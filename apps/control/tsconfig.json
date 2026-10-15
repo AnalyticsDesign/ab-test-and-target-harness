@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // DOM lib を外して workerd のグローバル(@cloudflare/workers-types)を使う。
+    // DOM の SubtleCrypto が勝つと crypto.subtle.timingSafeEqual(ids.ts)が見えなくなる
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"],
+    "noEmit": true
+  },
+  "include": ["src", "test", "vitest.config.ts"]
+}

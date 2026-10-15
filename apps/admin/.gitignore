@@ -1,0 +1,5 @@
+.next
+.env.local
+tsconfig.tsbuildinfo
+test-results
+playwright-report

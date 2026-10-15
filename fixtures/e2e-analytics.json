@@ -1,0 +1,49 @@
+{
+  "siteId": "site_analytics",
+  "siteSalt": "analytics-salt-0001",
+  "settings": {
+    "mode": "A",
+    "analytics": {
+      "extraKey": "wtt_x",
+      "exposure": {
+        "event": "wtt_exposure",
+        "keys": { "experimentId": "wtt_exp_id", "experimentName": "wtt_exp_name", "variantId": "wtt_var_id", "variantName": "wtt_var_name" }
+      },
+      "conversion": {
+        "event": "wtt_conversion",
+        "keys": { "goalId": "wtt_goal_id", "goalName": "wtt_goal_name" }
+      }
+    }
+  },
+  "version": 1,
+  "goals": [{ "id": "g_cta", "name": "CTA click", "type": "CUSTOM", "config": {} }],
+  "experiments": [
+    {
+      "id": "exp_pricing", "name": "Pricing hero",
+      "urlMatch": { "op": "contains", "value": "/" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "analytics": {
+        "overrides": { "experimentName": "Pricing Q3" },
+        "extra": { "test_group": "pricing_q3", "external_exp_id": "E-101" }
+      },
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 50, "changes": [],
+          "analytics": { "overrides": { "variantName": "Control" } } },
+        { "id": "vB", "name": "B", "weight": 50,
+          "changes": [{ "id": "c_title", "type": "TEXT", "selector": ".hero-title", "payload": { "text": "価格ページ B" } }],
+          "analytics": { "overrides": { "variantName": "New hero" }, "extra": { "test_group": "pricing_q3_b" } } }
+      ]
+    },
+    {
+      "id": "exp_promo", "name": "Promo",
+      "urlMatch": { "op": "contains", "value": "/" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "analytics": { "extra": { "campaign": "autumn" } },
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 50, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 50,
+          "changes": [{ "id": "c_promo", "type": "TEXT", "selector": ".promo", "payload": { "text": "秋のキャンペーン" } }] }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "siteId": "site_demo",
+  "siteSalt": "demo-salt-0001",
+  "settings": {
+    "mode": "A",
+    "allowedOrigins": ["http://localhost:4173"],
+    "uuidCookieEnabled": true
+  },
+  "version": 1,
+  "goals": [{ "id": "g_lead", "name": "lead", "type": "CUSTOM", "config": {} }],
+  "experiments": [
+    {
+      "id": "exp_hero", "name": "Hero copy",
+      "urlMatch": { "op": "contains", "value": "/" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 50, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 50, "changes": [
+          { "id": "c_text", "type": "TEXT", "selector": ".hero-title", "payload": { "text": "1日でGA4を「分かる」に変える" } },
+          { "id": "c_img", "type": "IMAGE", "selector": "img.hero-img", "payload": { "src": "https://placehold.co/600x200.png" } },
+          { "id": "c_hide", "type": "HIDE", "selector": ".old-banner", "payload": {} },
+          { "id": "c_attr", "type": "ATTRIBUTE", "selector": "a.cta", "payload": { "name": "href", "value": "/lp2/" } },
+          { "id": "c_mark", "type": "ATTRIBUTE", "selector": ".hero-title", "payload": { "name": "data-wtt-mark", "value": "1" } },
+          { "id": "c_html", "type": "HTML", "selector": ".extra", "payload": { "html": "<p class=\"injected\">B only</p>", "position": "append", "runScripts": false } },
+          { "id": "c_css", "type": "CSS", "payload": { "css": ".hero-title{letter-spacing:.02em}" } },
+          { "id": "c_js", "type": "CUSTOM_JS", "selector": ".hero-title", "payload": { "code": "element.dataset.wtt='b'" } }
+        ] }
+      ]
+    },
+    {
+      "id": "exp_ghost", "name": "Ghost",
+      "urlMatch": { "op": "contains", "value": "/" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 50, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 50, "changes": [
+          { "id": "c_ghost", "type": "TEXT", "selector": ".ghost-missing", "payload": { "text": "never" } }
+        ] }
+      ]
+    },
+    {
+      "id": "exp_css", "name": "CSS only",
+      "urlMatch": { "op": "contains", "value": "/code" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 50, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 50, "changes": [
+          { "id": "c_css", "type": "CSS", "payload": { "css": ".code-title{letter-spacing:5px}" } }
+        ] }
+      ]
+    },
+    {
+      "id": "exp_code", "name": "Code change",
+      "urlMatch": { "op": "contains", "value": "/code" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 50, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 50, "changes": [
+          { "id": "c_html_script", "type": "HTML", "selector": ".slot", "payload": { "html": "<p class=\"injected-script\">from html</p><script>window.__wttRuns=(window.__wttRuns||0)+1</script>", "position": "append", "runScripts": true } },
+          { "id": "c_html_inert", "type": "HTML", "selector": ".slot", "payload": { "html": "<script>window.__wttInert=1</script>", "position": "append", "runScripts": false } },
+          { "id": "c_js", "type": "CUSTOM_JS", "selector": ".code-title", "payload": { "code": "element.dataset.ctx=[ctx.experimentId,ctx.variantId,ctx.changeId].join('/');window.__wttJsRuns=(window.__wttJsRuns||0)+1" } },
+          { "id": "c_js_throw", "type": "CUSTOM_JS", "selector": ".code-title", "payload": { "code": "throw new Error('boom')" } },
+          { "id": "c_text_after", "type": "TEXT", "selector": ".after-throw", "payload": { "text": "still applied" } }
+        ] }
+      ]
+    },
+    {
+      "id": "exp_js_only", "name": "JS only (CSP block)",
+      "urlMatch": { "op": "contains", "value": "/blocked-js" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 50, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 50, "changes": [
+          { "id": "c_js", "type": "CUSTOM_JS", "selector": ".code-title", "payload": { "code": "element.dataset.blocked='no'" } }
+        ] }
+      ]
+    },
+    {
+      "id": "exp_preview",
+      "name": "Preview check",
+      "urlMatch": { "op": "contains", "value": "/preview" },
+      "trafficPercentage": 100,
+      "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 50, "changes": [] },
+        {
+          "id": "vB",
+          "name": "B",
+          "weight": 50,
+          "changes": [
+            { "id": "c_hit", "type": "TEXT", "selector": ".preview-title", "payload": { "text": "プレビュー適用" } },
+            { "id": "c_miss", "type": "TEXT", "selector": ".no-such-title", "payload": { "text": "never" } },
+            { "id": "c_css", "type": "CSS", "payload": { "css": ".preview-title{letter-spacing:3px}" } }
+          ]
+        }
+      ]
+    }
+  ]
+}

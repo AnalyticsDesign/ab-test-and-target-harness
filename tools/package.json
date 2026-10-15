@@ -1,0 +1,15 @@
+{
+  "name": "@wtt/tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"deploy-answers/test/*.test.mjs\"",
+    "typecheck": "tsc --noEmit -p fixture/tsconfig.json && (test ! -d s1-probe || tsc --noEmit -p s1-probe/tsconfig.json)"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260831.1",
+    "@types/node": "^26.4.0",
+    "typescript": "^7.0.2"
+  }
+}

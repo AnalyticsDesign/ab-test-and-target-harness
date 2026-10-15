@@ -1,0 +1,24 @@
+{
+  "name": "@wtt/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./source": "./generated/source.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "node build.mjs && node scripts/embed.mjs"
+  },
+  "dependencies": {
+    "@wtt/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "esbuild": "^0.28.2",
+    "happy-dom": "^20.0.11",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "siteId": "site_remote",
+  "siteSalt": "remote-salt-0001",
+  "settings": { "mode": "A", "allowedOrigins": ["http://localhost:4173"] },
+  "version": 1,
+  "goals": [],
+  "experiments": [
+    {
+      "id": "exp_remote", "name": "Remote hero",
+      "urlMatch": { "op": "contains", "value": "/" },
+      "trafficPercentage": 100, "persistAssignment": true,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 0, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 100, "changes": [
+          { "id": "c_t", "type": "TEXT", "selector": ".hero-title", "payload": { "text": "remote B" } }
+        ] }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 使い方の質問
+    url: https://github.com/AnalyticsDesign/web-test-and-target-harness/discussions/categories/q-a
+    about: 使い方・設定・導入の質問は Discussions の Q&A へ(Issue は不具合の報告と機能の提案)
+  - name: 脆弱性の報告
+    url: https://github.com/AnalyticsDesign/web-test-and-target-harness/security/advisories/new
+    about: 脆弱性は公開の Issue に書かず、Private vulnerability reporting で報告する

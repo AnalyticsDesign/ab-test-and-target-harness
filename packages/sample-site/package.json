@@ -1,0 +1,17 @@
+{
+  "name": "@wtt/sample-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "echo 'e2e runs via: pnpm e2e'",
+    "e2e": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^26.4.0",
+    "@wtt/core": "workspace:*",
+    "@wtt/runtime": "workspace:*",
+    "typescript": "^7.0.2"
+  }
+}

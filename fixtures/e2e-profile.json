@@ -1,0 +1,32 @@
+{
+  "siteId": "site_profile",
+  "siteSalt": "profile-salt-0001",
+  "settings": { "mode": "A", "idSource": "cookie:_site_uid", "allowedOrigins": ["http://localhost:4173"], "retentionDays": 30 },
+  "version": 1,
+  "goals": [
+    { "id": "g_pv", "name": "Pricing view", "type": "PAGEVIEW", "config": { "page": { "op": "contains", "value": "/profile-pricing.html" } } },
+    { "id": "g_buy", "name": "Buy click", "type": "CLICK", "config": { "selector": "#buy" } }
+  ],
+  "experiments": [
+    {
+      "id": "exp_visited", "name": "Visited pricing",
+      "urlMatch": { "op": "contains", "value": "/profile.html" },
+      "targeting": { "hist": "visited", "page": { "op": "contains", "value": "/profile-pricing.html" } },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 0, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 100, "changes": [{ "id": "c_v", "type": "TEXT", "selector": ".hero-title", "payload": { "text": "visited B" } }] }
+      ]
+    },
+    {
+      "id": "exp_converted", "name": "Converted buy",
+      "urlMatch": { "op": "contains", "value": "/profile.html" },
+      "targeting": { "hist": "converted", "goal": "g_buy" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 0, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 100, "changes": [{ "id": "c_c", "type": "TEXT", "selector": ".old-banner", "payload": { "text": "converted B" } }] }
+      ]
+    }
+  ]
+}

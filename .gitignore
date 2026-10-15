@@ -1,0 +1,52 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor / tools
+.idea/
+.vscode/
+*.swp
+.claude/settings.local.json
+
+# Node (将来の実装用)
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env
+.env.*
+!.env.example
+
+# Next.js (apps/admin)
+.next/
+# vinext (Vite) のビルド中間物。出力の dist/ と .wrangler/ は上で無視している
+.vinext/
+apps/admin/.env.local
+# `next dev` / `next build` / `next typegen` が生成する(dev は .next/dev 配下を指す別内容に書き換えるため追跡しない。
+# create-next-app の既定 .gitignore と同じ)。`pnpm -C apps/admin typecheck` が `next typegen` で先に生成する
+apps/admin/next-env.d.ts
+
+# Test / build artifacts
+test-results/
+playwright-report/
+packages/core/test/.tmp-*.json
+packages/core/test/.tmp-static/
+# fixture CLI(--static-dir)が焼く bootstrap。E2E の sample-site が /s/* で配る
+packages/sample-site/.static/
+apps/edge/.kv/
+packages/core/test/.tmp-newdir*/
+# admin E2E で control と edge が共有する wrangler のローカル状態(D1 / KV / R2)。実行のたびに作り直す
+apps/control/.e2e-state/
+
+# 導入時の入力(答え)と作業ログ。雛形 deploy-answers.example.yaml だけを追跡する
+deploy-answers.yaml
+deploy-log.md
+# 導入時の秘密(ゾーン用 API トークン)。終わったら消す
+deploy-secrets.env
+# D1 の手元バックアップ(docs/deploy.md 10.1)。メールアドレスやハッシュを含むので追跡しない
+deploy-backups/
+
+# SDD workspace (subagent-driven-development ledger/briefs)
+.superpowers/
+# エージェント向けの設定(docs/deploy.md 5.1。API キーが入る)
+.env.agent

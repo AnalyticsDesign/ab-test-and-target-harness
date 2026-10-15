@@ -1,0 +1,19 @@
+// admin の E2E 用: デプロイ専用の Worker(apps/deployer)を control と同じプロセスで動かすための設定。
+// control の wrangler dev に 2 つ目の -c として渡す(別プロセスにすると dev registry の取りこぼしで RPC が「Network connection lost」になることがあった)。
+// 2 つ目以降の Worker には --var が効かないので、API の向き先と鍵はここに書く。値はすべて E2E 専用の偽物で、
+// CF_API_BASE は偽の Cloudflare API(e2e/fake-cf-api.mjs)だけを指す(本物の API には届かない)。cron は E2E では動かさない
+{
+  "name": "wtt-deployer",
+  "main": "../../deployer/src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "durable_objects": { "bindings": [{ "name": "DEPLOY_QUEUE", "class_name": "DeployQueue" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DeployQueue"] }],
+  "vars": {
+    "CF_ACCOUNT_ID": "e2e",
+    "CF_DEPLOY_TOKEN": "e2e-token",
+    "CF_API_BASE": "http://127.0.0.1:8791/client/v4",
+    "STATIC_SCRIPT_NAME": "wtt-static"
+  }
+}

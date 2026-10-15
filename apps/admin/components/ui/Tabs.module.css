@@ -1,0 +1,5 @@
+.list { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+.tab { font: inherit; font-weight: 500; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; padding: 9px 12px; margin-bottom: -1px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: color var(--dur-fast), border-color var(--dur-fast); }
+.tab:hover { color: var(--text); }
+.tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.mark { width: 6px; height: 6px; border-radius: 999px; background: var(--danger); }

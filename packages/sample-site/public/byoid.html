@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>WTT sample site</title>
+  <script src="/s/site_byoid.js"></script>
+</head>
+<body>
+  <div id="hero-wrap">
+    <h1 class="hero-title">GA4を基礎から学ぶ</h1>
+    <img class="hero-img" src="https://placehold.co/600x100.png" srcset="https://placehold.co/1200x200.png 2x" alt="hero" />
+    <p class="old-banner">旧バナー</p>
+    <a class="cta" href="/lp/">申し込む</a>
+    <div class="extra"></div>
+  </div>
+  <template id="hero-tpl">
+    <h1 class="hero-title">GA4を基礎から学ぶ</h1>
+    <img class="hero-img" src="https://placehold.co/600x100.png" srcset="https://placehold.co/1200x200.png 2x" alt="hero" />
+    <p class="old-banner">旧バナー</p>
+    <a class="cta" href="/lp/">申し込む</a>
+    <div class="extra"></div>
+  </template>
+  <button id="rerender">re-render</button>
+  <script>
+    // SPA の再レンダリングを模す: 原状の template から作り直す(適用済み DOM は使わない)
+    document.getElementById("rerender").addEventListener("click", () => {
+      const wrap = document.getElementById("hero-wrap");
+      wrap.replaceChildren(document.getElementById("hero-tpl").content.cloneNode(true));
+    });
+  </script>
+</body>
+</html>

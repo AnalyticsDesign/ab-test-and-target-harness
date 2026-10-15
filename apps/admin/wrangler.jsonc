@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wtt-admin",
+  // 公開アドレス(docs/deploy.md 4.2)。自分のドメインに載せるときは false にし routes を書く(workers.dev と Preview URL を閉じる)
+  "workers_dev": true,
+  // Next.js を vinext(Vite)で Workers に載せる。main は vinext の fetch ハンドラ、assets は vinext build の出力
+  // init が生成する値(vinext の `init-cloudflare.ts`)。書き換えない
+  "main": "vinext/server/fetch-handler",
+  "assets": { "directory": "dist/client", "not_found_handling": "none", "binding": "ASSETS" },
+  // 生成値のまま(>= 2025-04-01 なので process.env に vars が入る = BFF が AB_CONTROL_URL を読める。control と揃えて引き下げない)
+  "compatibility_date": "2026-09-17",
+  // global_fetch_strictly_public: BFF が同じアカウントの control Worker を公開 URL で fetch するため。無いと error 1042
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  // vars はここが**本番値**(docs/deploy.md 4 節)。ローカル開発(`pnpm admin:dev` = next dev)は `.env.local`、
+  // Workers ランタイムのローカル確認(`pnpm -C apps/admin preview`)と E2E は `wrangler dev --var` で上書きする
+  "vars": {
+    // control の公開 URL(docs/deploy.md 3.5)。control 側の vars.AB_CONTROL_URL と同じ値にする
+    "AB_CONTROL_URL": "https://wtt-control.example.workers.dev"
+  },
+  // 自分のドメインに載せるとき(docs/deploy.md 4.2)。DNS と証明書は wrangler が作る
+  // 下の 3 行のうち "workers_dev" と "dev" は**上の `workers_dev` 行と下の `dev` 行を置き換える**(足すと後ろの行が勝つ)。
+  // "preview_urls" と "routes" は新しく足す
+  // "workers_dev": false, "preview_urls": false,
+  // "routes": [{ "pattern": "admin.example.com", "custom_domain": true }],
+  // "dev": { "port": 3000, "host": "localhost" }  // routes を書くと local mode の origin host が route になるので固定する(control 7.1 と同じ落とし穴)
+  "dev": { "port": 3000 }
+}

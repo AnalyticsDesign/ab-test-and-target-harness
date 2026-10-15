@@ -1,0 +1,6 @@
+.layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 24px; align-items: start; }
+.nav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }
+.item { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 0; border-radius: var(--radius); background: none; font: inherit; font-weight: 500; color: var(--muted); cursor: pointer; text-align: left; transition: background var(--dur-fast), color var(--dur-fast); }
+.item:hover, .item[aria-current="true"] { background: var(--nav-active); color: var(--text); }
+.danger { color: var(--danger); }
+.mark { width: 6px; height: 6px; border-radius: 999px; background: var(--danger); margin-left: auto; }

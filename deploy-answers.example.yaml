@@ -1,0 +1,49 @@
+# deploy-answers.yaml — 導入のときに AI エージェント(または人)が読む「質問への答え」。
+#
+# これは設定値ではない。導入が終わった後にこのファイルを書き換えても、環境は何も変わらない。
+# 稼働中の設定の正本は apps/edge/wrangler.jsonc と apps/control/wrangler.jsonc と apps/admin/wrangler.jsonc と apps/deployer/wrangler.jsonc(と Cloudflare 上の secret)。
+#
+# 使い方:
+#   1. このファイルを同じ場所に deploy-answers.yaml という名前でコピーする(git には入らない)
+#   2. 上段(質問への答え)の分かる行に答えを書く。書いた質問はエージェントが飛ばす。< で始まる値は未記入として聞かれる。
+#      質問の意味と選択肢は docs/install-questions.md
+#   3. node tools/deploy-answers/cli.mjs を実行すると、答えから推奨構成と最軽量構成が出る。
+#      選んだら --accept recommended か --accept lightest を付けて実行すると、下段(構成)が書き込まれる
+#   4. 構成を自分で決めている人は、上段の代わりに下段の行の # を外して書く(owner_email だけは上段に書く)。了承は --accept manual
+# 秘密(API トークン・パスワード)はここに書かない。
+#
+# 人が用意するもの(このファイルには書かない。docs/deploy.md 0.5 でエージェントがまとめて依頼する):
+#   - Google の OAuth クライアント(管理画面のログインに使う)。クライアント ID とクライアント シークレット
+#   - Cloudflare の API トークン: 配信ファイルのデプロイ用と使用状況の表示用(どちらも期限なし)。ドメインありの構成ではゾーンの設定用(期限 = 翌日)も
+
+# --- 上段: 質問への答え(docs/install-questions.md の質問と同じ順) ---
+features: <ab / history / itp>                                   # N1 やりたいこと(複数可。例 [ab, history])。ab は必ず入る
+daily_pv: <under_10k / 10k_30k / 30k_70k / over_70k / unknown>   # N2 1 日の PV(多い日の目安)
+image_upload: <false / true>                                     # N3 false = 画像の URL を使う / true = 管理画面からアップロード
+cloudflare_account: <none / existing / separate>                 # E1 Cloudflare のアカウント
+existing_plan: <free / paid>                                     # E1b cloudflare_account: existing のときだけ。Workers Paid なら paid
+site_on_cloudflare: <yes / no / no_site>                         # E2 タグを入れるサイトのドメインを、導入するアカウントで管理しているか
+install_host: <www.example.com>                                  # E2a site_on_cloudflare: yes のときだけ。タグを入れるページのホスト
+other_workers: <yes / no / unknown>                              # E2b existing・free でドメインなし(no / no_site)のときだけ。止まると困る Worker が同じアカウントにあるか
+owner_email: <you@example.com>                                   # E3 管理画面にログインする Google アカウントのメールアドレス
+
+# --- 下段: 構成(--accept が書き込む。自分で決めるときだけ # を外して書く) ---
+# edge_address: route              # route | workers-dev。route = 設置サイトのゾーンの Workers Route。workers-dev = *.workers.dev で公開(ゾーン不要。WAF・キャッシュ・D-lite が使えず、Free アカウントかつ止まって困る Workers が同じアカウントに無いことが前提)
+# zone_name: example.com           # route のとき。install_host が属する Cloudflare のゾーン。auto = ログインの後に --resolve-zone で確定する
+# asset_public_base: none          # none(R2 を使わない。画像アップロードと IMAGE の変更が無効)/ dev-assets(control 経由)/ auto(https://wtt-assets.<zone_name>)/ https://<R2 のカスタムドメイン>
+# dlite_hosts: []                    # D-lite(Mode B / D-lite)を使うページのホスト。書くと <host>/__ab/* の Route を足す
+# plan: free                       # free | paid。Workers のプラン。paid は導入の前にダッシュボードで切り替える
+# accepted: recommended            # --accept が書く(recommended / lightest / manual)
+
+# --- 既定値あり(変えるときだけ # を外す。--accept は書かない) ---
+# workspace_name: <会社名・チーム名・サイト名など>   # 最初のワークスペースの名前(管理画面のサイドバーに出る。後から変えられる)。未記入ならデプロイガイド 0.5 の人への依頼で聞き、# を外して書く
+# usage_visibility: members          # 管理画面の「使用状況」(Cloudflare の上限に対する消費)を見られる人。members = すべてのメンバー(ホームに要約が出る)/ instance_admins = システム管理者のみ。後から管理画面で変えられる
+# release_tag: latest                # 導入するリリースタグ(例 v0.9)。latest = git tag の v* を版の順に並べた先頭(GitHub Releases の API は使わない。デプロイガイド 0.3)
+# control_address: workers-dev       # workers-dev | custom。custom のときは control_host も書く
+# control_host: control.example.com  # control_address: custom のときのホスト(DNS と証明書は wrangler が作る)
+# control_protection: none           # control の無認証入口の守り。none | waf | access(waf / access は control_address: custom が前提。waf / access は実サイト未検証)
+# edge_waf_rate_limit: true          # /v1/sites/* と /__ab/* に WAF Rate Limiting Rule を作る(推奨)
+# edge_waf_requests_per_10s: 100     # そのしきい値(同一 IP から 10 秒あたり)。検証だけなら 20
+# asset_max_mb: 5                    # 画像アップロード 1 件の上限(MB)
+# admin_address: workers-dev       # workers-dev | custom。管理画面の公開アドレス。custom のときは admin_host も書く(招待・リセットリンクの見た目が整い、Access / WAF をゾーンで掛けられる)
+# admin_host: admin.example.com    # admin_address: custom のときのホスト(DNS と証明書は wrangler が作る)

@@ -1,0 +1,7 @@
+.shell { display: grid; grid-template-columns: 236px minmax(0, 1fr); flex: 1; min-height: 0; }
+.side { height: 100%; overflow-y: auto; min-height: 0; background: var(--side); border-right: 1px solid var(--border); }
+/* 本文列そのものはスクロールしない。スクロールするのは <main>(.content)だけ = 上部バーは常に見えている */
+.col { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.content { flex: 1; min-height: 0; overflow-y: auto; }
+/* max-width と padding は必ずこの 1 枚に置く(SaveBar の `margin: 24px -32px -32px` がこの padding と対になる) */
+.inner { max-width: 1240px; width: 100%; padding: 32px; }

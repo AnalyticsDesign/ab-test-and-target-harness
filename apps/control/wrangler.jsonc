@@ -1,0 +1,37 @@
+{
+  "name": "wtt-control",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  // Better Auth が AsyncLocalStorage を使う
+  "compatibility_flags": ["nodejs_compat"],
+  // database_id は `wrangler d1 create wtt-control` で作った値に置き換える。ローカル / vitest は wrangler のローカル D1 を使うため値は問われない
+  "d1_databases": [{ "binding": "DB", "database_name": "wtt-control", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }],
+  // edge と同じ KV(control が書き、edge が読む)。edge の wrangler.jsonc と同じ id にする
+  "kv_namespaces": [{ "binding": "CONFIG_KV", "id": "00000000000000000000000000000000" }],
+  "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "wtt-assets" }],
+  // 無認証の入口(Google の start / callback / 使い捨てコードの交換 / break-glass / setup / 招待受諾 / 非常時のパスワード 4 経路)の総当たり防止
+  "ratelimits": [{ "name": "AUTH_RATE_LIMITER", "namespace_id": "1002", "simple": { "limit": 10, "period": 10 } }],
+  // 設置タグの配信ファイルを出し直すデプロイ専用の Worker(RPC)。先に wtt-deployer をデプロイしておく(docs/deploy.md)
+  "services": [{ "binding": "DEPLOYER", "service": "wtt-deployer", "entrypoint": "Deployer" }],
+  // vars はここが本番値(docs/deploy.md 3 節)。ローカル開発は `.dev.vars`(`.dev.vars.example` を写す)、
+  // vitest は vitest.config.ts の miniflare.bindings、admin E2E は playwright.config.ts の `--var` で localhost 値に上書きする
+  "vars": {
+    // 管理画面(admin Worker)の公開 URL(docs/deploy.md 4 節)。招待・リセットリンクの先頭と Better Auth の trustedOrigins になる。
+    // workers.dev なら https://wtt-admin.<サブドメイン>.workers.dev、自ドメインなら https://<admin_host>
+    "AB_ADMIN_URL": "https://wtt-admin.example.workers.dev",
+    // control 自身の公開 URL(Better Auth の baseURL)。自分の workers.dev サブドメインかカスタムドメインに置き換える
+    "AB_CONTROL_URL": "https://wtt-control.example.workers.dev",
+    // IMAGE Change の公開ベース。R2 にカスタムドメインを接続したらその URL に、未接続の間は control 自身の /dev-assets を使う
+    "AB_ASSET_PUBLIC_BASE": "https://wtt-control.example.workers.dev/dev-assets",
+    "AB_ASSET_MAX_MB": "5",
+    // Google の OAuth クライアント ID(docs/deploy.md 3.3 / 3.4)。secret の AB_GOOGLE_CLIENT_SECRET と対
+    "AB_GOOGLE_CLIENT_ID": "",
+    // edge の公開 origin。bootstrap に API の宛先として焼き込む(docs/deploy.md 3.4)。workers.dev で公開したなら https://wtt-edge.<サブドメイン>.workers.dev
+    // AB_STATIC_ORIGIN(設置タグを配る配信専用の Worker の origin)は、ドメインなし構成のときだけ書く(Route 構成では edge と同じホストなので不要)
+    "AB_EDGE_ORIGIN": "https://www.example.com",
+    // 使用状況(docs/deploy.md 3.4)。導入時に 3.4 の手順で CF_ACCOUNT_ID を書き、d1 / kv に本製品の D1 と KV の id を足す。CF_ACCOUNT_ID が空なら使用状況は「未設定」と表示される。d1 が空、または書いた id がどのデータベースとも一致しないあいだは D1 の 1 データベースあたりの上限を「判定していません」と表示する
+    "CF_ACCOUNT_ID": "",
+    "AB_USAGE_RESOURCES": { "workers": ["wtt-edge", "wtt-control", "wtt-admin"], "d1": [], "kv": [] }
+  },
+  "dev": { "port": 8788 }
+}

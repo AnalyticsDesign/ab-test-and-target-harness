@@ -1,0 +1,20 @@
+{
+  "siteId": "site_consent",
+  "siteSalt": "consent-salt-0001",
+  "settings": { "mode": "A", "consentMode": "required", "uuidCookieEnabled": true, "allowedOrigins": ["http://localhost:4173"] },
+  "version": 1,
+  "goals": [],
+  "experiments": [
+    {
+      "id": "exp_consent", "name": "Consent hero",
+      "urlMatch": { "op": "contains", "value": "/" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 0, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 100, "changes": [
+          { "id": "c_t", "type": "TEXT", "selector": ".hero-title", "payload": { "text": "同意後のコピー" } }
+        ] }
+      ]
+    }
+  ]
+}

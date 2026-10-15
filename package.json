@@ -1,0 +1,23 @@
+{
+  "name": "web-test-and-target-harness",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "fixture": "tsx tools/fixture/build.ts",
+    "e2e": "pnpm runtime:build && pnpm edge:seed && pnpm -C packages/sample-site exec playwright test",
+    "edge:seed": "tsx tools/fixture/build.ts fixtures/demo.json apps/edge/.kv/demo-config.json --kv-bulk apps/edge/.kv/demo-bulk.json --static-dir packages/sample-site/.static --api-base http://localhost:4173 && tsx tools/fixture/build.ts fixtures/demo-dlite.json apps/edge/.kv/demo-dlite-config.json --kv-bulk apps/edge/.kv/demo-dlite-bulk.json --static-dir packages/sample-site/.static --api-base http://localhost:4173 && tsx tools/fixture/build.ts fixtures/e2e-consent.json apps/edge/.kv/e2e-consent-config.json --kv-bulk apps/edge/.kv/e2e-consent-bulk.json --static-dir packages/sample-site/.static --api-base http://localhost:4173 && tsx tools/fixture/build.ts fixtures/e2e-remote.json apps/edge/.kv/e2e-remote-config.json --kv-bulk apps/edge/.kv/e2e-remote-bulk.json --static-dir packages/sample-site/.static --api-base http://localhost:4173 && tsx tools/fixture/build.ts fixtures/e2e-byoid.json apps/edge/.kv/e2e-byoid-config.json --kv-bulk apps/edge/.kv/e2e-byoid-bulk.json --static-dir packages/sample-site/.static --api-base http://localhost:4173 && tsx tools/fixture/build.ts fixtures/e2e-analytics.json apps/edge/.kv/e2e-analytics-config.json --kv-bulk apps/edge/.kv/e2e-analytics-bulk.json --static-dir packages/sample-site/.static --api-base http://localhost:4173 && tsx tools/fixture/build.ts fixtures/e2e-profile.json apps/edge/.kv/e2e-profile-config.json --kv-bulk apps/edge/.kv/e2e-profile-bulk.json --static-dir packages/sample-site/.static --api-base http://localhost:4173 && tsx tools/fixture/build.ts fixtures/e2e-profile-keep.json apps/edge/.kv/e2e-profile-keep-config.json --kv-bulk apps/edge/.kv/e2e-profile-keep-bulk.json --static-dir packages/sample-site/.static --api-base http://localhost:4173 && pnpm -C apps/edge exec wrangler kv bulk put .kv/demo-bulk.json --binding CONFIG_KV --local && pnpm -C apps/edge exec wrangler kv bulk put .kv/demo-dlite-bulk.json --binding CONFIG_KV --local && pnpm -C apps/edge exec wrangler kv bulk put .kv/e2e-consent-bulk.json --binding CONFIG_KV --local && pnpm -C apps/edge exec wrangler kv bulk put .kv/e2e-remote-bulk.json --binding CONFIG_KV --local && pnpm -C apps/edge exec wrangler kv bulk put .kv/e2e-byoid-bulk.json --binding CONFIG_KV --local && pnpm -C apps/edge exec wrangler kv bulk put .kv/e2e-analytics-bulk.json --binding CONFIG_KV --local && pnpm -C apps/edge exec wrangler kv bulk put .kv/e2e-profile-bulk.json --binding CONFIG_KV --local && pnpm -C apps/edge exec wrangler kv bulk put .kv/e2e-profile-keep-bulk.json --binding CONFIG_KV --local",
+    "e2e:admin": "pnpm runtime:build && tsx apps/admin/e2e/global-setup.ts && pnpm -C apps/admin build && pnpm -C apps/admin exec playwright test",
+    "runtime:build": "pnpm -C packages/runtime build",
+    "edge:dev": "pnpm runtime:build && pnpm -C apps/edge exec wrangler dev",
+    "control:dev": "pnpm -C apps/control dev",
+    "admin:dev": "pnpm -C apps/admin dev",
+    "docs:check": "node tools/docs-check.mjs"
+  },
+  "devDependencies": {
+    "tsx": "^4"
+  },
+  "packageManager": "pnpm@10.34.5+sha512.a4ee05f2f73658255bd6a89859c065a45c28a57daefae2c893a168ee2b73168c37b91e83e57ea67654ad03f03031746430e8bce38e362e042605fb8abc80192e"
+}

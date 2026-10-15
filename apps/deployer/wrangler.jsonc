@@ -1,0 +1,18 @@
+{
+  "name": "wtt-deployer",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  // インターネットに出さない。管理用の Worker の Service Binding(RPC)からだけ呼ばれる
+  "workers_dev": false,
+  "preview_urls": false,
+  "durable_objects": { "bindings": [{ "name": "DEPLOY_QUEUE", "class_name": "DeployQueue" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DeployQueue"] }],
+  // 毎時 1 回。Cron の実行は Worker のリクエストに数えられるので頻度を上げない
+  "triggers": { "crons": ["17 * * * *"] },
+  "vars": {
+    // 導入するアカウントの Account ID に置き換える(docs/deploy.md)
+    "CF_ACCOUNT_ID": "00000000000000000000000000000000",
+    "STATIC_SCRIPT_NAME": "wtt-static"
+  }
+  // secret: CF_DEPLOY_TOKEN(Workers Scripts の Edit だけを持つ API トークン)
+}

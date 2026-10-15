@@ -1,0 +1,33 @@
+/* apps/admin/components/usage/Usage.module.css */
+.field { border: 0; padding: 0; margin: 0 0 16px; display: grid; gap: 6px; }
+.field legend { font-weight: 600; margin-bottom: 6px; }
+.note { margin: 0 0 12px; }
+.toneOk { color: var(--muted); }
+.toneWarn { color: var(--warn); font-weight: 600; }
+.toneDanger { color: var(--danger); font-weight: 600; }
+/* 月額 $5 に含まれる量の超過は止まらないので、危険の色にしない(文字の色はそのまま、太字だけ) */
+.toneNote { font-weight: 600; }
+/* 割合の列: 横棒 + 数字。棒の幅は固定にして行どうしを見比べやすくする */
+.ratio { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.meter { position: relative; display: inline-block; flex: 0 0 120px; height: 8px; border-radius: 4px; background: var(--gray-soft); overflow: hidden; }
+.bar { position: absolute; inset: 0 auto 0 0; border-radius: 4px; }
+.barOk { background: var(--ok); }
+.barWarn { background: var(--warn); }
+.barDanger { background: var(--danger); }
+/* 月額 $5 に含まれる量の超過は止まらないので危険の色にしない */
+.barNote { background: var(--accent); }
+/* 注意(70%)・危険(90%)の境目 */
+.tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--border-strong); }
+/* 数字の列: 右揃え + 数字の幅を揃えて、行どうしの桁を縦に揃える。「80,000 / 100,000」は 1 行に保つ */
+.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* 割合の文字は棒の右に、幅を揃えて置く(100% を超えても桁がずれない) */
+.percent { min-width: 4em; text-align: right; }
+/* 表の見出し(1 日の量 / 保存量)。枠の最上段に置き、左端を th の文字(左 14px)に揃える */
+.caption { caption-side: top; text-align: left; font-weight: 600; padding: 12px 14px; }
+.caption :global(.muted) { font-weight: 400; margin-left: 6px; }
+/* 1 日の量と保存量の表で列の位置を揃える固定幅(資源の列が残りを取る)。auto のレイアウトでは幅が目安にしかならず表ごとにずれるので fixed にする。資源の列は最低 240px(狭い画面では枠の中で横にスクロール)。使用量は「3,000,000 / 5,000,000」「500 MB / 5 GB(上限)」が 1 行に収まる幅。割合は棒 120px + 間 8px + 数字 4em + 左右の余白 28px */
+.colAmount { width: 220px; }
+.colRatio { width: 220px; }
+.colStatus { width: 120px; }
+.colProjection { width: 150px; }
+.fixed { table-layout: fixed; min-width: calc(240px + 220px + 220px + 120px + 150px); }

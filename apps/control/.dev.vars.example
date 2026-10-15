@@ -1,0 +1,16 @@
+BETTER_AUTH_SECRET=replace-with-32-plus-random-characters
+AB_SETUP_TOKEN=replace-with-one-time-setup-token
+# wrangler.jsonc の vars は本番値。ローカルの `wrangler dev` はここで localhost に上書きする
+AB_ADMIN_URL=http://localhost:3000
+AB_CONTROL_URL=http://localhost:8788
+AB_ASSET_PUBLIC_BASE=http://localhost:8788/dev-assets
+AB_EDGE_ORIGIN=http://localhost:8787
+# 使用状況の表示(Account Analytics: Read のトークンとアカウント ID)。空のまま = ローカルでは「未設定」と表示される
+CF_USAGE_TOKEN=
+CF_ACCOUNT_ID=
+# Google ログイン(ローカルで試すなら Google Cloud で作った OAuth クライアントの値。redirect URI = http://localhost:8788/auth/callback/google)
+# AB_GOOGLE_CLIENT_ID=
+# AB_GOOGLE_CLIENT_SECRET=
+
+# ローカルでメール + パスワードのログインを使うとき(16 文字以上)。本番では非常時だけ secret として置く
+# AB_BREAK_GLASS_TOKEN=local-break-glass-token

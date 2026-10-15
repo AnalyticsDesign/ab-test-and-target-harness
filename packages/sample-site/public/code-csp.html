@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>WTT code change page (CSP)</title>
+  <script nonce="wttE2E" src="/s/site_demo.js"></script>
+</head>
+<body>
+  <div id="wrap">
+    <h1 class="code-title">Code Change</h1>
+    <div class="slot"></div>
+    <p class="after-throw">original</p>
+  </div>
+  <template id="tpl">
+    <h1 class="code-title">Code Change</h1>
+    <div class="slot"></div>
+    <p class="after-throw">original</p>
+  </template>
+  <button id="rerender">re-render</button>
+  <script nonce="wttE2E">
+    // SPA の再レンダリングを模す: 原状の template から作り直す(適用済み DOM は使わない)
+    document.getElementById("rerender").addEventListener("click", () => {
+      document.getElementById("wrap").replaceChildren(document.getElementById("tpl").content.cloneNode(true));
+    });
+  </script>
+</body>
+</html>

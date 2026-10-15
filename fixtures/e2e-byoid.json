@@ -1,0 +1,20 @@
+{
+  "siteId": "site_byoid",
+  "siteSalt": "byoid-salt-0001",
+  "settings": { "mode": "A", "idSource": "cookie:_site_session", "allowedOrigins": ["http://localhost:4173"] },
+  "version": 1,
+  "goals": [],
+  "experiments": [
+    {
+      "id": "exp_byoid", "name": "BYOID hero",
+      "urlMatch": { "op": "contains", "value": "/" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 50, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 50, "changes": [
+          { "id": "c_t", "type": "TEXT", "selector": ".hero-title", "payload": { "text": "BYOID B" } }
+        ] }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+/* スクロール領域(<main>)の外にあるので sticky は要らない。flex-shrink: 0 = 長いページでも 52px から潰れない */
+.bar { flex-shrink: 0; display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 32px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.crumbs { display: flex; align-items: center; gap: 8px; min-width: 0; margin-right: auto; color: var(--muted); }
+.crumbs a { color: var(--muted); }
+.crumbs > :last-child { color: var(--text); font-weight: 500; }
+.sep { color: var(--faint); }
+.state { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.unpublished { color: var(--warn); font-weight: 500; }
