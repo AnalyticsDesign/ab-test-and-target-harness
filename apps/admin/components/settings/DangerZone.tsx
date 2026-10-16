@@ -12,7 +12,7 @@ export function DangerZone({ site, canDelete }: { site: Site; canDelete: boolean
   return (
     <section className="danger-zone">
       <h3>サイトを削除</h3>
-      <p>D1 / KV / R2 の画像をすべて削除します。配信中のエクスペリエンスがあるときは削除できません(先に終了します)。取り消せません。</p>
+      <p>サイトの設定・エクスペリエンス・目標・オーディエンス・公開の履歴・アップロードした画像と、設置タグの配信ファイルをすべて削除します。タグを残したページでは配信ファイルが見つからなくなり(404)、元の表示のまま動きます。配信中のエクスペリエンスがあるときは削除できません(先に終了します)。取り消せません。</p>
       <label className="field">
         <span className="field-label">確認のためサイト ID を入力</span>
         <input value={confirmId} onChange={(e) => setConfirmId(e.target.value)} />

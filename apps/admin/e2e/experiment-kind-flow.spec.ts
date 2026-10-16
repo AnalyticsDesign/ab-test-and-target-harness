@@ -44,7 +44,7 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
     await page.fill('input[name="name"]', "E2E single");
     await page.fill('input[name="value"]', "/");
     await page.getByRole("radio", { name: /パーソナライズ/ }).check();
-    await page.getByRole("button", { name: "作成(パターン A を 1 つ用意します)" }).click();
+    await page.getByRole("button", { name: "作成(A パターンを 1 つ用意します)" }).click();
     await expect(page).toHaveURL(/\/experiments\/exp_e2e_single$/);
     await expect(page.getByTestId("experiment-kind")).toHaveText("パーソナライズ");
     await page.getByRole("tab", { name: "パターン" }).click();

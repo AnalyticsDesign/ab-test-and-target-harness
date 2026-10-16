@@ -183,7 +183,7 @@ export function applySitePatch(row: SiteRow, patch: SitePatch, nowMs: number): {
     return { next, error: new ApiError(422, "byoid_cookie_name_conflict", { name: ref, message: "BYOID の参照 Cookie 名が衝突しています", hint: "BYOID の参照 Cookie 名は正本 / UUID / 旧 Cookie 名と衝突できません" }) };
   }
   if (next.mode === "B" && next.id_source !== "ab")
-    return { next, error: new ApiError(422, "mode_b_requires_id_source_ab", { message: "Mode B(サーバー発行 Cookie)と Mode C(BYOID)は併用できません", hint: "Mode B(サーバー発行 Cookie)と Mode C(BYOID)は MVP では併用できません" }) };
+    return { next, error: new ApiError(422, "mode_b_requires_id_source_ab", { message: "Mode B(サーバー発行 Cookie)と Mode C(BYOID)は併用できません", hint: "Mode B では「訪問者 ID の取得元」を ab(ツールが発行する ID)にしてください。サイトの既存の Cookie を使う場合は Mode A のままにします" }) };
   const parsed = SiteSettingsSchema.safeParse(settingsInput(next));
   if (!parsed.success) {
     // 同上(invalid_analytics と同じ理由で validationFailed() 経由に変更。review r2 finding 2)

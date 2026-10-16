@@ -7,5 +7,5 @@ export const KIND_HINT: Record<ExperimentKind, string> = {
   single: "1 つのパターンを、条件に合う訪問者全員に表示します。振り分けや比較はしません",
 };
 export function createButtonLabel(kind: ExperimentKind): string {
-  return kind === "single" ? "作成(パターン A を 1 つ用意します)" : "作成(パターン A / B を 50:50 で用意します)";
+  return kind === "single" ? "作成(A パターンを 1 つ用意します)" : "作成(A パターン / B パターンを 50:50 で用意します)";
 }
