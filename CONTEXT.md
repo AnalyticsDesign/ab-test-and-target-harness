@@ -14,13 +14,13 @@
 |---|---|
 | **Workspace** | ユーザーと Site を束ねるテナント単位。メンバーは 1 つの Role を持つ |
 | **Role** | OWNER / ADMIN / EDITOR / VIEWER の 4 種。EDITOR は作成・編集のみで本番化はできない(本番化 = Publish / Start / Pause / Stop は ADMIN 以上) |
-| **Site** | 実験を配信する対象サイト。Deployment Mode・consentMode などの設定を持つ |
+| **Site** | エクスペリエンスを配信する対象サイト。Deployment Mode・consentMode などの設定を持つ |
 
-## 実験
+## エクスペリエンス
 
 | 用語 | 定義 |
 |---|---|
-| **Experiment** | A/B テストの 1 実験。URL 条件・Targeting・Variant を持つ。状態は draft / running / paused / archived |
+| **Experiment** | エクスペリエンス(画面の表記)。サイトに出す変更のまとまりで、種別(`kind`: テスト = `test` / パーソナライズ = `single`)・URL 条件・Targeting・Variant を持つ。テストは 2 つ以上の Variant に振り分け、パーソナライズは Variant 1 つ(重み 100)を条件に合う訪問者全員に出す。種別は作成後に変えられない(変えるときは複製する)。状態は draft / running / paused / archived |
 | **Desired Status** | 運用者が意図した Experiment の状態(D1 上の `status`) |
 | **Published Status** | 本番に反映済みの Snapshot におけるその Experiment の状態。Desired Status とズレたら UI が差分を表示する |
 | **Variant** | Experiment 内の 1 パターン。重み(配分)と Change の集合を持つ |
@@ -38,7 +38,7 @@
 | **Snapshot** | 1 回の Publish が生成した不変の compiled config。version 番号を持つ(「Runtime Config」という呼称は廃止) |
 | **compiled config** | Snapshot の実体。running な Experiment の実行に必要な最小限の JSON。runtime.js と結合して 1 ファイルで配信される |
 | **runtime.js** | 訪問者のブラウザで動くエンジン。書き換えの適用・割当・計測を行う |
-| **未公開の変更** | 最後に成功した Publish 以降に編集された内容。本番には反映されていない。UI がバッジ / バナーで可視化する |
+| **未公開の編集**(画面の表記は「未公開の編集あり」) | 最後に成功した Publish 以降に編集された内容。本番には反映されていない。UI がバッジ / バナーで可視化する |
 | **Setup Token** | 初回セットアップ(`POST /setup`)専用の環境変数(`AB_SETUP_TOKEN`)。OWNER と最初の Workspace の作成後は無効化する(`wrangler secret delete`) |
 | **招待リンク** | Workspace への招待を表す URL(`/invite/<id>`)。メール送信は行わず、発行者が手渡しする。7 日で失効する |
 
@@ -59,10 +59,10 @@
 | 用語 | 定義 |
 |---|---|
 | **Decision** | 「この訪問者にどの Variant を出すか」の判定。ブラウザ内評価または edge への問い合わせ |
-| **Exposure** | 実験が実際に訪問者へ提示されたことの記録。Change の適用成功後に 1 回だけ GA4(dataLayer)へ送る |
+| **Exposure** | エクスペリエンスが実際に訪問者へ提示されたことの記録。Change の適用成功後に 1 回だけ GA4(dataLayer)へ送る |
 | **Conversion** | Goal の達成。GA4 へ `ab_conversion` として送る |
 | **Analytics 命名設定** | dataLayer に push するオブジェクトの名札(イベント名・キー名・`extraKey`)をサイト単位、値(`experimentName` / `variantName` の上書きと `extra`)を Experiment / Variant 単位で設定する機能。無設定なら既定名 |
-| **extra / extraKey** | Experiment / Variant が Exposure に足す任意の key-value(`extra`)と、それをネストするサイト単位の名前空間キー(`extraKey`、既定 `ab_extra`)。イベント push の直前に `{ [extraKey]: null }` を push して前の実験の値を消す |
+| **extra / extraKey** | Experiment / Variant が Exposure に足す任意の key-value(`extra`)と、それをネストするサイト単位の名前空間キー(`extraKey`、既定 `ab_extra`)。イベント push の直前に `{ [extraKey]: null }` を push して前のエクスペリエンスの値を消す |
 | **exposurePayloads** | compile が Experiment × Variant ごとに合成・検証して compiled config に焼く解決済み Exposure の値。runtime はこれにサイト設定のキー名を当てて push するだけで合成しない |
 
 ## エージェント面
@@ -70,15 +70,15 @@
 | 用語 | 定義 |
 |---|---|
 | **エージェント面** | 外部の AI エージェント(別プロジェクトの横断エージェント)が control を MCP / REST で直接操作するための面。本製品は LLM を呼ばず、GA4 / BQ の照会もヘッドレスブラウザも持たない。正は REST + OpenAPI、MCP は 1:1 の薄いラッパ、CLI は作らない |
-| **API キー** | 非ブラウザから control を叩く長寿命の鍵(Better Auth `apiKey`、接頭辞 `wtt_`)。必ずユーザーに紐づき、権限はそのユーザーの Role。鍵固有のスコープは持たない |
+| **API キー** | 非ブラウザから control を叩く鍵(Better Auth `apiKey`、接頭辞 `wtt_`)。必ずユーザーに紐づく。発行時に範囲(1 つのワークスペース / すべてのワークスペース = `full`。`full` はシステム管理者だけ)・権限(API の `roleCap`。実際の権限は持ち主の Role との低い方)・有効期限を決める。人とアクセス権の書き込み(鍵・招待・メンバー・ワークスペース)は鍵ではできない(403 `session_required`) |
 | **エラー封筒** | control の全エラー応答の形 `{ error, message, hint?, path?, ...details }`。`error` は機械可読コード |
 | **evaluate** | 割当の dry-run。URL / device / referrer / visitorId / 履歴を入力で与え、Experiment ごとに eligible と `reason`、variantId を返す |
 | **draft-bootstrap** | 下書き Experiment を compile + bake した bootstrap JS。エージェントがヘッドレスブラウザに注入し `#__ab_preview` で Variant を固定して検証する |
 | **analytics-recipe** | その Experiment の命名設定・期間・外部 ID を埋めた GA4 Data API リクエストと BigQuery SQL。数値は返さない(照会はエージェント側) |
-| **agent-guide** | `docs/agent-guide.md`。人間向けの繋ぎ方とエージェント向けレシピ 4 本。control が `/llms.txt` として配る |
-| **preview モード** | 対象ページを `#__ab_preview=<実験 ID>:<Variant ID>` で開いたときの runtime の動作。指定した実験だけを強制適用し、Cookie・consent・decision 通信・Goals・Exposure に触れない完全隔離。計測に混ざらない |
+| **agent-guide** | `docs/agent-guide.md`。人間向けの繋ぎ方とエージェント向けレシピ 7 本。control が `/llms.txt` として配る |
+| **preview モード** | 対象ページを `#__ab_preview=<エクスペリエンス ID>:<Variant ID>` で開いたときの runtime の動作。指定したエクスペリエンスだけを強制適用し、Cookie・consent・decision 通信・Goals・Exposure に触れない完全隔離。計測に混ざらない |
 | **PreviewReport** | `window.AB.getPreviewReport()` が返す Change ごとの適用結果(`matched` / `applied` / `error`)。通常表示では `null` |
 
 ## UI 表記
 
-- 管理画面・ドキュメントの日本語 UI では Experiment を「実験」と表記する(「エクスペリエンス」は使わない)
+- 管理画面・ドキュメントの日本語 UI では Experiment を「エクスペリエンス」、Variant を「パターン」と表記する(「実験」や、variant の別の訳語は使わない)。画面の表記と英語の識別子の対応は運用ガイド 1 節の表が正

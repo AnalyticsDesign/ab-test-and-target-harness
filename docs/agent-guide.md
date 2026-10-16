@@ -154,7 +154,7 @@ const report = await page.evaluate(() => window.AB.getPreviewReport());
 curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/analytics-recipe" -H "Authorization: Bearer $AB_API_KEY"
 ```
 
-返るのは**クエリ**であって数値ではありません(統計判定は Phase 2)。
+返るのは**クエリ**であって数値ではありません(今の版は統計判定を持ちません。v1.0 で、管理画面にテストの結果のレポートを追加する予定です)。
 
 - `ga4.exposureByVariant` / `ga4.conversionsByGoal`: `{ "method": "POST", "url": "…/v1beta/properties/<id>:runReport", "body": { … } }`。**`url` に `body` をそのまま POST**してください(property は URL に入っています。認証ヘッダだけ足します)
 - `bigquery.visitorCvrSql`(訪問者単位 = `user_pseudo_id`。既定)/ `bigquery.sessionCvrSql`(セッション単位)
@@ -166,7 +166,7 @@ curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/analytics-recipe" -
 - `runReport` が **400 `Field customEvent:… is not a valid dimension`** を返すときは、GA4 プロパティに `ab_experiment_id` / `ab_variant_id` / `ab_goal_id`(名札を変えていればその名前)が**イベントスコープのカスタムディメンション**として登録されていません。これはサイトの設置側(人間)の GA4 設定作業です — `docs/site-install.md` の「4. GA4 と GTM をつなぐ」を運用者に伝えてください。登録前のイベントは遡って次元にならないので、行が 0 でも契約の失敗ではありません
 
 **パターン別の CVR は GA4 だけでは出せません**。conversion イベントにはエクスペリエンス / パターンが付かない設計のため、パターン × 目標の CVR は BigQuery(GA4 export)で出します。
-GA4 単体で見る手段(v1alpha `runFunnelReport` のセグメントや GTM のユーザープロパティ)は alpha 依存 / 追加設定前提のため、Phase 2 の統計判定と一緒に検討します。
+GA4 単体で見る手段(v1alpha `runFunnelReport` のセグメントや GTM のユーザープロパティ)は alpha 依存 / 追加設定前提のため、統計判定と一緒に v1.0 以降で検討します。
 GA4 側の 2 本は「配分どおりに露出しているか(SRM の確認)」と「目標ごとの発生数」を見るために使ってください。
 
 人間の運用者向けの手順(GA4 探索レポートと BigQuery)は `docs/analytics.md` にあります。

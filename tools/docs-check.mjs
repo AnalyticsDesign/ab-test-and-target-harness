@@ -26,7 +26,7 @@ const PATH_EXCLUDE = /(^|\/)(\.env[^/]*|\.dev\.vars[^/]*|\.kv\/|\.static(\/|$)|n
 // 必須文書(ルート README から辿る公開文書 6 本 + CONTEXT.md)。既定モードでは 1 本でも欠けると missing-file で不合格。明示引数の不在も不合格
 const REQUIRED = ["README.md", "CONTEXT.md", "docs/README.md", "docs/deploy.md", "docs/site-install.md", "docs/operations.md", "docs/analytics.md", "docs/agent-guide.md"];
 // 用語表(B35)の検査の対象 = 公開文書。operations.md 1 節の対応表が正
-const GLOSSARY_FILES = new Set(["README.md", "CHANGELOG.md", "docs/README.md", "docs/install-patterns.md", "docs/install-questions.md", "docs/deploy.md", "docs/site-install.md", "docs/operations.md", "docs/analytics.md", "docs/agent-guide.md"]);
+const GLOSSARY_FILES = new Set(["README.md", "CONTEXT.md", "CHANGELOG.md", "docs/README.md", "docs/install-patterns.md", "docs/install-questions.md", "docs/deploy.md", "docs/site-install.md", "docs/operations.md", "docs/analytics.md", "docs/agent-guide.md"]);
 const GLOSSARY_BANNED = [
   { re: /未公開の変更あり/, use: "未公開の編集あり" },
   { re: /権限の上限/, use: "権限(API の roleCap)" },
