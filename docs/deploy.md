@@ -110,7 +110,7 @@ CF_DEPLOY_TOKEN=<配信ファイルのデプロイ用トークン>   # どの構
 CF_USAGE_TOKEN=<使用状況の表示用トークン>   # どの構成でも要る
 ```
 
-- **Google の OAuth クライアント**: `https://console.cloud.google.com/auth/overview` で、プロジェクト(新しく作るなら `wtt-auth`)→ Branding(ブランディング)→ Audience(対象)→ Clients(クライアント)の順に進む。種類は Web application(ウェブ アプリケーション)、リダイレクト URI は `<control URL>/auth/callback/google` を 1 つ。画面ごとの決めることと推奨は 0.5 の 1 の表。Client ID と Client secret を `GOOGLE_CLIENT_ID=` / `GOOGLE_CLIENT_SECRET=` に書く
+- **Google の OAuth クライアント**: `https://console.cloud.google.com/auth/overview` で、プロジェクト(新しく作るなら `wtt-auth`)→ Get started(開始)の 4 段の入力(新しいプロジェクトのときだけ)→ Audience(対象)→ Clients(クライアント)の順に進む。種類は Web application(ウェブ アプリケーション)、リダイレクト URI は `<control URL>/auth/callback/google` を 1 つ。画面ごとの決めることと推奨は 0.5 の 1 の表。Client ID と Client secret を `GOOGLE_CLIENT_ID=` / `GOOGLE_CLIENT_SECRET=` に書く
 - **配信ファイルのデプロイ用トークン**: My Profile(マイ プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)→ Custom token(カスタム トークン)。名前は `wtt-deploy-<アカウントのサブドメイン>`。権限は Account(アカウント)→ Workers Scripts(Workers スクリプト)→ Edit(編集)のみ。Account Resources(アカウント リソース)は導入先のアカウントだけで、期限なし。値を `CF_DEPLOY_TOKEN=` に書く(0.5 の 3)
 - **使用状況の表示用トークン**: 同じ画面で作る。名前は `wtt-usage-<アカウントのサブドメイン>`。権限は Account(アカウント)→ Account Analytics(アカウント分析)→ Read(読み取り)のみで、期限なし。値を `CF_USAGE_TOKEN=` に書く(0.5 の 4)
 - `CF_TOKEN` の行は、2.6・2.7 を後で足すときに使う(0.5 の 2)。ここでは空のままでよい
@@ -519,6 +519,17 @@ openssl version            # 乱数の生成に使う
 
 期待と違うとき:
 
+- `git clone` が `Filename too long` で失敗する(Windows)→ Windows のパスの長さの上限に当たっている。途中まで作られたフォルダを消し、短いパス(例 `C:\wtth`)に clone し直す
+- `corepack enable` が `EPERM` で失敗する(Windows で管理者権限が無い)→ Node の入ったフォルダ(`C:\Program Files\nodejs`)に書き込めないため。pnpm を起動するファイルをユーザーのフォルダに作り、そのフォルダを PATH に足す:
+
+  ```bash
+  mkdir -p "$HOME/wtt-bin"
+  corepack enable --install-directory "$HOME/wtt-bin"
+  export PATH="$HOME/wtt-bin:$PATH"   # エージェントは以後のシェルでも毎回これを設定する
+  grep -qs 'wtt-bin' ~/.bashrc || echo 'export PATH="$HOME/wtt-bin:$PATH"' >> ~/.bashrc   # 人が開く Git Bash でも使えるようにする
+  pnpm -v   # リポジトリ直下で。packageManager の版
+  ```
+
 - `corepack: command not found`(Node 25 以降は corepack が同梱されない)→ `npm install -g corepack` の後に `corepack enable`。LTS の Node を入れ直してもよい
 - `pnpm -v` が `packageManager` と違う版(単体で入れた pnpm 11 など)→ `corepack pnpm -v` が固定の版を返すなら、PATH の先に単体の pnpm がある。単体の pnpm を外して `corepack enable` を実行し、`pnpm -v` を確かめ直す。npm で入れたなら `npm uninstall -g pnpm` で外す。違う版のまま `pnpm install` を進めない。ロックファイルの解釈が変わる
 - `jq` / `pnpm` が入れた直後に見つからない(Windows)→ Git Bash を開き直す
@@ -702,13 +713,26 @@ fi
 
 1. **Google の OAuth クライアント**(どの構成でも要る)。エージェントは次の表を 1 画面ずつ案内し、登録するリダイレクト URI `<control URL>/auth/callback/google` を伝える。Google はこの作成を API で行う手段を提供していないため、この工程だけは人が行う。開くリンク = `https://console.cloud.google.com/auth/overview`
 
+**案内の前に人に聞くこと**: 同じ Google アカウントで、この製品のプロジェクト(`wtt-auth` など)を前に作ったか。前の導入を撤去して入れ直すときや、2 つ目を導入するときが当たる。
+
+- 作ったなら、プロジェクトは新しく作らない。画面の上部のプロジェクトの選択でそのプロジェクトを選び、表の Clients(クライアント)の行から進む。Get started(開始)・Branding(ブランディング)・Audience(対象)の設定は、プロジェクトに残っている
+- 撤去の後の入れ直しでは、Clients(クライアント)の一覧に前の導入のクライアント(`wtt-control-<識別子>`)が残っていないかを確かめる。残っていれば、使われないクライアントなので先に削除してもらう(10.4 の撤去の手順で消すもの)
+- 作っていなければ、表の上から進む
+
 | 画面 | 決めること | 推奨 |
 |---|---|---|
 | プロジェクト(画面の上部のプロジェクトの選択) | 新しく作るか、既存のものを使うか | 初めてなら、この製品専用に新しく作る(名前 = `wtt-auth`)。ほかの用途の設定と混ざらない。既存のものを使う場合、次のアプリ名がログインの画面に出る。同じ組織で 2 つ目以降を導入するときは、同じプロジェクトを使い、Clients(クライアント)だけ増やす。同意の画面の設定はプロジェクトに 1 つで、ログインできる人は各導入の招待で決まるため。組織が違う導入(別の会社のために入れるなど)ではプロジェクトを分け、名前を `wtt-auth-<組織名>` にする。アプリ名と Internal / External はプロジェクトに 1 つで、Internal にできるのはプロジェクトと同じ組織のアカウントだけのため |
-| Branding(ブランディング) | App name(アプリ名)・User support email(ユーザー サポートメール) | アプリ名 = Google のログインの画面に出る名前(例 `Web Test and Target Harness`)。組織名を付けてもよい。サポートのメール = `owner_email` |
-| Audience(対象) | User type(ユーザーの種類): Internal / External(外部)。Internal の日本語の表示は未確認。設定済みのプロジェクトでは、Audience(対象)の画面に Make internal(内部に公開)のボタンが出る | 管理画面を使う人が全員、同じ Google Workspace の組織のアカウントなら Internal(テストユーザーの登録が要らない)。個人の Gmail を含む・組織の外の人を招待するなら External(外部)。External で Publishing status(公開ステータス)が Testing(テスト中)のあいだは、Test users(テストユーザー)に登録した Google アカウントしかログインできない。`owner_email` と、招待する人を登録する |
-| Clients(クライアント) | 種類・名前・リダイレクト URI | Create client(クライアントを作成)を押し、Application type(アプリケーションの種類)= Web application(ウェブ アプリケーション)、Name(名前)= `wtt-control-<識別子>` にする。Authorized redirect URIs(承認済みのリダイレクト URI)の Add URI(URI を追加)で上の URI を 1 つ登録し、Create(作成)で作る。Name は Google の画面の中だけで使う名前で、識別子は上の「Cloudflare の API トークンの名前」と同じ。同じプロジェクトに複数の導入のクライアントが並んでも見分けられる |
-| 作成の結果 | 控える値 | Client ID(クライアント ID)と Client secret(クライアント シークレット)を `deploy-secrets.env` に書く。シークレットは、閉じると後から表示できないことがある |
+| Get started(開始)。新しく作ったプロジェクトのときだけ | アプリの情報・対象・連絡先 | 新しいプロジェクトでは、開くリンクの画面に Google Auth Platform not configured yet(Google Auth Platform はまだ構成されていません)と出る。先に Get started(開始)を押し、Project configuration(プロジェクト構成)の 4 段を上から入れる。App Information(アプリ情報)で App name(アプリ名)と User support email(ユーザー サポートメール)、Audience(対象)で Internal(内部)か External(外部)を選ぶ(決め方は次の 2 行)。Contact Information(連絡先情報)の Email addresses(メールアドレス)は、Google がプロジェクトの変更を知らせる宛先で、`owner_email` でよい。Finish(終了)で I agree to the Google API Services: User Data Policy.(Google API サービス: ユーザーデータに関するポリシー に同意します。)にチェックを入れて Continue(続行)を押し、最後に Create(作成)で作る。設定済みのプロジェクトではこの画面は出ず、左メニューの Branding(ブランディング)と Audience(対象)で同じ項目を確かめる |
+| Branding(ブランディング) | App name(アプリ名)・User support email(ユーザー サポートメール) | アプリ名 = Google のログインの画面に出る名前(例 `Web Test and Target Harness`)。組織名を付けてもよい。サポートのメールは選ぶ形で、選べるのはログイン中の Google アカウントと、そのアカウントが管理する Google グループだけ。`owner_email` でログインして作業し、それを選ぶ |
+| Audience(対象) | User type(ユーザーの種類): Internal(内部)/ External(外部)。設定済みのプロジェクトでは、Audience(対象)の画面に Make internal(内部に公開)のボタンが出る | 管理画面を使う人が全員、同じ Google Workspace の組織のアカウントなら Internal(テストユーザーの登録が要らない)。個人の Gmail を含む・組織の外の人を招待するなら External(外部)。External で Publishing status(公開ステータス)が Testing(テスト中)のあいだは、Test users(テストユーザー)に登録した Google アカウントしかログインできない。`owner_email` と、招待する人を登録する。登録は、Get started(開始)の入力を済ませた後に左メニューの Audience(対象)を開き、Test users(テストユーザー)の Add users で行う(Add users は日本語の表示でも英語のまま) |
+| Clients(クライアント) | 種類・名前・リダイレクト URI | Create client(クライアントを作成)を押し、Application type(アプリケーションの種類)= Web application(ウェブ アプリケーション)、Name(名前)= `wtt-control-<識別子>` にする。Authorized redirect URIs(承認済みのリダイレクト URI)の Add URI(URI を追加)で上の URI を 1 つ登録し、Create(作成)で作る。Name は Google の画面の中だけで使う名前で、識別子は上の「Cloudflare の API トークンの名前」と同じ。同じプロジェクトに複数の導入のクライアントが並んでも見分けられる。Use this client for an AI-powered agent(日本語の表示でも英語のまま)にはチェックを入れない。AI エージェントが利用者の代わりに Google の API を使うクライアントに付ける印で、このクライアントは人のログインに使う |
+| 作成の結果 | 控える値 | Client ID(クライアント ID)と Client secret(クライアント シークレット)を `deploy-secrets.env` に書く。シークレットは、作成の直後に出る画面を閉じると、表示もダウンロードもできなくなる。控える前に閉じたときは、表の下の「シークレットを控える前に閉じたとき」 |
+
+**シークレットを控える前に閉じたとき**(どちらでもよい。操作に迷ったら (b)):
+
+- (a) シークレットを足して、古いものを消す: Clients(クライアント)の一覧でクライアントの名前を押して詳細を開く。Client secrets(クライアント シークレット)の Add secret(日本語の表示でも英語のまま)で新しいシークレットを作り、その行のコピーのアイコンで値をコピーして `deploy-secrets.env` に書く。画面を離れるとコピーできなくなる。次に、古いシークレットの行で Disable(無効にする)を押してから、ごみ箱のアイコンで削除する。無効にする前は削除できない。1 つのクライアントに置けるシークレットは 2 つまで
+- (b) クライアントを作り直す: Clients(クライアント)の一覧でそのクライアントにチェックを入れ、Delete(削除)を押す。表の Clients(クライアント)の行から作り直す(リダイレクト URI も登録し直す)。消したクライアントは、30 日以内なら Restore deleted OAuth clients(削除した OAuth クライアントを復元)で戻せる
+
 2. **ゾーンの設定用の Cloudflare API トークン**(`edge_address: route` のときだけ。`workers-dev` では不要)
    - 画面: My Profile(マイ プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)→ Custom token(カスタム トークン)の Get started(始める)
    - Token name(トークン名)= `wtt-setup-<識別子>`
@@ -1531,7 +1555,10 @@ pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --json --comm
 
 ### 5.1 エージェント向けの設定(推奨・任意)
 
-導入が終わったら、続けて AI エージェントから control を操作できるようにしておく。方式は REST + API キーで、詳しくは[エージェント向けガイド](agent-guide.md)にある。人に「エージェント向けの設定もしますか」と 1 問で聞き、断られたら飛ばす。
+導入が終わったら、続けて AI エージェントから control を操作できるようにしておく。方式は REST + API キーで、詳しくは[エージェント向けガイド](agent-guide.md)にある。人に次の 1 問で聞く。答えは 3 の有効期限で使う:
+
+- 「導入の後も、AI エージェントにエクスペリエンスの作成などの操作をさせますか。(a) 続けて任せる / (b) この会話の作業の間だけ / (c) しない」
+- (c) なら、5.1 を飛ばす
 
 1. エージェントが[エージェント向けガイド 1.1 節](agent-guide.md#11-鍵の範囲と権限を決める必要なら専用ユーザーも)のロールの表を要約して見せ、鍵の権限と範囲を選んでもらう
    - 権限の既定は編集者。下書きまでエージェントが作り、公開は人が管理画面で行う
@@ -1545,7 +1572,7 @@ pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --json --comm
 3. **【人が行う】** 管理画面の左下のユーザーメニュー →「設定」→「API キー」の「新しい API キーを発行」で、名前と 1 で選んだ範囲・権限と、有効期限を指定して発行する
    - 表示された鍵を `.env.agent` の `AB_API_KEY=` の右に貼る。開き方は 0.5 の `deploy-secrets.env` と同じ。鍵は `wtt_` で始まり、発行の直後に 1 回だけ表示される。控えたら「保管したので閉じる」を押す
    - 鍵はチャットにも、エージェントの画面から実行するコマンドにも書かない。会話の記録に残る(0 節の「API キーの受け渡し」)
-   - 有効期限の選び方: この会話の作業のためだけに使うなら 1 日。期限切れで自然に無効になり、失効の操作が要らない。エージェントに継続して運用を任せるなら 90 日などの期限を付け、期限が来たら発行し直す。期限なしの鍵は、漏れたときに失効させるまで使われ続ける。選んだ期限は最後の報告の「残る鍵」に書く
+   - 有効期限は、5.1 の初めの問いの答えで決め、エージェントが依頼のときに伝える。(a) 続けて任せる → 90 日など。期限が来たら発行し直す。(b) この会話の作業の間だけ → 1 日。期限切れで自然に無効になり、失効の操作が要らない。期限なしの鍵は、漏れたときに失効させるまで使われ続ける。選んだ期限は最後の報告の「残る鍵」に書く
 4. エージェントが鍵を確かめる。値は表示しない:
 
 ```bash

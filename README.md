@@ -6,7 +6,7 @@
 - 配信: 設置タグを配る配信専用の Worker と、判定を返す edge Worker が担う
 - 計測: テストの結果(露出・目標の達成)は `dataLayer` から GA4 に送り、GA4 / BigQuery で読む。本製品は結果の集計を持たない
 
-状態: v0.9(先行公開版)。v1.0 で追加する予定の機能は[まだできないこと](#まだできないこと)にある。v0.9 から v1.0 へは更新で上げられる。使ってみた感想や不具合は Issue / Discussions へ。変更履歴は [CHANGELOG.md](CHANGELOG.md)
+状態: v0.9.1(先行公開版。v0.9 の文書を直した版)。v1.0 で追加する予定の機能は[まだできないこと](#まだできないこと)にある。v0.9 / v0.9.1 から v1.0 へは更新で上げられる。使ってみた感想や不具合は Issue / Discussions へ。変更履歴は [CHANGELOG.md](CHANGELOG.md)
 
 > **Adobe 社および同社の旧製品 Test&Target とは無関係**である。名称の "Test and Target" は一般名詞としての用法で、Adobe との提携・後継・互換関係は一切ない。
 
@@ -134,7 +134,7 @@ Claude Code / Codex などのコーディングエージェントに、下のプ
 ```text
 Web Test and Target Harness を私の Cloudflare アカウントに導入してください。
 1. この PC に足りないツール(Git / Node 24 以上の LTS / pnpm / jq。Windows では Git for Windows(Git Bash・OpenSSL を含む)も)を確かめ、入れるもの(名前と入手元)の一覧を 1 回だけ示して了承を取ってから入れる。pnpm は単体で入れず、Node に付く Corepack で使う(clone の後、リポジトリが固定した版が使われる。docs/deploy.md 0.4)
-2. https://github.com/AnalyticsDesign/web-test-and-target-harness を clone し、最新のリリースタグ(git tag の v* を版の順に並べた先頭。GitHub Releases の API は使わない)を checkout する
+2. https://github.com/AnalyticsDesign/web-test-and-target-harness を短いパスに clone し(Windows では例 C:\wtth。長いパスでは Filename too long で失敗する。docs/deploy.md 0.4)、最新のリリースタグ(git tag の v* を版の順に並べた先頭。GitHub Releases の API は使わない)を checkout する
 3. docs/install-questions.md を読み、その質問の表と進め方の規則どおりに私に聞く。答えは deploy-answers.example.yaml を写した deploy-answers.yaml に書く(既に deploy-answers.yaml があれば、答えの書かれた質問は飛ばす)
 4. node tools/deploy-answers/cli.mjs を実行し、出力を要約せずにそのまま私に見せて、推奨構成と最軽量構成のどちらにするかを聞く。選んだら --accept recommended か --accept lightest を付けて実行する。出力の先頭に『確認: アカウントが変わる』が出て、選んだ構成がそれに当たるときは、その節をそのまま見せ、構成の選択とは別にアカウントの変更への同意を聞く。同意したときだけ --confirm-account-change を付ける(終了コードごとの扱いは docs/deploy.md 0.2)
 5. docs/deploy.md を最初から最後まで読み、0 節の分担どおりに進める。コマンドは自分で実行し、【人が行う】と【人に依頼】の箇所でだけ止まって私に指示する
