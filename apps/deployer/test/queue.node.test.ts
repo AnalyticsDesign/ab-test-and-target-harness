@@ -57,7 +57,7 @@ describe("DeployQueueLogic", () => {
     expect(r).toEqual({ state: "deployed", accepted: { epoch: 10, seq: 1 }, deployed: { epoch: 10, seq: 1 }, deployedAt: new Date(now).toISOString() });
     expect(Object.keys(deploys[0]!.manifest).sort()).toEqual([staticPaths.preview("pv1"), staticPaths.site("site_a")].sort());
     const text = (await servedText("site_a"))!;
-    expect(text.startsWith("/* Web Test and Target Harness bootstrap (site site_a, config v1, runtime rt1) */")).toBe(true);
+    expect(text.startsWith("/* AB Test and Target Harness bootstrap (site site_a, config v1, runtime rt1) */")).toBe(true);
     expect(text).toContain('"apiBase":"https://edge.example"');
     expect(text.endsWith("/*RT1*/")).toBe(true);
   });

@@ -1,4 +1,4 @@
-# CONTEXT.md — Web Test and Target Harness 用語集
+# CONTEXT.md — AB Test and Target Harness 用語集
 
 このファイルは用語集である。手順は `docs/` の各ガイド(入口は `README.md`)を参照。
 
@@ -6,7 +6,7 @@
 
 | 用語 | 定義 |
 |---|---|
-| **Web Test and Target Harness** | 本製品。自分の Cloudflare アカウントにデプロイして使う OSS の Web A/B テスト / パーソナライズツール。Adobe 社および同社の旧製品 Test&Target とは無関係 |
+| **AB Test and Target Harness** | 本製品。自分の Cloudflare アカウントにデプロイして使う OSS の Web A/B テスト / パーソナライズツール。Adobe 社および同社の旧製品 Test&Target とは無関係 |
 
 ## テナントと権限
 
@@ -48,10 +48,10 @@
 |---|---|
 | **Visitor** | opaque な ID で識別される訪問者。PII は持たない |
 | **Visitor Profile** | Durable Object 上に置く訪問者ごとの集計値(Goal 達成回数・パターン別閲覧回数・割当)。生イベントは保存しない。最終訪問から retentionDays で全削除 |
-| **Deployment Mode** | 訪問者 ID の持続方法。A = JS Cookie、B = First-party Bridge(Phase 2)、C = BYOID(既存 ID の流用)、D-lite = 同一ゾーン Workers Route の Proxy Mode |
+| **Deployment Mode** | 訪問者 ID の持続方法。A = JS Cookie、B = サーバー発行 Cookie(今は同一ゾーン Workers Route の Proxy Mode。Bridge 経由は Phase 2)、C = BYOID(既存 ID の流用) |
 | **Bridge** | サイト自身のサーバーに置く `/__ab/*` の実装(アダプタ)。Phase 2 |
 | **Proxy Mode** | edge Worker が Cookie の読取・発行を自ら行う動作モード |
-| **D-lite** | サイトが Cloudflare 配下のとき、同一ゾーンの Workers Route で Proxy Mode を使う構成。現在の ITP 対応手段(Mode B は Phase 2) |
+| **サーバー発行 Cookie**(旧称 D-lite) | Mode B の表示名。サイトが Cloudflare 配下のとき、同一ゾーンの Workers Route で Proxy Mode を使う構成。現在の ITP 対応手段。識別子(`mode: "B"`・`dlite_hosts`・`/__ab/*`・コードとテストの名前)には旧称の `dlite` が残る |
 | **BYOID** | Bring Your Own ID。サイトの既存 Cookie 等を訪問者 ID として流用する方式(Mode C)。値はハッシュ化してから送る |
 
 ## 計測

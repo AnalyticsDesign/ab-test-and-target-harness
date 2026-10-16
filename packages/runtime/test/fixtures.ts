@@ -31,6 +31,7 @@ export const baseSettings: RuntimeSettings = {
 
 /** spec §10.9: 名前を変えたサイト設定。baseSettings(analytics 無し = 旧 record)と対で使う */
 export const renamedAnalytics: AnalyticsSettings = {
+  dataLayerName: "dataLayer",
   extraKey: "wtt_x",
   exposure: { event: "wtt_exposure", keys: { experimentId: "wtt_exp_id", experimentName: "wtt_exp_name", variantId: "wtt_var_id", variantName: "wtt_var_name" } },
   conversion: { event: "wtt_conversion", keys: { goalId: "wtt_goal_id", goalName: "wtt_goal_name" } },

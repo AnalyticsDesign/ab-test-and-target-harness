@@ -1,5 +1,6 @@
 import { Kysely } from "kysely";
 import { D1Dialect } from "kysely-d1";
+import type { ExperimentKind } from "@wtt/core";
 import type { Env } from "./env";
 
 // Better Auth 生成テーブル(migrations/0001_better_auth.sql)。列名は camelCase
@@ -33,9 +34,11 @@ export type InstanceAdminRow = { user_id: string; granted_by: string | null; cre
 /** instance_admin_prior_roles のマイグレーション(B46)。昇格前のワークスペースとロール。外すときに戻す */
 export type InstanceAdminPriorRoleRow = { user_id: string; organization_id: string; role: string; granted_at: number };
 export type ExperimentRow = {
-  site_id: string; id: string; name: string; status: "draft" | "running" | "paused" | "archived"; published_status: string | null;
+  site_id: string; id: string; name: string; kind: ExperimentKind; status: "draft" | "running" | "paused" | "archived"; published_status: string | null;
   url_match_json: string; targeting_json: string | null; traffic_percentage: number; persist_assignment: number; analytics_json: string | null;
   started_at: number | null; stopped_at: number | null;
+  /** 配信に入った時刻。開始・再開のたびに更新する。テストどうしの優先の順(決定 51) */
+  last_started_at: number | null;
   created_by: string; updated_by: string; created_at: number; updated_at: number;
 };
 export type VariantRow = { site_id: string; experiment_id: string; id: string; name: string; weight: number; position: number; analytics_json: string | null };

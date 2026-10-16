@@ -98,7 +98,7 @@ describe("fixture CLI", () => {
     execFileSync("pnpm", ["fixture", "fixtures/demo.json", `${out}/c.json`, "--static-dir", `${out}/static`, "--api-base", "http://localhost:4173"], { cwd: ROOT, stdio: "pipe" });
     const cfg = CompiledConfigSchema.parse(JSON.parse(readFileSync(`${out}/c.json`, "utf8")));
     const text = readFileSync(`${out}/static/s/${cfg.siteId}.js`, "utf8");
-    expect(text.startsWith(`/* Web Test and Target Harness bootstrap (site ${cfg.siteId}, config v${cfg.version}, runtime ${RUNTIME_HASH}) */\n`)).toBe(true);
+    expect(text.startsWith(`/* AB Test and Target Harness bootstrap (site ${cfg.siteId}, config v${cfg.version}, runtime ${RUNTIME_HASH}) */\n`)).toBe(true);
     expect(text).toContain('"apiBase":"http://localhost:4173"');
     expect(existsSync(`${out}/static/s/preview/${PREVIEW_HASH}.js`)).toBe(true);
     rmSync(out, { recursive: true, force: true });

@@ -54,7 +54,7 @@ export default async function WorkspacePage({ params }: { params: Promise<{ wid:
                     <code>{s.id}</code>
                   </td>
                   <td>{s.domain}</td>
-                  <td>{s.mode === "B" ? "D-lite" : s.idSource === "ab" ? "A" : "C"}</td>
+                  <td>{s.mode === "B" ? "B" : s.idSource === "ab" ? "A" : "C"}</td>
                   <td>{s.activeVersion ?? "未公開"}</td>
                 </tr>
               ))}

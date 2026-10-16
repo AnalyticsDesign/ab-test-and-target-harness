@@ -21,6 +21,7 @@ describe("settings sections", () => {
     expect(sectionOfField("analytics.exposure.event")).toBe("naming");
     expect(sectionOfField("exposure.event")).toBe("naming"); // invalid_analytics は analytics. が付かない
     expect(sectionOfField("extraKey")).toBe("naming");
+    expect(sectionOfField("dataLayerName")).toBe("naming"); // 決定 62: invalid_analytics の path は analytics. が付かない
     expect(sectionOfField("ga4PropertyId")).toBe("external");
     expect(sectionOfField("bigqueryDataset")).toBe("external");
     expect(sectionOfField("unknown")).toBe("general");

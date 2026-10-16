@@ -10,7 +10,7 @@ import { HydrationMark } from "@/components/HydrationMark";
 import { ThemeResync } from "@/components/ThemeResync";
 import { ConfirmProvider } from "@/components/ConfirmProvider";
 
-export const metadata = { title: "Web Test and Target Harness" };
+export const metadata = { title: "AB Test and Target Harness" };
 
 /**
  * 全画面共通。枠(サイドバー・上部バー)は認証済み領域(app/w 以下)、ログイン系は app/(auth)/layout.tsx が持つ。

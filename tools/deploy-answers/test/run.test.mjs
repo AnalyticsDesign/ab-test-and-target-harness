@@ -9,7 +9,7 @@ const LOWER = [
   "# edge_address: route              # route | workers-dev",
   "# zone_name: example.com           # route のとき",
   "# asset_public_base: none          # none / dev-assets / auto / https://…",
-  "# dlite_hosts: []                  # D-lite",
+  "# dlite_hosts: []                  # Mode B",
   "# plan: free                       # free | paid",
   "# accepted: recommended            # --accept が書く",
   "",

@@ -25,7 +25,7 @@
 | 当てはまること | 読む節 |
 |---|---|
 | サイトに Cookie の同意バナー(CMP)がある、または EU 向けで同意を得てから動かしたい | [7. consent の配線](#7-consent-の配線cmp-を使うサイト) |
-| Safari の訪問者にも長く同じパターンを出したい / サイトの既存の会員 ID などで訪問者を識別したい | [8. Mode C と D-lite](#8-mode-c-と-d-lite) |
+| Safari の訪問者にも長く同じパターンを出したい / サイトの既存の会員 ID などで訪問者を識別したい | [8. Mode C と Mode B](#8-mode-c-と-mode-b) |
 | 「前に料金ページを見た人」「目標を達成した人」など、訪問履歴で出し分けたい | [9. 履歴条件と Visitor Profile](#9-履歴条件と-visitor-profile) |
 | HTML / CSS / JavaScript の書き換え(コードの変更)を使う、またはサイトが CSP を出している | [10. コードの変更と CSP](#10-コードの変更と-csp) |
 | 日本国内向けのサイトで、外部送信ポリシーを公表している | [14. 外部送信規律への対応](#14-外部送信規律への対応) |
@@ -68,7 +68,7 @@
 | `名前` | 管理用の表示名。自由 |
 | `ドメイン(ホスト名)` | `<ページのホスト>`(例 `www.example.com`)。`https://` やパスは付けない。小文字 |
 | `サイト ID(任意)` | 空欄なら自動で決まる。自分で決めるなら英数字・`_`・`-` の 64 字以内(例 `site_example`)。タグの URL(`/s/<siteId>.js`)になり、**作成後は変更できない** |
-| `導入の形` | **迷ったら `A: JS Cookie(タグ 1 本)`**。もう一方の D-lite は Safari 対策の選択肢で、後から移せる([8 節](#8-mode-c-と-d-lite)) |
+| `導入の形` | **迷ったら `A: JS Cookie(タグ 1 本)`**。もう一方の `B: サーバー発行 Cookie` は Safari 対策の選択肢で、後から移せる([8 節](#8-mode-c-と-mode-b)) |
 | `同意の扱い`(設定のキーは `consentMode`) | **CMP が無ければ「同意を待たずに動かす」(既定。`implicit`)のまま**。同意を得るまで何も動かしたくない場合だけ「訪問者が同意するまで動かさない」(`required`)([7 節](#7-consent-の配線cmp-を使うサイト)) |
 
 作ったら、左メニューの「設定」→「一般」で **`受け付けるサイトのアドレス(Origin)`**(設定のキーは `allowedOrigins`)を確認する。`ドメイン(ホスト名)` から `https://<ドメイン>` が自動で入っている。同じタグを複数のホストのページに置く場合(例 `example.com` と `www.example.com`)は、1 行に 1 つずつ全部を書く。末尾のスラッシュやパスは付けない。ここに無い origin のページからの要求は拒否される(403)。この値はページの origin から決まるので、edge の位置にかかわらず既定値のままでよい。
@@ -108,6 +108,7 @@
 
 - **4.2 の GTM 部分は、用意した JSON をインポートすれば短縮できる(4.3)。** 手で作る場合と中身は同じ
 - 以下は既定の名前(`ab_exposure` / `ab_experiment_id` など)を前提にしている。「設定」→「外部計測の名前」(節の見出しは「外部計測の名前(dataLayer の名札)」)で名前を変えた場合は読み替える([12 節](#12-datalayer-の契約と命名の規則))
+- GTM のスニペットで dataLayer の名前を変えているサイト(`gtm.js` の URL に `l=` が付く)は、同じ節の `dataLayer の変数名` を同じ名前にする。違うままだと、タグは既定の `dataLayer` に入れ、GTM はそれを読まない([12 節](#datalayer-の変数名))
 
 ### 4.1 GA4 にカスタムディメンションを登録する
 
@@ -198,9 +199,9 @@ JSON に含まれないもの: 4.1 の GA4 カスタムディメンション(GA4
 1. **エクスペリエンスが適用されている**: パターンの変更がページに見える。割当を引き直して、別のパターンも出ることを確かめる。引き直し方は Mode で違う:
    - **Mode A**: DevTools → Application → Cookies で `_ab_vid` を削除して再読み込みする
    - **Mode C**: 参照している既存 Cookie の値が違う別のテスト利用者(または別のブラウザプロファイル)で開く。**本番の認証 Cookie を削除・改変しない**
-   - **D-lite**: DevTools → Application → Cookies で正本 Cookie を削除する(HttpOnly なので `document.cookie` からは消せない)
+   - **Mode B**: DevTools → Application → Cookies で正本 Cookie を削除する(HttpOnly なので `document.cookie` からは消せない)
 2. **Cookie が発行されている**: DevTools → Application → Cookies に `_ab_vid` がある(サイト設定の `正本 Cookie 名` を変えていればその名前)
-3. **`dataLayer` に `ab_exposure` が入っている**: DevTools の Console で `dataLayer` と入力して展開する。`ab_exposure` が **エクスペリエンスごとに 1 件**(二重に出ていない)で、`ab_experiment_id` / `ab_variant_id` が期待どおり。目標を踏んだら `ab_conversion` も同様に見る
+3. **`dataLayer` に `ab_exposure` が入っている**: DevTools の Console で `dataLayer`(サイト設定の `dataLayer の変数名` を変えていればその名前)と入力して展開する。`ab_exposure` が **エクスペリエンスごとに 1 件**(二重に出ていない)で、`ab_experiment_id` / `ab_variant_id` が期待どおり。目標を踏んだら `ab_conversion` も同様に見る
 4. **GA4 に届いている**: GTM のプレビューを有効にした状態でページを開き、GA4 → 管理 → **DebugView** に `ab_exposure` / `ab_conversion` が現れ、4.1 のパラメータが付いている
 
 コードの変更(HTML / CSS / JavaScript)を含むエクスペリエンスでは、あわせて Console に CSP 違反が出ていないことを確認する([10 節](#10-コードの変更と-csp))。開始直後に見るべきこと全体(両群の確認、SRM の兆候)は[運用ガイド 5 節](operations.md#5-開始直後のチェック)。
@@ -215,7 +216,7 @@ runtime は失敗を `console.debug`(`wtt: …` で始まる)に出す。Chrome 
 |---|---|---|
 | タグの URL が `not found` | そのサイトを一度でも公開したか / サイト ID の綴り | エクスペリエンスを開始する(自動で公開される)。反映は 1 分ほど |
 | タグの URL でサイトの 404 ページが出る | 配信専用の Worker の Route | [デプロイガイド 2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker) |
-| `_ab_vid` が作られない | タグが読み込まれているか(DevTools → Network で `<siteId>.js` が 200)/ `consentMode` が `required` で同意待ちになっていないか / `window.__ab` に `denied` を置いていないか | [7 節](#7-consent-の配線cmp-を使うサイト)。D-lite の Cookie は HttpOnly なので Application → Cookies で見る |
+| `_ab_vid` が作られない | タグが読み込まれているか(DevTools → Network で `<siteId>.js` が 200)/ `consentMode` が `required` で同意待ちになっていないか / `window.__ab` に `denied` を置いていないか | [7 節](#7-consent-の配線cmp-を使うサイト)。Mode B の Cookie は HttpOnly なので Application → Cookies で見る |
 | Network で `/v1/sites/<siteId>/decision` が 403(この通信は[履歴条件](#9-履歴条件と-visitor-profile)を使うサイトでだけ起きる) | ページの origin が `allowedOrigins` に完全一致しているか(`https://`・ポート・`www` の有無) | [2 節](#2-サイトを作る)の `allowedOrigins` に追加する |
 | Network で `/v1/sites/<siteId>/decision` が 404 | `<設置ホスト>/v1/*` の Route | [デプロイガイド 2.3](deploy.md#23-route-を書く) |
 | 元の表示が一瞬見えてから切り替わる(チラつく) | タグに `async` / `defer` が付いていないか / GTM 経由で入れていないか / CSS の変更か(CSS の変更は prehide しない) | [3 節](#3-タグを置く)のとおり viewport の meta の直後に同期で置く |
@@ -267,22 +268,22 @@ runtime は失敗を `console.debug`(`wtt: …` で始まる)に出す。Chrome 
 ### 撤回したときに起きること
 
 - **Mode A**: `document.cookie` から正本 Cookie と UUID Cookie(有効時)を削除する
-- **D-lite**: 正本 Cookie は HttpOnly で edge が持っているので、`AB.consent(false)` が `/__ab/decision` に撤回を 1 回送り、edge が Cookie を消す。**呼ばれなければ Cookie は消えない**
-- 撤回後に再び `AB.consent(true)` が呼ばれると、**新しい ID で**やり直す(前の ID は復元しない)。**Mode C は例外**で、サイトの既存 Cookie から作る ID なので同じ ID に戻る([8 節](#8-mode-c-と-d-lite))
+- **Mode B**: 正本 Cookie は HttpOnly で edge が持っているので、`AB.consent(false)` が `/__ab/decision` に撤回を 1 回送り、edge が Cookie を消す。**呼ばれなければ Cookie は消えない**
+- 撤回後に再び `AB.consent(true)` が呼ばれると、**新しい ID で**やり直す(前の ID は復元しない)。**Mode C は例外**で、サイトの既存 Cookie から作る ID なので同じ ID に戻る([8 節](#8-mode-c-と-mode-b))
 - 適用済みの変更は、撤回しても元に戻らない
-- **サーバー側の履歴の削除**: `AB.consent(false)` のときに `/v1/sites/<siteId>/event` へ削除要求(`{ "type": "forget" }`)を 1 回送り、[9 節](#9-履歴条件と-visitor-profile)の Visitor Profile(目標達成・閲覧回数・保存済みの割当)を即時に消す。**いま公開中の設定が履歴条件を使っていなくても送る**(以前の設定で作られた Profile が残っていることがあるため。Profile を一度も使っていないサイトでは、消すものが無いまま 1 要求が返るだけ)。サイト設定 `撤回時に Profile を削除(forgetOnRevoke)` を off にすると送らず、`retentionDays` の経過で消える(誤操作の拒否で履歴を失いたくない場合向け)。D-lite は対象外(Cookie の削除だけで、履歴は `retentionDays` で消える)。削除は確実ではなく、撤回直後のページ遷移や通信断で届かなかった分は `retentionDays` で消える
+- **サーバー側の履歴の削除**: `AB.consent(false)` のときに `/v1/sites/<siteId>/event` へ削除要求(`{ "type": "forget" }`)を 1 回送り、[9 節](#9-履歴条件と-visitor-profile)の Visitor Profile(目標達成・閲覧回数・保存済みの割当)を即時に消す。**いま公開中の設定が履歴条件を使っていなくても送る**(以前の設定で作られた Profile が残っていることがあるため。Profile を一度も使っていないサイトでは、消すものが無いまま 1 要求が返るだけ)。サイト設定 `撤回時に Profile を削除(forgetOnRevoke)` を off にすると送らず、`retentionDays` の経過で消える(誤操作の拒否で履歴を失いたくない場合向け)。Mode B は対象外(Cookie の削除だけで、履歴は `retentionDays` で消える)。削除は確実ではなく、撤回直後のページ遷移や通信断で届かなかった分は `retentionDays` で消える
 
-## 8. Mode C と D-lite
+## 8. Mode C と Mode B
 
-Mode は「訪問者 ID を何で持つか」の違い。**迷ったら Mode A**(タグ 1 本で完結し、実サイトで検証済み)。D-lite も実サイトで検証済み。Mode C は E2E テストでは検証済みだが、実サイトでは未検証。
+Mode は「訪問者 ID を何で持つか」の違い。**迷ったら Mode A**(タグ 1 本で完結し、実サイトで検証済み)。Mode B も実サイトで検証済み。Mode C は E2E テストでは検証済みだが、実サイトでは未検証。
 
 | Mode | 訪問者 ID の持ち方 | Safari での寿命 | 必要な作業 | 検証 |
 |---|---|---|---|---|
 | **A: JS Cookie** | タグが JavaScript で Cookie を書く(毎ページビューで延長) | **7 日間サイトを訪れないと消える**([13 節](#13-ブラウザの制約)) | タグ 1 本 | 実サイトで検証済み |
 | **C: BYOID**(`訪問者 ID の取得元` = `cookie:<名>`) | サイトの既存 Cookie(会員 ID など)から作る。ツールは発行しない | 元の Cookie に依存。サイトが JavaScript で書いた Cookie なら A と同じ | タグ 1 本 + サイト設定 | E2E 検証済み(`fixtures/e2e-byoid.json`)・実サイト未検証 |
-| **D-lite**(`導入の形` = D-lite。= Mode B) | サイトと同じゾーンの Workers Route を通して、edge が HTTP の `Set-Cookie`(HttpOnly)で発行する | 7 日ルールの対象外(同じゾーンの Route からの `Set-Cookie` が Safari で 7 日を超えて残ることを実機で確認済み) | タグ 1 本 + `/__ab/*` の Route。サイトが Cloudflare のゾーン配下にあることが前提 | E2E 検証済み(`fixtures/demo-dlite.json`)・実サイトで検証済み |
+| **B: サーバー発行 Cookie**(旧称 D-lite) | サイトと同じゾーンの Workers Route を通して、edge が HTTP の `Set-Cookie`(HttpOnly)で発行する | 7 日ルールの対象外(同じゾーンの Route からの `Set-Cookie` が Safari で 7 日を超えて残ることを実機で確認済み) | タグ 1 本 + `/__ab/*` の Route。サイトが Cloudflare のゾーン配下にあることが前提 | E2E 検証済み(`fixtures/demo-dlite.json`)・実サイトで検証済み |
 
-A から D-lite へは後から移せるが、Cookie の発行元が変わるので訪問者 ID は作り直しになる(全訪問者の割当がリセットされる)。
+A から B へは後から移せるが、Cookie の発行元が変わるので訪問者 ID は作り直しになる(全訪問者の割当がリセットされる)。
 
 ### Mode C(BYOID)
 
@@ -296,18 +297,18 @@ A から D-lite へは後から移せるが、Cookie の発行元が変わるの
 - **同意を撤回しても ID は変わらない。** ツールが消せるのは自分が発行した Cookie だけで、参照先の Cookie はサイトのもの。再び同意すると同じ ID に戻り、撤回前の履歴に再びつながる(サーバー側の履歴の削除は `撤回時に Profile を削除(forgetOnRevoke)` が担う。[7 節](#7-consent-の配線cmp-を使うサイト))
 - **`参照する Cookie 名` は `正本 Cookie 名` / `UUID Cookie 名` / 削除待ちの旧 Cookie 名と同じにできない**(保存時に 422)。同じだと、値が取れなかったときに自分で書いた匿名 ID を次のページで参照先として読み、同じ訪問者の ID が変わってしまうため
 - **メールアドレスなど個人データに由来する値は使わない。** `site_salt` はタグの中に入る公開値なので、この変換は「生の値を保存しない」ための措置で匿名化ではない。値の種類が少ないもの(低エントロピー)は逆算され得る
-- D-lite とは併用できない(D-lite では `訪問者 ID の取得元` は `ab` 固定)
+- Mode B とは併用できない(Mode B では `訪問者 ID の取得元` は `ab` 固定)
 
 **Mode C を選んだ場合の注意事項**
 
 - **Mode C でも、匿名の Cookie(`_ab_vid`。`正本 Cookie 名` の Cookie)を置く。** 識別(割当・履歴)には使わず、「初回の訪問からの経過」の条件に使う発行時刻のためだけに置く。サーバーへの判定の要求にはこの ID を含めず、時刻だけを送る
 - **「初回の訪問からの経過」はブラウザ単位**で、ログインした人を端末をまたいで数えるものではない(別の端末・別のブラウザでは、その端末で最初に訪れた時点から数え直す)
 
-### D-lite
+### Mode B(サーバー発行 Cookie)
 
 サイトが Cloudflare のゾーン配下にあるときの Safari 対策。サイト本体のサーバーの改修は要らない。
 
-1. サイト設定の `導入の形` を `D-lite: 同一ゾーンの Workers Route(サイトが Cloudflare 配下のとき)` にし、`hosts` に `<ページのホスト>` を 1 行に 1 つ書く(小文字。日本語ドメインは punycode)
+1. サイト設定の `導入の形` を `B: サーバー発行 Cookie(同じゾーンの Workers Route。サイトが Cloudflare 配下のとき)` にし、`hosts` に `<ページのホスト>` を 1 行に 1 つ書く(小文字。日本語ドメインは punycode)
 2. `<ページのホスト>/__ab/*` の Route を追加して edge を再デプロイする(デプロイガイドの `dlite_hosts`。[2.3](deploy.md#23-route-を書く))
 3. 疎通を確認する:
 
@@ -318,11 +319,11 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 
 `set-cookie:` の行が出れば通っている。
 
-`hosts`・Route・疎通確認の URL は、すべて `<ページのホスト>` に揃える。タグは D-lite の decision / event を `/__ab/…` の相対 URL で送るので、タグを別のホストから配っていても `/__ab/*` はページのホスト側に要る。
+`hosts`・Route・疎通確認の URL は、すべて `<ページのホスト>` に揃える。タグは Mode B の decision / event を `/__ab/…` の相対 URL で送るので、タグを別のホストから配っていても `/__ab/*` はページのホスト側に要る。
 
 - タグは `/__ab/decision` に訪問者 ID を含めずに送り、edge が `Set-Cookie`(HttpOnly)で正本 Cookie を発行する。ID は JavaScript から読めない
 - 同意の撤回で Cookie が消えるのは、`AB.consent(false)` が呼ばれたときだけ([7 節](#7-consent-の配線cmp-を使うサイト))。ページ読み込み時点で `denied` の場合は通信そのものを行わないため、既に発行された Cookie は残る(Cookie 自体の有効期限は 1 年)。`retentionDays` が決めるのはサーバー側の Visitor Profile の寿命で、Cookie ではない
-- `撤回時に Profile を削除(forgetOnRevoke)` は D-lite では効かない
+- `撤回時に Profile を削除(forgetOnRevoke)` は Mode B では効かない
 
 ## 9. 履歴条件と Visitor Profile
 
@@ -396,10 +397,10 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 | `名前` | 一般 | 管理用の表示名 |
 | `サイト ID(任意)` | 作成時のみ | タグの URL(`/s/<サイト ID>.js`)になる。空欄なら自動で決まる。既存のタグを引き継ぐ場合はその ID を指定する。**作成後は変更できない** |
 | `ドメイン(ホスト名)` | 一般 | サイトのホスト名。`受け付けるサイトのアドレス(Origin)` の初期値(`https://<ドメイン>`)になる |
-| `hosts` | 訪問者 ID | D-lite のときだけ表示。1 行 1 ホスト名(小文字。日本語ドメインは punycode)。edge が `/__ab/*` への要求のホストからサイトを引くために使う |
+| `hosts` | 訪問者 ID | Mode B のときだけ表示。1 行 1 ホスト名(小文字。日本語ドメインは punycode)。edge が `/__ab/*` への要求のホストからサイトを引くために使う |
 | `受け付けるサイトのアドレス(Origin。1 行に 1 つ。https://host[:port] の形)` | 一般 | 設定のキーは `allowedOrigins`。1 行 1 origin。**完全形 `https://host[:port]`** で、末尾スラッシュもパスも付けない。Mode A の decision / event はここに一致する Origin だけを受け付ける。空だと全部拒否する(403) |
-| `導入の形` | 訪問者 ID | `A: JS Cookie(タグ 1 本)` または `D-lite: 同一ゾーンの Workers Route(サイトが Cloudflare 配下のとき)`(= Mode B)。[8 節](#8-mode-c-と-d-lite) |
-| `訪問者 ID の取得元` | 訪問者 ID | `ab`(ツールが発行する匿名 ID = Mode A)または `cookie:<名>`(サイトの既存 Cookie を使う = Mode C / BYOID)。D-lite では `ab` 固定 |
+| `導入の形` | 訪問者 ID | `A: JS Cookie(タグ 1 本)` または `B: サーバー発行 Cookie(同じゾーンの Workers Route。サイトが Cloudflare 配下のとき)`。[8 節](#8-mode-c-と-mode-b) |
+| `訪問者 ID の取得元` | 訪問者 ID | `ab`(ツールが発行する匿名 ID = Mode A)または `cookie:<名>`(サイトの既存 Cookie を使う = Mode C / BYOID)。Mode B では `ab` 固定 |
 | `参照する Cookie 名` | 訪問者 ID | Mode C のとき。値は `SHA-256(site_salt + 値)` に変換してから送る。メールアドレスなど値の種類が少ないものは逆算され得るので使わない |
 | `正本 Cookie 名` | 訪問者 ID | 既定 `_ab_vid`。**変えると全訪問者の ID が作り直され、割当がリセットされる**。旧名は `retentionDays` の間、削除対象として記録され、その間は再利用できない |
 | `UUID Cookie(外部ツール連携用の別名。出力専用)` | 訪問者 ID | 有効にすると、正本の ID から導出した UUIDv4 を別の Cookie(`UUID Cookie 名`、既定 `_ab_uuid`)にも書く。導出した UUID から正本の ID には戻せず、ID の発行時刻も含まない。BYOID(Mode C)の訪問者にも出す。Mode C では割当に使う ID(BYOID のハッシュ。BYOID の Cookie が無ければ匿名 ID)から導出するので、ログインの前後で `_ab_uuid` の値が変わる。ツール自身はこの Cookie を読まない |
@@ -408,7 +409,7 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 | `decisionTimeoutMs(300〜3000)` | 一般 | decision の応答を待つ時間。超えるとその読み込みではエクスペリエンスを出さない(元の表示のまま) |
 | `retentionDays(Profile と旧 Cookie 名の保持日数)` | 一般 | 既定 90(1〜3650)。最終訪問からこの日数で Visitor Profile を自動削除する。変更は次に訪問した訪問者から効く(休眠中の Profile は変更前の日数で消える。[9 節](#9-履歴条件と-visitor-profile)) |
 | `撤回時に Profile を削除(forgetOnRevoke)` | 一般 | 既定 on。同意の撤回時にサーバー側の履歴をすぐ消す([7 節](#7-consent-の配線cmp-を使うサイト))。off にすると `retentionDays` まで残す |
-| `外部計測の名前(dataLayer の名札)` | 外部計測の名前 | `extra の名前空間キー` / `露出のイベント名` / `露出: experimentId キー` / `露出: experimentName キー` / `露出: variantId キー` / `露出: variantName キー` / `コンバージョンのイベント名` / `コンバージョン: goalId キー` / `コンバージョン: goalName キー` の 9 項目。既定のままで使える([12 節](#12-datalayer-の契約と命名の規則)) |
+| `外部計測の名前(dataLayer の名札)` | 外部計測の名前 | `dataLayer の変数名`(既定 `dataLayer`) / `extra の名前空間キー` / `露出のイベント名` / `露出: experimentId キー` / `露出: experimentName キー` / `露出: variantId キー` / `露出: variantName キー` / `コンバージョンのイベント名` / `コンバージョン: goalId キー` / `コンバージョン: goalName キー` の 10 項目。既定のままで使える([12 節](#12-datalayer-の契約と命名の規則)) |
 | `ga4PropertyId(数値の GA4 プロパティ ID。G- で始まる測定 ID ではありません)` | 外部 ID | 管理者以上。分析レシピ(`analytics-recipe`)がプロパティ ID を埋めるのに使う。空 = 未設定(レシピはプレースホルダのまま)。[分析ガイド 2 節 (d)](analytics.md#d-サイトに外部-id-を設定する) |
 | `bigqueryDataset(<GCP プロジェクト ID>.<データセット名>)` | 外部 ID | 同上。ドット区切りで `<GCP プロジェクト ID>.<BQ データセット>`(データセット名だけは不可) |
 
@@ -440,12 +441,20 @@ dataLayer.push({ event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "CTA
 
 ### サイト単位・エクスペリエンス単位の名前
 
-サイト単位の名札はサイト設定の `外部計測の名前(dataLayer の名札)` の 9 項目([11 節](#11-サイト設定項目の全一覧))。エクスペリエンス / パターン単位では、エクスペリエンス名・パターン名の**値**と、`extra` の追加 key-value を上書きできる。
+サイト単位の名札はサイト設定の `外部計測の名前(dataLayer の名札)` の 10 項目([11 節](#11-サイト設定項目の全一覧))。エクスペリエンス / パターン単位では、エクスペリエンス名・パターン名の**値**と、`extra` の追加 key-value を上書きできる。
 
 - エクスペリエンス名はエクスペリエンス側の `experimentName`、パターン名はパターン側の `variantName` で上書きする(無ければそれぞれの `name`)
 - レベルをまたぐ上書き(エクスペリエンス側で `variantName`、パターン側で `experimentName`)は受け付けない — 全パターンが同じ名前になったり、パターンごとにエクスペリエンス名が変わったりして、GA4 のセグメントが壊れるため
 - `experimentId` / `variantId` / イベント名は上書きできない
 - `extra` はキーごとにパターンの値がエクスペリエンスの値に優先する
+
+### dataLayer の変数名
+
+タグが push する配列の名前(既定 `dataLayer`)。GTM のスニペットで dataLayer の名前を変えているサイトだけ、スニペットの 4 番目の引数(既定のスニペットで `'dataLayer'` と書かれている所。`gtm.js` の URL の `l=` の値)と同じ名前にする。最後の引数はコンテナ ID(`GTM-XXXX`)なので、取り違えない。push する中身は上の形のままで、入れる配列だけが変わる。
+
+- 使える名前は JavaScript の変数名として書けるもの: 英字・`_`・`$` で始まり、英数字と `_` と `$` だけの 64 字以内。`AB` と `__ab` はタグ自身が使うので指定できない
+- その名前の配列が無ければタグが作る(GTM が後から読み込まれても処理される)。配列ではない値(`push` を持たない値)が既にある場合は、上書きせず push をやめる。エクスペリエンスの表示は続く
+- 送り先は GTM と gtag.js の dataLayer だけを想定している。Adobe Client Data Layer(`adobeDataLayer`)や Tealium の `utag_data` は、push の扱いが違うため対象外
 
 **名札を変えるときの注意**: 稼働中のエクスペリエンスがある状態でサイト単位の名札を変えると、GTM 側(カスタム イベント トリガー / データレイヤーの変数 / GA4 イベントタグのパラメータ)を同時に直さない限り、その時点から計測が途切れる。名札はエクスペリエンスの切れ目で変え、GTM の変更と同じタイミングで公開する。名札を変えたサイトでは [4.3](#43-ショートカット-json-をインポートする) の JSON は使えない。
 
@@ -464,7 +473,7 @@ dataLayer.push({ event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "CTA
 
 訪問者 ID は Cookie に持つため、ブラウザごとの Cookie の寿命が、同じ訪問者に同じパターンを出し続けられるかを左右する。
 
-| ブラウザ | JavaScript で書いた Cookie(Mode A / Mode C) | HTTP `Set-Cookie`(D-lite) |
+| ブラウザ | JavaScript で書いた Cookie(Mode A / Mode C) | HTTP `Set-Cookie`(Mode B) |
 |---|---|---|
 | Safari | 「**7 日間サイト操作なし**」で消える(JavaScript で書いた Cookie / localStorage / IndexedDB が対象)。一律 7 日の上限は 2020 年に廃止された。トラッカーと判定されたドメインからのリンク装飾付きの流入では 24 時間 | 真の first-party なら寿命の上限なし。ただし CNAME cloaking や、応答 IP の上位 16 ビットがページと異なる場合(Safari 16.4 以降)は 7 日 |
 | Brave | 2025-08 の v1.83 で JavaScript の Cookie の 7 日上限を撤廃し、HTTP と同じ**最大 180 日**に揃えた。Safari 型の「操作なし N 日で削除」は無い。ただし **Shields の既定設定で GTM / GA4 のスクリプトが遮断される**ため、Brave の訪問者にはエクスペリエンスは出て Cookie も残るが、`ab_exposure` / `ab_conversion` は GA4 に届かない(`dataLayer` への push は行われる)。Brave の訪問者は分析の母数・分子から欠ける前提で読む | 最大 180 日(GA4 の計測は既定で不可) |
@@ -473,7 +482,7 @@ dataLayer.push({ event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "CTA
 
 出典(Brave): [brave-browser issue #48063](https://github.com/brave/brave-browser/issues/48063) / [brave-core PR #30479](https://github.com/brave/brave-core/pull/30479)。
 
-**Safari 対策**は D-lite([8 節](#8-mode-c-と-d-lite))。同じゾーンの Workers Route から HTTP `Set-Cookie`(HttpOnly)で発行するので、「7 日間サイト操作なし」の対象にならない。サイトが Cloudflare のゾーン配下に無い場合は Mode A のまま運用することになる。定期的に再訪する訪問者が中心のサイトなら 7 日の間隔に収まるが、月 1 回程度しか来ない訪問者が中心のサイトでは、Safari のシェアの分だけ「初回扱い」(割当のリセット = 別のパターンを引き直す)が増える。
+**Safari 対策**は Mode B(サーバー発行 Cookie。[8 節](#8-mode-c-と-mode-b))。同じゾーンの Workers Route から HTTP `Set-Cookie`(HttpOnly)で発行するので、「7 日間サイト操作なし」の対象にならない。サイトが Cloudflare のゾーン配下に無い場合は Mode A のまま運用することになる。定期的に再訪する訪問者が中心のサイトなら 7 日の間隔に収まるが、月 1 回程度しか来ない訪問者が中心のサイトでは、Safari のシェアの分だけ「初回扱い」(割当のリセット = 別のパターンを引き直す)が増える。
 
 プライベートブラウズ / シークレットウィンドウでは、訪問をまたいで識別できない。その場合はセッション内だけの A/B テストとして動く(エラーにはしない)。
 
@@ -491,10 +500,10 @@ dataLayer.push({ event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "CTA
 | 同上 | **event**(目標の達成・同意の撤回): `type`(`goal` / `forget`)、`goalId`(達成した目標の識別子。`type` が `goal` のとき)、`visitorId`(Mode A) | A/B テストの効果測定(Conversion の計上)、および同意撤回時のサーバー側の履歴の削除 | 同上 |
 
 - **明示的な拒否(`denied`)の間は、`consentMode` に関係なく Cookie も送信も発生しない。** `window.__ab` の事前状態が `denied` の場合と、`AB.consent(false)` で撤回された後がこれにあたる。`pending`(同意も拒否もまだ)で止まるのは `consentMode: "required"` のサイトだけで、**既定の `consentMode: "implicit"` では `pending` を無視してすぐに動き、上の表の送信を行う**。同意を得てから送信を始める形にするには `required` を選ぶ([7 節](#7-consent-の配線cmp-を使うサイト))
-- **ツールは氏名・メールアドレスなどの入力項目を持たない。** 訪問者 ID はツールが発行する乱数、または Mode C ではサイトの既存 ID を `SHA-256(site_salt + 値)` に変換した値([8 節](#8-mode-c-と-d-lite)。変換元が個人データの場合の扱いは同節を参照)
+- **ツールは氏名・メールアドレスなどの入力項目を持たない。** 訪問者 ID はツールが発行する乱数、または Mode C ではサイトの既存 ID を `SHA-256(site_salt + 値)` に変換した値([8 節](#8-mode-c-と-mode-b)。変換元が個人データの場合の扱いは同節を参照)
 - **ただし `url`(閲覧中のページの URL)と `referrer` は加工せずにそのまま送る。** URL のクエリやフラグメントに個人情報(メールアドレス、氏名、会員 ID など)が含まれるページに設置すると、それも送信内容に含まれる。設置するページの URL 設計を確認し、含まれ得るなら公表用の情報一覧にその旨を書く
-- **Mode C** でも匿名の Cookie(`_ab_vid`)を置く。識別には使わず、判定の要求にはこの ID を含めず初回の訪問時刻(`firstVisitAt`)だけを送る([8 節](#8-mode-c-と-d-lite))
-- **D-lite** では、HTTP `Set-Cookie` で発行した HttpOnly Cookie が `/__ab/*` への要求に自動的に付く(`visitorId` は本文に含めない。この Cookie の値にも発行時刻(初回の訪問日時)が含まれる)
+- **Mode C** でも匿名の Cookie(`_ab_vid`)を置く。識別には使わず、判定の要求にはこの ID を含めず初回の訪問時刻(`firstVisitAt`)だけを送る([8 節](#8-mode-c-と-mode-b))
+- **Mode B** では、HTTP `Set-Cookie` で発行した HttpOnly Cookie が `/__ab/*` への要求に自動的に付く(`visitorId` は本文に含めない。この Cookie の値にも発行時刻(初回の訪問日時)が含まれる)
 - **プレビューを設置タグ経由で開いたときだけ**、設置タグと同じオリジンからスクリプト 1 本(`/s/preview/<hash>.js`)を追加で読む(設置タグの nonce 付き)。これは読み込みだけで、訪問者の情報を送らない。通常の訪問者は読まない
 - **GA4 / GTM への送信はこのツールの送信ではない。** タグはサイトの `dataLayer` に push するだけで、そこから先は GTM のタグが送る。GA4 / GTM は運営者の外部送信ポリシーに既に書かれているはずの送信先で、このツールが増やすのはイベント名とパラメータ([12 節](#12-datalayer-の契約と命名の規則))だけ
 

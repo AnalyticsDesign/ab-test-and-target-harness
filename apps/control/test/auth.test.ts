@@ -190,6 +190,7 @@ describe("setup and sign-up gate", () => {
       "POST /sites/{sid}/audiences",
       "POST /sites/{sid}/evaluate",
       "POST /sites/{sid}/experiments",
+      "POST /sites/{sid}/experiments/{eid}/duplicate",
       "POST /sites/{sid}/experiments/{eid}/status",
       "POST /sites/{sid}/goals",
       "POST /sites/{sid}/publish",

@@ -2,7 +2,7 @@
 
 ## Issue
 
-不具合の報告と機能の提案は Issue で受け付けている。**使い方の質問は [Discussions](https://github.com/AnalyticsDesign/web-test-and-target-harness/discussions) の Q&A へ。** 不具合の報告には、再現手順・期待した動作・実際の動作・環境(Cloudflare のプラン、ブラウザ、Node のバージョン)を書いてほしい。
+不具合の報告と機能の提案は Issue で受け付けている。**使い方の質問は [Discussions](https://github.com/AnalyticsDesign/ab-test-and-target-harness/discussions) の Q&A へ。** 不具合の報告には、再現手順・期待した動作・実際の動作・環境(Cloudflare のプラン、ブラウザ、Node のバージョン)を書いてほしい。
 
 **脆弱性は Issue に書かないこと。** 報告の窓口は [SECURITY.md](SECURITY.md) を参照。
 

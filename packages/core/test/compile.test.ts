@@ -380,3 +380,52 @@ describe("compile: 版 2(決定 49)", () => {
     });
   });
 });
+
+describe("experiment kind (決定 51、設計書 §3.1・§3.2)", () => {
+  const single = (id = "exp_s") => ({
+    id, name: "personalize", kind: "single" as const,
+    urlMatch: { op: "contains" as const, value: "/lp/" },
+    trafficPercentage: 100, persistAssignment: false,
+    variants: [{ id: "a", name: "A", weight: 100, changes: [{ id: "c1", type: "TEXT" as const, selector: ".hero-title", payload: { text: "S" } }] }],
+  });
+
+  it("compiled_config_schema_accepts_single_variant_experiment", () => {
+    const cfg = compile({ ...base, experiments: [single()] });
+    expect(cfg.experiments[0]!.variants).toHaveLength(1);
+    expect(CompiledConfigSchema.safeParse(cfg).success).toBe(true);
+    const read = parseCompiledConfig(JSON.parse(JSON.stringify(cfg))); // 戻り値は CompiledConfig | null(レビュー r2 CX-Medium-4)
+    expect(read).not.toBeNull();
+    if (read === null) throw new Error("parseCompiledConfig rejected a single-variant config");
+    expect(read.experiments[0]!.variants).toHaveLength(1);
+  });
+
+  it("does not put kind into the compiled config", () => {
+    const cfg = compile({ ...base, experiments: [single(), { ...exp(), kind: "test" }] });
+    for (const e of cfg.experiments) expect(e).not.toHaveProperty("kind");
+  });
+
+  it("treats a missing kind as a test", () => {
+    const oneVariant = { ...exp(), variants: [{ id: "vA", name: "A", weight: 100, changes: [] }] };
+    expect(() => compile({ ...base, experiments: [oneVariant] })).toThrow(CompileError);
+  });
+
+  it("rejects a single with two variants and a test with one variant", () => {
+    const codeOf = (input: unknown): string | null => {
+      try {
+        compile(input);
+        return null;
+      } catch (e) {
+        return e instanceof CompileError ? e.code : "other";
+      }
+    };
+    const twoVariants = { ...single(), variants: [{ id: "a", name: "A", weight: 50, changes: [] }, { id: "b", name: "B", weight: 50, changes: [] }] };
+    expect(codeOf({ ...base, experiments: [twoVariants] })).toBe("invalid_input");
+    const testWithOne = { ...exp(), kind: "test" as const, variants: [{ id: "vA", name: "A", weight: 100, changes: [] }] };
+    expect(codeOf({ ...base, experiments: [testWithOne] })).toBe("invalid_input");
+  });
+
+  it("keeps the input order of experiments (the order is the priority, 設計書 §3.2)", () => {
+    const cfg = compile({ ...base, experiments: [single("exp_z"), { ...exp(), id: "exp_b" }, { ...exp(), id: "exp_a" }] });
+    expect(cfg.experiments.map((e) => e.id)).toEqual(["exp_z", "exp_b", "exp_a"]);
+  });
+});

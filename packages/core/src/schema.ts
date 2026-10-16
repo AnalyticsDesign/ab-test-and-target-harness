@@ -285,7 +285,9 @@ export const ExperimentSchema = z
     ...ExperimentCommonShape,
     urlMatch: CompiledPageMatchSchema,
     targeting: DslNodeSchema.optional(),
-    variants: z.array(VariantSchema).min(2),
+    // 決定 51(設計書 §3.1): 種別は compiled config に載せないので、ここはパターン 1 つ以上だけを見る
+    // (テストは 2 つ以上・パーソナライズは 1 つは、control の保存と compile の入力で確かめる)
+    variants: z.array(VariantSchema).min(1),
   })
   .superRefine(refineVariantWeights);
 export type Experiment = z.infer<typeof ExperimentSchema>;

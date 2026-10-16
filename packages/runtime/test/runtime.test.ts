@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { uuidToVisitorId, visitorIdToUuid, bucketOf, hashByoidValue } from "@wtt/core";
 import type { CompiledConfig } from "@wtt/core";
 import { createRuntime, type AbApi, type RuntimeDeps } from "../src/runtime";
-import { baseConfig, baseSettings, goalsConfig, namedConfig, namedSettings, remoteConfig } from "./fixtures";
+import { baseConfig, baseSettings, goalsConfig, namedConfig, namedSettings, remoteConfig, renamedAnalytics } from "./fixtures";
 
 /** exp_hero(50/50)で指定の半分に入る canonical ID を探す */
 function findVisitor(half: "A" | "B"): string {
@@ -75,6 +75,7 @@ beforeEach(() => {
   // 各 test は必ず自前の PageState / assertion を持つため無害(apply.test.ts の既存パターンと同じ)
   document.head.querySelectorAll("style[data-ab-change]").forEach((s) => s.remove());
   delete (window as unknown as Record<string, unknown> & Window).dataLayer;
+  delete (window as unknown as Record<string, unknown> & Window).myDL;
   delete (window as unknown as Record<string, unknown> & Window).__ab;
 });
 afterEach(() => {
@@ -186,6 +187,60 @@ it("legacy_config_without_analytics_uses_default_names", async () => {
   ]);
   api.track("g_cta");
   expect(dataLayer()[2]).toEqual({ event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "CTA click", ab_extra: null });
+});
+
+it("custom_datalayer_name_receives_exposure_and_conversion", async () => {
+  // 決定 62: GTM のスニペットで名前を変えたサイト。push の形は同じで、宛先の配列だけが変わる
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const f = deferredFetch();
+  const settings = { ...namedSettings, analytics: { ...renamedAnalytics, dataLayerName: "myDL" } };
+  const api = createRuntime(makeDeps(f.fn), { config: namedConfig, settings });
+  await flush();
+  api.track("g_cta");
+  const myDL = (window as unknown as { myDL?: Array<Record<string, unknown>> }).myDL;
+  expect(myDL?.map((e) => e.event)).toEqual([undefined, "wtt_exposure", "wtt_conversion"]);
+  expect("dataLayer" in window).toBe(false); // 既定名の配列は作らない
+});
+
+it("analytics_without_datalayer_name_pushes_to_datalayer", async () => {
+  // 決定 62 より前に焼いた bootstrap(analytics はあるが dataLayerName が無い)は既定の dataLayer に push する
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const f = deferredFetch();
+  const { dataLayerName: _omit, ...legacy } = renamedAnalytics;
+  void _omit;
+  const settings = { ...namedSettings, analytics: legacy as typeof renamedAnalytics };
+  createRuntime(makeDeps(f.fn), { config: namedConfig, settings });
+  await flush();
+  expect(dataLayer().map((e) => e.event)).toEqual([undefined, "wtt_exposure"]);
+});
+
+it("datalayer_name_without_push_is_left_untouched_and_experiences_still_apply", async () => {
+  // 決定 62 (4): push を持たない既存の値(window のプロパティ名を入れられた等)は上書きせず、push だけをやめる
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const occupied = { site: "owned" };
+  (window as unknown as Record<string, unknown>).myDL = occupied;
+  const f = deferredFetch();
+  const settings = { ...namedSettings, analytics: { ...renamedAnalytics, dataLayerName: "myDL" } };
+  const api = createRuntime(makeDeps(f.fn), { config: namedConfig, settings });
+  await flush();
+  expect(() => api.track("g_cta")).not.toThrow();
+  expect((window as unknown as Record<string, unknown>).myDL).toBe(occupied);
+  expect(occupied).toEqual({ site: "owned" });
+  expect(document.querySelector(".hero-title")!.textContent).not.toBe("orig"); // 適用は続く
+  expect(api.getAssignments()).toMatchObject({ exp_hero: "vB" });
+});
+
+it("datalayer_name_of_a_getter_only_null_property_does_not_throw", async () => {
+  // 決定 62 (4): frameElement のように getter だけで null を返すプロパティは、strict mode の代入で TypeError になる
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  Object.defineProperty(window, "myDL", { get: () => null, configurable: true });
+  const f = deferredFetch();
+  const settings = { ...namedSettings, analytics: { ...renamedAnalytics, dataLayerName: "myDL" } };
+  const api = createRuntime(makeDeps(f.fn), { config: namedConfig, settings });
+  await flush();
+  expect(() => api.track("g_cta")).not.toThrow();
+  expect(document.querySelector(".hero-title")!.textContent).not.toBe("orig");
+  expect(api.getAssignments()).toMatchObject({ exp_hero: "vB" });
 });
 
 it("conversion_push_clears_extra_namespace", async () => {
@@ -892,4 +947,24 @@ it("apiBase が無い bootstrap(古い焼き方)は今までどおり設置タ�
   createRuntime(makeDeps(f.fn), { config: remoteConfig, settings: baseSettings });
   await flush();
   expect(f.calls[0]!.url).toBe(`https://edge.test/v1/sites/${remoteConfig.siteId}/decision`);
+});
+
+it("rank_follows_config_order_not_decision_order", async () => {
+  // 決定 51(設計書 §3.2): 順位は config の並びから取る。D-lite の decision が逆の順で返しても、後ろのテストが勝つ
+  document.body.innerHTML = `<h1 class="hero-title">orig</h1>`;
+  const config: CompiledConfig = {
+    ...baseConfig,
+    prehide: { exp_s: [".hero-title"], exp_t: [".hero-title"] },
+    exposureSelectors: { exp_s: [".hero-title"], exp_t: [".hero-title"] },
+    experiments: [
+      { id: "exp_s", name: "S", urlMatch: { op: "contains" as const, value: "/" }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "a", name: "A", weight: 100, changes: [{ id: "c", type: "TEXT" as const, selector: ".hero-title", payload: { text: "S" } }] }] },
+      { id: "exp_t", name: "T", urlMatch: { op: "contains" as const, value: "/" }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "vA", name: "A", weight: 50, changes: [] }, { id: "vB", name: "B", weight: 50, changes: [{ id: "c", type: "TEXT" as const, selector: ".hero-title", payload: { text: "T" } }] }] },
+    ],
+  };
+  const f = deferredFetch();
+  createRuntime(makeDeps(f.fn), { config, settings: { ...baseSettings, mode: "B" } });
+  await flush();
+  f.resolve(f.okRes({ v: config.version, experiments: [{ id: "exp_t", variant: "vB" }, { id: "exp_s", variant: "a" }] }));
+  await flush();
+  expect(document.querySelector(".hero-title")!.textContent).toBe("T");
 });

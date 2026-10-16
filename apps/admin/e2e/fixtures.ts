@@ -60,7 +60,7 @@ export const HERO_TEXT = "E2E から書き換え";
  * admin BFF は接続元 IP を転送しないので(決定 35 (4))、この E2E のすべての無認証 POST は control からは
  * 同じ IP に見え、経路ごとに 1 枠を共有する(apps/control/src/app.ts)。
  *
- * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 21 回(publish-flow 10 / audience-flow 8 / invite-flow 1 / login-screen 1 / write-freeze 1、
+ * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 22 回(publish-flow 10 / audience-flow 8 / invite-flow 1 / login-screen 1 / write-freeze 1 / experiment-kind-flow 1、
  * うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 / 招待受諾 1 回 /
  * `break-glass/reset-link` 1 回 / `reset-password` 1 回で、
  * 10 秒窓に入る sign-in は実測でも 10 回未満に収まっている。これ以上ログインを増やすなら、

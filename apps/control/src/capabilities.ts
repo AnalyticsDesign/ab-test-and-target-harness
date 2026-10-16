@@ -65,7 +65,7 @@ export const CapabilitiesSchema = z.object({
   imageUpload: z.boolean().describe("画像アップロードと IMAGE の変更が使えるか(R2 と公開ベース URL が設定されているとき true)"),
   edgeOrigin: z.string().nullable().describe("edge(訪問者のブラウザが decision / event を送る先)の公開 origin。未設定なら null"),
   tagOrigin: z.string().nullable().describe("設置タグ(/s/<siteId>.js)を配る公開 origin。未設定なら null"),
-  edgeOnWorkersDev: z.boolean().describe("edge を *.workers.dev で公開しているか(ゾーンの WAF・キャッシュ・D-lite が使えない構成)"),
+  edgeOnWorkersDev: z.boolean().describe("edge を *.workers.dev で公開しているか(ゾーンの WAF・キャッシュ・Mode B(サーバー発行 Cookie)が使えない構成)"),
   passwordLogin: z.boolean().describe("メール + パスワードのログインが開いているか(非常時だけ true。普段は Google ログインのみ)"),
   writeFreeze: z
     .object({

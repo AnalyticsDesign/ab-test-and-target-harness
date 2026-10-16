@@ -60,7 +60,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         onConfirm={(optionChecked) => settle({ confirmed: true, optionChecked })}
         onCancel={() => settle(CANCELLED)}
       >
-        {current?.body ? <p>{current.body}</p> : null}
+        {current?.body ? typeof current.body === "string" ? <p>{current.body}</p> : <div>{current.body}</div> : null}
       </ConfirmDialog>
     </ConfirmContext.Provider>
   );

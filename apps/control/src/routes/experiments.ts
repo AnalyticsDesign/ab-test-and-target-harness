@@ -3,16 +3,21 @@ import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
 import {
   ChangeSchema,
+  EXPERIMENT_KINDS,
   ExperimentAnalyticsSchema,
   PageMatchInputSchema,
   TargetingInputSchema,
   VariantAnalyticsSchema,
+  duplicateIdCandidates,
+  duplicateName,
   type Change,
   type ExperimentAnalytics,
+  type ExperimentKind,
   type VariantAnalytics,
 } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
 import { toStatement, type Db, type ExperimentRow, type SiteRow, type VariantRow } from "../db";
+import { copyChangesQuery, copyVariantsQuery, duplicateExperimentRow, insertExperimentQuery } from "../duplicate";
 import { ApiError, notFound, validationFailed } from "../errors";
 import { SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
@@ -31,10 +36,14 @@ const Targeting = TargetingInputSchema.nullable().describe(
 );
 const Traffic = z.number().int().min(1).max(100).describe("1〜100。0 は paused で表現する");
 const Analytics = ExperimentAnalyticsSchema.nullable();
+const KIND_DESCRIPTION =
+  "種別。test = テスト(2 つ以上のパターンに訪問者を振り分けて比べる)、single = パーソナライズ(パターン 1 つ・重み 100。振り分けず、条件に合う訪問者全員に表示する)。作成後は変えられない(変えたいときは複製する)";
+const Kind = z.enum(EXPERIMENT_KINDS).describe(KIND_DESCRIPTION);
 
 const ExperimentCreate = z.strictObject({
   id: z.string().regex(SLUG_RE),
   name: ExperimentName,
+  kind: Kind.default("test"),
   urlMatch: PageMatchInputSchema,
   targeting: Targeting.optional(),
   trafficPercentage: Traffic.default(100),
@@ -55,7 +64,7 @@ const ExperimentPatch = z.strictObject({
   analytics: Analytics.optional(),
 });
 
-/** spec §6.4: Variant は 2 つ以上・weight の合計は 100(合計はルート側で `variant_weights_invalid` にする) */
+/** 決定 51: パターンの数は種別で決まる(テストは 2 つ以上・パーソナライズは 1 つ)。数はルートで `variant_count_invalid` にする。weight の合計は 100(ルート側で `variant_weights_invalid` にする) */
 const VariantsPut = z
   .array(
     z.strictObject({
@@ -65,7 +74,7 @@ const VariantsPut = z
       analytics: VariantAnalyticsSchema.nullable().optional(),
     }),
   )
-  .min(2);
+  .min(1);
 /** spec §11 / 決定 35 (7): 1 Variant の Change は 100 件まで(保存時の件数上限。Publish の 512KB 上限は別途) */
 const MAX_CHANGES_PER_VARIANT = 100;
 /**
@@ -89,6 +98,7 @@ const ExperimentJsonSchema = z.object({
   id: z.string(),
   siteId: z.string(),
   name: z.string(),
+  kind: Kind,
   status: z.enum(["draft", "running", "paused", "archived"]),
   publishedStatus: z.enum(["draft", "running", "paused", "archived"]).nullable().describe("前回公開時の status"),
   urlMatch: PageMatchInputSchema,
@@ -129,6 +139,14 @@ const TRANSITIONS: Record<ExperimentRow["status"], Array<ExperimentRow["status"]
   paused: ["running", "archived"],
   archived: [],
 };
+const DuplicateBody = z
+  .strictObject({
+    mode: z.enum(["same", "variant"]).describe("same = 同じ内容(種別・すべてのパターンと設定)の下書き。variant = 選んだパターンだけを表示するパーソナライズの下書き(配信率 100%・割当の固定 off)"),
+    variantId: z.string().optional().describe("mode が variant のとき必須。表示するパターンの ID"),
+    id: z.string().regex(SLUG_RE).optional().describe("新しいエクスペリエンス ID。省略時は <元の ID>-copy、-copy-2 … の空いているもの"),
+    name: ExperimentName.optional().describe("省略時は「<元の名前> のコピー」または「<元の名前>(<パターン名> だけを表示)」"),
+  })
+  .refine((b) => b.mode !== "variant" || b.variantId !== undefined, { message: "variantId is required when mode is variant", path: ["variantId"] });
 const StatusBody = z.strictObject({ status: z.enum(["running", "paused", "archived"]) });
 const StatusResponseSchema = z.object({ experiment: ExperimentJsonSchema, publish: PublishResultSchema });
 
@@ -161,6 +179,17 @@ function chunk<T>(rows: T[], size: number): T[][] {
   return out;
 }
 
+/** 決定 51(設計書 §3.1): テストは 2 つ以上、パーソナライズはちょうど 1 つ。重みの合計 100 は別の検査(variant_weights_invalid) */
+function assertVariantCount(kind: ExperimentKind, count: number): void {
+  if (kind === "single" ? count === 1 : count >= 2) return;
+  throw new ApiError(422, "variant_count_invalid", {
+    kind,
+    count,
+    message: kind === "single" ? "パーソナライズのパターンは 1 つだけです" : "テストのパターンは 2 つ以上必要です",
+    hint: kind === "single" ? "パターンを比べるときは、種別「テスト」のエクスペリエンスを作成してください" : "パターンを 2 つ以上にしてください",
+  });
+}
+
 // spec §13.1: 子(Variant / Change / analytics)への書込みは親 Experiment の updated_at / updated_by を必ず更新する
 // → 各 PUT の batch の最後の文で行う(別トランザクションにしない)
 
@@ -187,7 +216,7 @@ experimentRoutes.post(
   "/sites/:sid/experiments",
   describeRoute({
     tags: ["experiments"],
-    summary: "エクスペリエンスを作成(編集者以上)。パターン a / b を 50 / 50 で自動作成する",
+    summary: "エクスペリエンスを作成(編集者以上)。テストはパターン a / b を 50 / 50、パーソナライズはパターン a を重み 100 で自動作成する",
     security: [{ bearer: [] }],
     responses: {
       201: { description: "作成したエクスペリエンス", content: { "application/json": { schema: resolver(ExperimentJsonSchema) } } },
@@ -209,10 +238,8 @@ experimentRoutes.post(
     const urlMatch = normalizedPageMatch(body.urlMatch, ["urlMatch"]);
     const targeting = normalizedTargeting(body.targeting ?? null, "experiment", "targeting");
     await assertTargetingRefs(db, site, targeting, "targeting");
-    const defaults = [
-      { id: "a", name: "A", weight: 50 },
-      { id: "b", name: "B", weight: 50 },
-    ];
+    // 決定 51(設計書 §3.1): テストは A / B(50:50)、パーソナライズは A(重み 100)を 1 つ
+    const defaults = body.kind === "single" ? [{ id: "a", name: "A", weight: 100 }] : [{ id: "a", name: "A", weight: 50 }, { id: "b", name: "B", weight: 50 }];
     assertExperimentAnalytics({ id: body.id, name: body.name, analytics: body.analytics ?? undefined }, defaults);
     const now = Date.now();
     const user = c.get("user").id;
@@ -220,6 +247,7 @@ experimentRoutes.post(
       site_id: site.id,
       id: body.id,
       name: body.name,
+      kind: body.kind,
       status: "draft",
       published_status: null,
       url_match_json: JSON.stringify(urlMatch),
@@ -229,6 +257,7 @@ experimentRoutes.post(
       analytics_json: body.analytics ? JSON.stringify(body.analytics) : null,
       started_at: null,
       stopped_at: null,
+      last_started_at: null,
       created_by: user,
       updated_by: user,
       created_at: now,
@@ -365,7 +394,7 @@ experimentRoutes.put(
   "/sites/:sid/experiments/:eid/variants",
   describeRoute({
     tags: ["experiments"],
-    summary: "パターンの集合を全置換(編集者以上)。2 つ以上・weight の合計 100。残るパターンの変更は保持される。draft のときだけ可",
+    summary: "パターンの集合を全置換(編集者以上)。テストは 2 つ以上、パーソナライズは 1 つ。weight の合計 100。残るパターンの変更は保持される。下書きのときだけ可",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "置換した", content: { "application/json": { schema: resolver(z.object({ ok: z.literal(true) })) } } },
@@ -389,12 +418,13 @@ experimentRoutes.put(
     if (exp.status !== "draft") {
       throw new ApiError(409, "experiment_active", {
         message: "このエクスペリエンスのパターンは変更できません",
-        hint: "配信中または終了済みのエクスペリエンスのパターンは変更できません。パターンを組み直すときは、新しいエクスペリエンスを作成してください",
+        hint: "配信中または終了済みのエクスペリエンスのパターンは変更できません。複製して新しいエクスペリエンスを作成してください",
       });
     }
     const body = c.req.valid("json");
     const ids = new Set(body.map((v) => v.id));
     if (ids.size !== body.length) throw new ApiError(422, "duplicate_variant_id", { message: "パターン ID が重複しています" });
+    assertVariantCount(exp.kind, body.length);
     const sum = body.reduce((a, v) => a + v.weight, 0);
     if (sum !== 100) throw new ApiError(422, "variant_weights_invalid", { message: `重みの合計は 100 である必要があります(現在 ${sum})`, sum });
     for (const v of body) assertName(v.name, ["variants", v.id, "name"]);
@@ -539,6 +569,8 @@ experimentRoutes.post(
     // 決定 34: analytics-recipe の期間に使う。started_at は最初の running のみ(Pause → Resume で動かさない)、stopped_at は archived
     const stamps = {
       ...(body.status === "running" && exp.started_at === null ? { started_at: now } : {}),
+      // 決定 51(K5、2026-10-06 ユーザー決定): 配信に入った時刻。開始・再開のたびに更新し、テストどうしの優先の順に使う
+      ...(body.status === "running" ? { last_started_at: now } : {}),
       ...(body.status === "archived" ? { stopped_at: now } : {}),
     };
     // 読んだ status のままであることを条件に更新する(並行 status 変更の stale read を弾く。負けた側は 409 で上書きしない)
@@ -572,5 +604,91 @@ experimentRoutes.post(
       freshSite = site; // この失敗パスでは activation まで届いていないので last_activated_at は進んでいない
     }
     return c.json({ experiment: experimentJson(fresh, { unpublished: isUnpublished(fresh, freshSite) }), publish: publicPublishResult(publish) });
+  },
+);
+
+/**
+ * 決定 51(設計書 §4.1): 複製(編集者以上。下書きを作るだけで公開しないため)。元の状態は問わず、元には何も書かない。
+ * 写さないもの: 状態(いつも draft)・開始 / 終了の時刻・公開の履歴
+ */
+experimentRoutes.post(
+  "/sites/:sid/experiments/:eid/duplicate",
+  describeRoute({
+    tags: ["experiments"],
+    summary: "エクスペリエンスを複製して下書きを作る(編集者以上)。元のエクスペリエンスは変わらない。パーソナライズの元は mode = same だけ",
+    security: [{ bearer: [] }],
+    responses: {
+      201: { description: "作成した下書き", content: { "application/json": { schema: resolver(ExperimentJsonSchema) } } },
+      ...errorResponses(400, 401, 403, 404, 409, 422),
+    },
+  }),
+  requireSession,
+  validator("json", DuplicateBody, (r) => {
+    if (!r.success) throw validationFailed(r.error);
+  }),
+  async (c) => {
+    const { site } = await loadSite(c, c.req.param("sid"), "editor");
+    const db = c.get("db");
+    const src = await loadExperiment(db, site.id, c.req.param("eid"));
+    const body = c.req.valid("json");
+    if (body.mode === "variant" && src.kind === "single")
+      throw new ApiError(422, "duplicate_mode_not_allowed", {
+        message: "パーソナライズのエクスペリエンスは「同じ内容」でだけ複製できます",
+        hint: "mode を same にしてください",
+      });
+    const variants = await loadVariants(db, site.id, src.id);
+    const picked = body.mode === "variant" ? variants.find((v) => v.id === body.variantId) : undefined;
+    if (body.mode === "variant" && !picked)
+      throw new ApiError(422, "unknown_variant", { path: ["variantId"], message: "指定したパターンがこのエクスペリエンスにありません" });
+    const idTaken = (id: string) => new ApiError(409, "id_taken", { id, message: "このエクスペリエンス ID は既に使われています", hint: "別の ID を指定してください" });
+    const allTaken = () => new ApiError(409, "id_taken", { message: "複製の ID の候補がすべて使われています", hint: "使っていない複製を削除してから、もう一度複製してください(API では id を指定できます)" });
+    const freeId = async (): Promise<string | undefined> => {
+      const taken = new Set((await db.selectFrom("experiments").select("id").where("site_id", "=", site.id).execute()).map((r) => r.id));
+      return duplicateIdCandidates(src.id).find((x) => !taken.has(x));
+    };
+    if (body.id !== undefined && (await db.selectFrom("experiments").select("id").where("site_id", "=", site.id).where("id", "=", body.id).executeTakeFirst())) throw idTaken(body.id);
+    const firstId = body.id ?? (await freeId());
+    if (firstId === undefined) throw allTaken();
+    const name = body.name ?? duplicateName(body.mode, src.name, picked?.name);
+    assertName(name, ["name"]);
+    const user = c.get("user").id;
+    const kept = body.mode === "variant" ? [picked!] : variants; // 外部計測の名前の検査に使う(写すのは batch の中の INSERT … SELECT)
+    const isUniqueViolation = (e: unknown) => /UNIQUE|PRIMARY KEY/i.test(String(e));
+    /** エクスペリエンス・パターン・変更を 1 batch = 1 トランザクションの 3 文で書く(片方だけ残らない。パターンと変更は元の行から INSERT … SELECT)。
+     *  3 文とも「元が読んだ版のまま」のときだけ書くので、読んだ設定・検査と写す中身はいつも同じ版になる */
+    const write = async (id: string): Promise<ExperimentRow> => {
+      const o = { siteId: site.id, sourceId: src.id, mode: body.mode, variantId: body.variantId, id, name, user, now: Date.now(), sourceUpdatedAt: src.updated_at };
+      const row = duplicateExperimentRow(src, o);
+      assertExperimentAnalytics(
+        { id: row.id, name: row.name, analytics: parseExperimentAnalytics(row) },
+        kept.map((v) => ({ id: v.id, name: v.name, analytics: parseVariantAnalytics(v) })),
+      );
+      const results = await c.env.DB.batch([
+        toStatement(c.env, insertExperimentQuery(db, row, o)),
+        toStatement(c.env, copyVariantsQuery(db, o)),
+        toStatement(c.env, copyChangesQuery(db, o)),
+      ]);
+      // 読んだ後に元が編集・削除された(3 文とも 0 行で、何も残っていない)。版の混ざった下書きやパターン 0 個の下書きを作らない
+      if ((results[0]?.meta.changes ?? 0) === 0)
+        throw new ApiError(409, "duplicate_source_changed", { message: "複製の元のエクスペリエンスが、複製の途中で変更されました", hint: "もう一度複製してください" });
+      return row;
+    };
+    let row: ExperimentRow;
+    try {
+      row = await write(firstId);
+    } catch (e) {
+      if (!isUniqueViolation(e)) throw e;
+      if (body.id !== undefined) throw idTaken(body.id); // 調べてから書くまでの間に同じ ID が作られた
+      // 自動の ID が同時の複製と衝突した。空いている次の候補で 1 回だけやり直す
+      const retryId = await freeId();
+      if (retryId === undefined) throw allTaken();
+      try {
+        row = await write(retryId);
+      } catch (e2) {
+        if (isUniqueViolation(e2)) throw new ApiError(409, "id_taken", { message: "複製の ID が同時の操作と重なりました", hint: "もう一度複製してください" });
+        throw e2;
+      }
+    }
+    return c.json(experimentJson(row, { unpublished: true }), 201);
   },
 );

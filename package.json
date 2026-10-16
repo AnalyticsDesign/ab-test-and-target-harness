@@ -1,5 +1,5 @@
 {
-  "name": "web-test-and-target-harness",
+  "name": "ab-test-and-target-harness",
   "private": true,
   "type": "module",
   "license": "MIT",

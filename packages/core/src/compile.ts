@@ -43,15 +43,30 @@ export class CompileError extends Error {
  * config 内に「生」と「解決済み」を同居させない(残っていれば CompiledConfigSchema の strict が拒否する)
  */
 export const VariantInputSchema = z.strictObject({ ...VariantSchema.shape, analytics: VariantAnalyticsSchema.optional() });
+/** 決定 51(設計書 §3): エクスペリエンスの種別。test = 2 つ以上のパターンに振り分けて比べる、single = パーソナライズ(パターン 1 つ・重み 100) */
+export const EXPERIMENT_KINDS = ["test", "single"] as const;
+export type ExperimentKind = (typeof EXPERIMENT_KINDS)[number];
+
+/** 種別ごとのパターンの数(設計書 §3.1)。重みの合計 100 は refineVariantWeights */
+function refineVariantCount(e: { kind: ExperimentKind; variants: unknown[] }, ctx: z.RefinementCtx): void {
+  if (e.kind === "single" ? e.variants.length === 1 : e.variants.length >= 2) return;
+  ctx.addIssue({ code: "custom", path: ["variants"], message: e.kind === "single" ? "a single experiment must have exactly 1 variant" : "a test must have at least 2 variants" });
+}
+
 export const ExperimentInputSchema = z
   .strictObject({
     ...ExperimentCommonShape,
+    /** 省略は test(既存の入力・fixture を変えない)。compiled config には載せない(設計書 §3.2) */
+    kind: z.enum(EXPERIMENT_KINDS).default("test"),
     urlMatch: PageMatchInputSchema,
     targeting: TargetingInputSchema.optional(),
-    variants: z.array(VariantInputSchema).min(2),
+    variants: z.array(VariantInputSchema).min(1),
     analytics: ExperimentAnalyticsSchema.optional(),
   })
-  .superRefine(refineVariantWeights);
+  .superRefine((e, ctx) => {
+    refineVariantWeights(e, ctx);
+    refineVariantCount(e, ctx);
+  });
 export type ExperimentInput = z.infer<typeof ExperimentInputSchema>;
 
 export const CompileInputSchema = z.strictObject({
@@ -206,7 +221,7 @@ export function compile(input: unknown): CompiledConfig {
       variants.push(variant);
     }
     exposurePayloads[exp.id] = byVariant;
-    const { analytics: _experimentAnalytics, variants: _authored, targeting: _input, urlMatch, ...rest } = exp;
+    const { analytics: _experimentAnalytics, variants: _authored, targeting: _input, urlMatch, kind: _kind, ...rest } = exp;
     experiments.push({ ...rest, urlMatch: compileMatch(urlMatch, `エクスペリエンス ${exp.id} の対象 URL`, budget), ...(targeting ? { targeting } : {}), variants });
   }
 

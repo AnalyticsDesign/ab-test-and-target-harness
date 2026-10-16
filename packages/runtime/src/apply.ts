@@ -1,7 +1,8 @@
 import type { Change } from "@wtt/core";
 import { activateScripts, runCustomJs, setNonce } from "./code";
 
-export type ActiveChange = { experimentId: string; variantId: string; change: Change };
+/** rank = config の experiments の並びの番号(後ろほど優先が高い。決定 51、設計書 §3.2)。省略は 0 */
+export type ActiveChange = { experimentId: string; variantId: string; change: Change; rank?: number };
 export type ControlWatch = { experimentId: string; selectors: string[] };
 export type EngineCallbacks = { onApplied(experimentId: string): void; onControlSeen(experimentId: string): void };
 export type ApplyEngine = { start(changes: ActiveChange[], watches: ControlWatch[]): void; stop(): void };
@@ -19,9 +20,10 @@ export type PageState = {
   executed: Set<string>; // CUSTOM_JS / HTML 内 <script> / CSS 注入の試行済み changeKey(試行前に登録。決定 38)
   succeeded: Set<string>; // 適用に成功した changeKey。要素が selector から外れても新世代が Exposure を出せるように(r2 CX-High-1)
   styles: Map<string, HTMLStyleElement>; // CSS: changeKey -> 注入した <style>
+  owners: WeakMap<Element, Map<string, number>>; // 決定 51(設計書 §3.2): 要素の部分 → それを書いたエクスペリエンスの順位
 };
 export function createPageState(): PageState {
-  return { applied: new WeakMap(), executed: new Set(), succeeded: new Set(), styles: new Map() };
+  return { applied: new WeakMap(), executed: new Set(), succeeded: new Set(), styles: new Map(), owners: new WeakMap() };
 }
 /** core の ID は min(1) だけで "/" などを含み得るため、区切り文字連結ではなく JSON 配列で一意にする(r2 CX-High-2) */
 export function changeKey(experimentId: string, variantId: string, changeId: string): string {
@@ -46,6 +48,47 @@ export function markApplied(applied: PageState["applied"], el: Element, key: str
   if (!set) applied.set(el, (set = new Set()));
   set.add(key);
   return true;
+}
+
+/**
+ * 決定 51(設計書 §3.2): 変更が書く「要素の部分」。"*" = HTML の replace(要素のすべての部分)。
+ * null = 優先を保証しないもの(HTML の挿入は両方入る・CSS は詳細度・CUSTOM_JS は保証しない)
+ */
+export function partOf(change: Change): string | null {
+  switch (change.type) {
+    case "TEXT":
+      return "content";
+    case "IMAGE":
+      return "attr:src"; // ATTRIBUTE の src と同じ属性を書くので同じ部分(レビュー r1 CX-High-1)
+    case "HIDE":
+      return "display";
+    case "ATTRIBUTE":
+      return `attr:${change.payload.name.toLowerCase()}`;
+    case "HTML":
+      return change.payload.position === "replace" ? "*" : null;
+    default:
+      return null;
+  }
+}
+
+/** 並びで後ろ(rank が大きい)のエクスペリエンスが、この部分(replace ならどれかの部分)を書いているか */
+function blocked(owners: PageState["owners"], el: Element, part: string, rank: number): boolean {
+  const m = owners.get(el);
+  if (!m) return false;
+  if (part === "*") {
+    for (const r of m.values()) if (r > rank) return true;
+    return false;
+  }
+  return (m.get(part) ?? -1) > rank || (m.get("*") ?? -1) > rank;
+}
+
+/** 部分を自分の順位で書いたと記録する。上書きした前の順位(無ければ null)を返す(② が「後から失敗」を数えるのに使う) */
+function claim(owners: PageState["owners"], el: Element, part: string, rank: number): number | null {
+  let m = owners.get(el);
+  if (!m) owners.set(el, (m = new Map()));
+  const prev = m.get(part) ?? null;
+  m.set(part, rank);
+  return prev !== null && prev < rank ? prev : null;
 }
 
 /** spec §11: TEXT / IMAGE / HIDE / ATTRIBUTE を 1 要素に適用する。例外はスキップして false(§10.7)。Code Change はエンジンが扱う */
@@ -108,7 +151,7 @@ export function injectCss(doc: Document, change: CssChange, ids: { experimentId:
 
 export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: EngineOptions = {}): ApplyEngine {
   const nonce = opts.nonce ?? null;
-  const { applied, executed, succeeded, styles } = opts.state ?? createPageState();
+  const { applied, executed, succeeded, styles, owners } = opts.state ?? createPageState();
   // この世代で Exposure を出した Experiment。前の世代(撤回前)が成功させた Change(succeeded)は 1 回だけ onApplied を呼び、
   // §16 の「再許可は新しい訪問者として Exposure を再発火」を保つ。この世代で直接適用したものは重ねて数えない
   const credited = new Set<string>();
@@ -160,9 +203,12 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
     }
   }
 
-  function applyHtmlChange(experimentId: string, change: HtmlChange, key: string): void {
+  function applyHtmlChange(experimentId: string, change: HtmlChange, key: string, rank: number): void {
     for (const el of query(change.selector)) {
       if (applied.get(el)?.has(key)) continue; // 同一要素へは 1 回だけ(§10.4)
+      const replace = change.payload.position === "replace";
+      if (replace && blocked(owners, el, "*", rank)) continue; // 決定 51: 後ろのエクスペリエンスが要素のどこかを書いている。印を付けず、要素が変われば再試行
+      const before = replace ? owners.get(el) : undefined;
       let inserted: Element[] | null;
       try {
         inserted = applyHtml(el, change);
@@ -185,6 +231,14 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
           console.debug("wtt: html scripts failed", change.id, e);
         }
       }
+      // 決定 51: replace は要素のすべての部分を書いた。元の記録を新しい最上位の要素に写し、新しい部分木のすべての要素を自分の順位にする
+      // (生成した子孫が同じセレクタに一致しても、前の順位の変更を通さない。レビュー r1 CX-High-2)。
+      // <script> の差し替えの後の最終の roots で行う(activateScripts は script を clone に置き換えるので、前に付けた記録は clone に残らない。レビュー r2 CX-High-2)
+      if (replace)
+        for (const n of roots) {
+          owners.set(n, new Map([...(before ?? new Map<string, number>()), ["*", rank]]));
+          for (const d of Array.from(n.querySelectorAll("*"))) owners.set(d, new Map([["*", rank]]));
+        }
       // 挿入した部分木への自己再適用を防ぐ: 最上位要素と、selector に一致する子孫を適用済みにする
       for (const n of roots) {
         mark(n, key);
@@ -198,27 +252,30 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
     }
   }
 
-  function applyOne(experimentId: string, variantId: string, change: Change): void {
+  function applyOne(experimentId: string, variantId: string, change: Change, rank: number): void {
     const key = changeKey(experimentId, variantId, change.id);
     // 前の世代(撤回前)が成功させた Change は、DOM から再発見できなくても(replace で selector が消えた、CUSTOM_JS が class を変えた)
     // この世代の Exposure を 1 回出す(§16。r2 CX-High-1)。この世代の成功は appliedNow が credited に入れるので二重にならない
     if (succeeded.has(key)) credit(experimentId);
     if (change.type === "CSS") return applyCss(experimentId, variantId, change, key);
     if (change.type === "CUSTOM_JS") return applyCustomJs(experimentId, variantId, change, key);
-    if (change.type === "HTML") return applyHtmlChange(experimentId, change, key);
+    if (change.type === "HTML") return applyHtmlChange(experimentId, change, key, rank);
+    const part = partOf(change);
     for (const el of query(change.selector)) {
       if (applied.get(el)?.has(key)) continue; // 同一要素へは 1 回だけ(§10.4)
+      if (part !== null && blocked(owners, el, part, rank)) continue; // 決定 51: 後ろのエクスペリエンスが書いた部分は上書きしない(印を付けない)
       if (!applyChangeTo(el, change)) continue;
       mark(el, key);
+      if (part !== null) claim(owners, el, part, rank);
       appliedNow(experimentId, key);
     }
   }
 
   function scan(): void {
     if (stopped) return;
-    for (const { experimentId, variantId, change } of active) {
+    for (const { experimentId, variantId, change, rank } of active) {
       try {
-        applyOne(experimentId, variantId, change);
+        applyOne(experimentId, variantId, change, rank ?? 0);
       } catch (e) {
         // Change 単位の例外境界(§10.7)。要素生成や <style> 挿入の例外(Trusted Types 等)で後続の Change と対照 watch を止めない。
         // CUSTOM_JS / HTML <script> / CSS は試行前に executed へ入るので MutationObserver の再スキャンで繰り返さない

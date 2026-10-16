@@ -38,7 +38,7 @@ export function mountOpenApi(app: Hono<AppEnv>): void {
       documentation: {
         openapi: "3.1.0",
         info: {
-          title: "Web Test and Target Harness control API",
+          title: "AB Test and Target Harness control API",
           version: "0.1.0",
           description:
             "メンテナンス中(書き込みの凍結中)は、ログイン以外の変更操作(POST / PUT / PATCH / DELETE)が 503 `write_frozen` になります。封筒の `hint` に理由と再開の見込み、`Retry-After` ヘッダーに待つ秒数が入ります。封筒の `retryAfter` にも同じ秒数が入ります。読み取り(GET)と、配信条件の計算(`POST /sites/{sid}/evaluate`)はそのまま使えます。凍結の状態は `GET /capabilities` の `writeFreeze` で確かめられます。",

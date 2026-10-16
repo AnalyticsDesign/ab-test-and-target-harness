@@ -13,7 +13,7 @@
 | 1 | 設置サイトのドメインを Cloudflare のゾーンとして使えるか | edge の置き方(構成 A / B / C)。ここだけは後から変えると設置タグの URL が変わる |
 | 2 | 月の PV とピーク日の PV はどれくらいか | Free プランで足りるか、Workers Paid($5/月〜)にするか |
 | 3 | 管理画面を何人で使うか、外部の AI エージェントに API を叩かせるか | control の公開アドレス(`*.workers.dev` / 自分のドメイン)と、ログイン入口の守り方 |
-| 4 | 画像の差し替え(IMAGE の変更)・Safari 対策(D-lite)を使うか | R2 のカスタムドメイン、`/__ab/*` の Route を足すか |
+| 4 | 画像の差し替え(IMAGE の変更)・Safari 対策(Mode B: サーバー発行 Cookie)を使うか | R2 のカスタムドメイン、`/__ab/*` の Route を足すか |
 
 ## 2. edge の置き方(問い 1)
 
@@ -25,7 +25,7 @@
 | 可否 | 可 | 可(手順の詳細はデプロイガイドに無い。下の注記) | **可(制約あり)**。前提 = Free アカウントで、止まって困る Workers が同じアカウントに無いこと |
 | 公開の仕方 | `<設置ホスト>/s/*`(`wtt-static`)と `/v1/*`(edge)の Workers Route | Custom Domain(例 `ab.<別ドメイン>`。`wtt-static` にも別のホストを付ける) | `*.workers.dev`(`edge_address: workers-dev`。`wtt-edge` と `wtt-static` の 2 つ) |
 | タグと設置サイトの関係 | 同一オリジン。CORS 設定は不要 | 別オリジン。サイトの `allowedOrigins` に設置サイトの origin を入れる | 別オリジン。サイトが CSP を出していれば `wtt-static` と edge のホストを足す |
-| D-lite(Safari 対策の一方式) | 使える | 使えない(ページのホストに `/__ab/*` を張れないため) | 使えない |
+| Mode B(サーバー発行 Cookie。Safari 対策の一方式) | 使える | 使えない(ページのホストに `/__ab/*` を張れないため) | 使えない |
 | Cache Rule / WAF Rate Limiting Rule | 設置サイトのゾーンに作る | edge を載せたゾーンに作る(Cache Rule の条件のホスト名は設置タグを配るホスト(`wtt-static` のホスト)、WAF の条件のホスト名は edge のホスト) | **作れない**。万が一、悪意のある人がプログラムで大量のアクセスを送ってきた場合(タグのアドレスはサイトの HTML に書かれるので、誰でも知ることができる)、アクセスを制限できず、無料枠の日次上限を使い切られて当日の配信が止まる(Free なら課金は起きない) |
 
 ### 各構成の注意
@@ -33,7 +33,7 @@
 - **A の前提の確認**: `curl -sI https://<設置ホスト>/ | grep -i '^server:'` が `server: cloudflare` を返せばプロキシ経由になっている。返さない場合、Workers Route は発火しない(タグの URL がサイト本体の 404 になる)
 - **DNS を Cloudflare に移すのはサイト全体に及ぶ作業**。ネームサーバーの変更、既存レコードの移行、SSL/TLS の暗号化モードの設定などが要り、この製品の手順の範囲外。サイトの管理者と相談して先に済ませる。ネームサーバーを移さずに一部のホストだけ Cloudflare に載せる方式(CNAME セットアップ)は Business プラン以上
 - **B**: デプロイガイドの 2.3 / 2.6 / 2.7 / 2.9 は A の書き方になっている。B では 2.3 の `routes` を `{ "pattern": "ab.<別ドメイン>", "custom_domain": true }` に、2.6 の条件のホスト名を設置タグを配るホスト(`wtt-static` のホスト)に、2.7 の条件のホスト名を edge のホストに、`<設置ホスト>` を設置タグを配るホストに読み替える(`/v1/*` の確認は edge のホストで行う)。`wtt-static` には 2.9 のとおり別のホストを付ける。**B の構成は実機で検証していない**
-- **C**: ドメインを用意せずに始められる簡易的な導入方法。技術的な制限(期限・PV 上限)は無く、そのまま本番にも使える。上の表の制約を引き受ける。次のどれかに当てはまるなら、ドメインを 1 つ用意して(年 $10 前後)Cloudflare の Free ゾーンに追加し、A か B にするほうがよい: Safari 対策(D-lite)を使いたい / 悪意のある人の大量のアクセスでその日の出し分けと計測が止まると困る / 1 日のアクセスが無料枠(10 万リクエスト)に近い。後から移る手順は[デプロイガイド 2.8](deploy.md#28-ドメインありへの移行workers-dev--route)(Worker・KV・サイト設定はそのまま。設置タグの URL だけ変わる)
+- **C**: ドメインを用意せずに始められる簡易的な導入方法。技術的な制限(期限・PV 上限)は無く、そのまま本番にも使える。上の表の制約を引き受ける。次のどれかに当てはまるなら、ドメインを 1 つ用意して(年 $10 前後)Cloudflare の Free ゾーンに追加し、A か B にするほうがよい: Safari 対策(Mode B)を使いたい / 悪意のある人の大量のアクセスでその日の出し分けと計測が止まると困る / 1 日のアクセスが無料枠(10 万リクエスト)に近い。後から移る手順は[デプロイガイド 2.8](deploy.md#28-ドメインありへの移行workers-dev--route)(Worker・KV・サイト設定はそのまま。設置タグの URL だけ変わる)
 
 ## 3. 料金プラン(問い 2)
 
@@ -52,7 +52,7 @@ Free で収まる PV の目安(どれが先に効くかはサイトの構成で�
 |---|---|---|
 | 履歴条件・`persistAssignment` を使わない(`needsProfile: false`、Mode A) | Workers のリクエストを使わない(設置タグは静的アセットで、読み込みは Worker のリクエストに数えられない) | Workers の上限では止まらない |
 | 履歴条件・`persistAssignment` を使う(`needsProfile: true`) | Durable Objects の行書込(decision 1 回で 2 行) | 約 5 万 PV/日 |
-| D-lite を使う | Workers のリクエスト数(判定で約 1 回/PV) | 約 10 万 PV/日 |
+| Mode B を使う | Workers のリクエスト数(判定で約 1 回/PV) | 約 10 万 PV/日 |
 
 設置タグの作り直しを行うデプロイ専用の Worker(`wtt-deployer`)も Workers のリクエストを使う(毎時の定期実行 24 回/日と、公開・設定の保存ごとに 1 回程度)。同じアカウントで他の Workers を動かしている場合、上限はそれらと共有する。管理画面(admin)の SSR も同じ上限を使う(静的ファイルは算入されない)。月の PV が少なくても、キャンペーンなどでピーク日が上の目安を超えるなら Workers Paid にする。
 
@@ -89,7 +89,7 @@ Free では Cloudflare の課金通知が使えないので、ダッシュボー
 | 機能 | 使うなら要るもの | 使わないとき |
 |---|---|---|
 | 画像の差し替え(IMAGE の変更) | R2 バケットのカスタムドメイン(例 `assets.<ドメイン>`。ゾーンが Cloudflare にあること) | `dev-assets`(control 経由の配信)で暫定運用できる。画像の配信も Workers のリクエスト数を消費する。**R2 を使わない**(`none`)なら IMAGE の変更は無効になり、サイト上の既存画像の差し替えは ATTRIBUTE の `src` で行う |
-| D-lite(Safari でも同じ訪問者に同じ表示を長く保つ) | 構成 A。`<ページのホスト>/__ab/*` の Route | Mode A(Safari では操作なし 7 日で Cookie が消える)、または Mode C(サイトの会員 ID などを使う)。[サイト導入ガイド 8 節](site-install.md#8-mode-c-と-d-lite) |
+| Mode B(Safari でも同じ訪問者に同じ表示を長く保つ) | 構成 A。`<ページのホスト>/__ab/*` の Route | Mode A(Safari では操作なし 7 日で Cookie が消える)、または Mode C(サイトの会員 ID などを使う)。[サイト導入ガイド 8 節](site-install.md#8-mode-c-と-mode-b) |
 
 ## 6. 決めた内容をデプロイガイドへ渡す
 
@@ -104,7 +104,7 @@ Free では Cloudflare の課金通知が使えないので、ダッシュボー
 | 管理画面を自分のドメインに載せる | `admin_address: custom` / `admin_host` |
 | 入口の守り | `control_protection`(`none` / `waf` / `access`) |
 | edge の WAF ルール | `edge_waf_rate_limit` / `edge_waf_requests_per_10s` |
-| D-lite | `dlite_hosts` |
+| Mode B(サーバー発行 Cookie) | `dlite_hosts` |
 | 料金プラン | `plan`(`free` / `paid`。`paid` なら導入の前にダッシュボードで切り替える) |
 
 構成 B は入力ファイルで表せないので、エージェントに任せる場合は最初に「edge を Custom Domain `ab.<別ドメイン>` で公開する」と伝える。

@@ -114,6 +114,9 @@ describe("parseBootPayload (plan 3 task 2 — final implementation, no zod)", ()
     expect(parseBootPayload({ config: validConfig, settings: validSettings })).not.toBeNull(); // 両方欠落 = 旧 record
     expect(parseBootPayload({ config: validConfig, settings: { ...validSettings, analytics: "x" } })).toBeNull();
     expect(parseBootPayload({ config: validConfig, settings: { ...validSettings, analytics: { extraKey: 1 } } })).toBeNull();
+    // 決定 62: dataLayerName は欠落なら既定(決定 62 より前の bootstrap)、型不正は拒否
+    expect(parseBootPayload({ config: validConfig, settings: { ...validSettings, analytics: { ...analytics, dataLayerName: "myDL" } } })).not.toBeNull();
+    expect(parseBootPayload({ config: validConfig, settings: { ...validSettings, analytics: { ...analytics, dataLayerName: 1 } } })).toBeNull();
     expect(parseBootPayload({ config: validConfig, settings: { ...validSettings, analytics: { ...analytics, exposure: { event: "x" } } } })).toBeNull(); // keys 欠落
     expect(parseBootPayload({ config: validConfig, settings: { ...validSettings, analytics: { ...analytics, conversion: { event: "x", keys: { goalId: "g" } } } } })).toBeNull(); // goalName 欠落
     expect(parseBootPayload({ config: { ...validConfig, exposurePayloads: [] }, settings: validSettings })).toBeNull();

@@ -28,10 +28,10 @@ other_workers: <yes / no / unknown>                              # E2b existing�
 owner_email: <you@example.com>                                   # E3 管理画面にログインする Google アカウントのメールアドレス
 
 # --- 下段: 構成(--accept が書き込む。自分で決めるときだけ # を外して書く) ---
-# edge_address: route              # route | workers-dev。route = 設置サイトのゾーンの Workers Route。workers-dev = *.workers.dev で公開(ゾーン不要。WAF・キャッシュ・D-lite が使えず、Free アカウントかつ止まって困る Workers が同じアカウントに無いことが前提)
+# edge_address: route              # route | workers-dev。route = 設置サイトのゾーンの Workers Route。workers-dev = *.workers.dev で公開(ゾーン不要。WAF・キャッシュ・Mode B(サーバー発行 Cookie)が使えず、Free アカウントかつ止まって困る Workers が同じアカウントに無いことが前提)
 # zone_name: example.com           # route のとき。install_host が属する Cloudflare のゾーン。auto = ログインの後に --resolve-zone で確定する
 # asset_public_base: none          # none(R2 を使わない。画像アップロードと IMAGE の変更が無効)/ dev-assets(control 経由)/ auto(https://wtt-assets.<zone_name>)/ https://<R2 のカスタムドメイン>
-# dlite_hosts: []                    # D-lite(Mode B / D-lite)を使うページのホスト。書くと <host>/__ab/* の Route を足す
+# dlite_hosts: []                    # Mode B(サーバー発行 Cookie。旧称 D-lite)を使うページのホスト。書くと <host>/__ab/* の Route を足す
 # plan: free                       # free | paid。Workers のプラン。paid は導入の前にダッシュボードで切り替える
 # accepted: recommended            # --accept が書く(recommended / lightest / manual)
 

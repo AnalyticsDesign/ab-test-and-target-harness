@@ -13,7 +13,7 @@ export function InstallTag({ site, tagOrigin }: { site: Site; tagOrigin: string 
         <dt className="muted">サイト ID</dt>
         <dd style={{ margin: 0 }} className="mono">{site.id}</dd>
         <dt className="muted">モード</dt>
-        <dd style={{ margin: 0 }}>{site.mode === "B" ? "D-lite" : site.idSource === "ab" ? "A" : "C"}</dd>
+        <dd style={{ margin: 0 }}>{site.mode === "B" ? "B" : site.idSource === "ab" ? "A" : "C"}</dd>
         <dt className="muted">ドメイン</dt>
         <dd style={{ margin: 0 }}>{site.domain}</dd>
       </dl>

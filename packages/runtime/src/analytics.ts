@@ -9,6 +9,7 @@ const allStrings = (v: unknown, keys: readonly string[]): boolean => isRecord(v)
  */
 export function isAnalyticsSettings(v: unknown): v is AnalyticsSettings {
   if (!isRecord(v) || typeof v.extraKey !== "string") return false;
+  if (v.dataLayerName !== undefined && typeof v.dataLayerName !== "string") return false; // 決定 62: 欠落は既定(analyticsNames が埋める)
   const ex = v.exposure;
   const cv = v.conversion;
   return (
@@ -35,7 +36,12 @@ export function isExposurePayloads(v: unknown): v is Record<string, Record<strin
   return true;
 }
 
-/** §10.9「バージョンと異常時」: settings.analytics が無い(旧 record)なら既定の名前(extraKey を含む)を使う */
+/**
+ * §10.9「バージョンと異常時」: settings.analytics が無い(旧 record)なら既定の名前(extraKey を含む)を使う。
+ * 決定 62 より前に焼いた bootstrap は analytics があっても dataLayerName を持たないので、そこだけ既定で埋める
+ */
 export function analyticsNames(settings: RuntimeSettings): AnalyticsSettings {
-  return settings.analytics ?? DEFAULT_ANALYTICS;
+  const a = settings.analytics;
+  if (!a) return DEFAULT_ANALYTICS;
+  return (a as Partial<AnalyticsSettings>).dataLayerName === undefined ? { ...a, dataLayerName: DEFAULT_ANALYTICS.dataLayerName } : a;
 }

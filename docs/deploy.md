@@ -1,6 +1,6 @@
 # デプロイガイド
 
-Web Test and Target Harness を運用者自身の Cloudflare アカウントへ配置する手順。
+AB Test and Target Harness を運用者自身の Cloudflare アカウントへ配置する手順。
 
 - **読者**: 人が読んで手で進めることも、AI エージェント(Claude Code / Codex など)に読ませて進めさせることもできる。エージェントに貼るだけのプロンプトは [README の「導入」](../README.md#導入)にある
 - **前提知識**: Cloudflare と GA4 の基本操作。エージェントに任せる場合は、0 節の「人が行う」の表だけ分かればよい
@@ -28,7 +28,7 @@ Web Test and Target Harness を運用者自身の Cloudflare アカウントへ�
 - 設置サイトのドメインが Cloudflare のゾーンにあり、DNS がプロキシ(オレンジの雲)になっている。edge と設置タグはそのゾーンの Workers Route で公開する(`<設置ホスト>/v1/*`・`/s/*`)。ドメインを用意せずに `*.workers.dev` で始めるなら、2.3・2.9・3.4 の `workers-dev` のときの手順と、1 節の制約 (3) を読む
 - control と管理画面は `*.workers.dev` のアドレスで公開する。自分のドメインに置くなら 3.6・4.2
 - 画像のアップロードに R2 を使う。使わない構成も手順 12 で選べる
-- ゾーンの Cache Rule(2.6)と WAF Rate Limiting Rule(2.7)は推奨の保護設定で、動いた後に足せる。ここでは作らない。作るときは 0.5 の 2 のトークンが要る。D-lite のサイトを置くなら 2.7 は必須
+- ゾーンの Cache Rule(2.6)と WAF Rate Limiting Rule(2.7)は推奨の保護設定で、動いた後に足せる。ここでは作らない。作るときは 0.5 の 2 のトークンが要る。Mode B(サーバー発行 Cookie)のサイトを置くなら 2.7 は必須
 
 ここで使う値。手を動かす前に控える。0.2 の入力ファイルはエージェントが質問の答えを記録するためのもので、手で進めるときは作らなくてよい。
 
@@ -62,8 +62,8 @@ openssl version            # 乱数の生成に使う
 **2. 本体を取得する**(0.3)
 
 ```bash
-git clone https://github.com/AnalyticsDesign/web-test-and-target-harness.git
-cd web-test-and-target-harness
+git clone https://github.com/AnalyticsDesign/ab-test-and-target-harness.git
+cd ab-test-and-target-harness
 git tag --list 'v*' --sort=-v:refname | head -5     # 使える tag。release_tag が latest なら先頭
 git checkout v0.9                                    # 入れる tag に読み替える
 git describe --tags --exact-match                    # 期待: 今 checkout した tag 名。それ以外なら checkout に失敗している
@@ -163,7 +163,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置ホスト>/s/probe.js"
 curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置ホスト>/v1/sites/probe/decision"   # 期待: 404(同上)
 ```
 
-200 が返る → 2.3 の「期待と違うとき」。D-lite のサイトを置くなら `/__ab/*` の Route も足す(2.3 の「パスごとの意味」)。
+200 が返る → 2.3 の「期待と違うとき」。Mode B のサイトを置くなら `/__ab/*` の Route も足す(2.3 の「パスごとの意味」)。
 
 **9. edge をデプロイする**(2.4)
 
@@ -326,7 +326,7 @@ curl -s https://<設置ホスト>/s/<siteId>.js | head -c 400
 ここまでで導入は終わり。次に読むもの:
 
 - サイトにタグを置く: [サイト導入ガイド](site-install.md)
-- 動いた後に足す推奨の保護設定: 2.6 Cache Rule・2.7 WAF Rate Limiting Rule。先に 0.5 の 2 のトークンを作る。D-lite のサイトを置くなら 2.7 は必須
+- 動いた後に足す推奨の保護設定: 2.6 Cache Rule・2.7 WAF Rate Limiting Rule。先に 0.5 の 2 のトークンを作る。Mode B のサイトを置くなら 2.7 は必須
 - AI エージェントに API を使わせる: 5.1
 - 版を上げる・保護する・戻す: 6 節以降(この文書の構成の表)
 
@@ -448,7 +448,7 @@ AI エージェントに任せる場合、構成は 0.2 の質問と検査スク
 - `zone_name: auto` と `asset_public_base: auto` は、0.4 の[ログインの後の確認](#ログインの後の確認)で確定する
 - 未検証と注記された値(`control_protection` の `waf` / `access`)が書かれていたら、進める前に人に確認する
 - ページのホスト(サイトの「ドメイン(ホスト名)」)は入力ファイルには書かず、5 節でサイトを作るときに管理画面で入力する
-- `dlite_hosts` があるときは、5 節でサイトを作るときに `導入の形` を D-lite にする
+- `dlite_hosts` があるときは、5 節でサイトを作るときに `導入の形` を `B: サーバー発行 Cookie` にする
 
 確認:
 
@@ -479,8 +479,8 @@ node tools/deploy-answers/cli.mjs; echo "exit=$?"   # 期待: exit=0、「## 指
 先に 0.4 のツールを入れる。リリースは GitHub の tag(`v0.9`、`v1.0` …)で出している。tag を指定して取得し、どの tag を入れたかを控える。更新は 6 節で「現在の tag → 目標の tag」として行う。
 
 ```bash
-git clone https://github.com/AnalyticsDesign/web-test-and-target-harness.git
-cd web-test-and-target-harness
+git clone https://github.com/AnalyticsDesign/ab-test-and-target-harness.git
+cd ab-test-and-target-harness
 git tag --list 'v*' --sort=-v:refname | head -5     # 使える tag。release_tag が latest なら先頭
 git checkout v0.9                                    # 入れる tag に読み替える
 git describe --tags --exact-match                    # 期待: 今 checkout した tag 名。それ以外なら checkout に失敗している
@@ -709,6 +709,8 @@ fi
 
 識別子を付ける理由: API トークンは Cloudflare のアカウントではなくユーザー(My Profile)に属する。そのため、別のアカウントに入れた導入のトークンも同じ一覧に並ぶ(1 つのアカウントに入れられる導入は 1 つまで。1 節)。Cloudflare は同じ名前のトークンを拒まないため、識別子が無いと、撤去のときにどの導入のトークンか名前から分からない。
 
+**名前は必ず表のとおりに付ける。** 依頼文の Token name(トークン名)には識別子を埋めた名前をそのまま書き、`wtt-deploy` のような識別子の無い名前や、`CF_DEPLOY_TOKEN` のような控えの変数名を名前にしない。作成の後、人に一覧の名前が依頼文と同じかを確かめてもらう。違っていたら、そのトークンを作り直してから値を控える(撤去のときに別の導入のトークンと取り違えないため。10.4 の 5)。
+
 **【人に依頼】**(構成で要るものだけ)
 
 1. **Google の OAuth クライアント**(どの構成でも要る)。エージェントは次の表を 1 画面ずつ案内し、登録するリダイレクト URI `<control URL>/auth/callback/google` を伝える。Google はこの作成を API で行う手段を提供していないため、この工程だけは人が行う。開くリンク = `https://console.cloud.google.com/auth/overview`
@@ -723,7 +725,7 @@ fi
 |---|---|---|
 | プロジェクト(画面の上部のプロジェクトの選択) | 新しく作るか、既存のものを使うか | 初めてなら、この製品専用に新しく作る(名前 = `wtt-auth`)。ほかの用途の設定と混ざらない。既存のものを使う場合、次のアプリ名がログインの画面に出る。同じ組織で 2 つ目以降を導入するときは、同じプロジェクトを使い、Clients(クライアント)だけ増やす。同意の画面の設定はプロジェクトに 1 つで、ログインできる人は各導入の招待で決まるため。組織が違う導入(別の会社のために入れるなど)ではプロジェクトを分け、名前を `wtt-auth-<組織名>` にする。アプリ名と Internal / External はプロジェクトに 1 つで、Internal にできるのはプロジェクトと同じ組織のアカウントだけのため |
 | Get started(開始)。新しく作ったプロジェクトのときだけ | アプリの情報・対象・連絡先 | 新しいプロジェクトでは、開くリンクの画面に Google Auth Platform not configured yet(Google Auth Platform はまだ構成されていません)と出る。先に Get started(開始)を押し、Project configuration(プロジェクト構成)の 4 段を上から入れる。App Information(アプリ情報)で App name(アプリ名)と User support email(ユーザー サポートメール)、Audience(対象)で Internal(内部)か External(外部)を選ぶ(決め方は次の 2 行)。Contact Information(連絡先情報)の Email addresses(メールアドレス)は、Google がプロジェクトの変更を知らせる宛先で、`owner_email` でよい。Finish(終了)で I agree to the Google API Services: User Data Policy.(Google API サービス: ユーザーデータに関するポリシー に同意します。)にチェックを入れて Continue(続行)を押し、最後に Create(作成)で作る。設定済みのプロジェクトではこの画面は出ず、左メニューの Branding(ブランディング)と Audience(対象)で同じ項目を確かめる |
-| Branding(ブランディング) | App name(アプリ名)・User support email(ユーザー サポートメール) | アプリ名 = Google のログインの画面に出る名前(例 `Web Test and Target Harness`)。組織名を付けてもよい。サポートのメールは選ぶ形で、選べるのはログイン中の Google アカウントと、そのアカウントが管理する Google グループだけ。`owner_email` でログインして作業し、それを選ぶ |
+| Branding(ブランディング) | App name(アプリ名)・User support email(ユーザー サポートメール) | アプリ名 = Google のログインの画面に出る名前(例 `AB Test and Target Harness`)。組織名を付けてもよい。サポートのメールは選ぶ形で、選べるのはログイン中の Google アカウントと、そのアカウントが管理する Google グループだけ。`owner_email` でログインして作業し、それを選ぶ |
 | Audience(対象) | User type(ユーザーの種類): Internal(内部)/ External(外部)。設定済みのプロジェクトでは、Audience(対象)の画面に Make internal(内部に公開)のボタンが出る | 管理画面を使う人が全員、同じ Google Workspace の組織のアカウントなら Internal(テストユーザーの登録が要らない)。個人の Gmail を含む・組織の外の人を招待するなら External(外部)。External で Publishing status(公開ステータス)が Testing(テスト中)のあいだは、Test users(テストユーザー)に登録した Google アカウントしかログインできない。`owner_email` と、招待する人を登録する。登録は、Get started(開始)の入力を済ませた後に左メニューの Audience(対象)を開き、Test users(テストユーザー)の Add users で行う(Add users は日本語の表示でも英語のまま) |
 | Clients(クライアント) | 種類・名前・リダイレクト URI | Create client(クライアントを作成)を押し、Application type(アプリケーションの種類)= Web application(ウェブ アプリケーション)、Name(名前)= `wtt-control-<識別子>` にする。Authorized redirect URIs(承認済みのリダイレクト URI)の Add URI(URI を追加)で上の URI を 1 つ登録し、Create(作成)で作る。Name は Google の画面の中だけで使う名前で、識別子は上の「Cloudflare の API トークンの名前」と同じ。同じプロジェクトに複数の導入のクライアントが並んでも見分けられる。Use this client for an AI-powered agent(日本語の表示でも英語のまま)にはチェックを入れない。AI エージェントが利用者の代わりに Google の API を使うクライアントに付ける印で、このクライアントは人のログインに使う |
 | 作成の結果 | 控える値 | Client ID(クライアント ID)と Client secret(クライアント シークレット)を `deploy-secrets.env` に書く。シークレットは、作成の直後に出る画面を閉じると、表示もダウンロードもできなくなる。控える前に閉じたときは、表の下の「シークレットを控える前に閉じたとき」 |
@@ -831,7 +833,7 @@ admin のリクエストの数え方:
 |---|---|---|
 | ゾーンの WAF Rate Limiting Rule(2.7) | 作れる | 作れない。Worker の起動前に捨てる仕組みが無いので、無料枠の日次上限(10 万リクエスト)を 1 台の機械から数分で使い切られうる。使い切ると当日は edge も control も止まる。上限はアカウント単位 |
 | ゾーンの Cache Rule(2.6) | 作る。設置タグのファイルのブラウザキャッシュの設定が上書きされないようにする、念のための設定 | 作れない(ゾーンが無い)。設置タグのファイルのヘッダ(60 秒)は配信専用の Worker が付けるので、変更されずに適用される |
-| D-lite | 使える | 使えない |
+| Mode B(サーバー発行 Cookie) | 使える | 使えない |
 | タグと設置サイト | 同一オリジン | 別オリジン。サイトが CSP を出していれば `script-src` に `wtt-static` のホスト、`connect-src` に edge のホストを足す |
 
 `*.workers.dev` の前提条件(2 つとも満たさないなら Route にする):
@@ -839,7 +841,7 @@ admin のリクエストの数え方:
 - Cloudflare アカウントが Free であること。Paid だと、悪意のある人がプログラムで大量のアクセスを送ってきた場合に、そのアクセスの分もすべて請求に含まれる。タグのアドレスはサイトの HTML に書かれるので誰でも知ることができ、アクセスを制限する仕組み(WAF)を置けない。支出上限を設定する機能も無い
 - 止まると困る Workers が同じアカウントに無いこと
 
-満たしていても、D-lite を使いたい・悪意のある人の大量のアクセスで止まると困る・1 日のアクセスが無料枠に近いなら Route のほうがよい。後からドメインありへ移る手順は 2.8。control 側にはこの制約が無く、`*.workers.dev` のままでも動く(3 節)。
+満たしていても、Mode B を使いたい・悪意のある人の大量のアクセスで止まると困る・1 日のアクセスが無料枠に近いなら Route のほうがよい。後からドメインありへ移る手順は 2.8。control 側にはこの制約が無く、`*.workers.dev` のままでも動く(3 節)。
 
 ## 2. edge のデプロイ
 
@@ -904,9 +906,9 @@ pnpm -C apps/control exec wrangler kv namespace list | jq -r '.[] | select(.titl
 
 - `/v1/*`(必須): decision / event。履歴条件または `persistAssignment` を使うサイト(`needsProfile`)で使う。目標はこのサイトでだけ `/event` にも送られる(目標だけでは `needsProfile` にならず、`ab_conversion` は `dataLayer` にのみ出る)。設置タグのファイルに edge の宛先(control の `AB_EDGE_ORIGIN`)が書き込まれるので、runtime はそこへ送る
 - `/s/*`: **edge には書かない**。設置タグのファイルは配信専用の Worker `wtt-static` が配る。`/s/*` を `wtt-static` に向けるのは 2.9
-- `/__ab/*`: D-lite(Mode B / D-lite)のサイトを置く場合に追加する。パターンは `<ページのホスト>/__ab/*`(D-lite は runtime がページのホストへ相対 URL で送るため。[サイト導入ガイド 8 節](site-install.md#8-mode-c-と-d-lite))。D-lite の `/__ab/decision` は Cookie の無い要求のたびに新しい visitorId を発行するため、2.7 の WAF ルールを**必ず**作る(`edge_waf_rate_limit: false` を選ばない。D-lite はゾーンの Route が前提なので、ルールは常に作れる)
+- `/__ab/*`: Mode B(サーバー発行 Cookie。旧称 D-lite)のサイトを置く場合に追加する。パターンは `<ページのホスト>/__ab/*`(Mode B ではタグがページのホストへ相対 URL で送るため。[サイト導入ガイド 8 節](site-install.md#8-mode-c-と-mode-b))。Mode B の `/__ab/decision` は Cookie の無い要求のたびに新しい visitorId を発行するため、2.7 の WAF ルールを**必ず**作る(`edge_waf_rate_limit: false` を選ばない。Mode B はゾーンの Route が前提なので、ルールは常に作れる)
 
-**`routes` を書いたら `"dev": { "host": "localhost" }` も併記する。** 理由: `routes` があると `wrangler dev` のローカル origin host が route のホスト名になり(`--local-upstream` の既定が「dev.host or route」)、host からサイトを引く D-lite の経路がローカルで 404 になって `pnpm e2e` が落ちる。
+**`routes` を書いたら `"dev": { "host": "localhost" }` も併記する。** 理由: `routes` があると `wrangler dev` のローカル origin host が route のホスト名になり(`--local-upstream` の既定が「dev.host or route」)、host からサイトを引く Mode B の経路がローカルで 404 になって `pnpm e2e` が落ちる。
 
 確認(`/s/*` を `wtt-static` に向ける前(2.9)と、`/v1/*` の Route を張る前に、そのパス配下に既存コンテンツが無いこと):
 
@@ -928,7 +930,7 @@ pnpm -C apps/edge exec wrangler deploy
 - 初回は Durable Objects の migration(`wrangler.jsonc` の `migrations[].tag`、`new_sqlite_classes: ["VisitorProfile"]`)を wrangler が自動で適用する。以後、クラス名を変えない限り tag は増やさない
 - Rate Limiting binding は wrangler 4.36 以上が必要。`namespace_id` はアカウント内で一意な整数文字列
 
-確認: 出力の末尾に `Deployed wtt-edge triggers` と Route が 1 本(`/v1/*`。D-lite があればその分も)並べば OK。`workers-dev` では triggers に `https://wtt-edge.<アカウントのサブドメイン>.workers.dev` が 1 行出る。この URL が edge の公開 origin で、3.4 の `AB_EDGE_ORIGIN` に使う(設置タグの `src` のホストは 2.9 の `wtt-static` のアドレス)。
+確認: 出力の末尾に `Deployed wtt-edge triggers` と Route が 1 本(`/v1/*`。Mode B があればその分も)並べば OK。`workers-dev` では triggers に `https://wtt-edge.<アカウントのサブドメイン>.workers.dev` が 1 行出る。この URL が edge の公開 origin で、3.4 の `AB_EDGE_ORIGIN` に使う(設置タグの `src` のホストは 2.9 の `wtt-static` のアドレス)。
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "https://<設置ホスト>/v1/sites/probe/decision"   # 期待: 404 text/plain(Worker の応答。サイト本体の 404 ページ(text/html)ではない)
@@ -1493,11 +1495,11 @@ curl -sS "<control URL>/login-options"   # 期待: {"google":true,"passwordLogin
 
 **サイトを作る**: 管理画面でワークスペースの配下にサイトを作る。ワークスペースはセットアップで 1 つ作られている。作成画面の項目は[サイト導入ガイド 2 節](site-install.md#2-サイトを作る)を参照。サイト ID とパターン ID は作成後に変更できない。
 
-`dlite_hosts` があるときは、サイトを作るときに次のとおりにする([サイト導入ガイド 8 節](site-install.md#d-lite)):
+`dlite_hosts` があるときは、サイトを作るときに次のとおりにする([サイト導入ガイド 8 節](site-install.md#mode-bサーバー発行-cookie)):
 
 - `ドメイン(ホスト名)` に `dlite_hosts` のホストを入れる
-- `導入の形` を `D-lite: 同一ゾーンの Workers Route(サイトが Cloudflare 配下のとき)` にする。作成画面の既定は Mode A なので、選ばないと Safari 対策が有効にならない
-- D-lite で作ると、サイト設定の `hosts` には `ドメイン(ホスト名)` が自動で入る。作成の画面には `hosts` の欄は無い。ほかのホストでも使うときは、作成後のサイト設定の `hosts` に足す
+- `導入の形` を `B: サーバー発行 Cookie(同じゾーンの Workers Route。サイトが Cloudflare 配下のとき)` にする。作成画面の既定は Mode A なので、選ばないと Safari 対策が有効にならない
+- Mode B で作ると、サイト設定の `hosts` には `ドメイン(ホスト名)` が自動で入る。作成の画面には `hosts` の欄は無い。ほかのホストでも使うときは、作成後のサイト設定の `hosts` に足す
 - サイトを作った後、疎通を確かめる。`set-cookie:` の行が出れば成功:
 
 ```bash
@@ -2123,6 +2125,8 @@ curl -sS -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RI
 
 - Google Cloud の OAuth クライアント `wtt-control-<識別子>`(0.5)を削除する。プロジェクト `wtt-auth` をほかの導入と共有していなければ、プロジェクトごと消してよい
 - Cloudflare の API トークンのうち残っているものを失効する: 配信ファイルのデプロイ用 `wtt-deploy-<識別子>` と使用状況の表示用 `wtt-usage-<識別子>`(識別子は 0.5)。ゾーンの設定用 `wtt-setup-<識別子>` と稼働確認用は期限切れなら何もしなくてよい
+  - **失効する前に、名前だけで決めず、撤去する導入のトークンかを確かめる。** API トークンはユーザーに属するので、ほかの導入(別のアカウントに入れた導入や試しの導入)のトークンも同じ一覧に並ぶ(0.5)。名前は人が付けるので、重なったり、手順と違う名前になったりする。トークンを開き、Account Resources(アカウント リソース)が撤去するアカウントだけであることと、作成日がその導入を入れた日(`deploy-log.md` の日付)と合うことを確かめる
+  - どちらかが合わない、または確かめられないトークンは失効しない。失効は取り消せず、まだ使っている導入のデプロイ用のトークンを失効すると、その導入では公開や設定の保存をしても設置タグのファイルが作り直されなくなる(使用状況の表示用なら、管理画面の使用状況が取れなくなる)
 - Cloudflare Access のアプリケーション(4.5 / 7.3)を削除する
 - GTM のタグ・トリガー・変数を削除する
 - 手元では `deploy-secrets.env` と `.env.agent`(5.1。API キーは control と一緒に無効になっている)を消し、`deploy-backups/` は保管方針に従って扱う

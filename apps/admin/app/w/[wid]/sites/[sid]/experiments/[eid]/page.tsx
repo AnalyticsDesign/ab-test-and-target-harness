@@ -3,10 +3,12 @@ import { controlFetch, requireUser } from "@/lib/control";
 import { loadCapabilities, loadSite, loadWorkspaces } from "@/lib/loaders";
 import { EDITOR_TABS } from "@/lib/experiment-draft";
 import { STATUS_JA, STATUS_TONE } from "@/lib/experiment-filter";
+import { KIND_JA } from "@/lib/experiment-kind";
 import { readParam } from "@/lib/url-state";
 import type { Audience, Experiment, Goal } from "@/lib/types";
 import { ExperimentEditor } from "@/components/ExperimentEditor";
 import { StatusButtons } from "@/components/StatusButtons";
+import { DuplicateButton } from "@/components/experiment/DuplicateButton";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPill } from "@/components/ui/StatusPill";
 
@@ -35,12 +37,18 @@ export default async function ExperimentPage({ params, searchParams }: { params:
         title={exp.data.name}
         meta={
           <span className="row" style={{ gap: 8 }}>
+            <span className="badge" data-testid="experiment-kind">{KIND_JA[exp.data.kind]}</span>
             <StatusPill tone={STATUS_TONE[exp.data.status]}>{STATUS_JA[exp.data.status]}</StatusPill>
             <span className="mono">{exp.data.id}</span>
             {exp.data.unpublished ? <span className="badge badge-warn">未公開の編集あり</span> : null}
           </span>
         }
-        actions={<StatusButtons siteId={site.id} experiment={exp.data} canPublish={canPublish} />}
+        actions={
+          <span className="row" style={{ gap: 8 }}>
+            {ws.role !== "viewer" ? <DuplicateButton wid={wid} siteId={site.id} experiment={exp.data} /> : null}
+            <StatusButtons siteId={site.id} experiment={exp.data} canPublish={canPublish} />
+          </span>
+        }
       />
       <p data-testid="status-banner" className="muted" data-status={exp.data.status} data-published-status={exp.data.publishedStatus ?? "none"}>
         状態: {STATUS_JA[exp.data.status]} / 本番: {exp.data.publishedStatus ? STATUS_JA[exp.data.publishedStatus] : "未反映"}。編集内容は「保存」で下書きに入ります。本番に出すには、画面の上部の「公開」を押します(管理者以上)。開始・一時停止・終了でも公開されますが、そのときはこのサイトのほかのエクスペリエンスの保存済みの下書きも一緒に本番に出ます

@@ -12,11 +12,11 @@
   // 初回デプロイで class を登録する。既存クラスの改名・削除をしない限り tag を増やさない
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["VisitorProfile"] }],
   // 設置サイトのゾーンに紐づく Workers Route。`/v1/*` は decision / event。bootstrap(`/s/*`)は配信専用の Worker が受ける(docs/deploy.md を参照して自分のドメインに置き換える)。
-  // D-lite を使う Site は <site-domain>/__ab/* を、needsProfile の Site は <site-domain>/v1/* を同じ形式で追加する
+  // Mode B(サーバー発行 Cookie)を使う Site は <site-domain>/__ab/* を、needsProfile の Site は <site-domain>/v1/* を同じ形式で追加する
   "routes": [
     { "pattern": "www.example.com/v1/*", "zone_name": "example.com" }
   ],
-  // routes を書くと local mode の origin host が route になり、host で Site を引く D-lite(/__ab/*)がローカルで 404 になる。
+  // routes を書くと local mode の origin host が route になり、host で Site を引く Mode B の経路(/__ab/*)がローカルで 404 になる。
   // dev.host で localhost に固定して e2e の host 一致(demo-dlite の settings.hosts)を保つ
   "dev": { "host": "localhost" }
 }

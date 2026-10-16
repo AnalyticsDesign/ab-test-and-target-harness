@@ -1,4 +1,4 @@
-# エージェント向けガイド(Web Test and Target Harness)
+# エージェント向けガイド(AB Test and Target Harness)
 
 このツールは **外部の AI エージェントが REST で直接操作できる**ように作られています。
 本製品は LLM を呼ばず、GA4 / BigQuery への照会もヘッドレスブラウザも持ちません。それらはエージェント側の手足です。
@@ -90,7 +90,7 @@ curl -sS "$AB_CONTROL_URL/me" -H "x-api-key: $AB_API_KEY"
 # 1. サイトを確認する(id は人間が管理画面で作ったもの)
 curl -sS "$AB_CONTROL_URL/workspaces/$WID/sites" -H "Authorization: Bearer $AB_API_KEY"
 
-# 2. エクスペリエンス(experiment)を作る(パターン a / b が 50:50 で自動生成される)
+# 2. エクスペリエンス(experiment)を作る(パターン a / b が 50:50 で自動生成される。`"kind":"single"` を足すとパーソナライズで、パターン a が重み 100 で 1 つ。省略は `test`)
 curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments" -H "Authorization: Bearer $AB_API_KEY" \
   -H 'content-type: application/json' \
   -d '{"id":"exp_hero_q1","name":"Hero Q1","urlMatch":{"part":"path","op":"startsWith","value":"/lp/"},"trafficPercentage":100}'
@@ -236,13 +236,28 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/$EID/status" -H "Author
 
 数値は Cloudflare 側の集計で数分遅れ、control は 60 秒の間同じ値を返す。日次の値は UTC 0 時(`resetAt`)に戻る。
 
+### レシピ 7: 複製する(編集者)
+
+```bash
+# 同じ内容の下書き(種別・パターン・変更・設定をそのまま。id / name は省略可)
+curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/duplicate" -H "Authorization: Bearer $AB_API_KEY" \
+  -H 'content-type: application/json' -d '{"mode":"same"}'
+# パターン b だけを表示するパーソナライズの下書き(配信率 100%・割当の固定 off で作られる)
+curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/duplicate" -H "Authorization: Bearer $AB_API_KEY" \
+  -H 'content-type: application/json' -d '{"mode":"variant","variantId":"b"}'
+```
+
+応答は `201` で新しいエクスペリエンス(いつも下書き)。開始は人の管理者に任せる。パーソナライズの元は `mode: "same"` だけ(`variant` は 422 `duplicate_mode_not_allowed`)。
+
 ---
 
 ## 3. 踏みやすい制約
 
 - **ID は作成後に変更できません**(エクスペリエンス / パターン / 目標 / オーディエンス)。`experimentId` は割当ハッシュの入力なので、変えると全訪問者の割当が変わります。作り直す場合は新しい ID で作ります。オーディエンスの ID に `new` は使えません(管理画面の新規作成の画面と重なるため。422)
 - **公開の反映**: 公開の結果の `staticDeploy` が `deployed` なら、訪問者のブラウザには 60 秒以内に届きます。`pending` なら配信ファイルの更新を再試行中です(`GET /sites/:sid` の `staticStale` が `true`。続くときは `POST /sites/:sid/static/redeploy` で作り直せます。管理者以上)。公開直後の検証は 1 分ほど待つか、キャッシュを迂回する URL で確認してください
-- **パターンの weight は合計 100**、パターンは 2 つ以上。`trafficPercentage` は 1〜100(0% 配信は一時停止で表現します)
+- **種別は作成後に変えられない**。パターンの数はテストが 2 つ以上、パーソナライズが 1 つ(違反は 422 `variant_count_invalid`)。変えたいときは複製する
+- **重なったときの優先**: 同じ要素の部分を複数のエクスペリエンスが変えると、パーソナライズ(作成の古い順)→ テスト(開始・再開の新しい順)の後ろが勝つ(テストどうしは先に配信に入ったもの。再開したテストは、その間に開始したテストより優先が低い)。保証するのは同じ要素の同じ部分までで、祖先と子孫にまたがる重なりは保証しない。公開の応答の `warnings`(`path` = `experiments.<優先の低い方>`)と `GET …/publish-preview` の `overlaps` に、対象 URL の条件とセレクタの文字列がどちらも完全に一致する組だけが出る。`?starting=<id>` を付けると、その下書きを開始したとき・一時停止中のテストを再開したときの組が分かる
+- **パターンの weight は合計 100**(テストは 2 つ以上のパターン、パーソナライズは 1 つで weight 100)。`trafficPercentage` は 1〜100(0% 配信は一時停止で表現します)
 - **正規表現は URL のパスとホストだけ**に使えます(`part` が `path` / `host`)。URL 全体(`part` が `url` または省略)の正規表現は 422 です。「ホストが一致」+「パスが正規表現に一致」で書き換えてください。クエリで絞るなら配信条件のクエリパラメータ(`query`)の `equals` / `contains` を使います
   - 使える書き方: ふつうの ASCII 文字、記号のエスケープ(`\.` `\/` `\-` `\?` `\*` `\+` `\(` `\)` `\[` `\]` `\{` `\}` `\|` `\^` `\$` `\\`)、`.`、`[...]` と `[^...]`、`\d` `\w` `\s`、`^` `$`、`( )` と `(?: )` と `|`、繰り返し `?` `*` `+` `{n}` `{n,m}`(m は 100 まで)。日本語のパスは `%E3%81%82` のようにエンコードした形で書きます
   - 使えないもの: 後方参照、先読み・後読み、名前付きグループ、フラグ、上限のない `{n,}`、最短一致(`*?` など)

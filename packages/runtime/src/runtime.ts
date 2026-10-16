@@ -186,11 +186,21 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
   let pendingForget: Promise<void> | null = null;
   const FORGET_WAIT_MS = 2000; // in-flight goal の settle を待つ上限(通信断で撤回を無期限に遅らせない)
 
-  const pushDataLayer = (evt: Record<string, unknown>): void => {
-    const dl = (deps.win.dataLayer = deps.win.dataLayer ?? []); // §10.5: 無ければ作ってから push
-    dl.push(evt);
-  };
   const names = analyticsNames(settings); // §10.9: 名札はサイト設定。無ければ既定名
+  const pushDataLayer = (evt: Record<string, unknown>): void => {
+    // 決定 62: 宛先の配列名もサイト設定(GTM のスニペットの `l=`)。§10.5: 無ければ作ってから push。
+    // 作った後に読み直すのは、window の setter 付きプロパティ(onload 等)が代入を無視・変換しうるため。
+    // push を持たない既存の値は上書きせず push だけをやめる(サイトの持ち物を壊さず、適用と /event は続ける)。
+    // getter だけのプロパティ(frameElement 等)への代入は strict mode で TypeError になるので、計測の失敗として握る
+    const win = deps.win as unknown as Record<string, { push?: (e: unknown) => unknown } | null | undefined>;
+    try {
+      if (win[names.dataLayerName] == null) win[names.dataLayerName] = [] as unknown[];
+      const dl = win[names.dataLayerName];
+      if (typeof dl?.push === "function") dl.push(evt);
+    } catch (e) {
+      console.debug("wtt: dataLayer push failed", names.dataLayerName, e);
+    }
+  };
   const exposure = createExposureTracker(config, names, assignments, pushDataLayer);
 
   /** revoke 時に旧 Identity 由来の状態を捨てる。§16 の「旧 Identity は復元しない」を getAssignments にも及ぼす(r1 CX-Medium-1) */
@@ -318,16 +328,19 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
       for (const e of outcome.experiments) assignments[e.id] = e.variant;
       const changes: ActiveChange[] = [];
       const watches: ControlWatch[] = [];
-      for (const e of outcome.experiments) {
-        const exp = config.experiments.find((x) => x.id === e.id);
-        const variant = exp?.variants.find((v) => v.id === e.variant);
-        if (!exp || !variant) continue;
+      // 決定 51(設計書 §3.2): 順位 = config の並びの番号(後ろほど優先)。decision の応答の順には頼らない。
+      // 適用も並びの順(前 → 後)に行う(HTML の挿入と CSS の順を並びのとおりにするため)
+      const chosen = new Map(outcome.experiments.map((e) => [e.id, e.variant]));
+      config.experiments.forEach((exp, rank) => {
+        const vid = chosen.get(exp.id);
+        const variant = vid === undefined ? undefined : exp.variants.find((v) => v.id === vid);
+        if (!variant) return;
         if (variant.changes.length === 0) {
           watches.push({ experimentId: exp.id, selectors: config.exposureSelectors[exp.id] ?? [] }); // 対照 Variant(§10.5)
         } else {
-          for (const change of variant.changes) changes.push({ experimentId: exp.id, variantId: variant.id, change });
+          for (const change of variant.changes) changes.push({ experimentId: exp.id, variantId: variant.id, change, rank });
         }
-      }
+      });
       // 防御: 現状 run() は世代ごとに 1 回で、isStale() が旧世代を止めているが、将来 activate()(Phase 2)等で
       // 同じ世代に 2 回目の start が入っても前のエンジンの MutationObserver をページ寿命で残さない(Plan 10 B2)。stop() は冪等
       engine?.stop();

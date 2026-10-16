@@ -193,6 +193,11 @@ export function createPreviewEngine(
     targets.push({ experimentId, variantId, changes: variant.changes, report });
   }
 
+  // 決定 51(設計書 §3.2): 本番と同じく config の並び(後ろほど優先)の順に適用する。指定の順には頼らない。
+  // 部分の記録は持たないので、後から一致した要素での逆転までは再現しない(運用ガイドに書く)。reports は指定の順のまま
+  const rankOf = (id: string): number => config.experiments.findIndex((e) => e.id === id);
+  targets.sort((a, b) => rankOf(a.experimentId) - rankOf(b.experimentId));
+
   const mark = (el: Element, key: string): boolean => markApplied(state.applied, el, key);
 
   function applyOne(t: Target, change: Change, row: PreviewChangeReport): void {

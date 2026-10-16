@@ -124,6 +124,19 @@ describe("docs/agent-guide.md のレシピ(§13.10)", () => {
     expect(["a", "b"]).toContain(hit.experiments[0]!.variantId);
   });
 
+  // レシピ 7(D9 plan ①): 複製。同じ内容 / 選んだパターンだけを表示するパーソナライズ
+  it("agent_guide_recipe_duplicate", async () => {
+    const { key, wid, token } = await agentKey();
+    const { id: sid } = await createSite(token, wid);
+    expect((await call("POST", `/sites/${sid}/experiments`, { token: key, body: { id: "exp_src", name: "Source", urlMatch: { op: "contains", value: "/" } } })).status).toBe(201);
+    const same = await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token: key, body: { mode: "same" } });
+    expect(same.status).toBe(201);
+    expect(await json(same)).toMatchObject({ kind: "test", status: "draft" });
+    const variant = await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token: key, body: { mode: "variant", variantId: "b" } });
+    expect(variant.status).toBe(201);
+    expect(await json(variant)).toMatchObject({ kind: "single", status: "draft", trafficPercentage: 100, persistAssignment: false });
+  });
+
   it("agent_guide_recipe_watch_usage", async () => {
     const owner = await setupOwner();
     // 監視用の鍵 = ワークスペース 1 つ・閲覧者(レシピ 6 の「閲覧者の鍵で可」)

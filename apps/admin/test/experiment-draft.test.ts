@@ -3,7 +3,7 @@ import { draftOf, failedTab, isDirty, targetingBody } from "@/lib/experiment-dra
 import type { Experiment } from "@/lib/types";
 
 const EXP = {
-  id: "exp_a", siteId: "s", name: "Hero", status: "draft", publishedStatus: null, urlMatch: { op: "equals", value: "/" }, targeting: { ctx: "device", op: "in", value: ["mobile"] },
+  id: "exp_a", siteId: "s", name: "Hero", kind: "test", status: "draft", publishedStatus: null, urlMatch: { op: "equals", value: "/" }, targeting: { ctx: "device", op: "in", value: ["mobile"] },
   trafficPercentage: 100, persistAssignment: false, analytics: { overrides: { experimentName: "hero_test" }, extra: { team: "growth" } },
   createdBy: "u", updatedBy: "u", createdAt: 1, updatedAt: 2, unpublished: true,
   variants: [{ id: "a", name: "A", weight: 50, analytics: null, changes: [] }, { id: "b", name: "B", weight: 50, analytics: null, changes: [] }],

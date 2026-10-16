@@ -155,10 +155,10 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await expect(tzCombo()).toHaveValue("America/New_York");
     await chooseTz("Asia/Tokyo");
     await saveAndReload();
-    // (3) Deployment Mode(訪問者 ID の節)。D-lite は hosts が要るので保存はせず、dirty になることと、再読み込みで捨てられることだけを見る
+    // (3) Deployment Mode(訪問者 ID の節)。Mode B は hosts が要るので保存はせず、dirty になることと、再読み込みで捨てられることだけを見る
     await page.getByTestId("section-identity").click();
     await expect(saveState).toHaveText("変更はありません");
-    await pick(page, "導入の形", /^D-lite/);
+    await pick(page, "導入の形", /^B: サーバー発行 Cookie/);
     await expect(saveState).toHaveText("未保存の変更あり");
     await page.reload();
     await waitForHydration(page); // 次の節の切替(React の onClick)の前に

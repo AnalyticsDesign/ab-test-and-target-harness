@@ -119,7 +119,7 @@ export function checkConfigured(values) {
     add("asset_public_base", "none / dev-assets / auto / https://<ホスト> のどれかで書く");
   const dl = values.dlite_hosts ?? [];
   if (!Array.isArray(dl)) add("dlite_hosts", "[ホスト, …] の配列で書く");
-  else if (dl.length && edge !== "route") add("dlite_hosts", "D-lite は edge_address: route のときだけ使える");
+  else if (dl.length && edge !== "route") add("dlite_hosts", "Mode B(サーバー発行 Cookie)は edge_address: route のときだけ使える");
   else {
     const bad = dl.map((h) => [h, hostProblem(h)]).find(([, p]) => p);
     if (bad) add("dlite_hosts", `${bad[0]}: ${bad[1]}`);

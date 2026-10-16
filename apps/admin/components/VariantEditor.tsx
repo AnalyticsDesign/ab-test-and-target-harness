@@ -16,6 +16,7 @@ export function VariantEditor({
   pageUrl,
   removable,
   imageUpload,
+  single,
 }: {
   siteId: string;
   experimentId: string;
@@ -33,6 +34,8 @@ export function VariantEditor({
   removable: boolean;
   /** 決定 43 (6): false ならアップロードボタンと IMAGE の種類を出さず、代替の一文を出す */
   imageUpload: boolean;
+  /** パーソナライズ(kind = single)。パターンは 1 つで重みは 100 のまま動かさないので、重みの入力を出さない */
+  single: boolean;
 }) {
   const analytics = variant.analytics ?? {};
   const lockVariantSet = disabled || variantsLocked;
@@ -48,10 +51,12 @@ export function VariantEditor({
           <span className="field-label">名前(100 字以内)</span>
           <input value={variant.name} maxLength={100} disabled={lockVariantSet} onChange={(e) => onChange({ ...variant, name: e.target.value })} />
         </label>
-        <label className="field">
-          <span className="field-label">重み(合計 100)</span>
-          <input type="number" min={0} max={100} value={variant.weight} disabled={lockVariantSet} onChange={(e) => onChange({ ...variant, weight: Number(e.target.value) })} />
-        </label>
+        {single ? null : (
+          <label className="field">
+            <span className="field-label">重み(合計 100)</span>
+            <input type="number" min={0} max={100} value={variant.weight} disabled={lockVariantSet} onChange={(e) => onChange({ ...variant, weight: Number(e.target.value) })} />
+          </label>
+        )}
         {removable ? (
           <button type="button" className="btn" style={{ marginLeft: "auto" }} disabled={lockVariantSet} onClick={onRemove}>
             パターンを削除
@@ -59,7 +64,7 @@ export function VariantEditor({
         ) : null}
       </div>
       <h3>外部計測(このパターンの値)</h3>
-      {variantsLocked ? <p className="muted">配信中または終了済みのエクスペリエンスでは、パターンの外部計測の上書きは変更できません(変えるときは新しいエクスペリエンスを作成してください)</p> : null}
+      {variantsLocked ? <p className="muted">配信中または終了済みのエクスペリエンスでは、パターンの外部計測の上書きは変更できません(複製して新しいエクスペリエンスを作成してください)</p> : null}
       <Field label="variantName の上書き(空 = 名前をそのまま)">
         <input
           value={analytics.overrides?.variantName ?? ""}

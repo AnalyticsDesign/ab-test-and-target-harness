@@ -11,7 +11,7 @@ export type ConfirmOption = { label: string; checkedBody?: ReactNode; checkedCon
 /**
  * 確認のモーダル(backlog B45)。<dialog> の showModal = 外側は押せない・フォーカスは中に閉じる・閉じると押したボタンへ戻る。
  * 画面の中央に出す。初期のフォーカス = キャンセル側(Enter の押し間違いで実行しない)。Esc と外(背面)のクリック = キャンセル。
- * 入力欄を持つ確認をモーダルにするときは、外のクリックで書きかけが消えないよう、ここに無効にする設定を足す。
+ * 入力欄を持つ確認をモーダルにするときは dismissOnBackdrop を false にする(外のクリックで書きかけが消えないように)。
  * 普段は useConfirm()(components/ConfirmProvider.tsx)から使う。画面に固有の確認(LeaveKeyDialog)はこれを直接使う
  */
 export function ConfirmDialog({
@@ -23,6 +23,8 @@ export function ConfirmDialog({
   tone = "danger",
   emphasizeCancel = false,
   option,
+  dismissOnBackdrop = true,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: {
@@ -37,6 +39,10 @@ export function ConfirmDialog({
   emphasizeCancel?: boolean;
   /** 本文の下に出すチェックボックス(B46 K12)。開くたびにオフから始まる */
   option?: ConfirmOption;
+  /** 外(背面)のクリックで閉じるか。入力欄を持つモーダルは false(書きかけが消えないように)。Esc は閉じる */
+  dismissOnBackdrop?: boolean;
+  /** 実行のボタンを押せなくする(送信中など) */
+  confirmDisabled?: boolean;
   onConfirm: (optionChecked: boolean) => void;
   onCancel: () => void;
 }) {
@@ -80,7 +86,7 @@ export function ConfirmDialog({
         downOutside.current = outside(e);
       }}
       onClick={(e) => {
-        if (downOutside.current && outside(e)) onCancel();
+        if (dismissOnBackdrop && downOutside.current && outside(e)) onCancel();
         downOutside.current = false;
       }}
       onCancel={(e) => {
@@ -113,7 +119,7 @@ export function ConfirmDialog({
         </label>
       ) : null}
       <div className="row" style={{ justifyContent: "flex-end" }}>
-        <button type="button" className={tone === "danger" ? "btn btn-danger" : "btn btn-primary"} onClick={() => onConfirm(checked)}>
+        <button type="button" className={tone === "danger" ? "btn btn-danger" : "btn btn-primary"} disabled={confirmDisabled} onClick={() => onConfirm(checked)}>
           {checked && option?.checkedConfirmLabel ? option.checkedConfirmLabel : confirmLabel}
         </button>
         <button ref={cancel} type="button" className={emphasizeCancel ? "btn btn-primary" : "btn"} onClick={onCancel}>

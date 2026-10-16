@@ -50,11 +50,11 @@ test("itp × ドメインあり → dlite_hosts に install_host。7 万以上�
   assert.deepEqual(cannotOf(v, r), []);
 });
 
-test("itp × ドメインなし → 推奨でもできないことに D-lite", () => {
+test("itp × ドメインなし → 推奨でもできないことに Mode B", () => {
   const v = { ...base, features: ["itp"], site_on_cloudflare: "no" };
   const r = recommend(v);
   assert.deepEqual(r.dlite_hosts, []);
-  assert.ok(has(cannotOf(v, r), /D-lite/));
+  assert.ok(has(cannotOf(v, r), /Mode B: サーバー発行 Cookie/));
 });
 
 test("画像のアップロード: route → auto、workers-dev → dev-assets、最軽量ではできないことに出る", () => {
@@ -142,7 +142,7 @@ test("注意には、後から履歴の条件・割り当ての固定を使う�
   assert.ok(!has(notesOf(vh, recommend(vh)), /割り当ての固定/));
 });
 
-test("configOf は下段の値から構成を作る(既定 = route・Free・D-lite なし)", () => {
+test("configOf は下段の値から構成を作る(既定 = route・Free・Mode B なし)", () => {
   assert.deepEqual(configOf({ asset_public_base: "none", install_host: "www.example.com", zone_name: "example.com" }), {
     edge_address: "route", zone_name: "example.com", asset_public_base: "none", dlite_hosts: [], plan: "free",
   });
@@ -152,7 +152,7 @@ test("summaryOf", () => {
   assert.equal(summaryOf(LIGHTEST), "ドメインなし(*.workers.dev) × Free × 画像のアップロードなし");
   assert.equal(
     summaryOf({ edge_address: "route", zone_name: "auto", asset_public_base: "auto", dlite_hosts: ["www.example.com"], plan: "paid" }, "www.example.com"),
-    "ドメインあり(www.example.com) × Workers Paid × 画像のアップロードあり(R2 から配信) × Safari 対策(D-lite)あり",
+    "ドメインあり(www.example.com) × Workers Paid × 画像のアップロードあり(R2 から配信) × Safari 対策(Mode B)あり",
   );
 });
 
@@ -164,11 +164,11 @@ test("placementOf: 管理画面と control の置き場所(ドメインありな
   );
 });
 
-test("Safari 対策を選んでもドメインなしなら D-lite の上限は効かない(7 万以上でも上限の話を出さない)", () => {
+test("Safari 対策を選んでもドメインなしなら Mode B の上限は効かない(7 万以上でも上限の話を出さない)", () => {
   const v = { ...base, features: ["itp"], daily_pv: "over_70k", site_on_cloudflare: "no" };
   const r = recommend(v);
   assert.ok(!has(cannotOf(v, r), /上限に達しうる/));
-  assert.ok(has(reasonsOf(v, r), /Safari 対策\(D-lite\)を使えないので/));
+  assert.ok(has(reasonsOf(v, r), /Safari 対策\(Mode B: サーバー発行 Cookie\)を使えないので/));
   assert.ok(!has(notesOf(v, r), /多い日に止めたくない/));
 });
 

@@ -3,15 +3,15 @@ import { featuresOf } from "./questions.mjs";
 
 /**
  * Free の上限に効く使い方と、Workers Paid を推奨する PV の区分(上限の 7 割を超えうる区分)。
- * 履歴(history)は構成によらず効く。Safari 対策は D-lite を使う構成(dlite_hosts がある)でだけ効く。
+ * 履歴(history)は構成によらず効く。Safari 対策は Mode B(サーバー発行 Cookie)を使う構成(dlite_hosts がある)でだけ効く。
  * A/B テストだけなら、割り当てとゴールの計測はブラウザの中で完結し、上限に効かない
  */
 export const FREE_LIMITS = {
   history: { label: "約 5 万 PV/日", paidAt: ["30k_70k", "over_70k"], what: "訪問者ごとの履歴の保存" },
-  itp: { label: "約 10 万 PV/日", paidAt: ["over_70k"], what: "表示のたびの Cloudflare への問い合わせ(D-lite)" },
+  itp: { label: "約 10 万 PV/日", paidAt: ["over_70k"], what: "表示のたびの Cloudflare への問い合わせ(Mode B)" },
 };
 
-/** その構成で先に効く上限。履歴が D-lite より低いので先に見る。上限に効かなければ null */
+/** その構成で先に効く上限。履歴が Mode B より低いので先に見る。上限に効かなければ null */
 export function limitFor(features, c) {
   if (features.has("history")) return FREE_LIMITS.history;
   if (c.dlite_hosts.length > 0) return FREE_LIMITS.itp;
@@ -78,7 +78,7 @@ export function recommend(values) {
 /** ゾーンも支払い方法の登録も要らない、最も手軽な構成 */
 export const LIGHTEST = Object.freeze({ edge_address: "workers-dev", zone_name: null, asset_public_base: "none", dlite_hosts: Object.freeze([]), plan: "free" });
 
-/** 下段に書かれた構成(省略時は deploy.md の既定: route・Free・D-lite なし) */
+/** 下段に書かれた構成(省略時は deploy.md の既定: route・Free・Mode B なし) */
 export function configOf(values) {
   return {
     edge_address: values.edge_address ?? "route",
@@ -102,7 +102,7 @@ export function summaryOf(c, host) {
         ? "画像のアップロードあり(管理用の Worker 経由で配信)"
         : "画像のアップロードあり(R2 から配信)",
   ];
-  if (c.dlite_hosts.length) parts.push("Safari 対策(D-lite)あり");
+  if (c.dlite_hosts.length) parts.push("Safari 対策(Mode B)あり");
   return parts.join(" × ");
 }
 
@@ -123,7 +123,7 @@ export function reasonsOf(values, c) {
   ];
   // アカウントの入れ替えの理由は、提示の確認の段落(render.mjs の accountChangeNote)に書く
   if (accountIsPaid(values)) r.push("このアカウントは既に Workers Paid なので、Paid として扱う");
-  else if (!limit && f.has("itp")) r.push("この構成では Safari 対策(D-lite)を使えないので、割り当てとゴールの計測は訪問者のブラウザの中で完結し、Free で足りる");
+  else if (!limit && f.has("itp")) r.push("この構成では Safari 対策(Mode B: サーバー発行 Cookie)を使えないので、割り当てとゴールの計測は訪問者のブラウザの中で完結し、Free で足りる");
   else if (!limit) r.push("A/B テストとゴールの計測は訪問者のブラウザの中で完結し、Workers の無料枠をほとんど使わないので Free で足りる");
   else if (c.plan === "paid") r.push(`${limit.what}を使い、多い日の PV が Free の上限(${limit.label})の 7 割を超えうるので Workers Paid にする`);
   else if (values.daily_pv === "unknown") r.push(`PV が分からないので Free で始める(${limit.what}を使うので、上限は ${limit.label})`);
@@ -137,7 +137,7 @@ export function reasonsOf(values, c) {
         ? "画像をアップロードするので R2 を使う。ドメインが無いので、管理用の Worker 経由で配る(R2 から直接配るより遅く、Workers の無料枠を使う)"
         : "画像をアップロードするので R2 を使い、wtt-assets.<ゾーン名> のアドレスで配る",
   );
-  if (c.dlite_hosts.length) r.push(`Safari 対策として、${c.dlite_hosts.join(", ")} で D-lite を使う`);
+  if (c.dlite_hosts.length) r.push(`Safari 対策として、${c.dlite_hosts.join(", ")} で Mode B(サーバー発行 Cookie)を使う`);
   return r;
 }
 
@@ -146,7 +146,7 @@ export function cannotOf(values, c) {
   const f = featuresOf(values);
   const out = [];
   if (f.has("itp") && c.dlite_hosts.length === 0)
-    out.push("Safari 対策(D-lite)が使えない。Safari では JavaScript で置いた Cookie が操作なしで 7 日で消え、同じ人が別の人として扱われうる(D-lite はドメインありの構成でだけ使える)");
+    out.push("Safari 対策(Mode B: サーバー発行 Cookie)が使えない。Safari では JavaScript で置いた Cookie が操作なしで 7 日で消え、同じ人が別の人として扱われうる(Mode B はドメインありの構成でだけ使える)");
   if (c.plan === "free" && exceedsFree(f, values.daily_pv, c)) out.push("多い日は Free の上限に達しうる。達した日の残りは出し分けと計測が止まる(ページは元の表示のまま動く)");
   if (values.image_upload === true && c.asset_public_base === "none") out.push("管理画面から画像をアップロードできない(画像の URL を書き換える変更で差し替えられる)");
   if (c.edge_address === "workers-dev") {

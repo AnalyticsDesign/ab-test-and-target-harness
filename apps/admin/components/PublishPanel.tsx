@@ -119,6 +119,16 @@ export function PublishPanel({ wid, site, preview, canPublish }: { wid: string; 
               画面の幅の条件を使うエクスペリエンス({preview.viewportExperiments.map((e) => e.name).join("、")})は、タグが viewport の meta より前にあるページや、meta が無いページでは配信されません
             </p>
           ) : null}
+          {preview.overlaps.length > 0 ? (
+            <div className="banner-warn" style={{ display: "block" }} data-testid="publish-overlaps">
+              同じ要素を変えるエクスペリエンスがあります(公開は止めません)
+              <ul>
+                {preview.overlaps.map((o) => (
+                  <li key={o.experimentIds.join("|")}>{o.message}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {hasCode ? (
             <p className="banner-warn" style={{ display: "block" }}>
               HTML / CSS / CUSTOM_JS を含む変更があります。配信前に下書きプレビューで表示を確認してください

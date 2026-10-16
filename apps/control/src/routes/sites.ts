@@ -76,7 +76,7 @@ siteRoutes.post(
     const id = body.id ?? newId("site");
     if (await db.selectFrom("sites").select("id").where("id", "=", id).executeTakeFirst())
       throw new ApiError(409, "site_id_taken", { id, message: "このサイト ID は既に使われています", hint: "別の ID を指定してください" });
-    // spec §4.1: allowedOrigins は domain から初期値。D-lite(mode B)は hosts = [domain]
+    // spec §4.1: allowedOrigins は domain から初期値。Mode B(サーバー発行 Cookie、旧称 D-lite)は hosts = [domain]
     const base: SiteRow = {
       id, workspace_id: wid, name: body.name, domain: body.domain, mode: "A", id_source: "ab", site_salt: randomToken(16),
       allowed_origins_json: JSON.stringify([`https://${body.domain}`]), hosts_json: "[]", retention_days: body.retentionDays,

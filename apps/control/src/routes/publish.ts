@@ -2,7 +2,10 @@ import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
+import type { ExperimentRow } from "../db";
 import { notFound, validationFailed } from "../errors";
+import { overlapWarnings } from "../experiment-order";
+import { SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
 import { canReadRawPublishError, loadSite } from "../roles";
 import { compile, CompileError, usesCondition, type CompiledConfig } from "@wtt/core";
@@ -27,7 +30,9 @@ export const PublishResultSchema = z.union([
       .describe(
         "設置タグの配信ファイルの更新。deployed = 反映済み(訪問者のブラウザには 60 秒以内に届く)/ pending = まだ反映されていない(自動で再試行する。サイトの staticStale が true になり、続くときは POST /sites/:sid/static/redeploy で作り直せる)/ skipped = 更新しなかった。superseded が true のときは、より新しい公開が更新するため。superseded が false のときは、配信ファイルを更新する仕組みが設定されていないため",
       ),
-    warnings: z.array(z.object({ path: z.string(), message: z.string() })).describe("公開の警告(拒否はしない)。dataLayer の名札(GA4 で値が破棄される可能性)と、配信するタグの大きさ(path = bootstrap)"),
+    warnings: z.array(z.object({ path: z.string(), message: z.string() })).describe(
+        "公開の警告(拒否はしない)。dataLayer の名札(GA4 で値が破棄される可能性)、配信するタグの大きさ(path = bootstrap)、同じ対象 URL で同じ要素を変えるエクスペリエンスの組(path = experiments.<優先の低い方の ID>。どちらが優先されるかを message に書く)",
+      ),
   }),
   z.object({
     ok: z.literal(false),
@@ -92,6 +97,11 @@ const PublishPreviewSchema = z.object({
     .object({ error: z.string(), message: z.string(), hint: z.string().optional() })
     .nullable()
     .describe("いまの下書きを公開すると止まる理由(止まらなければ null)"),
+  overlaps: z
+    .array(z.object({ path: z.string(), message: z.string(), experimentIds: z.array(z.string()).describe("[優先の低い方, 高い方]") }))
+    .describe(
+      "同じ対象 URL の条件で同じ要素(セレクタの文字列が同じ)を変える、配信中のエクスペリエンスの組。後に並ぶものが優先される(パーソナライズよりテスト、テストどうしは先に開始・再開したもの、パーソナライズどうしは後に作成したもの)。starting を付けたときは、その下書き・一時停止中のテストを今開始・再開したとして並べ、その ID を含む組だけ",
+    ),
 });
 
 /** HTML / CSS / CUSTOM_JS はコードレビューが要る Change(spec §13.9 の「Code Change の印」) */
@@ -238,6 +248,19 @@ publishRoutes.get(
     },
   }),
   requireSession,
+  validator(
+    "query",
+    z.object({
+      starting: z
+        .string()
+        .regex(SLUG_RE)
+        .optional()
+        .describe("下書きまたは一時停止中のエクスペリエンス ID を指定すると、それを今開始・再開したとして重なり(overlaps)だけを計算する。ほかの項目には効かない"),
+    }),
+    (r) => {
+      if (!r.success) throw validationFailed(r.error);
+    },
+  ),
   async (c) => {
     const { site } = await loadSite(c, c.req.param("sid"), "viewer");
     const db = c.get("db");
@@ -268,15 +291,32 @@ publishRoutes.get(
       .orderBy("updated_at", "desc")
       .execute();
     const usage = await audienceUsage(db, site.id);
+    const startingId = c.req.valid("query").starting ?? null;
     let next: CompiledConfig | null = null;
     let compileError: { error: string; message: string; hint?: string } | null = null;
+    let overlaps: ReturnType<typeof overlapWarnings> = [];
     try {
-      next = compile(await buildCompileInput(db, site, (site.active_version ?? 0) + 1));
+      const input = await buildCompileInput(db, site, (site.active_version ?? 0) + 1);
+      // compile の前の入力から出す(compile に失敗しても重なりは見せる)
+      if (startingId === null) overlaps = overlapWarnings(input.experiments);
+      next = compile(input);
     } catch (e) {
       const code = e instanceof CompileError ? e.code : "compile_failed";
       // compile 以外の例外(D1 の一時障害など)は応答では compile_failed に丸めるので、原因を追えるよう生のエラーをログに残す
       if (!(e instanceof CompileError)) console.error("publish-preview failed (compile_failed)", e);
       compileError = { error: code, ...describeCompileFailure(code, e instanceof Error ? e.message : String(e)) };
+    }
+    if (startingId !== null) {
+      // 決定 51(K7): その下書き・一時停止中のテストを「今開始・再開した」として並べた入力から、重なりだけを出す(ほかの項目は今の下書きのまま)
+      try {
+        const rows = (await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute()).map(
+          (r): ExperimentRow => (r.id === startingId && (r.status === "draft" || r.status === "paused") ? { ...r, status: "running", last_started_at: Date.now() } : r),
+        );
+        const hypo = await buildCompileInput(db, site, (site.active_version ?? 0) + 1, rows);
+        overlaps = overlapWarnings(hypo.experiments).filter((o) => o.experimentIds.includes(startingId));
+      } catch (e) {
+        console.error("publish-preview overlaps for starting failed", e); // 警告だけなので空で返す
+      }
     }
     const active = await loadActiveConfig(db, site);
     const nextPatterns = next?.patterns;
@@ -296,6 +336,7 @@ publishRoutes.get(
       droppedPageConditions,
       viewportExperiments: (next?.experiments ?? []).filter((e) => usesCondition(e.targeting, "viewport")).map((e) => ({ id: e.id, name: e.name })),
       compileError,
+      overlaps,
       lastActivatedAt: site.last_activated_at,
       siteLevelChanged: site.content_updated_at > since,
       experiments: exps.map((e) => {

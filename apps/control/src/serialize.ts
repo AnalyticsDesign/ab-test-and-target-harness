@@ -10,7 +10,8 @@ export function siteJson(row: SiteRow) {
     retentionDays: row.retention_days, consentMode: row.consent_mode, forgetOnRevoke: row.forget_on_revoke === 1, timezone: row.timezone, decisionTimeoutMs: row.decision_timeout_ms,
     visitorCookieName: row.visitor_cookie_name, uuidCookieEnabled: row.uuid_cookie_enabled === 1, uuidCookieName: row.uuid_cookie_name,
     previousCookieNames: JSON.parse(row.previous_cookie_names_json) as Array<{ name: string; until: number }>,
-    analytics: row.analytics_json ? JSON.parse(row.analytics_json) : DEFAULT_ANALYTICS,
+    // 決定 62 より前に保存した行は dataLayerName を持たないので既定名で補う(edge へ配る record は SiteSettingsSchema が埋める)
+    analytics: row.analytics_json ? { dataLayerName: DEFAULT_ANALYTICS.dataLayerName, ...JSON.parse(row.analytics_json) } : DEFAULT_ANALYTICS,
     ga4PropertyId: row.ga4_property_id, bigqueryDataset: row.bigquery_dataset,
     activeVersion: row.active_version, activeKvStale: row.active_kv_stale === 1,
     staticStale: row.static_stale === 1, staticRemoving: row.static_removing !== null,
@@ -38,7 +39,7 @@ export const SiteJsonSchema = z.object({
   uuidCookieEnabled: z.boolean(),
   uuidCookieName: z.string(),
   previousCookieNames: z.array(z.object({ name: z.string(), until: z.number().int().describe("保持期限(epoch 秒)") })),
-  analytics: z.record(z.string(), z.unknown()).describe("外部計測の名前(dataLayer の命名設定。`analytics`)"),
+  analytics: z.record(z.string(), z.unknown()).describe("外部計測の名前(dataLayer の命名設定。`analytics`。push 先の配列の名前 `dataLayerName` を含む)"),
   ga4PropertyId: z.string().nullable(),
   bigqueryDataset: z.string().nullable(),
   activeVersion: z.number().int().nullable(),
@@ -57,7 +58,7 @@ export function goalJson(row: GoalRow) {
 
 export function experimentJson(row: ExperimentRow, extra: { unpublished: boolean }) {
   return {
-    id: row.id, siteId: row.site_id, name: row.name, status: row.status, publishedStatus: row.published_status,
+    id: row.id, siteId: row.site_id, name: row.name, kind: row.kind, status: row.status, publishedStatus: row.published_status,
     urlMatch: JSON.parse(row.url_match_json), targeting: row.targeting_json ? JSON.parse(row.targeting_json) : null,
     trafficPercentage: row.traffic_percentage, persistAssignment: row.persist_assignment === 1,
     analytics: row.analytics_json ? JSON.parse(row.analytics_json) : null,

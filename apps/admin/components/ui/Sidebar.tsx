@@ -56,7 +56,7 @@ export function Sidebar({ user, workspaces }: { user: SessionUser; workspaces: W
   return (
     <nav className={styles.side} aria-label="メインメニュー">
       <Link href="/w" className={styles.logo}>
-        Web Test and Target Harness
+        AB Test and Target Harness
       </Link>
       {ws ? <ContextSwitcher workspaces={workspaces} wid={ws.id} sid={ctx.kind === "site" ? ctx.sid : null} /> : null}
       {ctx.kind === "home" ? <Item href="/w" icon="home" label="ホーム" current /> : null}

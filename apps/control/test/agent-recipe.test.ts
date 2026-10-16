@@ -235,6 +235,15 @@ describe("GET …/analytics-recipe (spec §13.10 / 決定 39 (5))", () => {
     expect(r.notes.some((n) => n.includes("events_intraday"))).toBe(true);
   });
 
+  it("adds a note that comparison does not apply to a personalization (決定 51、設計書 §3.4)", async () => {
+    const NOTE = "パーソナライズなので、比較と SRM の確認は意味を持ちません";
+    const { owner, sid, eid } = await recipeSite();
+    expect((await get(owner.token, sid, eid)).notes).not.toContain(NOTE); // テスト(exp_lp)には付かない
+    const { id: single } = await createExperiment(owner.token, sid, { id: "exp_single", name: "LP personalize", kind: "single" });
+    await setPeriod(sid, single, Date.UTC(2026, 0, 2), Date.UTC(2026, 0, 5));
+    expect((await get(owner.token, sid, single)).notes).toContain(NOTE);
+  });
+
   it("VIEWER で読め、未知の Experiment は 404", async () => {
     const { owner, sid, eid } = await recipeSite();
     expect((await call("GET", `/sites/${sid}/experiments/${eid}/analytics-recipe`, { token: owner.token })).status).toBe(200);

@@ -54,7 +54,7 @@ export function SiteCreateForm({ workspaceId }: { workspaceId: string }) {
           value={mode}
           options={[
             { value: "A", label: "A: JS Cookie(タグ 1 本)" },
-            { value: "B", label: "D-lite: 同一ゾーンの Workers Route(サイトが Cloudflare 配下のとき)" },
+            { value: "B", label: "B: サーバー発行 Cookie(同じゾーンの Workers Route。サイトが Cloudflare 配下のとき)" },
           ]}
           onChange={setMode}
         />

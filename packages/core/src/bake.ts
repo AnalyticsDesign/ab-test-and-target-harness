@@ -22,5 +22,5 @@ export function bakeBootstrap(config: CompiledConfig, settings: SiteSettings, ru
   const boot = JSON.stringify({ config, settings: toRuntimeSettings(settings), ...(opts.apiBase ? { apiBase: opts.apiBase } : {}) });
   const preview = opts.previewSource === undefined ? "" : `${opts.previewSource}\n`;
   const runtime = opts.runtimeHash ? `, runtime ${opts.runtimeHash}` : "";
-  return `/* Web Test and Target Harness bootstrap (site ${config.siteId}, config v${config.version}${runtime}) */\n${preview}self.__WTT_BOOT__=${boot};\n${runtimeSource}`;
+  return `/* AB Test and Target Harness bootstrap (site ${config.siteId}, config v${config.version}${runtime}) */\n${preview}self.__WTT_BOOT__=${boot};\n${runtimeSource}`;
 }

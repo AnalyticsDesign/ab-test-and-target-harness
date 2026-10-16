@@ -16,6 +16,7 @@ import {
   setupOwner,
   siteRow,
   siteWithRunning,
+  TEXT_CHANGE,
   testEnv,
 } from "./helpers";
 import { getDb } from "../src/db";
@@ -424,5 +425,94 @@ describe("publish (spec §13.6)", () => {
     expect((await env.ASSETS!.list({ prefix: `sites/${sid}/` })).objects).toEqual([]);
     expect(await env.CONFIG_KV.get(kvKeys.settings(sid))).toBeNull();
     expect(await env.CONFIG_KV.get(kvKeys.active(sid))).toBeNull();
+  });
+});
+
+describe("publish orders experiments by priority (決定 51、設計書 §3.2・§9.3)", () => {
+  it("compiles singles first (oldest created) and tests newest-started first", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    const mk = async (id: string, kind: "test" | "single") => {
+      expect((await call("POST", `/sites/${sid}/experiments`, { token, body: { id, name: id, kind, urlMatch: { op: "contains", value: "/" } } })).status).toBe(201);
+      const vid = kind === "single" ? "a" : "b";
+      await call("PUT", `/sites/${sid}/experiments/${id}/variants/${vid}/changes`, { token, body: [TEXT_CHANGE()] });
+    };
+    await mk("s1", "single");
+    await mk("t1", "test");
+    await mk("t2", "test");
+    // 開始の時刻を明示する(同じテストの中で Date.now() が同じミリ秒になり得るため、D1 を直接書く)
+    await env.DB.prepare("update experiments set status = 'running', last_started_at = ? where site_id = ? and id = ?").bind(1_000, sid, "t1").run();
+    await env.DB.prepare("update experiments set status = 'running', last_started_at = ? where site_id = ? and id = ?").bind(5_000, sid, "t2").run();
+    await env.DB.prepare("update experiments set status = 'running', last_started_at = ? where site_id = ? and id = ?").bind(9_000, sid, "s1").run();
+    const res = await json(await publishRes(token, sid));
+    expect(res.ok).toBe(true);
+    const detail = await json(await call("GET", `/sites/${sid}/publishes/${res.version}`, { token }));
+    expect(detail.config.experiments.map((e: any) => e.id)).toEqual(["s1", "t2", "t1"]);
+    expect(detail.config.experiments.every((e: any) => !("kind" in e))).toBe(true);
+  });
+
+  it("resumed_test_yields_to_running_test", async () => {
+    // T1 を開始 → 一時停止 → T2 を開始 → T1 を再開。T1 は配信に入り直したので、テストの中で優先が最も低い(先頭側)
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    for (const id of ["t1", "t2"]) {
+      await call("POST", `/sites/${sid}/experiments`, { token, body: { id, name: id, urlMatch: { op: "contains", value: "/" } } });
+      await call("PUT", `/sites/${sid}/experiments/${id}/variants/b/changes`, { token, body: [TEXT_CHANGE()] });
+    }
+    const status = (id: string, to: string) => call("POST", `/sites/${sid}/experiments/${id}/status`, { token, body: { status: to } }).then((r) => json(r));
+    await status("t1", "running");
+    await status("t1", "paused");
+    await status("t2", "running");
+    const resumed = await status("t1", "running");
+    expect(resumed.publish.ok).toBe(true);
+    const detail = await json(await call("GET", `/sites/${sid}/publishes/${resumed.publish.version}`, { token }));
+    expect(detail.config.experiments.map((e: any) => e.id)).toEqual(["t1", "t2"]);
+    const t1 = await env.DB.prepare("select started_at, last_started_at from experiments where site_id = ? and id = 't1'").bind(sid).first<{ started_at: number; last_started_at: number }>();
+    expect(t1!.last_started_at).toBeGreaterThanOrEqual(t1!.started_at); // started_at(最初の開始)は動かない
+  });
+});
+
+describe("overlap warnings (決定 51、設計書 §3.3)", () => {
+  async function siteWithTwoTests() {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    for (const [id, started] of [["t1", 1_000], ["t2", 5_000]] as const) {
+      await call("POST", `/sites/${sid}/experiments`, { token, body: { id, name: id.toUpperCase(), urlMatch: { op: "contains", value: "/" } } });
+      await call("PUT", `/sites/${sid}/experiments/${id}/variants/b/changes`, { token, body: [TEXT_CHANGE()] });
+      await env.DB.prepare("update experiments set status = 'running', last_started_at = ? where site_id = ? and id = ?").bind(started, sid, id).run();
+    }
+    return { token, sid };
+  }
+
+  it("adds the overlap to the publish warnings without refusing", async () => {
+    const { token, sid } = await siteWithTwoTests();
+    const res = await json<any>(await publishRes(token, sid));
+    expect(res.ok).toBe(true);
+    expect(res.warnings).toContainEqual({ path: "experiments.t2", message: expect.stringContaining("「T1」(先に開始・再開)が優先され") });
+  });
+
+  it("publish-preview lists overlaps, and ?starting= treats a draft as started now", async () => {
+    const { token, sid } = await siteWithTwoTests();
+    const preview = await json<any>(await call("GET", `/sites/${sid}/publish-preview`, { token }));
+    expect(preview.overlaps).toEqual([expect.objectContaining({ path: "experiments.t2", experimentIds: ["t2", "t1"] })]);
+    await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "t3", name: "T3", urlMatch: { op: "contains", value: "/" } } });
+    await call("PUT", `/sites/${sid}/experiments/t3/variants/b/changes`, { token, body: [TEXT_CHANGE()] });
+    const starting = await json<any>(await call("GET", `/sites/${sid}/publish-preview?starting=t3`, { token }));
+    // t3 は今開始した = テストの中で優先が最も低い。t3 を含む組だけを返す
+    expect(starting.overlaps.map((o: any) => o.experimentIds)).toEqual([["t3", "t2"], ["t3", "t1"]]);
+    expect(starting.compileError).toEqual(preview.compileError); // starting は overlaps だけに効く
+    expect((await call("GET", `/sites/${sid}/publish-preview?starting=Bad!`, { token })).status).toBe(422);
+    // 一時停止中のテストも「今再開した」として並べる(t1 を止めると、再開したときは t2 より優先が低い)
+    await env.DB.prepare("update experiments set status = 'paused' where site_id = ? and id = 't1'").bind(sid).run();
+    const resuming = await json<any>(await call("GET", `/sites/${sid}/publish-preview?starting=t1`, { token }));
+    expect(resuming.overlaps.map((o: any) => o.experimentIds)).toEqual([["t1", "t2"]]);
+  });
+
+  it("publish-preview keeps overlaps even when the draft cannot be compiled", async () => {
+    const { token, sid } = await siteWithTwoTests();
+    await env.DB.prepare("update experiments set targeting_json = ? where site_id = ? and id = 't1'").bind(JSON.stringify({ audience: "aud_missing" }), sid).run();
+    const preview = await json<any>(await call("GET", `/sites/${sid}/publish-preview`, { token }));
+    expect(preview.compileError).not.toBeNull();
+    expect(preview.overlaps).toHaveLength(1);
   });
 });

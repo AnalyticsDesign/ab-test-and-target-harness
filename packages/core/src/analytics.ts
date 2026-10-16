@@ -55,6 +55,18 @@ export function analyticsEventNameIssue(name: string): string | null {
   return null;
 }
 
+/**
+ * 決定 62: dataLayer の変数名 = JavaScript の識別子(64 字まで)。GA4 には送られないので GA4 の命名規則は当てない。
+ * runtime 自身のグローバル(`window.AB` / `window.__ab`)に push 先が重なると API や同意の口を壊すので拒否する
+ */
+export const DATA_LAYER_NAME_RE = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;
+const RUNTIME_GLOBALS: ReadonlySet<string> = new Set(["AB", "__ab"]);
+export function dataLayerNameIssue(name: string): string | null {
+  if (!DATA_LAYER_NAME_RE.test(name)) return `"${name}" must match ${DATA_LAYER_NAME_RE.source} (a JavaScript variable name, max 64)`;
+  if (RUNTIME_GLOBALS.has(name)) return `"${name}" is reserved for the runtime's own global`;
+  return null;
+}
+
 const refineWith = (check: (name: string) => string | null) => (v: string, ctx: z.RefinementCtx): void => {
   const issue = check(v);
   if (issue) ctx.addIssue({ code: "custom", message: issue });
@@ -71,6 +83,7 @@ const D = DEFAULT_ANALYTICS;
  */
 export const AnalyticsSettingsSchema = z
   .strictObject({
+    dataLayerName: z.string().superRefine(refineWith(dataLayerNameIssue)).default(D.dataLayerName),
     extraKey: AnalyticsNameSchema.default(D.extraKey),
     exposure: z
       .strictObject({

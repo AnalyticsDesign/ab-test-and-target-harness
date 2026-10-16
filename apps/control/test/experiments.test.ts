@@ -100,7 +100,7 @@ describe("experiments / variants", () => {
     expect(sum120Body.message).toBe("重みの合計は 100 である必要があります(現在 120)");
     const single = await call("PUT", `/sites/${sid}/experiments/${id}/variants`, { token, body: [{ id: "a", name: "A", weight: 100 }] });
     expect(single.status).toBe(422);
-    expect((await json(single)).error).toBe("validation_failed");
+    expect(await json(single)).toMatchObject({ error: "variant_count_invalid", kind: "test", count: 1 }); // 決定 51: テストは 2 つ以上
     const dup = await call("PUT", `/sites/${sid}/experiments/${id}/variants`, { token, body: [{ id: "a", name: "A", weight: 50 }, { id: "a", name: "A2", weight: 50 }] });
     expect(dup.status).toBe(422);
     const dupBody = await json(dup);
@@ -248,11 +248,69 @@ describe("experiments / variants", () => {
     expect(archivedRes.status).toBe(409);
     const archivedBody = await json(archivedRes);
     expect(archivedBody).toMatchObject({ error: "experiment_active", message: "このエクスペリエンスのパターンは変更できません" });
-    // B65(A6): 複製の機能がまだ無い版では「複製して」と案内しない(D9 ① のマージで複製の案内に戻す)
-    expect(archivedBody.hint).toContain("新しいエクスペリエンスを作成してください");
-    expect(archivedBody.hint).not.toContain("複製");
+    // B65(A6)で外した複製の案内を、複製の機能(D9 ①)と一緒に戻す
+    expect(archivedBody.hint).toContain("複製して新しいエクスペリエンスを作成してください");
     // 3 回とも拒否されている = draft のときに置換した集合(a / c)のまま
     const exp = await json(await call("GET", `/sites/${sid}/experiments/${id}`, { token }));
     expect(exp.variants.map((v: any) => v.id)).toEqual(["a", "c"]);
+  });
+});
+
+describe("experiment kind (決定 51、設計書 §3.1)", () => {
+  it("creates a test by default and a single with one variant of weight 100", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    const { id: tid } = await createExperiment(token, sid, { id: "exp_t" });
+    const t = await json(await call("GET", `/sites/${sid}/experiments/${tid}`, { token }));
+    expect(t.kind).toBe("test");
+    expect(t.variants.map((v: any) => [v.id, v.weight])).toEqual([["a", 50], ["b", 50]]);
+    const created = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { op: "contains", value: "/" } } });
+    expect(created.status).toBe(201);
+    expect((await json(created)).kind).toBe("single");
+    const s = await json(await call("GET", `/sites/${sid}/experiments/exp_s`, { token }));
+    expect(s.variants.map((v: any) => [v.id, v.name, v.weight])).toEqual([["a", "A", 100]]);
+    const list = await json(await call("GET", `/sites/${sid}/experiments`, { token }));
+    expect(list.map((e: any) => [e.id, e.kind])).toEqual([["exp_t", "test"], ["exp_s", "single"]]);
+  });
+
+  it("variant count follows the kind", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { op: "contains", value: "/" } } });
+    const two = await call("PUT", `/sites/${sid}/experiments/exp_s/variants`, { token, body: [{ id: "a", name: "A", weight: 50 }, { id: "b", name: "B", weight: 50 }] });
+    expect(two.status).toBe(422);
+    const body = await expectEnvelope(two);
+    expect(body).toMatchObject({ error: "variant_count_invalid", kind: "single", count: 2, message: "パーソナライズのパターンは 1 つだけです" });
+    const renamed = await call("PUT", `/sites/${sid}/experiments/exp_s/variants`, { token, body: [{ id: "main", name: "本命", weight: 100 }] });
+    expect(renamed.status).toBe(200);
+    const weight50 = await call("PUT", `/sites/${sid}/experiments/exp_s/variants`, { token, body: [{ id: "main", name: "本命", weight: 50 }] });
+    expect((await json(weight50)).error).toBe("variant_weights_invalid");
+  });
+
+  it("kind cannot be changed after creation", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    const { id } = await createExperiment(token, sid);
+    const res = await call("PATCH", `/sites/${sid}/experiments/${id}`, { token, body: { kind: "single" } });
+    expect(res.status).toBe(422);
+    expect((await json(res)).error).toBe("validation_failed");
+  });
+
+  it("rejects an unknown kind", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    const res = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_x", name: "X", kind: "personalize", urlMatch: { op: "contains", value: "/" } } });
+    expect(res.status).toBe(422);
+  });
+
+  it("single_start_publishes_one_variant", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { op: "contains", value: "/" } } });
+    await call("PUT", `/sites/${sid}/experiments/exp_s/variants/a/changes`, { token, body: [TEXT_CHANGE()] });
+    const started = await json(await call("POST", `/sites/${sid}/experiments/exp_s/status`, { token, body: { status: "running" } }));
+    expect(started.publish.ok).toBe(true);
+    const detail = await json(await call("GET", `/sites/${sid}/publishes/${started.publish.version}`, { token }));
+    expect(detail.config.experiments[0].variants.map((v: any) => [v.id, v.weight])).toEqual([["a", 100]]);
   });
 });

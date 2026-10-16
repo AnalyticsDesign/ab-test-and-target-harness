@@ -125,6 +125,25 @@ describe("sites", () => {
     expect(s?.analytics.exposure.event).toBe("wtt_exposure");
     expect(s?.analytics.conversion.event).toBe("ab_conversion"); // 未指定は既定
   });
+  it("datalayer_name_is_validated_stored_and_defaulted_for_old_rows", async () => {
+    // 決定 62: GTM のスニペットの dataLayer 名に合わせる。JS の識別子だけを受け付け、GA4 の規則の文言は出さない
+    const { token, workspaceId } = await setupOwner();
+    const { id } = await createSite(token, workspaceId);
+    const bad = await call("PATCH", `/sites/${id}`, { token, body: { analytics: { dataLayerName: "my-dl" } } });
+    expect(bad.status).toBe(422);
+    const badBody = (await expectEnvelope(bad)) as { error: string; message: string; path?: unknown };
+    expect(badBody.error).toBe("invalid_analytics");
+    expect(badBody.path).toEqual(["dataLayerName"]); // invalid_analytics の path は analytics からの相対(既存の契約)
+    expect(badBody.message).not.toContain("GA4");
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { analytics: { dataLayerName: "AB" } } })).status).toBe(422);
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { analytics: { dataLayerName: "myDL" } } })).status).toBe(200);
+    expect((await kvSettings(id))?.analytics.dataLayerName).toBe("myDL");
+    expect(((await json(await call("GET", `/sites/${id}`, { token }))) as { analytics: { dataLayerName: string } }).analytics.dataLayerName).toBe("myDL");
+    // 決定 62 より前に保存した行(analytics_json に dataLayerName が無い)は既定名で返す
+    const legacy = { extraKey: "ab_extra", exposure: { event: "ab_exposure", keys: {} }, conversion: { event: "ab_conversion", keys: {} } };
+    await env.DB.prepare("UPDATE sites SET analytics_json = ? WHERE id = ?").bind(JSON.stringify(legacy), id).run();
+    expect(((await json(await call("GET", `/sites/${id}`, { token }))) as { analytics: { dataLayerName: string } }).analytics.dataLayerName).toBe("dataLayer");
+  });
   it("delete removes the site and every KV record", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id } = await createSite(token, workspaceId, { mode: "B" });

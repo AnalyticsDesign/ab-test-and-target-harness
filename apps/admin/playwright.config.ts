@@ -64,5 +64,6 @@ export default defineConfig({
     // testMatch は絶対パスに当たるので、ファイル名まで絞る(/write-freeze/ だけだと、チェックアウト先のディレクトリ名
     // 「…d13-write-freeze」にも当たり、e2e/ のすべてのファイル(fake-cf-api.mjs まで)を読み込んでしまう)
     { name: "write-freeze", testMatch: /write-freeze\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    { name: "experiment-kind", testMatch: /experiment-kind-flow/, dependencies: ["publish"], use: { browserName: "chromium" } },
   ],
 });

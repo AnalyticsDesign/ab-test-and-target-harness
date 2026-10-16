@@ -129,7 +129,7 @@ function historyPagesFor(entries: Array<{ page: Parameters<typeof normalizePageM
   return out;
 }
 
-const DRAFT_HINT = "weight の合計 100・パターン 2 つ以上・参照する目標 / オーディエンスの存在・配信条件の形を確認してください";
+const DRAFT_HINT = "weight の合計 100・パターンの数(テストは 2 つ以上、パーソナライズは 1 つ)・参照する目標 / オーディエンスの存在・配信条件の形を確認してください";
 /** 下書きの compile の失敗(evaluate の draft と draft-bootstrap)。場所が分かる失敗はその説明を hint に出す */
 function draftCompileError(e: CompileError): ApiError {
   return new ApiError(422, "invalid_draft", { message: "下書きを compile できません", hint: describeCompileFailure(e.code, e.message).hint ?? DRAFT_HINT, compileError: e.code, detail: e.message });

@@ -168,7 +168,7 @@ function ExperimentEditorBody({ site, experiment, goals, audiences, role, imageU
       ) : null}
       {tab === "variants" ? (
         <TabPanel id="variants" animate={animate}>
-          <VariantsTab {...tabProps} siteId={site.id} experimentId={experiment.id} variantsLocked={variantsLocked} pageUrl={pageUrl} imageUpload={imageUpload} selected={variant} onSelect={onVariant} animate={animate} />
+          <VariantsTab {...tabProps} siteId={site.id} experimentId={experiment.id} variantsLocked={variantsLocked} pageUrl={pageUrl} imageUpload={imageUpload} single={experiment.kind === "single"} selected={variant} onSelect={onVariant} animate={animate} />
         </TabPanel>
       ) : null}
       {tab === "analytics" ? (

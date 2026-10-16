@@ -1,3 +1,4 @@
+import type { ExperimentKind } from "@wtt/core";
 import type { PageMatchValue } from "./page-match";
 /**
  * control が返す JSON の形(apps/control/src/serialize.ts と各ルートの zod スキーマに一致させる)。
@@ -34,7 +35,7 @@ export type Invitation = { id: string; email: string; role: Role | null; status:
 /** `POST /workspaces/:wid/invitations` の結果。`extended: true` = 同じ Role の招待が既にあり、そのリンクの期限を延ばした(id / url は前と同じ) */
 export type InvitationResult = { id: string; url: string; expiresAt: number; extended: boolean };
 export type PublicInvitation = { id: string; email: string; role: Role | null; workspaceName: string; status: string; expiresAt: number };
-export type AnalyticsSettings = { extraKey: string; exposure: { event: string; keys: Record<string, string> }; conversion: { event: string; keys: Record<string, string> } };
+export type AnalyticsSettings = { dataLayerName: string; extraKey: string; exposure: { event: string; keys: Record<string, string> }; conversion: { event: string; keys: Record<string, string> } };
 export type Site = {
   id: string; workspaceId: string; name: string; domain: string; mode: "A" | "B"; idSource: string; allowedOrigins: string[]; hosts: string[];
   retentionDays: number; consentMode: "implicit" | "required"; forgetOnRevoke: boolean; timezone: string; decisionTimeoutMs: number; visitorCookieName: string; uuidCookieEnabled: boolean; uuidCookieName: string;
@@ -52,7 +53,7 @@ export type ChangeType = "TEXT" | "IMAGE" | "HIDE" | "ATTRIBUTE" | "HTML" | "CSS
 export type Change = { id: string; type: ChangeType; selector?: string; payload: Record<string, unknown>; updatedBy?: string; updatedAt?: number };
 export type Variant = { id: string; name: string; weight: number; analytics: { overrides?: { variantName?: string }; extra?: Record<string, string> } | null; changes: Change[] };
 export type Experiment = {
-  id: string; siteId: string; name: string; status: Status; publishedStatus: Status | null; urlMatch: PageMatchValue; targeting: unknown | null;
+  id: string; siteId: string; name: string; kind: ExperimentKind; status: Status; publishedStatus: Status | null; urlMatch: PageMatchValue; targeting: unknown | null;
   trafficPercentage: number; persistAssignment: boolean; analytics: { overrides?: { experimentName?: string }; extra?: Record<string, string> } | null;
   createdBy: string; updatedBy: string; createdAt: number; updatedAt: number; unpublished: boolean;
   /** `GET /sites/:sid/experiments/:eid` だけが返す */
@@ -73,6 +74,8 @@ export type PublishPreview = {
   viewportExperiments: Array<{ id: string; name: string }>;
   /** いまの下書きが Publish で止まる理由(止まらないなら null) */
   compileError: { error: string; message: string; hint?: string } | null;
+  /** 同じ対象 URL で同じ要素を変える配信中のエクスペリエンスの組(experimentIds = [優先の低い方, 高い方]) */
+  overlaps: Array<{ path: string; message: string; experimentIds: string[] }>;
 };
 export type Goal = { id: string; name: string; type: "PAGEVIEW" | "CLICK" | "CUSTOM"; config: Record<string, unknown>; createdAt: number; updatedAt: number };
 /** backlog D13: 書き込みの凍結の状態。reason = null は「凍結の設定が読めない」(凍結中として扱う) */

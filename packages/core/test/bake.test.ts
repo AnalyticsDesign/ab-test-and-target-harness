@@ -10,7 +10,7 @@ describe("bakeBootstrap", () => {
   it("bake_embeds_config_and_runtime_settings_before_runtime_source", () => {
     const settings = parseSiteSettings({ settingsVersion: 1, siteId: "site_b", hosts: ["a.example"], allowedOrigins: ["https://a.example"] })!;
     const out = bakeBootstrap(cfg, settings, "/*RUNTIME*/");
-    expect(out.startsWith("/* Web Test and Target Harness bootstrap (site site_b, config v3) */\nself.__WTT_BOOT__=")).toBe(true);
+    expect(out.startsWith("/* AB Test and Target Harness bootstrap (site site_b, config v3) */\nself.__WTT_BOOT__=")).toBe(true);
     expect(out.endsWith(";\n/*RUNTIME*/")).toBe(true);
     const boot = JSON.parse(out.slice(out.indexOf("=") + 1, out.lastIndexOf(";\n")));
     expect(boot.config).toEqual(cfg);
@@ -34,7 +34,7 @@ describe("bakeBootstrap", () => {
   it("apiBase と runtimeHash を渡すと boot に apiBase、先頭の注釈に runtime のハッシュが入る(決定 52 (7))", () => {
     const settings = parseSiteSettings({ settingsVersion: 1, siteId: "site_b" })!;
     const out = bakeBootstrap(cfg, settings, "/*RUNTIME*/", { apiBase: "https://edge.example", runtimeHash: "abc123def456" });
-    expect(out.startsWith("/* Web Test and Target Harness bootstrap (site site_b, config v3, runtime abc123def456) */\nself.__WTT_BOOT__=")).toBe(true);
+    expect(out.startsWith("/* AB Test and Target Harness bootstrap (site site_b, config v3, runtime abc123def456) */\nself.__WTT_BOOT__=")).toBe(true);
     const boot = JSON.parse(out.slice(out.indexOf("=") + 1, out.lastIndexOf(";\n")));
     expect(boot.apiBase).toBe("https://edge.example");
   });

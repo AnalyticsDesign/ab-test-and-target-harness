@@ -8,6 +8,7 @@ describe("Analytics 命名設定のスキーマと検証(spec §10.9)", () => {
   it("applies the spec §10.9 defaults from an empty object (nested prefault)", () => {
     expect(AnalyticsSettingsSchema.parse({})).toEqual(DEFAULT_ANALYTICS);
     expect(DEFAULT_ANALYTICS).toEqual({
+      dataLayerName: "dataLayer",
       extraKey: "ab_extra",
       exposure: { event: "ab_exposure", keys: { experimentId: "ab_experiment_id", experimentName: "ab_experiment_name", variantId: "ab_variant_id", variantName: "ab_variant_name" } },
       conversion: { event: "ab_conversion", keys: { goalId: "ab_goal_id", goalName: "ab_goal_name" } },
@@ -17,6 +18,18 @@ describe("Analytics 命名設定のスキーマと検証(spec §10.9)", () => {
     expect(partial.exposure.keys.experimentId).toBe("wtt_exp");
     expect(partial.exposure.keys.variantName).toBe("ab_variant_name");
     expect(partial.conversion).toEqual(DEFAULT_ANALYTICS.conversion);
+  });
+
+  it("datalayer_name_must_be_a_js_identifier_and_not_a_runtime_global", () => {
+    // 決定 62: GTM のスニペットの dataLayer 名(`l=`)に合わせる。GA4 の規則は当てず、JS の識別子として検査する
+    const parse = (dataLayerName: string) => AnalyticsSettingsSchema.safeParse({ dataLayerName });
+    for (const ok of ["dataLayer", "myDL", "$dl", "_dl", "dl_2", "a".repeat(64)]) expect(parse(ok).success, ok).toBe(true);
+    expect(parse("myDL").data?.dataLayerName).toBe("myDL");
+    for (const ng of ["", "1dl", "a.b", "a-b", "my dl", "a".repeat(65), "AB", "__ab"]) {
+      const r = parse(ng);
+      expect(r.success, ng).toBe(false);
+      expect(r.error?.issues[0]?.path, ng).toEqual(["dataLayerName"]);
+    }
   });
 
   it("analytics_name_regex_and_reserved_prefix_rejected", () => {

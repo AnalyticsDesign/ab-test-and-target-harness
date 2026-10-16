@@ -87,12 +87,13 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 | ルート | Role | 内容 |
 |---|---|---|
 | `GET /sites/:sid/experiments` | VIEWER | Experiment 一覧 |
-| `POST /sites/:sid/experiments` | EDITOR | 作成(Variant a / b を 50 / 50 で自動作成) |
+| `POST /sites/:sid/experiments` | EDITOR | 作成(`kind` = test はパターン a / b を 50 / 50、single はパターン a を重み 100 で自動作成) |
 | `GET /sites/:sid/experiments/:eid` | VIEWER | 1 件(Variant と Change を含む) |
 | `PATCH /sites/:sid/experiments/:eid` | EDITOR | 更新(id は不変、status は `/status` 経由) |
 | `DELETE /sites/:sid/experiments/:eid` | EDITOR | 削除(draft / archived のみ) |
-| `PUT /sites/:sid/experiments/:eid/variants` | EDITOR | Variant を全置換(2 つ以上・weight 合計 100。draft のみ) |
+| `PUT /sites/:sid/experiments/:eid/variants` | EDITOR | Variant を全置換(test は 2 つ以上・single は 1 つ・weight 合計 100。draft のみ) |
 | `PUT /sites/:sid/experiments/:eid/variants/:vid/changes` | EDITOR | Change を全置換(1 件でも保存時検証に落ちれば何も書かない) |
+| `POST /sites/:sid/experiments/:eid/duplicate` | EDITOR | 複製(下書きを作る。mode = same / variant) |
 | `POST /sites/:sid/experiments/:eid/status` | ADMIN | status 遷移(成功した遷移は必ず Site を自動 Publish) |
 
 ### Publish

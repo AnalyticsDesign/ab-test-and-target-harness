@@ -87,7 +87,7 @@ export const SitePatchSchema = z.strictObject({
   uuidCookieEnabled: z.boolean().optional(),
   uuidCookieName: z.string().optional(),
   // 検証は core の AnalyticsSettingsSchema に委ねる(失敗を validation_failed ではなく 422 invalid_analytics で返すため、ここでは unknown)
-  analytics: z.unknown().optional().describe("外部計測の名前(dataLayer の命名設定)。全フィールド optional、未指定は既定値。不正なら 422 invalid_analytics"),
+  analytics: z.unknown().optional().describe("外部計測の名前(dataLayer の命名設定)。全フィールド optional、未指定は既定値。`dataLayerName` は push 先の配列の名前(既定 `dataLayer`。GTM のスニペットで名前を変えているサイトは同じ名前にする)。不正なら 422 invalid_analytics"),
   // 決定 34: 外部 ID(資格情報ではない)。null で消去。site-settings record には載せない
   ga4PropertyId: z.string().regex(/^\d{1,20}$/).nullable().optional(),
   bigqueryDataset: z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]\.[A-Za-z0-9_]{1,1024}$/).nullable().optional(),
@@ -168,7 +168,10 @@ export function applySitePatch(row: SiteRow, patch: SitePatch, nowMs: number): {
       // message だけ日本語の既定文で上書きする(Task 11 で実地確認して発見した「message が無く hint だけ」問題の対処と両立)
       const err = validationFailed(a.error, "invalid_analytics");
       err.extra.hint = a.error.issues[0]?.message;
-      err.extra.message = "外部計測の名前の設定が GA4 の規則に反しています";
+      // 決定 62: dataLayer の変数名は GA4 に送られない(JS の識別子の規則)ので、GA4 の文言を出さない
+      err.extra.message = a.error.issues[0]?.path[0] === "dataLayerName"
+        ? "dataLayer の変数名は JavaScript の変数名として使える名前にしてください"
+        : "外部計測の名前の設定が GA4 の規則に反しています";
       return { next, error: err };
     }
     next.analytics_json = JSON.stringify(a.data);
@@ -180,7 +183,7 @@ export function applySitePatch(row: SiteRow, patch: SitePatch, nowMs: number): {
     return { next, error: new ApiError(422, "byoid_cookie_name_conflict", { name: ref, message: "BYOID の参照 Cookie 名が衝突しています", hint: "BYOID の参照 Cookie 名は正本 / UUID / 旧 Cookie 名と衝突できません" }) };
   }
   if (next.mode === "B" && next.id_source !== "ab")
-    return { next, error: new ApiError(422, "mode_b_requires_id_source_ab", { message: "D-lite と BYOID は併用できません", hint: "D-lite と BYOID は MVP では併用できません" }) };
+    return { next, error: new ApiError(422, "mode_b_requires_id_source_ab", { message: "Mode B(サーバー発行 Cookie)と Mode C(BYOID)は併用できません", hint: "Mode B(サーバー発行 Cookie)と Mode C(BYOID)は MVP では併用できません" }) };
   const parsed = SiteSettingsSchema.safeParse(settingsInput(next));
   if (!parsed.success) {
     // 同上(invalid_analytics と同じ理由で validationFailed() 経由に変更。review r2 finding 2)

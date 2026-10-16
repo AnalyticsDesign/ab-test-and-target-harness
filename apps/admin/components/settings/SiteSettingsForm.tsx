@@ -104,6 +104,7 @@ export function SiteSettingsForm({
     )
       return;
     const analytics: Record<string, unknown> = {};
+    analytics.dataLayerName = String(fd.get("analytics.dataLayerName"));
     for (const f of ANALYTICS_FIELDS) setPath(analytics, f.path, String(fd.get(`analytics.${f.path}`)));
     const body: Record<string, unknown> = {
       name: fd.get("name"),
@@ -204,7 +205,7 @@ export function SiteSettingsForm({
               <Field label="retentionDays(訪問者プロフィールと旧 Cookie 名の保持日数)" hint="最終訪問からこの日数で訪問者プロフィールを自動削除します。変更は次に訪問した訪問者から効きます(休眠中のプロフィールは変更前の日数で消えます)。" error={fields.retentionDays}>
                 <input name="retentionDays" type="number" min={1} max={3650} defaultValue={site.retentionDays} disabled={ro} />
               </Field>
-              <Field label="撤回時に訪問者プロフィールを削除(forgetOnRevoke)" hint="訪問者が同意を撤回(AB.consent(false))したとき、サーバー側の履歴(目標の達成・閲覧回数・保存済み割当)を即時に削除します。オフにすると retentionDays まで保持され、誤って拒否した訪問者の履歴は失われません — ただし Mode C(BYOID)では再許可時に撤回前の履歴へ再接続します。D-lite(Mode B)では効きません — 撤回は Cookie の削除だけで、訪問者プロフィールは retentionDays で消えます。削除は best-effort です — 通信断や DO 障害で forget が届かなかった場合も retentionDays で消えます" error={fields.forgetOnRevoke}>
+              <Field label="撤回時に訪問者プロフィールを削除(forgetOnRevoke)" hint="訪問者が同意を撤回(AB.consent(false))したとき、サーバー側の履歴(目標の達成・閲覧回数・保存済み割当)を即時に削除します。オフにすると retentionDays まで保持され、誤って拒否した訪問者の履歴は失われません — ただし Mode C(BYOID)では再許可時に撤回前の履歴へ再接続します。Mode B(サーバー発行 Cookie)では効きません — 撤回は Cookie の削除だけで、訪問者プロフィールは retentionDays で消えます。削除は best-effort です — 通信断や DO 障害で forget が届かなかった場合も retentionDays で消えます" error={fields.forgetOnRevoke}>
                 <label>
                   <input name="forgetOnRevoke" type="checkbox" defaultChecked={site.forgetOnRevoke} disabled={ro} /> 有効にする(既定)
                 </label>
@@ -223,7 +224,7 @@ export function SiteSettingsForm({
                   disabled={ro}
                   options={[
                     { value: "A", label: "A: JS Cookie" },
-                    { value: "B", label: "D-lite(同一ゾーンの Workers Route)" },
+                    { value: "B", label: "B: サーバー発行 Cookie(同じゾーンの Workers Route)" },
                   ]}
                   onChange={(v) => {
                     setMode(v as "A" | "B");
@@ -234,7 +235,7 @@ export function SiteSettingsForm({
               {mode === "B" ? (
                 <div className="banner-warn" style={{ display: "block" }}>
                   <p>
-                    <strong>D-lite の設置手順</strong>(インフラ作業。管理画面は設定値の保持までです)
+                    <strong>Mode B(サーバー発行 Cookie)の設置手順</strong>(インフラ作業。管理画面は設定値の保持までです)
                   </p>
                   <ol>
                     <li>
@@ -314,6 +315,13 @@ export function SiteSettingsForm({
             </section>
             <section className={switched ? "card enter" : "card"} hidden={section !== "naming"}>
               <h2>外部計測の名前(dataLayer の名札)</h2>
+              <Field
+                label="dataLayer の変数名"
+                hint="タグが計測イベントを入れる配列の名前。GTM のスニペットで dataLayer の名前を変えている場合だけ、同じ名前にします(スニペットの 4 番目の引数で、既定は 'dataLayer'。gtm.js の URL の l= の値)。英字・_・$ で始まり、英数字と _ と $ だけの 64 字以内"
+                error={analyticsError("dataLayerName")}
+              >
+                <input name="analytics.dataLayerName" defaultValue={site.analytics.dataLayerName ?? "dataLayer"} disabled={ro} required pattern="[A-Za-z_$][A-Za-z0-9_$]{0,63}" />
+              </Field>
               <p className="muted">
                 GA4 の規則: 英字始まり・英数字と _ のみ・40 字以内。_ / firebase_ / ga_ / google_ / gtag. 始まりと GA4 の予約イベント名は不可。7 つのキー名は互いに重複せず、露出と
                 コンバージョンのイベント名は異なる必要があります。既定のまま使えます

@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import type { Experiment } from "@/lib/types";
 import { FILTER_JA, STATUS_FILTERS, STATUS_JA, STATUS_TONE, countByFilter, filterExperiments, type StatusFilter } from "@/lib/experiment-filter";
+import { KIND_JA } from "@/lib/experiment-kind";
 import { replaceParam } from "@/lib/url-state";
 import { LocalTime } from "./LocalTime";
 import { StatusPill } from "./ui/StatusPill";
@@ -39,6 +40,7 @@ export function ExperimentList({ wid, sid, experiments, canPublish, initialFilte
           <thead>
             <tr>
               <th>名前</th>
+              <th>種別</th>
               <th>状態</th>
               <th>本番</th>
               <th>URL</th>
@@ -58,6 +60,7 @@ export function ExperimentList({ wid, sid, experiments, canPublish, initialFilte
                       {e.unpublished ? <span className="badge badge-warn">未公開の編集あり</span> : null}
                     </div>
                   </td>
+                  <td>{KIND_JA[e.kind]}</td>
                   <td>
                     <StatusPill tone={STATUS_TONE[e.status]}>{STATUS_JA[e.status]}</StatusPill>
                   </td>
@@ -80,7 +83,7 @@ export function ExperimentList({ wid, sid, experiments, canPublish, initialFilte
             })}
             {shown.length === 0 ? (
               <tr>
-                <td colSpan={6} className="muted">
+                <td colSpan={7} className="muted">
                   この状態のエクスペリエンスはありません
                 </td>
               </tr>

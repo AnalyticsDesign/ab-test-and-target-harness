@@ -10,12 +10,14 @@ import {
   parseCompiledConfig,
   type AnalyticsWarning,
   type CompiledConfig,
+  type ExperimentKind,
   type StaticGeneration,
 } from "@wtt/core";
 import { RUNTIME_HASH, RUNTIME_SOURCE } from "@wtt/runtime/source";
 import { edgeOrigin } from "./capabilities";
 import type { Db, ExperimentRow, SiteRow, Tables } from "./db";
 import type { Env } from "./env";
+import { orderForCompile, overlapWarnings } from "./experiment-order";
 import { newId } from "./ids";
 import { siteToSettings } from "./site-settings";
 import { requestStaticDeploy, type StaticDeployState } from "./static-delivery";
@@ -47,16 +49,31 @@ async function gzipSize(text: string): Promise<number> {
 /** 既定は spec §13.6 手順 1 の「running の全 Experiment」。エージェント面(§13.10)は下書きや 1 件だけを対象にするので絞り込みを渡す */
 export type CompileInputScope = { statuses?: ReadonlyArray<ExperimentRow["status"]>; experimentIds?: ReadonlyArray<string> };
 
+/** `buildCompileInput` の戻り値(compile の入力の保存する形)。重なりの警告(`overlapWarnings`)もこの experiments を受ける */
+export type StoredChangeInput = { id: string; type: string; selector?: string; payload: unknown };
+export type StoredExperimentInput = {
+  id: string; name: string; kind: ExperimentKind; urlMatch: unknown; targeting?: unknown;
+  trafficPercentage: number; persistAssignment: boolean; analytics?: unknown;
+  variants: Array<{ id: string; name: string; weight: number; analytics?: unknown; changes: StoredChangeInput[] }>;
+};
+export type StoredCompileInput = {
+  siteId: string; siteSalt: string; version: number; timezone: string; retentionDays: number;
+  goals: Array<{ id: string; name: string; type: string; config: unknown }>;
+  audiences: Record<string, unknown>;
+  experiments: StoredExperimentInput[];
+};
+
 export async function buildCompileInput(
   db: Db,
   site: SiteRow,
   version: number,
   experiments?: ExperimentRow[],
   scope: CompileInputScope = {},
-): Promise<unknown> {
+): Promise<StoredCompileInput> {
   const statuses = scope.statuses ?? (["running"] as const);
   const all = experiments ?? (await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute());
-  const exps = all.filter((e) => statuses.includes(e.status) && (!scope.experimentIds || scope.experimentIds.includes(e.id)));
+  // 決定 51(設計書 §3.2・§9.3): 並べる順 = 優先の順。compile は入力の順を保つ
+  const exps = orderForCompile(all.filter((e) => statuses.includes(e.status) && (!scope.experimentIds || scope.experimentIds.includes(e.id))));
   const variants = await db.selectFrom("variants").selectAll().where("site_id", "=", site.id).orderBy("position").execute();
   const changes = await db.selectFrom("changes").selectAll().where("site_id", "=", site.id).orderBy("position").execute();
   const goals = await db.selectFrom("goals").selectAll().where("site_id", "=", site.id).execute();
@@ -72,6 +89,7 @@ export async function buildCompileInput(
     experiments: exps.map((e) => ({
       id: e.id,
       name: e.name,
+      kind: e.kind,
       urlMatch: JSON.parse(e.url_match_json),
       ...(e.targeting_json ? { targeting: JSON.parse(e.targeting_json) } : {}),
       trafficPercentage: e.traffic_percentage,
@@ -243,9 +261,12 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, userId: strin
     // 写しと compile 入力は**同じ 1 回の SELECT** から取る(別々に読むと間に割り込んだ status 変更で食い違う。rulings §4 CX-High-3)
     const experiments = await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute();
     statusSnapshot = experiments.map((e) => ({ id: e.id, status: e.status }));
-    config = compile(await buildCompileInput(db, site, version, experiments));
+    const input = await buildCompileInput(db, site, version, experiments);
+    config = compile(input);
     // §10.9: compile は警告に留める。拒否は保存 API(`assertName`)側
     warnings = analyticsWarnings(config);
+    // 決定 51(設計書 §3.3): 同じ対象 URL・同じセレクタを変える組。拒否はしない(どちらが優先されるかを文に入れる)
+    for (const { path, message } of overlapWarnings(input.experiments)) warnings.push({ path, message });
     // 決定 50: 焼いた bootstrap(runtime + config + Identity 設定)が新しい接続の最初の往復に収まらない大きさなら警告(拒否はしない)
     const bootstrapBytes = await gzipSize(bakeBootstrap(config, siteToSettings(site), RUNTIME_SOURCE, { apiBase: edgeOrigin(env), runtimeHash: RUNTIME_HASH }));
     const budget = BOOTSTRAP_LIMITS.totalBytes - BOOTSTRAP_LIMITS.headerAllowance;

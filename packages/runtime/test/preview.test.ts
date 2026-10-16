@@ -155,6 +155,21 @@ describe("preview mode (spec §12.3 (a) / §10.8)", () => {
     expect(api.getAssignments()).toEqual({ exp_preview: "vB" });
   });
 
+  it("preview_applies_in_config_order", () => {
+    // 決定 51: 指定の順(優先の高い方を先に書いた)に関係なく、config の並び(後ろほど優先)の順に適用する
+    const config = {
+      ...baseConfig,
+      experiments: [
+        { id: "exp_low", name: "Low", urlMatch: { op: "contains", value: "/" }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "a", name: "A", weight: 100, changes: [{ id: "c", type: "TEXT", selector: ".hero-title", payload: { text: "S" } }] }] },
+        { id: "exp_high", name: "High", urlMatch: { op: "contains", value: "/" }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "vA", name: "A", weight: 50, changes: [] }, { id: "vB", name: "B", weight: 50, changes: [{ id: "c", type: "TEXT", selector: ".hero-title", payload: { text: "T" } }] }] },
+      ],
+      prehide: { exp_low: [".hero-title"], exp_high: [".hero-title"] },
+      exposureSelectors: { exp_low: [".hero-title"], exp_high: [".hero-title"] },
+    } as typeof baseConfig;
+    createRuntime(previewDeps("#__ab_preview=exp_high:vB,exp_low:a"), { config, settings: baseSettings });
+    expect(document.querySelector(".hero-title")!.textContent).toBe("T");
+  });
+
   it("preview の report は外れた selector を matched 0 / applied false で返す", () => {
     // §18.1 の同名テストは E2E(Task 8)。ここは同じ判定を unit で先に固定する
     const api = createRuntime(previewDeps("#__ab_preview=exp_preview:vB"), { config: previewConfig, settings: baseSettings });

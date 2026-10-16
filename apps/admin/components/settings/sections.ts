@@ -18,7 +18,7 @@ const EXTERNAL = new Set(["ga4PropertyId", "bigqueryDataset"]);
 /** 入力欄の name、または control の 422 の path(ドット区切り)から、その欄がある節を引く。不明は先頭の節 */
 export function sectionOfField(name: string): SectionId {
   const head = name.split(".")[0]!;
-  if (head === "analytics" || head === "exposure" || head === "conversion" || head === "extraKey") return "naming";
+  if (head === "analytics" || head === "exposure" || head === "conversion" || head === "extraKey" || head === "dataLayerName") return "naming";
   if (IDENTITY.has(head)) return "identity";
   if (EXTERNAL.has(head)) return "external";
   return "general";

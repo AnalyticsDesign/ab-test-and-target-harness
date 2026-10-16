@@ -4,6 +4,8 @@
  * zod のスキーマ・検証は analytics.ts に置く
  */
 export type AnalyticsSettings = {
+  /** 決定 62: push 先のグローバル配列の名前。GTM のスニペットで dataLayer の名前(`l=`)を変えているサイトに合わせる */
+  dataLayerName: string;
   extraKey: string;
   exposure: {
     event: string;
@@ -16,6 +18,7 @@ export type AnalyticsSettings = {
 };
 
 export const DEFAULT_ANALYTICS: AnalyticsSettings = {
+  dataLayerName: "dataLayer",
   extraKey: "ab_extra",
   exposure: {
     event: "ab_exposure",

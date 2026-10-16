@@ -230,6 +230,8 @@ SELECT
       "このサイトには目標が無いので visitorCvrSql / sessionCvrSql は 0 行を返す(CROSS JOIN UNNEST の対象配列が空になり、露出の母数すら出ない)。先に目標を作ること。mixedExposureCountSql と GA4 の exposureByVariant は目標無しでも機能する",
     );
   }
+  // 決定 51(設計書 §3.4): パーソナライズはパターン 1 つで振り分けないので、パターンどうしの比較も割り振りの偏りの確認も成り立たない
+  if (experiment.kind === "single") notes.push("パーソナライズなので、比較と SRM の確認は意味を持ちません");
 
   return {
     experiment: { id: experiment.id, name: experiment.name, startedAt: experiment.started_at, stoppedAt: experiment.stopped_at },

@@ -10,7 +10,7 @@
       "path": "accounts/0/containers/0",
       "accountId": "0",
       "containerId": "0",
-      "name": "Web Test and Target Harness",
+      "name": "AB Test and Target Harness",
       "publicId": "GTM-XXXXXXX",
       "usageContext": [
         "WEB"
