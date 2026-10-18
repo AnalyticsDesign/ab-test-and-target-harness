@@ -1,5 +1,5 @@
 import { createApplyEngine, createPageState } from "./apply";
-import { analyticsNames, isAnalyticsSettings, isExposurePayloads } from "./analytics";
+import { analyticsNames, isAnalyticsSettings, isConversionPayloads, isExposurePayloads } from "./analytics";
 import { createConsent } from "./consent";
 import { collectContext } from "./context";
 import { decideLocally, needsRemoteDecision, requestDecision, type DecisionOutcome } from "./decision";
@@ -87,7 +87,8 @@ export function parseBootPayload(raw: unknown): BootPayload | null {
   // §16 / 決定 37: forgetOnRevoke は欠落なら既定 true、型不正は他フィールドと同じく fail-closed
   const forget = (settings as { forgetOnRevoke?: unknown }).forgetOnRevoke;
   if (forget !== undefined && typeof forget !== "boolean") return null;
-  // spec §10.9: analytics / exposurePayloads は欠落なら既定・導出にフォールバック、型不正は拒否(他フィールドと同じ fail-closed)
+  // spec §10.9: analytics / exposurePayloads / conversionPayloads(B77)は欠落なら既定・ID にフォールバック、型不正は拒否(他フィールドと同じ fail-closed)
+  if (!isConversionPayloads(config.conversionPayloads ?? {})) return null; // 欠落は {} に置き換えて通す(サイズの都合でこの 1 行にしている。K25)
   const analytics = (settings as { analytics?: unknown }).analytics;
   if (analytics !== undefined && !isAnalyticsSettings(analytics)) return null;
   const payloads = (config as { exposurePayloads?: unknown }).exposurePayloads;
@@ -250,7 +251,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
   /** §10.6 / §10.9: conversion の共通処理。dataLayer に push し、needsProfile なら /event へ転送(§9.2。準備前はキュー) */
   function conversion(goal: Goal): void {
     const k = names.conversion.keys;
-    pushDataLayer({ event: names.conversion.event, [k.goalId]: goal.id, [k.goalName]: goal.name, [names.extraKey]: null });
+    pushDataLayer({ event: names.conversion.event, [k.goalId]: goal.id, [k.goalName]: config.conversionPayloads?.[goal.id]?.goalName ?? goal.id, [names.extraKey]: null });
     results?.conversion(goal.id); // 結果の CV は goal の /event とは別の要求(needsProfile に関係なく送る。設計書 §6.2)
     if (!config.needsProfile) return;
     if (!eventsReady) {

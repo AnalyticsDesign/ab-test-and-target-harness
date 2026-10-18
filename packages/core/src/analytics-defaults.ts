@@ -42,3 +42,12 @@ export type ExposurePayload = {
   variantName: string;
   extra: Record<string, string>;
 };
+
+/**
+ * B77(K5): compile が目標ごとに解決して compiled config の `conversionPayloads` に焼く値。
+ * `goalName` = 目標の外部計測の名前 ?? 目標 ID(目標の管理用の名前は訪問者に届けない)
+ */
+export type ConversionPayload = {
+  goalId: string;
+  goalName: string;
+};

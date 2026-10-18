@@ -57,6 +57,7 @@ export function duplicateExperimentRow(e: ExperimentRow, o: CopyOptions): Experi
     // D9 ②(設計書 §6.3): 複製は別のテスト。元の結果の記録の ID と個票の削除の印は写さない(開始で新しく振る)
     run_id: null,
     results_purged_at: null,
+    description: e.description,
     created_by: o.user,
     updated_by: o.user,
     created_at: o.now,
@@ -64,12 +65,16 @@ export function duplicateExperimentRow(e: ExperimentRow, o: CopyOptions): Experi
   };
 }
 
-/** パターンを写す。variant は選んだ 1 つを重み 100・先頭の位置で、same はすべてをそのまま */
+/**
+ * パターンを写す。variant は選んだ 1 つを重み 100・先頭の位置で、same はすべてをそのまま。オリジナルの印とメモ(B77)も写す。
+ * メモは書いた時点の値を写す。メモの変更は親の updated_at を進めない(公開の対象にならない)ので、`sourceUnchanged` は
+ * 読んでから書くまでのメモのずれを見つけない。写るのが少し古いか新しいメモになるだけで影響が小さいので、許す
+ */
 export function copyVariantsQuery(db: Db, o: CopyOptions) {
   const variant = o.mode === "variant";
   return db
     .insertInto("variants")
-    .columns(["site_id", "experiment_id", "id", "name", "weight", "position", "analytics_json"])
+    .columns(["site_id", "experiment_id", "id", "name", "weight", "position", "analytics_json", "original", "description"])
     .expression((eb) => {
       const q = eb
         .selectFrom("variants")
@@ -81,6 +86,8 @@ export function copyVariantsQuery(db: Db, o: CopyOptions) {
           (variant ? s.val(100) : s.ref("weight")).as("weight"),
           (variant ? s.val(0) : s.ref("position")).as("position"),
           "analytics_json",
+          "original",
+          "description",
         ])
         .where("site_id", "=", o.siteId)
         .where("experiment_id", "=", o.sourceId)

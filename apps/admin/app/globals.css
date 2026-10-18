@@ -9,7 +9,7 @@
   --warn: #a86a12; --warn-soft: #fbf0dc;
   --gray: #7a7974; --gray-soft: #efefec;
   --danger: #c23a30; --danger-soft: #fbeae8;
-  --code-bg: #f6f6f4;
+  --code-bg: #f6f6f4; --code-key: #8a3fb0; --code-str: #2f7a45; --code-cmt: #8a8983;
   --shadow: 0 8px 24px rgb(0 0 0 / 0.12);
   --font-sans: "IBM Plex Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
@@ -28,7 +28,7 @@
   --warn: #e2aa58; --warn-soft: #2e2415;
   --gray: #9a9994; --gray-soft: #232321;
   --danger: #ec6a60; --danger-soft: #2d1715;
-  --code-bg: #121210;
+  --code-bg: #121210; --code-key: #c79be0; --code-str: #8fd0a4; --code-cmt: #8a8983;
   --shadow: 0 8px 24px rgb(0 0 0 / 0.5);
   color-scheme: dark;
 }
@@ -43,7 +43,7 @@
     --warn: #e2aa58; --warn-soft: #2e2415;
     --gray: #9a9994; --gray-soft: #232321;
     --danger: #ec6a60; --danger-soft: #2d1715;
-    --code-bg: #121210;
+    --code-bg: #121210; --code-key: #c79be0; --code-str: #8fd0a4; --code-cmt: #8a8983;
     --shadow: 0 8px 24px rgb(0 0 0 / 0.5);
     color-scheme: dark;
   }
@@ -92,6 +92,10 @@ textarea.code { min-height: 200px; white-space: pre; overflow-wrap: normal; over
 .btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
 .btn-danger:hover:not(:disabled) { background: var(--danger); filter: brightness(0.94); }
 .btn:disabled { opacity: 0.55; cursor: default; }
+/* 小さいボタン(一覧や行の中の操作)と、薄いボタン(「追加」など目立たせない操作) */
+.btn-sm { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.btn-ghost { border-color: var(--border); color: var(--muted); background: transparent; }
+.btn-ghost:hover:not(:disabled) { color: var(--text); background: var(--sunken); }
 a.btn { text-decoration: none; }
 .error-box { border: 1px solid var(--danger); background: var(--danger-soft); color: var(--danger); padding: 8px 12px; border-radius: var(--radius); }
 /* 確認のモーダルで、チェックを入れたときに本文と差し替える注意(B46)。取り消せない結果を目立たせる。文字は読みやすさのため本文色の太字 */

@@ -13,6 +13,8 @@ runtime が送るイベントは 2 種類だけ(既定名。名札は Site 単�
 | `ab_exposure` | 訪問者に Variant が適用されたとき(Experiment ごとに 1 ページ 1 回) | `ab_experiment_id` / `ab_experiment_name` / `ab_variant_id` / `ab_variant_name` |
 | `ab_conversion` | Goal を達成したとき(`AB.track()` / Goal の検知) | `ab_goal_id` / `ab_goal_name` |
 
+`ab_experiment_name` / `ab_variant_name` / `ab_goal_name` の値は、エクスペリエンス・パターン・目標の外部計測で指定した名前で、指定が無ければそれぞれの ID になる(管理画面の「名前」の欄の値は送らない。[サイト導入ガイド 12 節](site-install.md#サイト単位エクスペリエンス単位の名前))。**名前は表示用で、集計は ID(`ab_experiment_id` / `ab_variant_id` / `ab_goal_id`)で行う。** 名前は後から変えられ、変えて公開した時点から値が変わるので、名前で集計すると変更の前と後で別の行に分かれる。
+
 **パーソナライズの `ab_exposure`**: 種別がパーソナライズのエクスペリエンスも、テストと同じく変更を表示したページの読み込みごとに `ab_exposure` を送る(「誰が変更を見たか」を GA4 で切り出せるようにするため)。条件に合う訪問者全員に表示するので、テストより回数が増える。GA4 の標準プロパティの BigQuery への日次エクスポートは 1 日 100 万イベントまでなので、量が気になるサイトは GTM のトリガーで `ab_experiment_id` を除外する。パターンは 1 つなので、比較と SRM の確認は意味を持たない(`analytics-recipe` の `notes` にも出る)。
 
 **`ab_conversion` には Experiment / Variant が付かない**。コンバージョンは「どの実験のせいで起きたか」を runtime が決められないため、あえて付けていない。したがって Variant 別 CVR は、次のように **2 つの集合を突き合わせて**出す。

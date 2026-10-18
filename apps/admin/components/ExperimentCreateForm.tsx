@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { api, describeError } from "@/lib/client";
 import { Field } from "./Field";
 import { PageMatchField } from "./PageMatchField";
@@ -8,12 +8,14 @@ import { ErrorBox } from "./ErrorBox";
 import { SubmitButton } from "./SubmitButton";
 import { KIND_HINT, KIND_JA, createButtonLabel } from "@/lib/experiment-kind";
 import type { ExperimentKind } from "@wtt/core";
+import { EXPOSED_NOTE, InfoTip } from "./experiment/AnalyticsCard";
 
 export function ExperimentCreateForm({ wid, sid }: { wid: string; sid: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [urlMatch, setUrlMatch] = useState<PageMatchValue>(DEFAULT_PAGE_MATCH);
   const [kind, setKind] = useState<ExperimentKind>("test");
+  const idInput = useId();
   return (
     <form
       className="card"
@@ -36,9 +38,15 @@ export function ExperimentCreateForm({ wid, sid }: { wid: string; sid: string })
       }}
     >
       <h1>新しいエクスペリエンス</h1>
-      <Field label="エクスペリエンス ID(スラッグ)" hint="GA4 の experimentId としてそのまま送られます。割当ハッシュの入力でもあるため作成後は変更できません">
-        <input name="id" required pattern="[a-z0-9][a-z0-9_\-]{0,63}" placeholder="exp_hero_copy" />
-      </Field>
+      {/* ID は dataLayer に出るので ⓘ に共通の注意を付ける(B77 Q25)。ⓘ はボタンなので label の外に置き、label は htmlFor で欄と結ぶ */}
+      <div className="field">
+        <span className="field-label row" style={{ gap: 6 }}>
+          <label htmlFor={idInput}>エクスペリエンス ID(スラッグ)</label>
+          <InfoTip label="エクスペリエンス ID の補足">{EXPOSED_NOTE}</InfoTip>
+        </span>
+        <input id={idInput} name="id" required pattern="[a-z0-9][a-z0-9_\-]{0,63}" placeholder="exp_hero_copy" />
+        <span className="field-hint">GA4 の experimentId としてそのまま送られます。割当ハッシュの入力でもあるため作成後は変更できません</span>
+      </div>
       <Field label="名前(100 字以内)">
         <input name="name" required maxLength={100} />
       </Field>

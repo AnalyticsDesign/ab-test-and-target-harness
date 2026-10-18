@@ -1,12 +1,15 @@
 import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
+import type { ExpressionBuilder } from "kysely";
 import { z } from "zod";
 import {
   ChangeSchema,
   EXPERIMENT_KINDS,
+  ExperimentAnalyticsRequestSchema,
   ExperimentAnalyticsSchema,
   PageMatchInputSchema,
   TargetingInputSchema,
+  VariantAnalyticsRequestSchema,
   VariantAnalyticsSchema,
   duplicateIdCandidates,
   duplicateName,
@@ -18,7 +21,7 @@ import {
 } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
 import { resultsStore } from "../capabilities";
-import { toStatement, type Db, type ExperimentRow, type SiteRow, type VariantRow } from "../db";
+import { toStatement, type Db, type ExperimentRow, type SiteRow, type Tables, type VariantRow } from "../db";
 import { copyChangesQuery, copyVariantsQuery, duplicateExperimentRow, insertExperimentQuery, retiredIds } from "../duplicate";
 import { ApiError, notFound, validationFailed } from "../errors";
 import { SLUG_RE } from "../ids";
@@ -27,7 +30,18 @@ import { publicPublishResult, publishSite, type PublishResult } from "../publish
 import { loadSite } from "../roles";
 import { PublishResultSchema } from "./publish";
 import { experimentJson } from "../serialize";
-import { assertExperimentAnalytics, assertName, assertTargetingRefs, normalizedPageMatch, normalizedTargeting, parseChange, targetingValidationFailed } from "../validation";
+import {
+  ANALYTICS_REQUEST_DESCRIPTION,
+  assertAnalyticsValues,
+  assertDescription,
+  assertExperimentAnalytics,
+  assertName,
+  assertTargetingRefs,
+  normalizedPageMatch,
+  normalizedTargeting,
+  parseChange,
+  targetingValidationFailed,
+} from "../validation";
 
 export const experimentRoutes = new Hono<AppEnv>();
 
@@ -45,7 +59,10 @@ const Targeting = TargetingInputSchema.nullable().describe(
   "配信条件。条件 1 つ、否定の形を持つ条件の not、または and / or の下に条件か否定の形を持つ条件の not が並ぶ形だけを受けます。入れ子やグループの除外はオーディエンスで作ります",
 );
 const Traffic = z.number().int().min(1).max(100).describe("1〜100。0 は paused で表現する");
-const Analytics = ExperimentAnalyticsSchema.nullable();
+/** B77(K12): 受け口は値を文字列として受けるだけ(値の検査は assertAnalyticsValues)。応答は保存する形 */
+const Analytics = ExperimentAnalyticsRequestSchema.nullable().describe(ANALYTICS_REQUEST_DESCRIPTION);
+const AnalyticsJson = ExperimentAnalyticsSchema.nullable();
+const Description = z.string().describe("メモ(社内用。外部には出力されない)。1,000 字まで");
 const KIND_DESCRIPTION =
   "種別。test = テスト(2 つ以上のパターンに訪問者を振り分けて比べる)、single = パーソナライズ(パターン 1 つ・重み 100。振り分けず、条件に合う訪問者全員に表示する)。作成後は変えられない(変えたいときは複製する)";
 const Kind = z.enum(EXPERIMENT_KINDS).describe(KIND_DESCRIPTION);
@@ -59,6 +76,7 @@ const ExperimentCreate = z.strictObject({
   trafficPercentage: Traffic.default(100),
   persistAssignment: z.boolean().default(false),
   analytics: Analytics.optional(),
+  description: Description.optional(),
 });
 /**
  * PATCH は全フィールド任意。`ExperimentCreate.partial()` から導出しないのは、zod の `.partial()` が
@@ -72,6 +90,7 @@ const ExperimentPatch = z.strictObject({
   trafficPercentage: Traffic.optional(),
   persistAssignment: z.boolean().optional(),
   analytics: Analytics.optional(),
+  description: Description.optional().describe("メモ(社内用。外部には出力されない)。1,000 字まで。body がこのキーだけのときは状態にかかわらず受け、未公開の編集にしない"),
 });
 
 /** 決定 51: パターンの数は種別で決まる(テストは 2 つ以上・パーソナライズは 1 つ)。数はルートで `variant_count_invalid` にする。weight の合計は 100(ルート側で `variant_weights_invalid` にする) */
@@ -81,10 +100,18 @@ const VariantsPut = z
       id: z.string().regex(SLUG_RE),
       name: z.string().min(1),
       weight: z.number().int().min(0).max(100),
-      analytics: VariantAnalyticsSchema.nullable().optional(),
+      analytics: VariantAnalyticsRequestSchema.nullable().optional().describe(ANALYTICS_REQUEST_DESCRIPTION),
+      // B77(K8): 省いたら保存済みの値を保つ(新しいパターンは false / '')。deploy の途中で古い管理画面が送らなくても印とメモが消えない
+      original: z
+        .boolean()
+        .optional()
+        .describe("オリジナル(変更を持たず、元のページをそのまま見せるパターン)。true にするとそのパターンの変更を消す。テストだけ。省略時は保存済みの値を保つ"),
+      description: Description.optional().describe("メモ(社内用。外部には出力されない)。1,000 字まで。省略時は保存済みの値を保つ"),
     }),
   )
   .min(1);
+/** B77(K9): パターンのメモだけを更新する。ほかのキーは受けない */
+const VariantPatch = z.strictObject({ description: Description });
 /** spec §11 / 決定 35 (7): 1 Variant の Change は 100 件まで(保存時の件数上限。Publish の 512KB 上限は別途) */
 const MAX_CHANGES_PER_VARIANT = 100;
 /**
@@ -108,6 +135,7 @@ const ExperimentJsonSchema = z.object({
   id: z.string(),
   siteId: z.string(),
   name: z.string(),
+  description: z.string().describe("メモ(社内用。外部には出力されない)"),
   kind: Kind,
   status: z.enum(["draft", "running", "paused", "archived"]),
   publishedStatus: z.enum(["draft", "running", "paused", "archived"]).nullable().describe("前回公開時の status"),
@@ -115,7 +143,7 @@ const ExperimentJsonSchema = z.object({
   targeting: Targeting,
   trafficPercentage: z.number().int(),
   persistAssignment: z.boolean(),
-  analytics: Analytics,
+  analytics: AnalyticsJson,
   runId: z
     .string()
     .nullable()
@@ -134,17 +162,24 @@ const ChangeJsonSchema = z.object({
   updatedBy: z.string(),
   updatedAt: z.number().int().describe("epoch ミリ秒"),
 });
-const ExperimentDetailJsonSchema = ExperimentJsonSchema.extend({
-  variants: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      weight: z.number().int(),
-      analytics: VariantAnalyticsSchema.nullable(),
-      changes: z.array(ChangeJsonSchema),
-    }),
-  ),
+const VariantJsonSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  weight: z.number().int(),
+  original: z.boolean().describe("オリジナル(変更を持たず、元のページをそのまま見せるパターン)"),
+  description: z.string().describe("メモ(社内用。外部には出力されない)"),
+  analytics: VariantAnalyticsSchema.nullable(),
 });
+const ExperimentDetailJsonSchema = ExperimentJsonSchema.extend({
+  variants: z.array(VariantJsonSchema.extend({ changes: z.array(ChangeJsonSchema) })),
+});
+
+/** B77(K8): オリジナルのパターンへの変更の保存 */
+const variantOriginal = () =>
+  new ApiError(422, "variant_original", {
+    message: "オリジナルのパターンには変更を保存できません",
+    hint: "オリジナルは元のページをそのまま表示します。変更を加えるときは、オリジナルを外すか別のパターンに保存してください",
+  });
 
 /** spec §13.8: draft → running、running ↔ paused、running | paused → archived(復帰不可)。表外は 409 invalid_transition */
 const TRANSITIONS: Record<ExperimentRow["status"], Array<ExperimentRow["status"]>> = {
@@ -184,6 +219,19 @@ async function loadExperiment(db: Db, siteId: string, eid: string): Promise<Expe
 export async function loadVariants(db: Db, siteId: string, eid: string): Promise<VariantRow[]> {
   return db.selectFrom("variants").selectAll().where("site_id", "=", siteId).where("experiment_id", "=", eid).orderBy("position").execute();
 }
+
+const variantJson = (v: VariantRow) => ({
+  id: v.id,
+  name: v.name,
+  weight: v.weight,
+  original: v.original === 1,
+  description: v.description,
+  analytics: v.analytics_json ? (JSON.parse(v.analytics_json) as VariantAnalytics) : null,
+});
+
+/** B77(K8): パターンがオリジナルである(`variants as ov` の副問い合わせ)。PUT …/changes の条件付きの DELETE と親の更新の条件に使う */
+const variantIsOriginal = (siteId: string, eid: string, vid: string) => (eb: ExpressionBuilder<Tables, any>) =>
+  eb.exists(eb.selectFrom("variants as ov").select("ov.id").where("ov.site_id", "=", siteId).where("ov.experiment_id", "=", eid).where("ov.id", "=", vid).where("ov.original", "=", 1));
 
 const parseVariantAnalytics = (v: VariantRow): VariantAnalytics | undefined => (v.analytics_json ? (JSON.parse(v.analytics_json) as VariantAnalytics) : undefined);
 const parseExperimentAnalytics = (e: ExperimentRow): ExperimentAnalytics | undefined => (e.analytics_json ? (JSON.parse(e.analytics_json) as ExperimentAnalytics) : undefined);
@@ -238,7 +286,7 @@ experimentRoutes.post(
   "/sites/:sid/experiments",
   describeRoute({
     tags: ["experiments"],
-    summary: "エクスペリエンスを作成(編集者以上)。テストはパターン a / b を 50 / 50、パーソナライズはパターン a を重み 100 で自動作成する",
+    summary: "エクスペリエンスを作成(編集者以上)。テストの既定は A パターン(オリジナル)/ B パターン(ID a / b、重み 50 / 50)、パーソナライズは A パターン(ID a、重み 100)を自動作成する",
     security: [{ bearer: [] }],
     responses: {
       201: { description: "作成したエクスペリエンス", content: { "application/json": { schema: resolver(ExperimentJsonSchema) } } },
@@ -258,11 +306,17 @@ experimentRoutes.post(
     }
     if ((await retiredIds(db, site.id)).has(body.id)) throw retiredIdTaken(body.id);
     assertName(body.name, ["name"]);
+    if (body.description !== undefined) assertDescription(body.description, ["description"]);
+    assertAnalyticsValues(body.analytics, null, ["analytics"]);
     const urlMatch = normalizedPageMatch(body.urlMatch, ["urlMatch"]);
     const targeting = normalizedTargeting(body.targeting ?? null, "experiment", "targeting");
     await assertTargetingRefs(db, site, targeting, "targeting");
-    // 決定 51(設計書 §3.1): テストは A / B(50:50)、パーソナライズは A(重み 100)を 1 つ
-    const defaults = body.kind === "single" ? [{ id: "a", name: "A", weight: 100 }] : [{ id: "a", name: "A", weight: 50 }, { id: "b", name: "B", weight: 50 }];
+    // 決定 51(設計書 §3.1): テストは A / B(50:50)、パーソナライズは A(重み 100)を 1 つ。
+    // B77(K8、設計書 Q6): テストの A はオリジナル(元のページ)。パーソナライズはオリジナルを持たない
+    const defaults =
+      body.kind === "single"
+        ? [{ id: "a", name: "A", weight: 100, original: 0 }]
+        : [{ id: "a", name: "A", weight: 50, original: 1 }, { id: "b", name: "B", weight: 50, original: 0 }];
     assertExperimentAnalytics({ id: body.id, name: body.name, analytics: body.analytics ?? undefined }, defaults);
     const now = Date.now();
     const user = c.get("user").id;
@@ -283,6 +337,7 @@ experimentRoutes.post(
       last_started_at: null,
       run_id: null,
       results_purged_at: null,
+      description: body.description ?? "",
       created_by: user,
       updated_by: user,
       created_at: now,
@@ -294,7 +349,7 @@ experimentRoutes.post(
       toStatement(
         c.env,
         db.insertInto("variants").values(
-          defaults.map((v, i) => ({ site_id: site.id, experiment_id: row.id, id: v.id, name: v.name, weight: v.weight, position: i, analytics_json: null })),
+          defaults.map((v, i) => ({ site_id: site.id, experiment_id: row.id, id: v.id, name: v.name, weight: v.weight, position: i, analytics_json: null, original: v.original, description: "" })),
         ),
       ),
     ]);
@@ -329,10 +384,7 @@ experimentRoutes.get(
     return c.json({
       ...experimentJson(exp, { unpublished: isUnpublished(exp, site) }),
       variants: variants.map((v) => ({
-        id: v.id,
-        name: v.name,
-        weight: v.weight,
-        analytics: v.analytics_json ? JSON.parse(v.analytics_json) : null,
+        ...variantJson(v),
         changes: changes
           .filter((ch) => ch.variant_id === v.id)
           .map((ch) => ({
@@ -352,7 +404,7 @@ experimentRoutes.patch(
   "/sites/:sid/experiments/:eid",
   describeRoute({
     tags: ["experiments"],
-    summary: "エクスペリエンスを更新(編集者以上)。id は不変、status は変更できない(status は /status で変更する)",
+    summary: "エクスペリエンスを更新(編集者以上)。id は不変、status は変更できない(status は /status で変更する)。メモ(description)だけの更新は状態にかかわらず可で、公開の対象にならない",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "更新後のエクスペリエンス", content: { "application/json": { schema: resolver(ExperimentJsonSchema) } } },
@@ -368,6 +420,15 @@ experimentRoutes.patch(
     const db = c.get("db");
     const exp = await loadExperiment(db, site.id, c.req.param("eid"));
     const body = c.req.valid("json");
+    if (body.description !== undefined) assertDescription(body.description, ["description"]);
+    // B77(K9、設計書 Q26〜Q29): メモだけの更新は config に出ないので、updated_at / updated_by を進めない(未公開の印を付けない)。
+    // 状態も問わない(終了したエクスペリエンスにも経緯を書ける)。外部計測の検査も、何も変わらないので通さない
+    const keys = Object.keys(body);
+    if (keys.length === 1 && keys[0] === "description") {
+      await db.updateTable("experiments").set({ description: body.description }).where("site_id", "=", site.id).where("id", "=", exp.id).execute();
+      const next: ExperimentRow = { ...exp, description: body.description! };
+      return c.json(experimentJson(next, { unpublished: isUnpublished(next, site) }));
+    }
     // 触る列だけを set に積む(status / published_status / started_at / stopped_at は Task 6 / 7 の帳簿。
     // 読んだ行をまるごと書き戻すと、並行する status 変更を古い値で潰しうる)
     const set: Partial<ExperimentRow> = { updated_at: Date.now(), updated_by: c.get("user").id };
@@ -383,7 +444,11 @@ experimentRoutes.patch(
     }
     if (body.trafficPercentage !== undefined) set.traffic_percentage = body.trafficPercentage;
     if (body.persistAssignment !== undefined) set.persist_assignment = body.persistAssignment ? 1 : 0;
-    if (body.analytics !== undefined) set.analytics_json = body.analytics ? JSON.stringify(body.analytics) : null;
+    if (body.analytics !== undefined) {
+      assertAnalyticsValues(body.analytics, parseExperimentAnalytics(exp) ?? null, ["analytics"]);
+      set.analytics_json = body.analytics ? JSON.stringify(body.analytics) : null;
+    }
+    if (body.description !== undefined) set.description = body.description;
     const next: ExperimentRow = { ...exp, ...set };
     const variants = await loadVariants(db, site.id, exp.id);
     assertExperimentAnalytics(
@@ -438,7 +503,8 @@ experimentRoutes.put(
   "/sites/:sid/experiments/:eid/variants",
   describeRoute({
     tags: ["experiments"],
-    summary: "パターンの集合を全置換(編集者以上)。テストは 2 つ以上、パーソナライズは 1 つ。weight の合計 100。残るパターンの変更は保持される。下書きのときだけ可",
+    summary:
+      "パターンの集合を全置換(編集者以上)。テストは 2 つ以上、パーソナライズは 1 つ。weight の合計 100。残るパターンの変更は保持される(オリジナルにしたパターンの変更は消す)。original / description を省いたパターンは保存済みの値を保つ。下書きのときだけ可",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "置換した", content: { "application/json": { schema: resolver(z.object({ ok: z.literal(true) })) } } },
@@ -471,7 +537,20 @@ experimentRoutes.put(
     assertVariantCount(exp.kind, body.length);
     const sum = body.reduce((a, v) => a + v.weight, 0);
     if (sum !== 100) throw new ApiError(422, "variant_weights_invalid", { message: `重みの合計は 100 である必要があります(現在 ${sum})`, sum });
-    for (const v of body) assertName(v.name, ["variants", v.id, "name"]);
+    for (const v of body) {
+      assertName(v.name, ["variants", v.id, "name"]);
+      if (v.description !== undefined) assertDescription(v.description, ["variants", v.id, "description"]);
+      // B77(K8、設計書 Q7): パーソナライズは選んだパターンを全員に見せるもので、元のページを見せるパターンは意味を持たない
+      if (exp.kind === "single" && v.original === true)
+        throw new ApiError(422, "original_not_allowed", {
+          path: ["variants", v.id, "original"],
+          message: "パーソナライズのパターンはオリジナルにできません",
+          hint: "オリジナルはテストのパターンだけに使えます",
+        });
+    }
+    // B77(K12): 比べる保存済みの値は同じ ID のパターンのもの(新しいパターンは null)
+    const stored = new Map((await loadVariants(db, site.id, exp.id)).map((v) => [v.id, parseVariantAnalytics(v) ?? null]));
+    for (const v of body) assertAnalyticsValues(v.analytics, stored.get(v.id) ?? null, ["variants", v.id, "analytics"]);
     assertExperimentAnalytics(
       { id: exp.id, name: exp.name, analytics: parseExperimentAnalytics(exp) },
       body.map((v) => ({ id: v.id, name: v.name, analytics: v.analytics ?? undefined })),
@@ -480,6 +559,15 @@ experimentRoutes.put(
     // 消える Variant の Change は CASCADE で消え、残る Variant の Change は保持される(id で突き合わせ)。
     // D1 batch で 1 トランザクション(途中で失敗しても集合が壊れない)
     const analyticsJson = (v: (typeof body)[number]) => (v.analytics ? JSON.stringify(v.analytics) : null);
+    // B77(K8): original / description は指定したときだけ doUpdateSet に入れる。省いたら既存の行の値を保ち(読んで埋めない。
+    // 読んでから書くまでに PATCH …/variants/:vid が書いたメモを古い値で潰さない)、新しい行は列の既定値と同じ 0 / '' で入る。
+    // 1 文のバインドは最大 15(values 9 + doUpdateSet 6)で、D1 の上限 100 より十分小さい
+    const flags = (v: (typeof body)[number]) => ({
+      ...(v.original !== undefined ? { original: v.original ? 1 : 0 } : {}),
+      ...(v.description !== undefined ? { description: v.description } : {}),
+    });
+    // オリジナルにしたパターンの変更は同じ batch で消す(設計書 Q5)。対象はこのエクスペリエンスのパターンだけ
+    const originalIds = body.filter((v) => v.original === true).map((v) => v.id);
     await c.env.DB.batch([
       toStatement(c.env, db.deleteFrom("variants").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).where("id", "not in", [...ids])),
       ...body.map((v, i) =>
@@ -487,12 +575,15 @@ experimentRoutes.put(
           c.env,
           db
             .insertInto("variants")
-            .values({ site_id: site.id, experiment_id: exp.id, id: v.id, name: v.name, weight: v.weight, position: i, analytics_json: analyticsJson(v) })
+            .values({ site_id: site.id, experiment_id: exp.id, id: v.id, name: v.name, weight: v.weight, position: i, analytics_json: analyticsJson(v), original: v.original ? 1 : 0, description: v.description ?? "" })
             .onConflict((oc) =>
-              oc.columns(["site_id", "experiment_id", "id"]).doUpdateSet({ name: v.name, weight: v.weight, position: i, analytics_json: analyticsJson(v) }),
+              oc.columns(["site_id", "experiment_id", "id"]).doUpdateSet({ name: v.name, weight: v.weight, position: i, analytics_json: analyticsJson(v), ...flags(v) }),
             ),
         ),
       ),
+      ...(originalIds.length > 0
+        ? [toStatement(c.env, db.deleteFrom("changes").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).where("variant_id", "in", originalIds))]
+        : []),
       toStatement(c.env, db.updateTable("experiments").set({ updated_at: now, updated_by: c.get("user").id }).where("site_id", "=", site.id).where("id", "=", exp.id)),
     ]);
     return c.json({ ok: true });
@@ -503,7 +594,8 @@ experimentRoutes.put(
   "/sites/:sid/experiments/:eid/variants/:vid/changes",
   describeRoute({
     tags: ["experiments"],
-    summary: "パターンの変更を全置換(編集者以上)。1 件でも保存時検証に落ちれば何も書かない",
+    summary:
+      "パターンの変更を全置換(編集者以上)。1 件でも保存時検証に落ちれば何も書かない。オリジナルのパターンには変更を保存できない(空配列は受けて何もしない)",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "置換した", content: { "application/json": { schema: resolver(z.object({ ok: z.literal(true), count: z.number().int() })) } } },
@@ -530,14 +622,20 @@ experimentRoutes.put(
     const vid = c.req.param("vid");
     const variant = await db
       .selectFrom("variants")
-      .select("id")
+      .select(["id", "original"])
       .where("site_id", "=", site.id)
       .where("experiment_id", "=", exp.id)
       .where("id", "=", vid)
       .executeTakeFirst();
     if (!variant) throw notFound();
+    const raw = c.req.valid("json");
+    // B77(K8): オリジナルは変更を持たない。空配列は受けて何もしない(エージェントや deploy の途中の古い管理画面が全パターンに [] を送っても失敗させない)
+    if (variant.original === 1) {
+      if (raw.length === 0) return c.json({ ok: true, count: 0 });
+      throw variantOriginal();
+    }
     // 全件を検証してから書く(1 件でも不正なら何も書かない)
-    const changes: Change[] = c.req.valid("json").map((r) => parseChange(c.env, site.id, r));
+    const changes: Change[] = raw.map((r) => parseChange(c.env, site.id, r));
     const ids = new Set(changes.map((ch) => ch.id));
     if (ids.size !== changes.length) throw new ApiError(422, "duplicate_change_id", { message: "変更の ID が重複しています" });
     for (const ch of changes)
@@ -568,12 +666,62 @@ experimentRoutes.put(
     }));
     // D1 batch で 1 トランザクション(途中で失敗しても集合が壊れない)。
     // 8 行(12 パラメータ/行 × 8 = 96)ずつに分けた複数の INSERT 文として積む(上のコメント参照)
-    await c.env.DB.batch([
+    const inserts = chunk(changeRows, 8).map((rows) => toStatement(c.env, db.insertInto("changes").values(rows)));
+    const isOriginal = variantIsOriginal(site.id, exp.id, vid);
+    const results = await c.env.DB.batch([
       toStatement(c.env, db.deleteFrom("changes").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).where("variant_id", "=", vid)),
-      ...chunk(changeRows, 8).map((rows) => toStatement(c.env, db.insertInto("changes").values(rows))),
-      toStatement(c.env, db.updateTable("experiments").set({ updated_at: now, updated_by: user }).where("site_id", "=", site.id).where("id", "=", exp.id)),
+      ...inserts,
+      // B77(K8): 上の読みの後に同じパターンがオリジナルになっていたら(並行する PUT …/variants)、いま入れた変更を同じトランザクションで消す。
+      // 最後はオリジナルに変更が残らない。消した行があれば 422 で返す(batch の後なのでロールバックにはならない)
+      toStatement(c.env, db.deleteFrom("changes").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).where("variant_id", "=", vid).where(isOriginal)),
+      // 拒否になる保存は親の帳簿(未公開の印と更新者)を変えない
+      toStatement(
+        c.env,
+        db
+          .updateTable("experiments")
+          .set({ updated_at: now, updated_by: user })
+          .where("site_id", "=", site.id)
+          .where("id", "=", exp.id)
+          .where((eb) => eb.not(isOriginal(eb))),
+      ),
     ]);
+    if ((results[1 + inserts.length]?.meta.changes ?? 0) > 0) throw variantOriginal();
     return c.json({ ok: true, count: changes.length });
+  },
+);
+
+// B77(K9、設計書 Q26〜Q29): パターンのメモ。config に出ないので状態を問わず受け、親の updated_at / updated_by を進めない
+experimentRoutes.patch(
+  "/sites/:sid/experiments/:eid/variants/:vid",
+  describeRoute({
+    tags: ["experiments"],
+    summary: "パターンのメモを更新(編集者以上)。状態にかかわらず可。公開の対象にならない",
+    security: [{ bearer: [] }],
+    responses: {
+      200: { description: "更新後のパターン", content: { "application/json": { schema: resolver(VariantJsonSchema) } } },
+      ...errorResponses(400, 401, 403, 404, 422),
+    },
+  }),
+  requireSession,
+  validator("json", VariantPatch, (r) => {
+    if (!r.success) throw validationFailed(r.error);
+  }),
+  async (c) => {
+    const { site } = await loadSite(c, c.req.param("sid"), "editor");
+    const db = c.get("db");
+    const exp = await loadExperiment(db, site.id, c.req.param("eid"));
+    const { description } = c.req.valid("json");
+    assertDescription(description, ["description"]);
+    const row = await db
+      .updateTable("variants")
+      .set({ description })
+      .where("site_id", "=", site.id)
+      .where("experiment_id", "=", exp.id)
+      .where("id", "=", c.req.param("vid"))
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) throw notFound();
+    return c.json(variantJson(row));
   },
 );
 
@@ -692,6 +840,13 @@ experimentRoutes.post(
     const picked = body.mode === "variant" ? variants.find((v) => v.id === body.variantId) : undefined;
     if (body.mode === "variant" && !picked)
       throw new ApiError(422, "unknown_variant", { path: ["variantId"], message: "指定したパターンがこのエクスペリエンスにありません" });
+    // B77(K8): オリジナルは元のページそのもので、パーソナライズにしても何も表示しない
+    if (picked?.original === 1)
+      throw new ApiError(422, "duplicate_original_variant", {
+        path: ["variantId"],
+        message: "オリジナルのパターンはパーソナライズに複製できません",
+        hint: "変更のあるパターンを選んでください",
+      });
     const idTaken = (id: string) => new ApiError(409, "id_taken", { id, message: "このエクスペリエンス ID は既に使われています", hint: "別の ID を指定してください" });
     const allTaken = () => new ApiError(409, "id_taken", { message: "複製の ID の候補がすべて使われています", hint: "使っていない複製を削除してから、もう一度複製してください(API では id を指定できます)" });
     // 使われている ID に、一度開始してから削除した ID を足して判定する(D9 ②、K16)

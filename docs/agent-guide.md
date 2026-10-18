@@ -90,12 +90,12 @@ curl -sS "$AB_CONTROL_URL/me" -H "x-api-key: $AB_API_KEY"
 # 1. サイトを確認する(id は人間が管理画面で作ったもの)
 curl -sS "$AB_CONTROL_URL/workspaces/$WID/sites" -H "Authorization: Bearer $AB_API_KEY"
 
-# 2. エクスペリエンス(experiment)を作る(パターン a / b が 50:50 で自動生成される。`"kind":"single"` を足すとパーソナライズで、パターン a が重み 100 で 1 つ。省略は `test`)
+# 2. エクスペリエンス(experiment)を作る(パターン a(名前 A・オリジナル)と b(名前 B)が 50:50 で自動生成される。`"kind":"single"` を足すとパーソナライズで、パターン a(名前 A)が重み 100 で 1 つ。省略は `test`)
 curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments" -H "Authorization: Bearer $AB_API_KEY" \
   -H 'content-type: application/json' \
   -d '{"id":"exp_hero_q1","name":"Hero Q1","urlMatch":{"part":"path","op":"startsWith","value":"/lp/"},"trafficPercentage":100}'
 
-# 3. パターン b の変更(change)を全置換する(空配列で全消し)
+# 3. パターン b の変更(change)を全置換する(空配列で全消し。オリジナルの a には変更を保存できない)
 curl -sS -X PUT "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/variants/b/changes" \
   -H "Authorization: Bearer $AB_API_KEY" -H 'content-type: application/json' \
   -d '[{"id":"c_text","type":"TEXT","selector":"h1.hero","payload":{"text":"新しい見出し"}}]'
@@ -112,6 +112,30 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/status" \
 画像アップロードと IMAGE の変更が無効な導入があります(R2 を使わない構成)。IMAGE を使う前に `GET /capabilities` の `imageUpload` を見てください。`false` のときはアップロードが 409、IMAGE の変更の保存が 422(`image_upload_disabled`)になるので、画像の差し替えは ATTRIBUTE の `src` で行います。
 
 公開の失敗は **HTTP 200 + `{"ok": false, "error": …}`** で返るので、`ok` を必ず見てください。
+
+**パターンの組み替え・メモ・目標名**:
+
+```bash
+# パターンの集合を全置換する(下書きのときだけ)。original / description を省いたパターンは保存済みの値を保つ(新しいパターンは false / 空)
+curl -sS -X PUT "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/variants" -H "Authorization: Bearer $AB_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '[{"id":"a","name":"A","weight":34,"original":true},{"id":"b","name":"B","weight":33},{"id":"c","name":"C","weight":33,"description":"見出しを短くした案","analytics":{"overrides":{"variantName":"short_headline"}}}]'
+
+# パターンのメモだけを直す(状態にかかわらずできる。公開の対象にならない)
+curl -sS -X PATCH "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/variants/b" -H "Authorization: Bearer $AB_API_KEY" \
+  -H 'content-type: application/json' -d '{"description":"ボタンの色だけを変えた案"}'
+
+# 目標を作り、dataLayer に出す目標名を指定する(analytics を省くと ab_goal_name は目標 ID)
+curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/goals" -H "Authorization: Bearer $AB_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"id":"g_lead","name":"資料請求の完了","type":"PAGEVIEW","config":{"page":{"part":"path","op":"equals","value":"/thanks/"}},"analytics":{"overrides":{"goalName":"lead"}}}'
+```
+
+- **オリジナル**(`original: true`)は、変更を持たずに元のページをそのまま見せるパターンです。テストでだけ使え、数に制限はありません(A/A のテストも組めます)。パーソナライズで `true` にすると 422 `original_not_allowed`。`PUT …/variants` で `true` にしたパターンの変更は、同じ保存で消えます
+- オリジナルのパターンへの `PUT …/variants/:vid/changes` は、空配列なら 200(`count: 0`。何もしない)、1 件以上なら 422 `variant_original` です
+- テストからパーソナライズへの複製(`mode: "variant"`)でオリジナルのパターンを選ぶと 422 `duplicate_original_variant` です。複製はオリジナルの印とメモも写します
+- **メモ**(`description`)は社内用の欄で、1,000 字まで(超えると 422 `description_too_long`)。設置タグのファイルにも dataLayer にも出ません。エクスペリエンスのメモは body が `description` だけの `PATCH /sites/:sid/experiments/:eid` で、パターンのメモは `PATCH /sites/:sid/experiments/:eid/variants/:vid` で直します。どちらも状態にかかわらずでき、「未公開の編集あり」になりません(ほかのキーと一緒に送ると、ふつうの更新として扱います)
+- **目標の外部計測**(`analytics`)は、目標の作成と `PATCH /sites/:sid/goals/:gid` で受けます。`PATCH` で `"analytics": null` を送ると指定を消し、次の公開から `ab_goal_name` は目標 ID に戻ります。目標名はいつでも変えられ、変えて公開した時点から `ab_goal_name` の値が変わります(集計は `ab_goal_id` で行ってください)。応答の目標の `analytics` は、指定が無ければ `null` です
 
 ### レシピ 2: 下書きを検証する(公開前に本物のページで見る)
 
@@ -300,7 +324,8 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/duplicate" 
 - **ワークスペースの削除(`DELETE /workspaces/:wid`)もシステム管理者だけ**です。配下のサイトに実行中のエクスペリエンスがあれば 409 `workspace_has_running_experiments`(`siteId` / `experimentId` を返す。先に終了する)。**最後に残った 1 つのワークスペースは削除できず** 409 `last_workspace` を返します(すべて消すと、誰もワークスペースを作れずログインもできない状態になるため)。作り直したいときは、先に新しいワークスペースを作ってから古い方を削除してください
 - **招待の一覧(`GET /workspaces/:wid/invitations`)に出るのは、まだ受けられていない招待だけ**です。受諾済み・取り消し済みの行は返りません。取り消しは `DELETE /workspaces/:wid/invitations/:id`(管理者。成功すると 204、すでに受諾済み・取り消し済み・別ワークスペースの ID は 404)
 - **同じメールアドレスへの再発行**(`POST /workspaces/:wid/invitations`): 有効な招待が既にあり**ロールが同じ**なら、新しい招待は作らずその招待の期限を 7 日後まで延ばし、`extended: true` と**同じ `id` / `url`** を返します。**ロールが違う**ときは 409 `already_invited`(現在のロールを `role` と `message` で返す)で、招待には何も起きません — ロールを変えるときは先に取り消してから発行し直してください。有効な招待が無ければ新規発行で `extended: false` を返し、同じ宛先の期限切れの招待は取り消し済みとして片づけます
-- 名前(エクスペリエンス / パターン / 目標)は 100 字以内(GA4 のパラメータ値上限)
+- **名前(エクスペリエンス / パターン / 目標の `name`)は管理画面の中だけで使い、訪問者には届きません**(100 字以内)。compiled config・設置タグのファイル・`draft-bootstrap` に入りません。dataLayer の `ab_experiment_name` / `ab_variant_name` / `ab_goal_name` は、外部計測(`analytics.overrides` の `experimentName` / `variantName` / `goalName`)で指定した値、指定が無ければそれぞれの ID です
+- **外部計測の値**(名前の指定と `extra` の値)は 1〜100 字で、改行・タブなどの制御文字(U+0000〜U+001F・U+007F〜U+009F)と U+2028 / U+2029 は使えません。違反は 422 `invalid_analytics_value`(`path` が値の位置、`code` が `empty` / `too_long` / `invalid_char`)。保存済みと同じ値は検査しないので、古い値が残っていても、ほかの欄の保存は止まりません。外部計測の値は dataLayer に入り、サイトの訪問者もブラウザで見られます
 - **Windows の Git Bash から日本語を含む JSON を送ると文字化けする**ことがあります(`curl -d '{"name":"…"}'` の引数が UTF-8 にならない)。UTF-8 のファイルに書いて `curl --data-binary @body.json -H 'content-type: application/json' …` で送ってください
 - **本番のページを headless ブラウザで開くときは、計測系の通信を遮断する**(下書きの検証以外の、設置状況の確認なども同じ)。遮断しないと、確認のたびに GA4 などへ実データが送られます。Playwright なら次のように止められます:
 

@@ -1,4 +1,5 @@
 import {
+  analyticsValueIssue,
   attributeChangeIssue,
   audienceDefinitionIssue,
   ChangeSchema,
@@ -28,13 +29,52 @@ import type { Env } from "./env";
 import { ApiError, validationFailed } from "./errors";
 
 /**
- * spec §10.9 / §13.5: 導出値(Experiment / Variant / Goal の name)は 100 字以内。素の文字列長(GA4 は全角も 1 文字)。
+ * spec §13.5: Experiment / Variant / Goal の name は 100 字以内。素の文字列長(全角も 1 文字)。
+ * B77(K11): 名前は compiled config に出さず(dataLayer の名前は外部計測の指定 ?? ID)、上限は管理画面の表示のために保つ。
  * `path` は封筒の契約(`ErrorEnvelopeSchema` の `array<string|number>`)に合わせて配列で渡す(決定 34)
  */
 export const NAME_MAX = 100;
 export function assertName(name: string, path: (string | number)[]): void {
   if (name.length > NAME_MAX)
-    throw new ApiError(422, "name_too_long", { path, max: NAME_MAX, message: "名前が長すぎます(100 字以内)", hint: "GA4 は 100 字超のパラメータ値を破棄します" });
+    throw new ApiError(422, "name_too_long", { path, max: NAME_MAX, message: "名前が長すぎます(100 字以内)", hint: "名前は管理画面の中だけで使います。100 字以内にしてください" });
+}
+
+/** 受け口のスキーマの `analytics` に付ける説明(/openapi.json)。値の規則は assertAnalyticsValues が見る */
+export const ANALYTICS_REQUEST_DESCRIPTION =
+  "外部計測(dataLayer に出す名前の指定と追加の値)。値は 1〜100 字で、改行・タブなどの制御文字は使えない(保存済みと同じ値は検査しない)。null は指定なし(更新では消す)";
+
+/** 目標の受け口の `analytics` の説明(/openapi.json)。目標には追加の値(extra)が無く、名前の指定だけ */
+export const GOAL_ANALYTICS_REQUEST_DESCRIPTION =
+  "外部計測(dataLayer に出す目標名の指定)。値は 1〜100 字で、改行・タブなどの制御文字は使えない(保存済みと同じ値は検査しない)。null は指定なし(更新では消す)";
+
+/** 外部計測(エクスペリエンス・パターン・目標の analytics)の、値の検査に使う部分 */
+type AnalyticsValues = { overrides?: Record<string, string | undefined>; extra?: Record<string, string> };
+
+/**
+ * B77(K12): dataLayer に出す値(名前の指定と追加の値)の保存時の検査。`next` のすべての値を core の analyticsValueIssue に通し、
+ * 最初の問題で 422 invalid_analytics_value(`path` = `[...path, "overrides" | "extra", キー]`、`code`・`message` は core のもの)。
+ * `prev`(保存済みの analytics。新規は null)の同じ場所と同じ値は見ない — 制御文字を含む古い値(マイグレーションで写した名前)が
+ * あっても、他の欄の保存を止めないため。キーの規則と strict は受け口のスキーマ(core の …AnalyticsRequestSchema)が見る
+ */
+export function assertAnalyticsValues(next: AnalyticsValues | null | undefined, prev: AnalyticsValues | null, path: (string | number)[]): void {
+  if (!next) return;
+  for (const group of ["overrides", "extra"] as const) {
+    for (const [key, value] of Object.entries(next[group] ?? {})) {
+      if (value === undefined || prev?.[group]?.[key] === value) continue;
+      const issue = analyticsValueIssue(value);
+      if (issue) throw new ApiError(422, "invalid_analytics_value", { path: [...path, group, key], code: issue.code, message: issue.message });
+    }
+  }
+}
+
+/**
+ * B77(K9): エクスペリエンスとパターンのメモ(社内用。config には出さない)は 1,000 字まで。素の文字列長で数える。
+ * `path` は封筒の契約に合わせて配列で渡す
+ */
+export const DESCRIPTION_MAX = 1000;
+export function assertDescription(value: string, path: (string | number)[]): void {
+  if (value.length > DESCRIPTION_MAX)
+    throw new ApiError(422, "description_too_long", { path, max: DESCRIPTION_MAX, message: "メモが長すぎます(1,000 字以内)", hint: "1,000 字以内にしてください" });
 }
 
 /** spec §13.9: Goal / オーディエンス / タイムゾーンの変更は Site レベルで「未公開の変更」として拾う */

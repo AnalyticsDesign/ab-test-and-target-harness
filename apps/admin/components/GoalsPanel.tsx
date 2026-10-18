@@ -1,9 +1,12 @@
 "use client";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { api, describeError, fieldErrors } from "@/lib/client";
-import type { Goal } from "@/lib/types";
+import type { AnalyticsSettings, Goal } from "@/lib/types";
+import { analyticsValueErrors } from "@/lib/analytics-values";
+import { conversionPreview } from "@/lib/datalayer-preview";
+import { goalAnalyticsBody, goalNameOf } from "@/lib/goal-analytics";
 import { Field } from "./Field";
 import { PageMatchField } from "./PageMatchField";
 import { DEFAULT_PAGE_MATCH, describePageMatch, type PageMatchValue } from "@/lib/page-match";
@@ -11,13 +14,134 @@ import { ErrorBox } from "./ErrorBox";
 import { SubmitButton } from "./SubmitButton";
 import { PageHeader } from "./ui/PageHeader";
 import { Picker } from "./ui/Picker";
+import { AnalyticsBadges, AnalyticsCard, AnalyticsSection, EXPOSED_NOTE, InfoTip } from "./experiment/AnalyticsCard";
+import { DataLayerPreview } from "./experiment/DataLayerPreview";
+import styles from "./GoalsPanel.module.css";
 
 const GOAL_TYPES = [
   { value: "PAGEVIEW", label: "ページの表示(PAGEVIEW)" },
   { value: "CLICK", label: "クリック(CLICK)" },
   { value: "CUSTOM", label: "コードから送る(CUSTOM)" },
 ];
-export function GoalsPanel({ siteId, goals, canEdit }: { siteId: string; goals: Goal[]; canEdit: boolean }) {
+
+/** 目標名の欄の値の問題(保存の前の検査。保存済みと同じ値は見ない。空は「指定なし」なので見ない)。無ければ null */
+function goalNameIssue(goalName: string, saved: Goal["analytics"]): string | null {
+  return analyticsValueErrors({ overrides: { goalName } }, saved, ["analytics"])[0]?.message ?? null;
+}
+
+/** 目標名の入力 + 出力される内容(編集パネルと追加フォームで共通。K14 の注意は編集だけ) */
+function GoalAnalyticsFields({
+  names,
+  goalId,
+  goalName,
+  note,
+  error,
+  disabled,
+  onChange,
+}: {
+  names: AnalyticsSettings;
+  goalId: string;
+  goalName: string;
+  /** 目標名の欄の下の注意(編集だけ) */
+  note?: string;
+  error?: string | null;
+  disabled: boolean;
+  onChange: (v: string) => void;
+}) {
+  const k = names.conversion.keys;
+  return (
+    <div className={styles.split}>
+      <AnalyticsSection
+        title="目標名"
+        tipLabel="目標名の補足"
+        tip={
+          <>
+            <code>{k.goalName}</code> に出力します。空なら目標 ID({goalId})を出力します。{EXPOSED_NOTE}
+          </>
+        }
+      >
+        <input
+          aria-label="目標名"
+          aria-invalid={error ? true : undefined}
+          value={goalName}
+          placeholder={`空なら目標 ID(${goalId})を出力`}
+          maxLength={100}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        {error ? (
+          <span role="alert" className="field-error">
+            {error}
+          </span>
+        ) : null}
+        {note ? <span className={styles.note}>{note}</span> : null}
+      </AnalyticsSection>
+      <AnalyticsSection output title="出力される内容" tipLabel="出力される内容の補足" tip="この目標を達成したときに dataLayer に送る内容です。キー名はサイトの設定(外部計測の名前)の値です">
+        <DataLayerPreview extraKey={names.extraKey} lines={conversionPreview(names, { goalId, goalName })} />
+      </AnalyticsSection>
+    </div>
+  );
+}
+
+/** 行の下に開く編集パネル。名前と目標名を下書きに持ち、「保存」で PATCH を 1 回だけ送る(送る内容の決め方は lib/goal-analytics) */
+function GoalEditPanel({
+  goal,
+  names,
+  busy,
+  fields,
+  onSave,
+  onCancel,
+}: {
+  goal: Goal;
+  names: AnalyticsSettings;
+  busy: boolean;
+  fields: Record<string, string>;
+  onSave: (body: { name: string; analytics?: Goal["analytics"] }) => void;
+  onCancel: () => void;
+}) {
+  const savedGoalName = goalNameOf(goal.analytics);
+  const [name, setName] = useState(goal.name);
+  const [goalName, setGoalName] = useState(savedGoalName);
+  const issue = goalNameIssue(goalName, goal.analytics);
+  function save() {
+    if (issue) return; // 問題のある値は送らない(欄に出ている)
+    // 何も変えていなければ送らず閉じる(更新日時を進めない)
+    if (name === goal.name && goalName === savedGoalName) return onCancel();
+    onSave({ name, ...goalAnalyticsBody(goalName, goal.analytics) });
+  }
+  return (
+    <div className={styles.panel}>
+      <div className={styles.narrow}>
+        <Field label="名前(100 字以内。管理画面の中だけで使います)" error={fields.name}>
+          <input value={name} required maxLength={100} disabled={busy} onChange={(e) => setName(e.target.value)} />
+        </Field>
+      </div>
+      <div className={styles.secHead}>
+        <h3>外部計測(dataLayer 出力)</h3>
+        <AnalyticsBadges count={goalName ? 1 : 0} countTitle="設定した項目の数" />
+      </div>
+      <GoalAnalyticsFields
+        names={names}
+        goalId={goal.id}
+        goalName={goalName}
+        note={`変更して公開すると、その時点から ${names.conversion.keys.goalName} の値が変わります。集計は ${names.conversion.keys.goalId} で行ってください`}
+        error={issue ?? fields["analytics.overrides.goalName"]}
+        disabled={busy}
+        onChange={setGoalName}
+      />
+      <div className={styles.foot}>
+        <button type="button" className="btn" onClick={onCancel} disabled={busy}>
+          キャンセル
+        </button>
+        <button type="button" className="btn btn-primary" onClick={save} disabled={busy}>
+          保存
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function GoalsPanel({ siteId, goals, canEdit, names }: { siteId: string; goals: Goal[]; canEdit: boolean; names: AnalyticsSettings }) {
   const router = useRouter();
   const ask = useConfirm();
   const [type, setType] = useState<Goal["type"]>("PAGEVIEW");
@@ -26,15 +150,23 @@ export function GoalsPanel({ siteId, goals, canEdit }: { siteId: string; goals: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
-  async function run(fn: () => Promise<unknown>) {
+  const [openId, setOpenId] = useState<string | null>(null); // 編集パネルを開いている目標
+  const [addGoalName, setAddGoalName] = useState("");
+  const [addOpen, setAddOpen] = useState(false); // 追加フォームの外部計測(畳んだ状態から開く)
+  const k = names.conversion.keys;
+  const addIssue = goalNameIssue(addGoalName, null);
+  /** 成功したら true(失敗は画面に出して false。編集パネルは失敗なら開いたままにする) */
+  async function run(fn: () => Promise<unknown>): Promise<boolean> {
     setBusy(true);
     setError(null);
     try {
       await fn();
       router.refresh();
+      return true;
     } catch (e) {
       setError(describeError(e));
       setFields(fieldErrors(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -45,53 +177,95 @@ export function GoalsPanel({ siteId, goals, canEdit }: { siteId: string; goals: 
       <p className="muted">
         目標はサイト単位です。達成するたびに <code>dataLayer</code> に <code>ab_conversion</code> が送られ、GTM から GA4 に送ると、エクスペリエンスのパターンごとに CV を比べられます。配信条件の「目標を達成した人」にも使えます。
         ページの表示は指定したページの読み込みごと、クリックはセレクタに一致する要素のクリックごとに達成になります(重複は除きません)。
-        履歴条件(converted)を使うサイトでは <code>/event</code> にも転送され、訪問者プロフィールに達成回数が記録されます。名前は GA4 の <code>ab_goal_name</code> に載るため 100 字以内です
+        履歴条件(converted)を使うサイトでは <code>/event</code> にも転送され、訪問者プロフィールに達成回数が記録されます。名前は管理画面の中だけで使い、訪問者には届きません。<code>{k.goalName}</code> に出す名前は外部計測で指定します(指定しなければ目標 ID)
       </p>
       <ErrorBox message={error} />
-      <div className="card-flush">
-        <table>
+      <div className="card-flush has-menu">
+        <table className={styles.table}>
           <thead>
             <tr>
               <th>ID</th>
               <th>名前</th>
               <th>種類</th>
               <th>設定</th>
+              <th>外部計測</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {goals.map((g) => (
-              <tr key={g.id}>
-                <td>
-                  <code>{g.id}</code>
-                </td>
-                <td>
-                  {canEdit ? (
-                    <input
-                      defaultValue={g.name}
-                      maxLength={100}
-                      disabled={busy}
-                      onBlur={(e) => e.target.value !== g.name && run(() => api("PATCH", `/sites/${siteId}/goals/${g.id}`, { name: e.target.value }))}
-                    />
-                  ) : (
-                    g.name
-                  )}
-                </td>
-                <td>{GOAL_TYPES.find((t) => t.value === g.type)?.label ?? g.type}</td>
-                <td>{g.type === "PAGEVIEW" ? describePageMatch((g.config as { page: PageMatchValue }).page) : <code>{JSON.stringify(g.config)}</code>}</td>
-                <td>{canEdit ? <button
-                      className="btn"
-                      disabled={busy}
-                      onClick={async () => {
-                        // 押した瞬間に消えるので確認する(B45)。配信条件などから参照されている目標は control が 409 で断る
-                        const ok = await ask({ title: `目標「${g.name}」を削除しますか?`, body: "元に戻せません", confirmLabel: "削除する" });
-                        if (ok) await run(() => api("DELETE", `/sites/${siteId}/goals/${g.id}`));
-                      }}
-                    >
-                      削除
-                    </button> : null}</td>
-              </tr>
-            ))}
+            {goals.map((g) => {
+              const isOpen = canEdit && openId === g.id;
+              const goalName = goalNameOf(g.analytics);
+              return (
+                <Fragment key={g.id}>
+                  <tr className={isOpen ? styles.open : undefined}>
+                    <td>
+                      <code>{g.id}</code>
+                    </td>
+                    <td>{g.name}</td>
+                    <td>{GOAL_TYPES.find((t) => t.value === g.type)?.label ?? g.type}</td>
+                    <td>{g.type === "PAGEVIEW" ? describePageMatch((g.config as { page: PageMatchValue }).page) : <code>{JSON.stringify(g.config)}</code>}</td>
+                    <td>
+                      {goalName ? (
+                        // 長い名前は 220px で切り、全文は title(K15)
+                        <span className={`badge ${styles.nameBadge}`} title={`目標名: ${goalName}`} data-testid="goal-name-badge">
+                          目標名 {goalName}
+                        </span>
+                      ) : (
+                        <span className={styles.none}>指定なし(ID を出力)</span>
+                      )}
+                    </td>
+                    <td>
+                      {canEdit ? (
+                        <div className={styles.actions}>
+                          <button
+                            type="button"
+                            className={isOpen ? `btn ${styles.on}` : "btn"}
+                            aria-expanded={isOpen}
+                            disabled={busy}
+                            onClick={() => {
+                              setFields({});
+                              setOpenId(isOpen ? null : g.id);
+                            }}
+                          >
+                            {isOpen ? "編集 ▴" : "編集 ▾"}
+                          </button>
+                          <button
+                            className="btn"
+                            disabled={busy}
+                            onClick={async () => {
+                              // 押した瞬間に消えるので確認する(B45)。配信条件などから参照されている目標は control が 409 で断る
+                              const ok = await ask({ title: `目標「${g.name}」を削除しますか?`, body: "元に戻せません", confirmLabel: "削除する" });
+                              if (ok) await run(() => api("DELETE", `/sites/${siteId}/goals/${g.id}`));
+                            }}
+                          >
+                            削除
+                          </button>
+                        </div>
+                      ) : null}
+                    </td>
+                  </tr>
+                  {isOpen ? (
+                    <tr className={styles.open}>
+                      <td className={styles.panelCell} colSpan={6}>
+                        <GoalEditPanel
+                          goal={g}
+                          names={names}
+                          busy={busy}
+                          fields={fields}
+                          onCancel={() => setOpenId(null)}
+                          onSave={async (body) => {
+                            setFields({});
+                            // 名前と外部計測を 1 回の PATCH で送る。成功したらパネルを閉じ、失敗なら開いたまま欄にエラーを出す
+                            if (await run(() => api("PATCH", `/sites/${siteId}/goals/${g.id}`, body))) setOpenId(null);
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -104,21 +278,39 @@ export function GoalsPanel({ siteId, goals, canEdit }: { siteId: string; goals: 
             const form = e.currentTarget;
             const config = type === "PAGEVIEW" ? { page } : type === "CLICK" ? { selector: fd.get("selector") } : {};
             setFields({});
+            if (addIssue) return setAddOpen(true); // 目標名に問題があれば送らない(欄にエラーが出ている。畳んでいたら開く)
             run(async () => {
-              await api("POST", `/sites/${siteId}/goals`, { id: fd.get("id"), name: fd.get("name"), type, config });
+              await api("POST", `/sites/${siteId}/goals`, { id: fd.get("id"), name: fd.get("name"), type, config, ...goalAnalyticsBody(addGoalName, null) });
               form.reset();
               setGoalId("");
               setPage(DEFAULT_PAGE_MATCH);
+              setAddGoalName("");
             });
           }}
         >
           <h2>追加</h2>
-          <Field label="ID(スラッグ)" error={fields.id}>
-            <input name="id" required pattern="[a-z0-9][a-z0-9_\-]{0,63}" placeholder="g_purchase" onChange={(e) => setGoalId(e.target.value)} />
-          </Field>
-          <Field label="名前(100 字以内)" error={fields.name}>
-            <input name="name" required maxLength={100} />
-          </Field>
+          <div className={`field ${styles.narrow}`}>
+            {/* ⓘ は label の外に置く(label の中のボタンは入力欄への紐づけを奪う) */}
+            <span className={styles.labelRow}>
+              <label htmlFor="goal-add-id" className="field-label">
+                ID(スラッグ)
+              </label>
+              <InfoTip label="ID の補足">
+                作成後は変えられません。<code>{k.goalId}</code> に出力します。{EXPOSED_NOTE}
+              </InfoTip>
+            </span>
+            <input id="goal-add-id" name="id" required pattern="[a-z0-9][a-z0-9_\-]{0,63}" placeholder="g_purchase" onChange={(e) => setGoalId(e.target.value)} />
+            {fields.id ? (
+              <span role="alert" className="field-error">
+                {fields.id}
+              </span>
+            ) : null}
+          </div>
+          <div className={styles.narrow}>
+            <Field label="名前(100 字以内。管理画面の中だけで使います)" error={fields.name}>
+              <input name="name" required maxLength={100} />
+            </Field>
+          </div>
           <Field label="種類" group error={fields.type}>
             <Picker label="種類" value={type} options={GOAL_TYPES} onChange={(v) => setType(v as Goal["type"])} />
           </Field>
@@ -138,6 +330,22 @@ export function GoalsPanel({ siteId, goals, canEdit }: { siteId: string; goals: 
               <input name="selector" required placeholder="a.cta" />
             </Field>
           ) : null}
+          <AnalyticsCard
+            bare
+            title="外部計測(dataLayer 出力)"
+            badge={<AnalyticsBadges count={addGoalName ? 1 : 0} countTitle="設定した項目の数" />}
+            open={addOpen}
+            onOpenChange={setAddOpen}
+          >
+            <GoalAnalyticsFields
+              names={names}
+              goalId={goalId || "<目標 ID>"}
+              goalName={addGoalName}
+              error={addIssue ?? fields["analytics.overrides.goalName"]}
+              disabled={busy}
+              onChange={setAddGoalName}
+            />
+          </AnalyticsCard>
           <SubmitButton busy={busy}>追加</SubmitButton>
         </form>
       ) : null}

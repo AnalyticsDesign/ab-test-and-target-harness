@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { applyD1Migrations, reset } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { kvKeys, parseCompiledConfig } from "@wtt/core";
+import { compile, kvKeys, parseCompiledConfig } from "@wtt/core";
 import {
   active,
   call,
@@ -21,7 +22,7 @@ import {
 } from "./helpers";
 import { getDb } from "../src/db";
 import type { Env } from "../src/env";
-import { publishSite, sha256Hex, type PublishResult } from "../src/publish";
+import { buildCompileInput, publishSite, sha256Hex, type PublishResult } from "../src/publish";
 
 /**
  * `:active` の put の直前に D1 の `active_version` を別の版へ進める KV。
@@ -82,7 +83,7 @@ describe("publish (spec §13.6)", () => {
     expect(await active(sid)).toBe("1");
     const cfg = await config(sid, 1);
     expect(cfg?.experiments.map((e) => e.id)).toEqual(["exp_hero"]);
-    expect(cfg?.exposurePayloads?.exp_hero?.b?.variantName).toBe("B");
+    expect(cfg?.exposurePayloads?.exp_hero?.b?.variantName).toBe("b"); // B77: 外部計測の名前の指定が無ければパターン ID(名前は配らない)
     const exp = await json(await call("GET", `/sites/${sid}/experiments/exp_hero`, { token: owner.token }));
     expect(exp.publishedStatus).toBe("running");
     expect(exp.unpublished).toBe(false);
@@ -514,5 +515,62 @@ describe("overlap warnings (決定 51、設計書 §3.3)", () => {
     const preview = await json<any>(await call("GET", `/sites/${sid}/publish-preview`, { token }));
     expect(preview.compileError).not.toBeNull();
     expect(preview.overlaps).toHaveLength(1);
+  });
+});
+
+describe("dataLayer names are baked into payloads (B77)", () => {
+  it("publish_bakes_conversion_payloads", async () => {
+    // K5: 目標名は「外部計測で指定 ?? 目標 ID」で conversionPayloads に焼き、goals[] には名前を出さない
+    const { owner, sid } = await siteWithRunning();
+    const goal = (body: Record<string, unknown>) => call("POST", `/sites/${sid}/goals`, { token: owner.token, body: { type: "CUSTOM", config: {}, ...body } });
+    expect((await goal({ id: "g_named", name: "購入(社内名)", analytics: { overrides: { goalName: "purchase" } } })).status).toBe(201);
+    expect((await goal({ id: "g_plain", name: "資料請求(社内名)" })).status).toBe(201);
+    const r = await json<PublishResult & { ok: true }>(await publishRes(owner.token, sid));
+    expect(r.ok).toBe(true);
+    const raw = JSON.parse((await env.CONFIG_KV.get(kvKeys.config(sid, r.version)))!);
+    expect(raw.conversionPayloads).toEqual({ g_named: { goalId: "g_named", goalName: "purchase" }, g_plain: { goalId: "g_plain", goalName: "g_plain" } });
+    expect(raw.goals.map((g: Record<string, unknown>) => g.id).sort()).toEqual(["g_named", "g_plain"]);
+    for (const g of raw.goals) expect(g).not.toHaveProperty("name");
+    expect(JSON.stringify(raw)).not.toContain("社内名");
+  });
+
+  it("backfill_keeps_compiled_names", async () => {
+    // K7 / Review Focus 3: 外部計測が空の開始済みのテストと目標は、マイグレーションで名前を写すので、
+    // その後の compile の出力の名前は写す前(名前を出していたころ)と同じ
+    const mine = env.TEST_MIGRATIONS.find((m) => m.name.endsWith("_variant_original_and_memo.sql"))!.name;
+    await reset();
+    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS.filter((m) => m.name < mine));
+    const t = 1_700_000_000_000;
+    const insertVar = `insert into variants (site_id, experiment_id, id, name, weight, position, analytics_json) values ('s1', 'e_run', ?1, ?2, 50, ?3, ?4)`;
+    const insertGoal = `insert into goals (site_id, id, name, type, config_json, created_at, updated_at) values ('s1', ?1, ?2, 'CUSTOM', '{}', ?3, ?3)`;
+    await env.DB.batch([
+      env.DB.prepare(`insert into organization (id, name, slug, "createdAt") values ('w1', 'W', 'ws-1', '2026-09-01T00:00:00.000Z')`),
+      env.DB.prepare(
+        `insert into sites (id, workspace_id, name, domain, site_salt, content_updated_at, created_at, updated_at) values ('s1', 'w1', 'S', 'example.com', 'salt', ?1, ?1, ?1)`,
+      ).bind(t),
+      env.DB.prepare(
+        `insert into experiments (site_id, id, name, status, url_match_json, analytics_json, started_at, created_by, updated_by, created_at, updated_at) values ('s1', 'e_run', '購入ボタンのテスト', 'running', '{"op":"contains","value":"/"}', null, ?1, 'u', 'u', ?1, ?1)`,
+      ).bind(t),
+      env.DB.prepare(insertVar).bind("a", "元のボタン", 0, null),
+      env.DB.prepare(insertVar).bind("b", "赤いボタン", 1, JSON.stringify({ overrides: { variantName: "red" } })),
+      env.DB.prepare(insertGoal).bind("g_buy", "購入", t),
+    ]);
+    const names = async () => {
+      const config = compile(await buildCompileInput(getDb(env), await siteRow("s1"), 1));
+      return { exposure: config.exposurePayloads, conversion: config.conversionPayloads };
+    };
+    // 写す前の行をそのまま compile すると、上書きの無い名前は ID になる(写さなければ出力が変わる)
+    expect((await names()).conversion).toEqual({ g_buy: { goalId: "g_buy", goalName: "g_buy" } });
+    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+    // 写した後は、名前を出していたころの「上書き ?? 名前」と同じ
+    expect(await names()).toEqual({
+      exposure: {
+        e_run: {
+          a: { experimentId: "e_run", experimentName: "購入ボタンのテスト", variantId: "a", variantName: "元のボタン", extra: {} },
+          b: { experimentId: "e_run", experimentName: "購入ボタンのテスト", variantId: "b", variantName: "red", extra: {} },
+        },
+      },
+      conversion: { g_buy: { goalId: "g_buy", goalName: "購入" } },
+    });
   });
 });

@@ -6,7 +6,7 @@ describe("experiment kind wording (決定 51・決定 54)", () => {
     expect(KIND_JA).toEqual({ test: "テスト", single: "パーソナライズ" });
   });
   it("tells what the create button prepares", () => {
-    expect(createButtonLabel("test")).toBe("作成(A パターン / B パターンを 50:50 で用意します)");
+    expect(createButtonLabel("test")).toBe("作成(A パターン(オリジナル)/ B パターンを 50:50 で用意します)"); // B77 K21
     expect(createButtonLabel("single")).toBe("作成(A パターンを 1 つ用意します)");
   });
   it("explains each kind in one sentence", () => {

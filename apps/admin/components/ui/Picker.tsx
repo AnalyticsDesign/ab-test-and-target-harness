@@ -12,7 +12,8 @@ const flatten = (opts: Array<PickerOption | PickerGroup>): PickerOption[] => opt
  * 見た目をそろえたプルダウン(決定 49、設計書 §12。WAI-ARIA の select-only combobox)。ブラウザ標準の select の代わりに使う(B35 で全画面に広げる)。
  * フォーカスは常にこの欄にあり、一覧の中の今の行は aria-activedescendant で示す。キーボード: ↓↑ で移動(閉じていれば開く)、Home / End、
  * Enter / Space で決定(閉じていれば開く)、Esc で閉じる、Tab で閉じて次へ。外側をクリックすると閉じる。
- * 今の値が選択肢に無い(古いデータ)ときは「(使えません)」を付けてそのまま見せる
+ * 今の値が選択肢に無い(古いデータ)ときは「(使えません)」を付けてそのまま見せる。
+ * 幅は親の幅まで(欄も一覧も)で、収まらない名前は … で切り、全文は title で見せる
  */
 export function Picker({ label, value, options, onChange, disabled, placeholder = "選択してください", className, name }: Props) {
   const id = useId();
@@ -109,7 +110,10 @@ export function Picker({ label, value, options, onChange, disabled, placeholder 
         onMouseDown={(e) => e.preventDefault()} // フォーカスを combobox に残す
         onClick={() => choose(i)}
       >
-        {o.label}
+        {/* 長い名前は … で切り、全文は title で見せる(一覧の幅には上限がある) */}
+        <span className={styles.label} title={o.label}>
+          {o.label}
+        </span>
         {o.hint ? <small>{o.hint}</small> : null}
       </div>
     );
@@ -136,7 +140,9 @@ export function Picker({ label, value, options, onChange, disabled, placeholder 
         }}
         onKeyDown={onKey}
       >
-        <span className={shown === null ? styles.placeholder : undefined}>{shown ?? placeholder}</span>
+        <span className={shown === null ? `${styles.value} ${styles.placeholder}` : styles.value} title={shown ?? undefined}>
+          {shown ?? placeholder}
+        </span>
         <span aria-hidden="true" className={styles.caret}>
           ▾
         </span>

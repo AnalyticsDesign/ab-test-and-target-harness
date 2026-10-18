@@ -1,4 +1,5 @@
 import type { CompiledConfig } from "./schema";
+import { withoutLegacyNames } from "./legacy-names";
 import { toRuntimeSettings, type SiteSettings } from "./settings";
 
 /**
@@ -16,10 +17,12 @@ export type BakeOptions = { previewSource?: string; apiBase?: string | null; run
  * spec §9.4 / §5.4 / §20: runtime.js + compiled config + Identity 設定(runtime 向けサブセット)を 1 ファイルに連結する純関数。
  * KV / R2 / API へのアクセスは呼び出し側(デプロイ専用の Worker・control の下書きの bootstrap とサイズの警告)。決定 52
  * previewSource(決定 50)は下書きの bootstrap(control の draft-bootstrap)だけが渡す。本番の bootstrap はプレビューを別ファイルから読む。
+ * B77: 焼く前に必ず withoutLegacyNames を通す(古い config の名前を payload に移して抜く)。
  * 出力形式(options なし)は edge の serveBootstrap が Plan 3 まで生成していた body と同一(bootstrap.test.ts が固定する)
  */
 export function bakeBootstrap(config: CompiledConfig, settings: SiteSettings, runtimeSource: string, opts: BakeOptions = {}): string {
-  const boot = JSON.stringify({ config, settings: toRuntimeSettings(settings), ...(opts.apiBase ? { apiBase: opts.apiBase } : {}) });
+  // B77(K6): 古い config(名前付き)でも、焼く本文には名前を入れない。出力(dataLayer)は変えない
+  const boot = JSON.stringify({ config: withoutLegacyNames(config), settings: toRuntimeSettings(settings), ...(opts.apiBase ? { apiBase: opts.apiBase } : {}) });
   const preview = opts.previewSource === undefined ? "" : `${opts.previewSource}\n`;
   const runtime = opts.runtimeHash ? `, runtime ${opts.runtimeHash}` : "";
   return `/* AB Test and Target Harness bootstrap (site ${config.siteId}, config v${config.version}${runtime}) */\n${preview}self.__WTT_BOOT__=${boot};\n${runtimeSource}`;

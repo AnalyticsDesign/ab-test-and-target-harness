@@ -94,4 +94,32 @@ describe("openapi (decision 34)", () => {
     const changesBody = doc.paths["/sites/{sid}/experiments/{eid}/variants/{vid}/changes"]?.put?.requestBody?.content?.["application/json"]?.schema as { maxItems?: number } | undefined;
     expect(changesBody?.maxItems, "PUT …/changes: maxItems が無い").toBe(100);
   });
+
+  it("b77_fields_are_published", async () => {
+    // B77: 目標の外部計測(analytics)・パターンのオリジナルとメモ(original / description)・パターンのメモだけを更新するルート
+    const doc = (await (await app.request("/openapi.json", {}, env)).json()) as Doc & { components?: { schemas?: Record<string, Schema> } };
+    const body = (path: string, method: string) => doc.paths[path]?.[method]?.requestBody?.content?.["application/json"]?.schema;
+    const ok = (path: string, method: string, code: string) => doc.paths[path]?.[method]?.responses?.[code]?.content?.["application/json"]?.schema;
+    for (const [path, method] of [
+      ["/sites/{sid}/goals", "post"],
+      ["/sites/{sid}/goals/{gid}", "patch"],
+    ] as const) {
+      expect(propertiesOf(doc, body(path, method)), `${method.toUpperCase()} ${path}`).toContain("analytics");
+    }
+    const goalOut = ok("/sites/{sid}/goals", "post", "201");
+    expect(propertiesOf(doc, goalOut)).toContain("analytics");
+    // 応答の analytics は目標の外部計測の形(目標名の指定だけ)
+    expect(propertiesOf(doc, (goalOut?.properties as Record<string, Schema> | undefined)?.analytics)).toEqual(["overrides"]);
+    const variantItem = (body("/sites/{sid}/experiments/{eid}/variants", "put") as { items?: Schema } | undefined)?.items;
+    expect(propertiesOf(doc, variantItem)).toEqual(expect.arrayContaining(["original", "description", "analytics"]));
+    expect(propertiesOf(doc, body("/sites/{sid}/experiments/{eid}/variants/{vid}", "patch"))).toEqual(["description"]);
+  });
 });
+
+/** schema の properties のキー($ref と anyOf / oneOf / allOf をたどって集める) */
+function propertiesOf(doc: { components?: { schemas?: Record<string, Schema> } }, s: Schema | undefined): string[] {
+  if (!s) return [];
+  if (s.$ref) return propertiesOf(doc, doc.components?.schemas?.[s.$ref.replace("#/components/schemas/", "")]);
+  const nested = [...(s.anyOf ?? []), ...(s.oneOf ?? []), ...(s.allOf ?? [])] as Schema[];
+  return [...new Set([...Object.keys(s.properties ?? {}), ...nested.flatMap((n) => propertiesOf(doc, n))])];
+}

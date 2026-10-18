@@ -45,11 +45,18 @@ export type ExperimentRow = {
   run_id: string | null;
   /** 計測用 D1 の個票を消した時刻(epoch ミリ秒。③ の保持期限の削除が書く) */
   results_purged_at: number | null;
+  /** migrations/0015_variant_original_and_memo.sql(B77): メモ(社内用。外部には出力しない。1,000 字まで) */
+  description: string;
   created_by: string; updated_by: string; created_at: number; updated_at: number;
 };
-export type VariantRow = { site_id: string; experiment_id: string; id: string; name: string; weight: number; position: number; analytics_json: string | null };
+/** original = オリジナル(0 / 1。変更を持たず元のページを見せる)・description = メモ(同 0015、B77) */
+export type VariantRow = {
+  site_id: string; experiment_id: string; id: string; name: string; weight: number; position: number; analytics_json: string | null;
+  original: number; description: string;
+};
 export type ChangeRow = { site_id: string; experiment_id: string; variant_id: string; id: string; type: string; selector: string | null; payload_json: string; position: number; created_by: string; updated_by: string; created_at: number; updated_at: number };
-export type GoalRow = { site_id: string; id: string; name: string; type: string; config_json: string; created_at: number; updated_at: number };
+/** analytics_json = 目標の外部計測 `{ overrides: { goalName } }`(0015、B77)。無ければ null */
+export type GoalRow = { site_id: string; id: string; name: string; type: string; config_json: string; analytics_json: string | null; created_at: number; updated_at: number };
 export type AssetRow = { id: string; site_id: string; experiment_id: string; r2_key: string; public_url: string; mime: string; size: number; created_by: string; created_at: number };
 export type PublishRow = { id: string; site_id: string; version: number; status: "reserved" | "failed" | "active" | "superseded"; config_hash: string | null; config_json: string | null; needs_profile: number | null; error: string | null; kv_deleted: number; published_by: string; created_at: number; activated_at: number | null };
 

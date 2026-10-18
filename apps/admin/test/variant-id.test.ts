@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { variantIdIssue, VARIANT_ID_RE } from "@/lib/variant-id";
+import { nextVariantId } from "@/lib/variant-id";
 
-describe("variantIdIssue()(Variant ID の受理 / 拒否。control の SLUG_RE と同じ規則。Plan 10 B1)", () => {
-  it.each(["a", "v3", "hero-b", "x_1", "0", "a".repeat(64)])("accepts %s", (id) => expect(variantIdIssue(id, ["existing1", "existing2"])).toBeNull());
-  it.each(["A", "vB", "-a", "_a", "a/b", "a b", "a".repeat(65), "日本"])("rejects %s with a format reason", (id) => expect(variantIdIssue(id, [])).toMatch(/英小文字/));
-  it("rejects a duplicate with the id in the reason", () => expect(variantIdIssue("b", ["a", "b"])).toContain('"b"'));
-  it("returns null for empty input (button disabled, no reason shown)", () => expect(variantIdIssue("", ["a"])).toBeNull());
-  it("VARIANT_ID_RE is the same source as control's SLUG_RE (apps/control/src/ids.ts) — change both together", () => expect(VARIANT_ID_RE.source).toBe("^[a-z0-9][a-z0-9_-]{0,63}$"));
+describe("nextVariantId()(パターン ID の自動の採番。B77 設計書 Q23)", () => {
+  it("nextVariantId", () => {
+    expect(nextVariantId(["a", "b"])).toBe("c");
+    expect(nextVariantId(["b"])).toBe("a"); // 消した ID は使い直す(下書きのみ)
+    expect(nextVariantId("abcdefghijklmnopqrstuvwxyz".split(""))).toBe("aa");
+    expect(nextVariantId([..."abcdefghijklmnopqrstuvwxyz".split(""), "aa"])).toBe("ab");
+  });
+  it("空なら a。API で付けた ID(v1 など)は数に入れずに a から探す", () => {
+    expect(nextVariantId([])).toBe("a");
+    expect(nextVariantId(["v1", "hero-b", "a"])).toBe("b");
+  });
 });

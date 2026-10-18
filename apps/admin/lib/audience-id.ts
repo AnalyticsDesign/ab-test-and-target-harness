@@ -1,4 +1,5 @@
-import { VARIANT_ID_RE } from "./variant-id"; // control の SLUG_RE と同じ規則(apps/control/src/ids.ts)
+/** control の SLUG_RE(apps/control/src/ids.ts)と同じ規則。変えるときは両方を一緒に */
+const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 /**
  * オーディエンス ID の候補(plan ② P7)。名前の ASCII の英数字から aud_<スラッグ>(全角の英数字は NFKC で半角に)。英数字が無ければ aud_ + 乱数。
@@ -22,6 +23,6 @@ export function audienceIdCandidate(name: string, taken: string[], random: () =>
  */
 export function audienceIdProblem(id: string): string | null {
   if (id === "") return "ID を入力してください";
-  if (!VARIANT_ID_RE.test(id)) return "ID は英小文字・数字で始まり、英小文字・数字・_・- のみ、64 文字以内で入力してください";
+  if (!SLUG_RE.test(id)) return "ID は英小文字・数字で始まり、英小文字・数字・_・- のみ、64 文字以内で入力してください";
   return id === "new" ? "new は新規作成の画面と重なるので ID に使えません" : null;
 }

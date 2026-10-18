@@ -47,6 +47,7 @@ export const namedConfig: CompiledConfig = {
       vB: { experimentId: "exp_hero", experimentName: "Hero Q3", variantId: "vB", variantName: "New hero", extra: { test_group: "pricing_q3", external_exp_id: "E-101" } },
     },
   },
+  conversionPayloads: { g_cta: { goalId: "g_cta", goalName: "CTA click" } }, // B77: 目標名は焼いた payload が持つ
 };
 
 /** Goals 付き needsProfile config(persistAssignment で remote 経路)。PAGEVIEW は happy-dom の URL(https://site.test/pricing?utm=x)に一致 */

@@ -29,9 +29,13 @@ export async function retentionConflicts(db: Db, site: SiteRow, days: number): P
     if (n > days) out.push({ kind: "experiment", id: e.id, name: e.name, withinDays: n });
   }
   const active = await loadActiveConfig(db, site);
-  for (const e of active?.experiments ?? []) {
-    const n = maxWithinDays(e.targeting);
-    if (n > days) out.push({ kind: "published", id: e.id, name: e.name, withinDays: n });
+  const published = (active?.experiments ?? []).map((e) => ({ id: e.id, withinDays: maxWithinDays(e.targeting) })).filter((e) => e.withinDays > days);
+  if (published.length > 0) {
+    // B77: compiled config は名前を持たないので、名前は D1 の行から ID で引く(行が無ければ ID。IN 句はバインドの上限があるのでサイトの全行を読む)
+    const names = new Map(
+      (await db.selectFrom("experiments").select(["id", "name"]).where("site_id", "=", site.id).execute()).map((r) => [r.id, r.name] as const),
+    );
+    for (const e of published) out.push({ kind: "published", id: e.id, name: names.get(e.id) ?? e.id, withinDays: e.withinDays });
   }
   return out;
 }

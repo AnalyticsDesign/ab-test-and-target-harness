@@ -7,7 +7,7 @@ import { EXPERIMENT, HERO_TEXT, SITE, appAlert, login, openSite, waitForHydratio
 /**
  * backlog D13 / 決定 56: 凍結中の管理画面。スイッチは運用者と同じく wrangler d1 execute で入れる(--local・E2E の状態ディレクトリ)。
  * 動いている wrangler dev と同じ sqlite に書く。終わったら必ず外す(後の project に凍結を残さない)。
- * 保存はサイト設定の外部計測の欄(1 回の要求で保存する画面の代表。publish-flow と同じ操作)と、エクスペリエンスの編集画面(3 段の保存)で確かめる。
+ * 保存はサイト設定の外部計測の欄(1 回の要求で保存する画面の代表。publish-flow と同じ操作)と、エクスペリエンスの編集画面(段に分けた保存)で確かめる。
  * ログインは 1 回だけ(sign-in の予算。fixtures.ts の login() のコメント)
  */
 const control = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../control");
@@ -66,26 +66,34 @@ test("the banner follows freeze and thaw without a reload; a save shows the reas
   await page.getByRole("button", { name: "保存" }).click();
   await expect(page.getByText("保存しました")).toBeVisible();
 
-  // エクスペリエンスの編集画面: 3 段の保存の途中(パターン b の変更)で凍結に当たる(決定 56 (5)。レビュー r1 CX-Medium-3)。
-  // 凍結の判定の時刻を選べないので、b の変更の PUT だけを Playwright で 503 write_frozen にする(概要の PATCH と a の変更は control に届く)。
+  // エクスペリエンスの編集画面: 段に分けた保存の途中(パターン b の変更)で凍結に当たる(決定 56 (5)。レビュー r1 CX-Medium-3)。
+  // 凍結の判定の時刻を選べないので、b の変更の PUT だけを Playwright で 503 write_frozen にする。
+  // B77 K17: 保存は変わった段だけを送るので、基本設定の名前と b の変更を直す(基本設定の PATCH は control に届き、その後の b の変更で断られる)。
   // EXPERIMENT は running なのでパターンの一覧の PUT は送られない(variantsLocked)
+  const base = `/api/control/sites/${SITE.id}/experiments/${EXPERIMENT.id}`;
+  const isPatch = (r: { url(): string; request(): { method(): string } }) => new URL(r.url()).pathname === base && r.request().method() === "PATCH";
+  const isBChanges = (r: { url(): string; request(): { method(): string } }) => new URL(r.url()).pathname === `${base}/variants/b/changes` && r.request().method() === "PUT";
   await openSite(page, SITE.name);
   await page.getByRole("link", { name: EXPERIMENT.name }).click();
+  await waitForHydration(page);
+  const name = page.getByLabel("名前(100 字以内)");
+  await name.fill(`${EXPERIMENT.name} (凍結)`);
   await page.getByRole("tab", { name: "パターン" }).click();
   await page.getByTestId("variant-pick-b").click();
   const text = page.getByTestId("variant-b").getByTestId("change-TEXT").locator("textarea");
   await text.fill("E2E 凍結の確認");
-  const bChanges = `**/api/control/sites/${SITE.id}/experiments/${EXPERIMENT.id}/variants/b/changes`;
-  await page.route(bChanges, (route) =>
+  await page.route(`**${base}/variants/b/changes`, (route) =>
     route.request().method() === "PUT" ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify(FROZEN_503) }) : route.continue(),
   );
+  const patched = page.waitForResponse(isPatch);
   await page.getByRole("button", { name: "保存(下書き)" }).click();
+  expect((await patched).status()).toBe(200); // 基本設定の PATCH は届いている(= 一部は保存された)
   await expect(appAlert(page)).toContainText("一部は保存されています。入力はそのまま残っています。メンテナンスが終わってからもう一度保存すると、残りも保存されます");
   await expect(appAlert(page)).not.toContainText("再読み込み");
   await expect(text).toHaveValue("E2E 凍結の確認"); // 再読み込みしていないので入力が残っている
   // 凍結が外れた後に押し直すと、残り(b の変更)も保存される
-  await page.unroute(bChanges);
-  const saved = page.waitForResponse((r) => r.url().includes(`/api/control/sites/${SITE.id}/experiments/${EXPERIMENT.id}/variants/b/changes`) && r.request().method() === "PUT");
+  await page.unroute(`**${base}/variants/b/changes`);
+  const saved = page.waitForResponse(isBChanges);
   await page.getByRole("button", { name: "保存(下書き)" }).click();
   expect((await saved).status()).toBe(200);
   await page.reload();
@@ -93,9 +101,14 @@ test("the banner follows freeze and thaw without a reload; a save shows the reas
   await page.getByRole("tab", { name: "パターン" }).click();
   await page.getByTestId("variant-pick-b").click();
   await expect(text).toHaveValue("E2E 凍結の確認"); // 保存された内容が読み直しても同じ
-  // 後の project のために元の文に戻す
+  // 後の project のために元の名前と文に戻す(名前は invite-flow などがリンクの名前で引く)
   await text.fill(HERO_TEXT);
-  const restored = page.waitForResponse((r) => r.url().includes(`/api/control/sites/${SITE.id}/experiments/${EXPERIMENT.id}/variants/b/changes`) && r.request().method() === "PUT");
+  await page.getByRole("tab", { name: "基本設定" }).click();
+  await expect(name).toHaveValue(`${EXPERIMENT.name} (凍結)`);
+  await name.fill(EXPERIMENT.name);
+  const restoredPatch = page.waitForResponse(isPatch);
+  const restored = page.waitForResponse(isBChanges);
   await page.getByRole("button", { name: "保存(下書き)" }).click();
+  expect((await restoredPatch).status()).toBe(200);
   expect((await restored).status()).toBe(200);
 });

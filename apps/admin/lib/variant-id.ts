@@ -1,8 +1,14 @@
-/** control の `SLUG_RE`(apps/control/src/ids.ts)と同じ規則。受理なら null、拒否なら画面に出す理由文を返す(Plan 10 B1) */
-export const VARIANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-export function variantIdIssue(id: string, existing: string[]): string | null {
-  if (id === "") return null; // 未入力は理由を出さない(ボタンだけ無効)
-  if (!VARIANT_ID_RE.test(id)) return "英小文字・数字で始まり、英小文字・数字・_・- のみ、64 文字以内で入力してください";
-  if (existing.includes(id)) return `パターン ID "${id}" は既に使われています`;
-  return null;
+/** B77(設計書 Q23): パターン ID の自動の採番。`a`〜`z` のうち使われていない最初の文字、無ければ `aa`, `ab`, …(列の名前と同じ数え方) */
+export function nextVariantId(existing: string[]): string {
+  const used = new Set(existing);
+  for (let n = 0; ; n++) {
+    const id = idAt(n);
+    if (!used.has(id)) return id;
+  }
+}
+/** 0 → a、25 → z、26 → aa、27 → ab …(26 進の「0 の無い」数え方) */
+function idAt(n: number): string {
+  let s = "";
+  for (let m = n + 1; m > 0; m = Math.floor((m - 1) / 26)) s = String.fromCharCode(97 + ((m - 1) % 26)) + s;
+  return s;
 }

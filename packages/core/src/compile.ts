@@ -3,8 +3,8 @@ import {
   CompiledConfig, CompiledConfigSchema, DslNode, Experiment, ExperimentCommonShape, Goal, GoalInputSchema, LIMITS,
   PageMatchInputSchema, PatternDef, ResultsConfigSchema, Variant, VariantSchema, refineVariantWeights,
 } from "./schema";
-import { ExperimentAnalyticsSchema, VariantAnalyticsSchema, exposurePayloadIssue, resolveExposurePayload } from "./analytics";
-import type { ExposurePayload } from "./analytics-defaults";
+import { ExperimentAnalyticsSchema, VariantAnalyticsSchema, exposurePayloadIssue, resolveConversionPayload, resolveExposurePayload } from "./analytics";
+import type { ConversionPayload, ExposurePayload } from "./analytics-defaults";
 import { normalizePageMatch, pageMatchIssue, type PageMatchInput } from "./page-normalize";
 import { patternIdOf } from "./pattern-id";
 import { compileRegex, REGEX_LIMITS } from "./regex-compile";
@@ -40,9 +40,10 @@ export class CompileError extends Error {
 /**
  * compile 入力の Variant / Experiment = 共有スキーマ + 著者が書く `analytics`(§10.9)。
  * compiled config 側(VariantSchema / ExperimentSchema)には `analytics` を置かない — compile が取り除き、
- * config 内に「生」と「解決済み」を同居させない(残っていれば CompiledConfigSchema の strict が拒否する)
+ * config 内に「生」と「解決済み」を同居させない(残っていれば CompiledConfigSchema の strict が拒否する)。
+ * `name` は入力では必須で、出力には出さない(B77、K4。配る形のスキーマでは古い config のために任意)
  */
-export const VariantInputSchema = z.strictObject({ ...VariantSchema.shape, analytics: VariantAnalyticsSchema.optional() });
+export const VariantInputSchema = z.strictObject({ ...VariantSchema.shape, name: z.string().min(1), analytics: VariantAnalyticsSchema.optional() });
 /** 決定 51(設計書 §3): エクスペリエンスの種別。test = 2 つ以上のパターンに振り分けて比べる、single = パーソナライズ(パターン 1 つ・重み 100) */
 export const EXPERIMENT_KINDS = ["test", "single"] as const;
 export type ExperimentKind = (typeof EXPERIMENT_KINDS)[number];
@@ -56,6 +57,7 @@ function refineVariantCount(e: { kind: ExperimentKind; variants: unknown[] }, ct
 export const ExperimentInputSchema = z
   .strictObject({
     ...ExperimentCommonShape,
+    name: z.string().min(1), // B77(K4): 入力では必須、出力には出さない
     /** 省略は test(既存の入力・fixture を変えない)。compiled config には載せない(設計書 §3.2) */
     kind: z.enum(EXPERIMENT_KINDS).default("test"),
     urlMatch: PageMatchInputSchema,
@@ -221,15 +223,22 @@ export function compile(input: unknown): CompiledConfig {
       const issue = exposurePayloadIssue(payload);
       if (issue) throw new CompileError("invalid_analytics", `experiment ${exp.id} variant ${v.id}: ${issue}`);
       byVariant[v.id] = payload;
-      const { analytics: _variantAnalytics, ...variant } = v;
+      // B77: 名前は管理画面の中だけで使い、訪問者に届けない(dataLayer の名前は exposurePayloads だけが持つ)
+      const { analytics: _variantAnalytics, name: _variantName, ...variant } = v;
       variants.push(variant);
     }
     exposurePayloads[exp.id] = byVariant;
-    const { analytics: _experimentAnalytics, variants: _authored, targeting: _input, urlMatch, kind: _kind, ...rest } = exp;
+    const { analytics: _experimentAnalytics, variants: _authored, targeting: _input, urlMatch, kind: _kind, name: _experimentName, ...rest } = exp;
     experiments.push({ ...rest, urlMatch: compileMatch(urlMatch, `エクスペリエンス ${exp.id} の対象 URL`, budget), ...(targeting ? { targeting } : {}), variants });
   }
 
-  const goals: Goal[] = parsed.data.goals.map((g) => (g.type === "PAGEVIEW" ? { ...g, config: { page: compileMatch(g.config.page, `目標 ${g.id}`, budget) } } : g));
+  // B77(K5): 目標も名前と著者の analytics を取り除き、dataLayer の名前は conversionPayloads に焼く(すべての目標について出す)
+  const conversionPayloads: Record<string, ConversionPayload> = {};
+  const goals: Goal[] = parsed.data.goals.map((g) => {
+    conversionPayloads[g.id] = resolveConversionPayload(g);
+    const { name: _goalName, analytics: _goalAnalytics, ...goal } = g;
+    return goal.type === "PAGEVIEW" ? { ...goal, config: { page: compileMatch(goal.config.page, `目標 ${g.id}`, budget) } } : goal;
+  });
 
   // サイト全体の命令数(設計書 §10.2)。hint に大きいものから並べる
   const total = budget.reduce((a, b) => a + b.instructions, 0);
@@ -251,6 +260,7 @@ export function compile(input: unknown): CompiledConfig {
     goals,
     experiments,
     exposurePayloads,
+    conversionPayloads,
     ...(parsed.data.results !== undefined ? { results: parsed.data.results } : {}),
   };
   const out = CompiledConfigSchema.parse(config);

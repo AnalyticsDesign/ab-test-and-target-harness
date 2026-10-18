@@ -6,6 +6,7 @@ export const KIND_HINT: Record<ExperimentKind, string> = {
   test: "2 つ以上のパターンに訪問者を振り分けて比べます",
   single: "1 つのパターンを、条件に合う訪問者全員に表示します。振り分けや比較はしません",
 };
+/** B77 K21: テストの作成は A をオリジナルにする(作成の既定) */
 export function createButtonLabel(kind: ExperimentKind): string {
-  return kind === "single" ? "作成(A パターンを 1 つ用意します)" : "作成(A パターン / B パターンを 50:50 で用意します)";
+  return kind === "single" ? "作成(A パターンを 1 つ用意します)" : "作成(A パターン(オリジナル)/ B パターンを 50:50 で用意します)";
 }

@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { draftOf, failedTab, isDirty, targetingBody } from "@/lib/experiment-draft";
+import { EDITOR_TABS, draftOf, draftValueErrors, failedTab, isDirty, saveSteps, targetingBody, type Draft } from "@/lib/experiment-draft";
 import type { Experiment } from "@/lib/types";
 
 const EXP = {
   id: "exp_a", siteId: "s", name: "Hero", kind: "test", status: "draft", publishedStatus: null, urlMatch: { op: "equals", value: "/" }, targeting: { ctx: "device", op: "in", value: ["mobile"] },
   trafficPercentage: 100, persistAssignment: false, analytics: { overrides: { experimentName: "hero_test" }, extra: { team: "growth" } },
-  createdBy: "u", updatedBy: "u", createdAt: 1, updatedAt: 2, unpublished: true, runId: null,
-  variants: [{ id: "a", name: "A", weight: 50, analytics: null, changes: [] }, { id: "b", name: "B", weight: 50, analytics: null, changes: [] }],
+  createdBy: "u", updatedBy: "u", createdAt: 1, updatedAt: 2, unpublished: true, runId: null, description: "仮説: 無料体験を前に出す",
+  variants: [
+    { id: "a", name: "A", weight: 50, original: true, description: "", analytics: null, changes: [] },
+    { id: "b", name: "B", weight: 50, original: false, description: "", analytics: null, changes: [] },
+  ],
 } as Experiment;
 
 describe("experiment draft", () => {
@@ -18,6 +21,7 @@ describe("experiment draft", () => {
     expect(d.expName).toBe("hero_test");
     expect(d.extra).toEqual({ team: "growth" });
     expect(d.variants.map((v) => v.id)).toEqual(["a", "b"]);
+    expect(d.description).toBe("仮説: 無料体験を前に出す");
   });
   it("uses empty values when the experiment has none", () => {
     const d = draftOf({ ...EXP, targeting: null, analytics: null, variants: undefined });
@@ -38,9 +42,10 @@ describe("experiment draft", () => {
     expect(failedTab("patch", "name")).toBe("overview");
     expect(failedTab("patch", "urlMatch")).toBe("overview");
     expect(failedTab("patch", undefined)).toBe("overview");
-    expect(failedTab("patch", "analytics")).toBe("analytics");
+    expect(failedTab("patch", "analytics")).toBe("overview"); // B77 K16: 外部計測は基本設定タブの下部のカード
     expect(failedTab("variants", "0")).toBe("variants");
     expect(failedTab("changes", "payload")).toBe("variants");
+    expect(EDITOR_TABS).toEqual(["overview", "variants"]); // ?tab=analytics は readParam の既定で基本設定に落ちる
   });
   it("experiment_form_keeps_unrepresentable_targeting(画面で表せない保存値は JSON のまま持ち、保存では送らない = ほかの欄の保存を止めない)", () => {
     const legacy = draftOf({ ...EXP, targeting: { hist: "visited", pattern: "p_pricing" } });
@@ -55,5 +60,75 @@ describe("experiment draft", () => {
       expect(d.targeting).toEqual({ kind: "raw", json: t });
       expect(targetingBody(d.targeting)).toEqual({}); // 名前だけを保存しても PATCH の本文に targeting は含まれない
     }
+  });
+});
+
+describe("saveSteps(B77 K17。保存の段を差分で決める)", () => {
+  const TEXT = { id: "c1", type: "TEXT" as const, selector: "#cta", payload: { text: "B" } };
+  const initial = draftOf(EXP);
+  const withVariant = (d: Draft, id: string, patch: Partial<Draft["variants"][number]>): Draft => ({ ...d, variants: d.variants.map((v) => (v.id === id ? { ...v, ...patch } : v)) });
+  const NONE = { patchExperiment: false, experimentMemo: false, putVariants: false, variantMemos: [], putChanges: [] };
+
+  it("何も変えていなければ何も送らない", () => {
+    expect(saveSteps(initial, draftOf(EXP), "draft")).toEqual(NONE);
+  });
+  it("エクスペリエンスのメモだけ → experimentMemo のみ", () => {
+    expect(saveSteps(initial, { ...initial, description: "仮説 2" }, "draft")).toEqual({ ...NONE, experimentMemo: true });
+  });
+  it("パターンのメモだけ → variantMemos のみ", () => {
+    expect(saveSteps(initial, withVariant(initial, "b", { description: "メモ" }), "draft")).toEqual({ ...NONE, variantMemos: ["b"] });
+  });
+  it("名前と b の変更 → patchExperiment と putChanges [\"b\"]", () => {
+    expect(saveSteps(initial, withVariant({ ...initial, name: "Hero 2" }, "b", { changes: [TEXT] }), "draft")).toEqual({ ...NONE, patchExperiment: true, putChanges: ["b"] });
+  });
+  it("エクスペリエンスの外部計測・配信の欄はどれでも patchExperiment(メモは載せない)", () => {
+    expect(saveSteps(initial, { ...initial, expName: "x" }, "running").patchExperiment).toBe(true);
+    expect(saveSteps(initial, { ...initial, extra: {} }, "running").patchExperiment).toBe(true);
+    expect(saveSteps(initial, { ...initial, traffic: 50 }, "paused").patchExperiment).toBe(true);
+    expect(saveSteps(initial, { ...initial, persist: true }, "draft").patchExperiment).toBe(true);
+    expect(saveSteps(initial, { ...initial, urlMatch: { op: "equals", value: "/x" } } as Draft, "draft").patchExperiment).toBe(true);
+  });
+  it("オリジナルの切り替えだけでも、下書きなら putVariants", () => {
+    expect(saveSteps(initial, withVariant(initial, "a", { original: false }), "draft")).toEqual({ ...NONE, putVariants: true });
+  });
+  it("パターンの集合(並び・名前・重み・外部計測)が変わったら putVariants。下書きでなければ送らない", () => {
+    expect(saveSteps(initial, { ...initial, variants: [...initial.variants].reverse() }, "draft").putVariants).toBe(true);
+    expect(saveSteps(initial, withVariant(initial, "b", { weight: 40 }), "draft").putVariants).toBe(true);
+    expect(saveSteps(initial, withVariant(initial, "b", { name: "Blue" }), "draft").putVariants).toBe(true);
+    expect(saveSteps(initial, withVariant(initial, "b", { analytics: { overrides: { variantName: "blue" } } }), "draft").putVariants).toBe(true);
+    expect(saveSteps(initial, withVariant(initial, "b", { weight: 40 }), "running").putVariants).toBe(false);
+  });
+  it("オリジナルのパターンの変更は送らない", () => {
+    expect(saveSteps(initial, withVariant(initial, "a", { changes: [TEXT] }), "draft").putChanges).toEqual([]);
+  });
+  it("新しいパターンは集合の更新で作り、メモと変更があればその後に送る", () => {
+    const added = { ...initial, variants: [...initial.variants, { id: "c", name: "C", weight: 0, original: false, description: "新案", analytics: null, changes: [TEXT] }] };
+    expect(saveSteps(initial, added, "draft")).toEqual({ ...NONE, putVariants: true, variantMemos: ["c"], putChanges: ["c"] });
+    const empty = { ...initial, variants: [...initial.variants, { id: "c", name: "C", weight: 0, original: false, description: "", analytics: null, changes: [] }] };
+    expect(saveSteps(initial, empty, "draft")).toEqual({ ...NONE, putVariants: true });
+  });
+  it("配信中でもメモと変更は送る", () => {
+    expect(saveSteps(initial, withVariant({ ...initial, description: "途中の記録" }, "b", { description: "m", changes: [TEXT] }), "running")).toEqual({ ...NONE, experimentMemo: true, variantMemos: ["b"], putChanges: ["b"] });
+  });
+  it("終了したエクスペリエンスでメモ以外は対象にしない", () => {
+    const edited = withVariant({ ...initial, name: "Hero 2", description: "結果の記録" }, "b", { description: "勝ち", changes: [TEXT] });
+    expect(saveSteps(initial, edited, "archived")).toEqual({ ...NONE, experimentMemo: true, variantMemos: ["b"] });
+  });
+  it("draftValueErrors: エクスペリエンスと各パターンの外部計測を、保存済みの値と比べて検査する(B77 K17 (1))", () => {
+    const initial = draftOf({ ...EXP, analytics: { overrides: { experimentName: "旧\t名前" } } });
+    expect(draftValueErrors(initial, initial)).toEqual([]); // 変えていない古い値では止めない
+    const current: Draft = {
+      ...initial,
+      extra: { team: "" },
+      variants: [
+        ...initial.variants.map((v) => (v.id === "b" ? { ...v, analytics: { overrides: { variantName: "b\nb" } } } : v)),
+        { id: "c", name: "C", weight: 0, original: false, description: "", analytics: { extra: { k: "x".repeat(101) } }, changes: [] }, // 新しいパターンは保存済みの値が無い
+      ],
+    };
+    expect(draftValueErrors(initial, current).map((e) => [e.path, e.code])).toEqual([
+      [["analytics", "extra", "team"], "empty"],
+      [["variants", "b", "analytics", "overrides", "variantName"], "invalid_char"],
+      [["variants", "c", "analytics", "extra", "k"], "too_long"],
+    ]);
   });
 });

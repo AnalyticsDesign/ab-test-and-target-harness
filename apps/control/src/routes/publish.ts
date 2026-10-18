@@ -326,6 +326,13 @@ publishRoutes.get(
             .filter(([id]) => !Object.prototype.hasOwnProperty.call(nextPatterns, id))
             .map(([, p]) => ({ part: p.part ?? "url", op: p.op, value: p.value }))
         : [];
+    // B77: compiled config は名前を持たないので、名前は D1 の行から ID で引く(無ければ ID)。
+    // exps は前回の activation 以降に変わった行だけなので使えず(変えずに running のままのエクスペリエンスが漏れる)、サイトの行を読む
+    const viewport = (next?.experiments ?? []).filter((e) => usesCondition(e.targeting, "viewport")).map((e) => e.id);
+    const viewportNames =
+      viewport.length > 0
+        ? new Map((await db.selectFrom("experiments").select(["id", "name"]).where("site_id", "=", site.id).execute()).map((r) => [r.id, r.name] as const))
+        : new Map<string, string>();
     return c.json({
       audienceChanges: changedAudiences.map((a) => ({
         id: a.id,
@@ -334,7 +341,7 @@ publishRoutes.get(
         experiments: (usage.get(a.id) ?? []).filter((u) => u.status === "running").map(({ id, name }) => ({ id, name })),
       })),
       droppedPageConditions,
-      viewportExperiments: (next?.experiments ?? []).filter((e) => usesCondition(e.targeting, "viewport")).map((e) => ({ id: e.id, name: e.name })),
+      viewportExperiments: viewport.map((id) => ({ id, name: viewportNames.get(id) ?? id })),
       compileError,
       overlaps,
       lastActivatedAt: site.last_activated_at,

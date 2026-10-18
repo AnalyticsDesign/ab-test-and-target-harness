@@ -18,7 +18,7 @@ describe("fixture CLI", () => {
     expect(new Set(changes.map((c) => c.type))).toEqual(new Set(["TEXT", "IMAGE", "HIDE", "ATTRIBUTE", "HTML", "CSS", "CUSTOM_JS"]));
     expect(changes).toEqual(input.experiments[0].variants[1].changes);
     expect(cfg.prehide["exp_hero"]).toContain(".hero-title");
-    expect(cfg.goals).toEqual(input.goals);
+    expect(cfg.goals).toEqual(input.goals.map(({ name: _name, ...g }: { name: string }) => g)); // 名前は配らない(B77)
     rmSync(out, { force: true });
   });
   it("exits 1 with legacy_targeting on stderr and creates no output", () => {
@@ -169,30 +169,34 @@ describe("fixture CLI", () => {
     rmSync(out, { force: true });
     rmSync(bulk, { force: true });
   });
-  it("cli_warns_when_derived_name_exceeds_100_chars_but_still_writes_output", () => {
-    // spec §10.9 / §13.5: 導出値(name)の 100 字上限は共有スキーマに入れない。fixture CLI は警告のみで出力は書く。
-    // 元の name を直接見るので、短い override で隠れていても警告される(CX-Medium-1)
+  it("cli_does_not_warn_on_long_names_and_output_has_no_names", () => {
+    // B77: 名前は管理画面の中だけで使い、compiled config に出さない(dataLayer には外部計測の名前 ?? ID)。
+    // 名前が 100 字を超えても GA4 に届かないので警告は出さず、出力の experiments / goals に名前は無い
     const inPath = `${ROOT}/packages/core/test/.tmp-longname.json`;
     const outPath = `${ROOT}/packages/core/test/.tmp-longname-out.json`;
     const def = JSON.parse(readFileSync(`${ROOT}/fixtures/demo.json`, "utf8"));
     def.experiments[0].name = "x".repeat(101);
-    def.experiments[0].analytics = { overrides: { experimentName: "Short" } }; // override は短い → payload 側は 100 字以内
+    def.experiments[0].analytics = { overrides: { experimentName: "Short" } };
     def.experiments[0].variants[1].name = "z".repeat(101);
-    def.experiments[0].variants[1].analytics = { overrides: { variantName: "Short B" } };
     def.goals[0].name = "y".repeat(101);
     writeFileSync(inPath, JSON.stringify(def));
     rmSync(outPath, { force: true });
     // execFileSync は成功時に stderr を返さないので、警告の検証には spawnSync を使う(exit 0 + stderr の両方を見る)
     const r = spawnSync("pnpm", ["fixture", inPath, outPath], { cwd: ROOT, encoding: "utf8" });
     expect(r.status).toBe(0);
-    expect(r.stderr).toMatch(/warning: experiments\.exp_hero\.name: experiment exp_hero: name is 101 chars/);
-    expect(r.stderr).toMatch(/warning: experiments\.exp_hero\.variants\.vB\.name: experiment exp_hero variant vB: name is 101 chars/);
-    expect(r.stderr).toMatch(/warning: goals\.g_lead\.name: goal g_lead: name is 101 chars/);
-    expect(r.stderr).not.toMatch(/exposurePayloads\./); // 解決済み payload は override で 100 字以内なので警告なし
+    expect(r.stderr).not.toMatch(/warning: /);
     expect(existsSync(outPath)).toBe(true);
-    const cfg = CompiledConfigSchema.parse(JSON.parse(readFileSync(outPath, "utf8")));
+    const raw = readFileSync(outPath, "utf8");
+    const cfg = CompiledConfigSchema.parse(JSON.parse(raw));
     expect(cfg.exposurePayloads!["exp_hero"]!["vA"]!.experimentName).toBe("Short");
-    expect(cfg.experiments[0]!.name).toHaveLength(101); // 共有スキーマは長い name を拒否しない(§10.9)
+    expect(cfg.exposurePayloads!["exp_hero"]!["vB"]!.variantName).toBe("vB"); // 指定が無ければ ID
+    expect(cfg.conversionPayloads!["g_lead"]!.goalName).toBe("g_lead");
+    for (const e of cfg.experiments) {
+      expect("name" in e).toBe(false);
+      for (const v of e.variants) expect("name" in v).toBe(false);
+    }
+    for (const g of cfg.goals) expect("name" in g).toBe(false);
+    for (const long of ["x".repeat(101), "z".repeat(101), "y".repeat(101)]) expect(raw).not.toContain(long);
     rmSync(inPath, { force: true });
     rmSync(outPath, { force: true });
   });

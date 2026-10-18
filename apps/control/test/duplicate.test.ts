@@ -160,6 +160,31 @@ describe("POST …/duplicate (決定 51、設計書 §4.1)", () => {
     }
   });
 
+  it("duplicate_copies_original_and_description", async () => {
+    // B77(K8・K9): 複製はオリジナルの印とメモを写す(作成の既定で a がオリジナル)
+    const { token, sid } = await sourceTest();
+    expect((await call("PATCH", `/sites/${sid}/experiments/exp_src`, { token, body: { description: "経緯のメモ" } })).status).toBe(200);
+    expect((await call("PATCH", `/sites/${sid}/experiments/exp_src/variants/b`, { token, body: { description: "B のメモ" } })).status).toBe(200);
+    const res = await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token, body: { mode: "same" } });
+    expect(res.status).toBe(201);
+    const created = await json(res);
+    expect(created.description).toBe("経緯のメモ");
+    const d = await detail(token, sid, created.id);
+    expect(d.variants.map((v: any) => [v.id, v.original, v.description])).toEqual([["a", true, ""], ["b", false, "B のメモ"]]);
+  });
+
+  it("duplicate_variant_mode_rejects_original", async () => {
+    const { token, sid } = await sourceTest();
+    const res = await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token, body: { mode: "variant", variantId: "a" } });
+    expect(res.status).toBe(422);
+    expect(await expectEnvelope(res)).toMatchObject({
+      error: "duplicate_original_variant",
+      path: ["variantId"],
+      message: "オリジナルのパターンはパーソナライズに複製できません",
+      hint: "変更のあるパターンを選んでください",
+    });
+  });
+
   it("needs an editor", async () => {
     const { token, sid, workspaceId } = await sourceTest();
     const viewer = await inviteAndJoin(token, workspaceId, "viewer");

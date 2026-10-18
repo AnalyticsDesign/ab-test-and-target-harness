@@ -59,7 +59,7 @@ export type StoredExperimentInput = {
 };
 export type StoredCompileInput = {
   siteId: string; siteSalt: string; version: number; timezone: string; retentionDays: number;
-  goals: Array<{ id: string; name: string; type: string; config: unknown }>;
+  goals: Array<{ id: string; name: string; type: string; config: unknown; analytics?: unknown }>;
   audiences: Record<string, unknown>;
   experiments: StoredExperimentInput[];
 };
@@ -84,7 +84,8 @@ export async function buildCompileInput(
     siteSalt: site.site_salt,
     version,
     timezone: site.timezone,
-    goals: goals.map((g) => ({ id: g.id, name: g.name, type: g.type, config: JSON.parse(g.config_json) })),
+    // B77(K5): 目標の外部計測(目標名の指定)。compile が conversionPayloads に焼く
+    goals: goals.map((g) => ({ id: g.id, name: g.name, type: g.type, config: JSON.parse(g.config_json), ...(g.analytics_json ? { analytics: JSON.parse(g.analytics_json) } : {}) })),
     retentionDays: site.retention_days,
     audiences: Object.fromEntries(audiences.map((a) => [a.id, JSON.parse(a.definition_json)])),
     experiments: exps.map((e) => ({

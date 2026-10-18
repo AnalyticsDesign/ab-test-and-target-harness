@@ -39,6 +39,41 @@ describe("goals", () => {
     expect((await call("POST", `/sites/${sid}/goals`, { token: v.token, body: { id: "g", name: "g", type: "CUSTOM", config: {} } })).status).toBe(403);
     expect((await call("GET", `/sites/${sid}/goals`, { token: v.token })).status).toBe(200);
   });
+  it("goal_analytics_round_trip", async () => {
+    // B77(K5): 目標の外部計測(目標名の指定)は作成と PATCH で受け、PATCH の null で消す。どちらもサイトを「未公開の変更」にする
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    const contentUpdatedAt = async () => (await json<{ contentUpdatedAt: number }>(await call("GET", `/sites/${sid}`, { token }))).contentUpdatedAt;
+    const created = await call("POST", `/sites/${sid}/goals`, { token, body: { id: "g_buy", name: "購入", type: "CUSTOM", config: {}, analytics: { overrides: { goalName: "purchase" } } } });
+    expect(created.status).toBe(201);
+    expect((await json(created)).analytics).toEqual({ overrides: { goalName: "purchase" } });
+    const list = await json<Array<{ id: string; analytics: unknown }>>(await call("GET", `/sites/${sid}/goals`, { token }));
+    expect(list.find((g) => g.id === "g_buy")?.analytics).toEqual({ overrides: { goalName: "purchase" } });
+    // 外部計測に触れない PATCH は保存済みの値を保つ
+    expect((await json(await call("PATCH", `/sites/${sid}/goals/g_buy`, { token, body: { name: "購入完了" } }))).analytics).toEqual({ overrides: { goalName: "purchase" } });
+    const before = await contentUpdatedAt();
+    await new Promise((r) => setTimeout(r, 2));
+    const cleared = await call("PATCH", `/sites/${sid}/goals/g_buy`, { token, body: { analytics: null } });
+    expect(cleared.status).toBe(200);
+    expect((await json(cleared)).analytics).toBeNull();
+    expect(await contentUpdatedAt()).toBeGreaterThan(before);
+    const after = await json<Array<{ id: string; analytics: unknown }>>(await call("GET", `/sites/${sid}/goals`, { token }));
+    expect(after.find((g) => g.id === "g_buy")?.analytics).toBeNull();
+  });
+  it("goal_patch_rejects_unknown_analytics_keys", async () => {
+    // 目標の extra は範囲外(strict)。未知のキーは 422 validation_failed で、path が欄を指す
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    expect((await call("POST", `/sites/${sid}/goals`, { token, body: { id: "g_buy", name: "購入", type: "CUSTOM", config: {} } })).status).toBe(201);
+    const patch = await call("PATCH", `/sites/${sid}/goals/g_buy`, { token, body: { analytics: { extra: {} } } });
+    expect(patch.status).toBe(422);
+    const body = await json(patch);
+    expect(body.error).toBe("validation_failed");
+    expect(body.path).toEqual(["analytics"]);
+    const create = await call("POST", `/sites/${sid}/goals`, { token, body: { id: "g_x", name: "x", type: "CUSTOM", config: {}, analytics: { overrides: { experimentName: "x" } } } });
+    expect(create.status).toBe(422);
+    expect((await json(create)).path).toEqual(["analytics", "overrides"]);
+  });
   it("goal_pageview_config_is_renamed_by_migration(0005: { urlOp, urlValue } → { page })", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);

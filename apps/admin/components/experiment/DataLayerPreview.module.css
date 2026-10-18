@@ -1,0 +1,8 @@
+/* dataLayer の出力イメージ。1 行ずつ折り返し、折り返した続きはキーの位置より 2 文字下げる(長い値でも注釈が隠れない) */
+.preview { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; overflow-x: auto; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.65; }
+.ln { text-indent: -2ch; white-space: pre-wrap; overflow-wrap: anywhere; }
+.k { color: var(--code-key); }
+.s { color: var(--code-str); }
+.c { color: var(--code-cmt); }
+/* 本来の値(ID・エクスペリエンスの値)を置き換えた行の注釈は注意の色 */
+.c.over { color: var(--warn); }

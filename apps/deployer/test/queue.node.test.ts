@@ -183,6 +183,28 @@ describe("DeployQueueLogic", () => {
     expect((await q2.siteStatus("site_a")).deployedAt).toBe(atBefore); // 焼き直しは世代が同じ(届く定義は変わらない)なので時刻を動かさない
   });
 
+  it("rebake_strips_legacy_names", async () => {
+    // 名前付き・conversionPayloads 無しの古い config を、古い runtime の hash で保存する(B77、K6)
+    const legacy: CompiledConfig = {
+      ...CONFIG,
+      goals: [{ id: "g_buy", name: "購入完了", type: "CUSTOM", config: {} }],
+      experiments: [{
+        id: "exp1", name: "社内のヒーロー検証", trafficPercentage: 100, persistAssignment: true, urlMatch: { op: "contains", value: "/lp/" },
+        variants: [{ id: "a", name: "A案", weight: 50, changes: [] }, { id: "b", name: "B案", weight: 50, changes: [] }],
+      }],
+    };
+    await makeQueue(RT).redeploySite({ ...req("site_a", 10, 1), config: legacy });
+    now += 60_000;
+    const RT2: RuntimeBundle = { source: "/*RT2*/", hash: "rt2", previewSource: "/*PV2*/", previewHash: "pv2" };
+    await makeQueue(RT2, 10).tick(); // runtime の hash が変わったので焼き直す
+    const text = (await servedText("site_a"))!;
+    expect(text.endsWith("/*RT2*/")).toBe(true);
+    expect(text).not.toContain('"name":');
+    const boot = JSON.parse(text.slice(text.indexOf("self.__WTT_BOOT__=") + "self.__WTT_BOOT__=".length, text.lastIndexOf(";\n")));
+    expect(boot.config.conversionPayloads.g_buy).toEqual({ goalId: "g_buy", goalName: "購入完了" }); // 名前だった値は payload にだけ残る
+    expect(boot.config.exposurePayloads.exp1.b).toMatchObject({ experimentName: "社内のヒーロー検証", variantName: "B案" });
+  });
+
   it("previews_keep_current_and_previous", async () => {
     await makeQueue(RT).redeploySite(req("site_a", 10, 1));
     const RT2: RuntimeBundle = { source: "/*RT2*/", hash: "rt2", previewSource: "/*PV2*/", previewHash: "pv2" };

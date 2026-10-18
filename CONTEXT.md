@@ -23,10 +23,11 @@
 | **Experiment** | エクスペリエンス(画面の表記)。サイトに出す変更のまとまりで、種別(`kind`: テスト = `test` / パーソナライズ = `single`)・URL 条件・Targeting・Variant を持つ。テストは 2 つ以上の Variant に振り分け、パーソナライズは Variant 1 つ(重み 100)を条件に合う訪問者全員に出す。種別は作成後に変えられない(変えるときは複製する)。状態は draft / running / paused / archived |
 | **Desired Status** | 運用者が意図した Experiment の状態(D1 上の `status`) |
 | **Published Status** | 本番に反映済みの Snapshot におけるその Experiment の状態。Desired Status とズレたら UI が差分を表示する |
-| **Variant** | Experiment 内の 1 パターン。重み(配分)と Change の集合を持つ |
+| **Variant** | Experiment 内の 1 パターン。重み(配分)と Change の集合を持つ。`original`(画面の表記は「オリジナル」)のパターンは Change を持たず、元のページをそのまま表示する(テストだけ。作成したテストの `a` はオリジナル) |
+| **メモ**(`description`) | Experiment と Variant に付ける社内用の欄(1,000 字まで)。compiled config に入らず、変えても未公開の編集にならない |
 | **Change** | ページへの 1 つの書き換え(TEXT / IMAGE / HIDE / ATTRIBUTE / HTML / CSS / CUSTOM_JS)。セレクタと value(書き換え内容の本体)を持つ |
 | **Code Change** | HTML / CSS / CUSTOM_JS の Change の総称。任意コードを訪問者のブラウザで実行できる。下書きは全編集 Role が作成でき、本番化は ADMIN の Publish を経由することで統制する(旧称「特権 Change / 特権 Experiment」は廃止)。実行は `<script>` 要素の挿入(`new Function` / `eval` 不使用)で、設置タグの nonce を引き継ぐ。CUSTOM_JS は `function(element, ctx)`、`this` も `element`、`ctx = { experimentId, variantId, changeId }` |
-| **Goal** | コンバージョン定義(PAGEVIEW / CLICK / CUSTOM) |
+| **Goal** | コンバージョン定義(PAGEVIEW / CLICK / CUSTOM)。外部計測で dataLayer に出す目標名(`goalName`)を指定できる |
 | **Targeting** | 配信対象の条件。Context 条件(URL / パス / ホスト / query / device / ブラウザ / OS / 画面の幅 / referrer / 曜日と時間帯 / 初回の訪問からの経過)と履歴条件(閲覧したページ・目標の達成。期間も指定できる)がある |
 | **Audience** | Site ごとの名前付きの配信条件(例: 料金ページを 2 回以上見て、資料請求が未達成の人)。エクスペリエンスの Targeting から参照され、編集は次の Publish で参照するすべてのエクスペリエンスに効く。閲覧したページの条件はページの一致(URL / パス / ホスト)を直接書く |
 
@@ -36,7 +37,7 @@
 |---|---|
 | **Publish** | Site 単位の本番反映操作。その Site の running な Experiment すべてを 1 つの Snapshot にコンパイルして配信に載せる。Start / Pause / Stop も内部的に Publish を伴う |
 | **Snapshot** | 1 回の Publish が生成した不変の compiled config。version 番号を持つ(「Runtime Config」という呼称は廃止) |
-| **compiled config** | Snapshot の実体。running な Experiment の実行に必要な最小限の JSON。runtime.js と結合して 1 ファイルで配信される |
+| **compiled config** | Snapshot の実体。running な Experiment の実行に必要な最小限の JSON。runtime.js と結合して 1 ファイルで配信される。管理画面の名前(Experiment / Variant / Goal の `name`)とメモは入れない |
 | **runtime.js** | 訪問者のブラウザで動くエンジン。書き換えの適用・割当・計測を行う |
 | **未公開の編集**(画面の表記は「未公開の編集あり」) | 最後に成功した Publish 以降に編集された内容。本番には反映されていない。UI がバッジ / バナーで可視化する |
 | **Setup Token** | 初回セットアップ(`POST /setup`)専用の環境変数(`AB_SETUP_TOKEN`)。OWNER と最初の Workspace の作成後は無効化する(`wrangler secret delete`) |
@@ -61,9 +62,11 @@
 | **Decision** | 「この訪問者にどの Variant を出すか」の判定。ブラウザ内評価または edge への問い合わせ |
 | **Exposure** | エクスペリエンスが実際に訪問者へ提示されたことの記録。Change の適用成功後に 1 回だけ GA4(dataLayer)へ送る |
 | **Conversion** | Goal の達成。GA4 へ `ab_conversion` として送る |
-| **Analytics 命名設定** | dataLayer に push するオブジェクトの名札(イベント名・キー名・`extraKey`)をサイト単位、値(`experimentName` / `variantName` の上書きと `extra`)を Experiment / Variant 単位で設定する機能。無設定なら既定名 |
+| **Analytics 命名設定** | dataLayer に push するオブジェクトの名札(イベント名・キー名・`extraKey`)をサイト単位、値(`experimentName` / `variantName` の指定と `extra`)を Experiment / Variant 単位、`goalName` を Goal 単位で設定する機能(画面の表記は「外部計測」)。名札は無設定なら既定名 |
+| **名前と外部計測** | 管理画面の名前(`name`)は管理画面の中だけで使い、訪問者には届かない。dataLayer の `ab_experiment_name` / `ab_variant_name` / `ab_goal_name` は、外部計測で指定した名前、指定が無ければそれぞれの ID。外部計測の値は訪問者もブラウザで見られる |
 | **extra / extraKey** | Experiment / Variant が Exposure に足す任意の key-value(`extra`)と、それをネストするサイト単位の名前空間キー(`extraKey`、既定 `ab_extra`)。イベント push の直前に `{ [extraKey]: null }` を push して前のエクスペリエンスの値を消す |
 | **exposurePayloads** | compile が Experiment × Variant ごとに合成・検証して compiled config に焼く解決済み Exposure の値。runtime はこれにサイト設定のキー名を当てて push するだけで合成しない |
+| **conversionPayloads** | compile が Goal ごとに compiled config に書き込む解決済み Conversion の値(`goalId` と、外部計測の指定 ?? Goal ID の `goalName`) |
 
 ## エージェント面
 

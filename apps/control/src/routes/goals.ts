@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
-import { GoalInputSchema, targetingReferences } from "@wtt/core";
+import { GoalAnalyticsRequestSchema, GoalAnalyticsSchema, GoalInputSchema, targetingReferences, type GoalAnalytics } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
 import type { Db } from "../db";
 import { ApiError, notFound, validationFailed } from "../errors";
@@ -9,21 +9,36 @@ import { SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
 import { loadSite } from "../roles";
 import { goalJson } from "../serialize";
-import { assertName, normalizedPageMatch, touchSite } from "../validation";
+import { GOAL_ANALYTICS_REQUEST_DESCRIPTION, assertAnalyticsValues, assertName, normalizedPageMatch, touchSite } from "../validation";
 
 export const goalRoutes = new Hono<AppEnv>();
 
-/** core の Goal(id / name / type / config)に、control 固有の id スラッグ規則を足す */
-const GoalCreate = GoalInputSchema.superRefine((v, ctx) => {
-  if (!SLUG_RE.test(v.id)) ctx.addIssue({ code: "custom", path: ["id"], message: "id must match slug rule" });
-});
-const GoalPatch = z.strictObject({ name: z.string().min(1).optional(), config: z.unknown().optional() });
+/**
+ * B77(K12): 受け口の analytics は値を文字列として受けるだけ(キーの規則と strict は同じ)。値の検査は assertAnalyticsValues。
+ * 作成で null は指定なし、PATCH で null は消す
+ */
+const GoalAnalyticsRequest = GoalAnalyticsRequestSchema.nullable().describe(GOAL_ANALYTICS_REQUEST_DESCRIPTION);
+const [pageviewInput, clickInput, customInput] = GoalInputSchema.options;
+/** core の Goal(id / name / type / config / analytics)の analytics を受け口の形に差し替え、control 固有の id スラッグ規則を足す */
+const GoalCreate = z
+  .discriminatedUnion("type", [
+    pageviewInput.extend({ analytics: GoalAnalyticsRequest.optional() }),
+    clickInput.extend({ analytics: GoalAnalyticsRequest.optional() }),
+    customInput.extend({ analytics: GoalAnalyticsRequest.optional() }),
+  ])
+  .superRefine((v, ctx) => {
+    if (!SLUG_RE.test(v.id)) ctx.addIssue({ code: "custom", path: ["id"], message: "id must match slug rule" });
+  });
+const GoalPatch = z.strictObject({ name: z.string().min(1).optional(), config: z.unknown().optional(), analytics: GoalAnalyticsRequest.optional() });
+
+const parseGoalAnalytics = (json: string | null): GoalAnalytics | null => (json ? (JSON.parse(json) as GoalAnalytics) : null);
 
 const GoalJsonSchema = z.object({
   id: z.string(),
   name: z.string(),
   type: z.enum(["PAGEVIEW", "CLICK", "CUSTOM"]),
   config: z.unknown(),
+  analytics: GoalAnalyticsSchema.nullable().describe("外部計測(dataLayer に出す目標名の指定)。指定が無ければ null"),
   createdAt: z.number().int().describe("epoch ミリ秒"),
   updatedAt: z.number().int().describe("epoch ミリ秒"),
 });
@@ -80,24 +95,25 @@ goalRoutes.post(
     const { site } = await loadSite(c, c.req.param("sid"), "editor");
     const body = c.req.valid("json");
     assertName(body.name, ["name"]);
+    assertAnalyticsValues(body.analytics, null, ["analytics"]);
     const config = body.type === "PAGEVIEW" ? { page: normalizedPageMatch(body.config.page, ["config", "page"]) } : body.config;
     const db = c.get("db");
     if (await db.selectFrom("goals").select("id").where("site_id", "=", site.id).where("id", "=", body.id).executeTakeFirst())
       throw new ApiError(409, "id_taken", { message: "この ID は既に使われています", hint: "別の ID を指定してください" });
     const now = Date.now();
-    const row = { site_id: site.id, id: body.id, name: body.name, type: body.type, config_json: JSON.stringify(config), created_at: now, updated_at: now };
+    const row = { site_id: site.id, id: body.id, name: body.name, type: body.type, config_json: JSON.stringify(config), analytics_json: body.analytics ? JSON.stringify(body.analytics) : null, created_at: now, updated_at: now };
     await db.insertInto("goals").values(row).execute();
     await touchSite(db, site.id, now);
     return c.json(goalJson(row), 201);
   },
 );
 
-/** Goal の `type` は作成後不変(PATCH は name / config のみ受理。strictObject が他のキーを 422 で弾く) */
+/** Goal の `type` は作成後不変(PATCH は name / config / analytics のみ受理。strictObject が他のキーを 422 で弾く) */
 goalRoutes.patch(
   "/sites/:sid/goals/:gid",
   describeRoute({
     tags: ["goals"],
-    summary: "目標を更新(編集者以上)。name / config のみ。type は不変",
+    summary: "目標を更新(編集者以上)。name / config / analytics のみ。type は不変",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "更新後の目標", content: { "application/json": { schema: resolver(GoalJsonSchema) } } },
@@ -117,10 +133,17 @@ goalRoutes.patch(
     const merged = GoalInputSchema.safeParse({ id: row.id, name: body.name ?? row.name, type: row.type, config: body.config ?? JSON.parse(row.config_json) });
     if (!merged.success) throw validationFailed(merged.error);
     assertName(merged.data.name, ["name"]);
+    // B77(K12): 保存済みの同じ場所と同じ値は見ない(古い値があっても他の欄の保存を止めない)。省いたら保存済みの値を保つ
+    if (body.analytics !== undefined) assertAnalyticsValues(body.analytics, parseGoalAnalytics(row.analytics_json), ["analytics"]);
     const config = merged.data.type === "PAGEVIEW" ? { page: normalizedPageMatch(merged.data.config.page, ["config", "page"]) } : merged.data.config;
     const now = Date.now();
     // 書き戻すのは PATCH で変わり得る列だけ(全列 `set(row)` は rulings #14 が sites で禁じた形。rulings §4 CX-Medium-2)
-    const patch = { name: merged.data.name, config_json: JSON.stringify(config), updated_at: now };
+    const patch = {
+      name: merged.data.name,
+      config_json: JSON.stringify(config),
+      ...(body.analytics !== undefined ? { analytics_json: body.analytics ? JSON.stringify(body.analytics) : null } : {}),
+      updated_at: now,
+    };
     await db.updateTable("goals").set(patch).where("site_id", "=", site.id).where("id", "=", row.id).execute();
     await touchSite(db, site.id, now);
     return c.json(goalJson({ ...row, ...patch }));

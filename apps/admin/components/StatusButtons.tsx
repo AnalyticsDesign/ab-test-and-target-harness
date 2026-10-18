@@ -46,11 +46,14 @@ export function StatusButtons({ siteId, experiment, canPublish }: { siteId: stri
               )
                 return;
               // 決定 51(設計書 §3.3): 下書きの開始・一時停止中の再開で、同じ要素を変える配信中のエクスペリエンスがあれば、どちらが優先されるかを確認に出す。
-              // 取得に失敗したら確認なしで進める(警告は開始・再開を止めない)
+              // 取得に失敗したら確認なしで進める(警告は開始・再開を止めない)。
+              // B77 K20: 下書きの開始では、保存済みのパターンのうち重み 0 のものも同じ確認に入れる(開始後は重みを直せない。再開では出さない)
               if ((experiment.status === "draft" || experiment.status === "paused") && n.to === "running") {
+                const starting = experiment.status === "draft";
                 const confirm = startConfirmFor(
                   await loadStartOverlaps(() => api<PublishPreview>("GET", `/sites/${siteId}/publish-preview?starting=${encodeURIComponent(experiment.id)}`)),
-                  experiment.status === "paused" ? "再開" : "開始",
+                  starting ? "開始" : "再開",
+                  starting ? (experiment.variants ?? []).filter((v) => v.weight === 0).map((v) => v.name) : [],
                 );
                 if (
                   confirm &&

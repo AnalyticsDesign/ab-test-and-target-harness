@@ -158,6 +158,8 @@ curl -sS "https://analyticsadmin.googleapis.com/v1beta/properties/$PID/customDim
 | `DLV - ab_goal_id` | `ab_goal_id` |
 | `DLV - ab_goal_name` | `ab_goal_name` |
 
+`ab_*_name` の 3 つに入るのは、エクスペリエンス・パターン・目標の外部計測で指定した名前で、指定が無ければ ID(`ab_experiment_name` ならエクスペリエンス ID)。管理画面の「名前」の欄の値は入らない([12 節](#サイト単位エクスペリエンス単位の名前))。
+
 **トリガー: カスタム イベント 2 件**
 
 | トリガー名 | イベント名 |
@@ -171,6 +173,8 @@ curl -sS "https://analyticsadmin.googleapis.com/v1beta/properties/$PID/customDim
 |---|---|---|---|
 | `GA4 - ab_exposure` | `ab_exposure` | `ab_experiment_id` = `{{DLV - ab_experiment_id}}`、`ab_variant_id` = `{{DLV - ab_variant_id}}`、`ab_experiment_name` = `{{DLV - ab_experiment_name}}`、`ab_variant_name` = `{{DLV - ab_variant_name}}` | `CE - ab_exposure` |
 | `GA4 - ab_conversion` | `ab_conversion` | `ab_goal_id` = `{{DLV - ab_goal_id}}`、`ab_goal_name` = `{{DLV - ab_goal_name}}` | `CE - ab_conversion` |
+
+変数はタグの設定欄(上の表のイベント パラメータなど)で使い、カスタム HTML のタグの JavaScript の文字列の中に `'{{DLV - ab_variant_name}}'` のように直接書かない。値に `'` が入るとタグが壊れる。
 
 作ったら GTM の**プレビュー**で対象ページを開き、エクスペリエンスが動いているページで `ab_exposure` のタグが発火することを確かめてから**公開**する(エクスペリエンスの開始は [5 節](#5-設置後の確認)の手順で行う)。
 
@@ -420,7 +424,7 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 
 ## 12. dataLayer の契約と命名の規則
 
-タグが GTM / GA4 の `dataLayer` に入れる形は次の 2 種類。名前(イベント名・キー名・名前空間キー。以下「名札」)は**サイト単位**で、値の上書きと追加の key-value は**エクスペリエンス / パターン単位**で設定できる。何も設定しなければ下の既定の名前で動く。
+タグが GTM / GA4 の `dataLayer` に入れる形は次の 2 種類。名前(イベント名・キー名・名前空間キー。以下「名札」)は**サイト単位**で、値の上書きと追加の key-value は**エクスペリエンス / パターン単位**で、目標名の値は**目標単位**で設定できる。何も設定しなければ下の既定の名前で動く。
 
 **Exposure(訪問者にパターンを出したとき。エクスペリエンスごとに 1 回、2 回に分けて push)**
 
@@ -438,15 +442,18 @@ dataLayer.push({ event: "ab_exposure",
 dataLayer.push({ event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "CTA click", ab_extra: null });
 ```
 
+例の `ab_experiment_name` / `ab_variant_name` / `ab_goal_name` は、外部計測で名前を指定したときの値。指定が無ければ ID(この例なら `"exp_hero"` / `"vB"` / `"g_cta"`)が入る。
+
 - GTM の data layer は push を**マージ**し、省略したキーは同じページ内で前の値を保つ。追加の key-value を `ab_extra` の下にまとめて毎回 `null` で消すのは、前のエクスペリエンスの追加キーが次の Exposure / Conversion に残らないようにするため
 - GTM 側では、データレイヤーの変数(**バージョン 2**)で `ab_extra.test_group` のようにドット区切りで取り出す
 - 分析は `ab_exposure` でセグメントを作り、`ab_conversion` を比べる。Exposure の後に残る標準キーの値が他のイベントから見えることは許容している(消すのはイベントの push の直前だけ)
 
 ### サイト単位・エクスペリエンス単位の名前
 
-サイト単位の名札はサイト設定の `外部計測の名前(dataLayer の名札)` の 10 項目([11 節](#11-サイト設定項目の全一覧))。エクスペリエンス / パターン単位では、エクスペリエンス名・パターン名の**値**と、`extra` の追加 key-value を上書きできる。
+サイト単位の名札はサイト設定の `外部計測の名前(dataLayer の名札)` の 10 項目([11 節](#11-サイト設定項目の全一覧))。エクスペリエンス / パターン単位では、エクスペリエンス名・パターン名の**値**と、`extra` の追加 key-value を指定できる。目標単位では目標名の値を指定できる。管理画面では、エクスペリエンスの「基本設定」の下・パターンの詳細・目標の編集にある「外部計測(dataLayer 出力)」の「エクスペリエンス名」「パターン名」「目標名」の欄で入力する。
 
-- エクスペリエンス名はエクスペリエンス側の `experimentName`、パターン名はパターン側の `variantName` で上書きする(無ければそれぞれの `name`)
+- エクスペリエンス名はエクスペリエンス側の `experimentName`、パターン名はパターン側の `variantName`、目標名は目標側の `goalName` で指定する。指定が無ければ、それぞれの ID を出す
+- エクスペリエンス・パターン・目標の「名前」の欄(`name`)は、管理画面の中だけで使う。設置タグのファイルにも dataLayer にも入らないので、訪問者には届かない。外部計測で指定した値は dataLayer に入り、訪問者もブラウザで見られるので、社内向けの言葉や個人情報は入れない
 - レベルをまたぐ上書き(エクスペリエンス側で `variantName`、パターン側で `experimentName`)は受け付けない — 全パターンが同じ名前になったり、パターンごとにエクスペリエンス名が変わったりして、GA4 のセグメントが壊れるため
 - `experimentId` / `variantId` / イベント名は上書きできない
 - `extra` はキーごとにパターンの値がエクスペリエンスの値に優先する
@@ -466,8 +473,7 @@ dataLayer.push({ event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "CTA
 - 名前は `^[A-Za-z][A-Za-z0-9_]{0,39}$`。`_` / `firebase_` / `ga_` / `google_` / `gtag.` で始まる名前は不可
 - イベント名はさらに、`query_id` で始まるものと、GA4 の予約・自動収集イベント名(`page_view` / `click` / `session_start` など)が不可。Exposure と Conversion のイベント名は互いに別にする
 - サイト単位の 7 つのキー名は互いに別にし、`event` は使えない
-- 値(`extra` の値と、`experimentName` / `variantName` などの上書き値)は文字列 1〜100 字。1 エクスペリエンス × パターンの `extra` は 20 キーまで
-- エクスペリエンス / パターン / 目標の `name` が 100 字を超えると GA4 側で値が捨てられる(管理画面は保存時に拒否する)
+- 値(`extra` の値と、`experimentName` / `variantName` / `goalName` の指定)は文字列 1〜100 字。改行・タブなどの制御文字(U+0000〜U+001F・U+007F〜U+009F)と U+2028 / U+2029 は使えない(保存時に `invalid_analytics_value` で拒否する。保存済みと同じ値は検査しない)。1 エクスペリエンス × パターンの `extra` は 20 キーまで
 - `extra` はパターンごとに複製されて配信用の設定に焼き込まれるので、エクスペリエンス単位の `extra` は 512KB のサイズ上限に対してパターンの数だけ効く(超えると公開が `config_too_large` で失敗する)
 
 拒否する GA4 の予約・自動収集イベント名のリストは GA4 のヘルプの写しで、**GA4 側で後から増えたものには追随しない**。受け付けてしまった予約名のイベントは GA4 が記録せずに捨てる(DebugView で確認できる)。エクスペリエンスは止まらず、影響は名前を変えた運用者の計測の欠落に限られる。

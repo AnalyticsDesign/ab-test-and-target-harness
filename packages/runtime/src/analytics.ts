@@ -1,4 +1,4 @@
-import { DEFAULT_ANALYTICS, type AnalyticsSettings, type ExposurePayload, type RuntimeSettings } from "@wtt/core";
+import { DEFAULT_ANALYTICS, type AnalyticsSettings, type ConversionPayload, type ExposurePayload, type RuntimeSettings } from "@wtt/core";
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const allStrings = (v: unknown, keys: readonly string[]): boolean => isRecord(v) && keys.every((k) => typeof v[k] === "string");
@@ -35,6 +35,9 @@ export function isExposurePayloads(v: unknown): v is Record<string, Record<strin
   }
   return true;
 }
+
+/** B77: boot payload 内の config.conversionPayloads の形チェック。欠落は目標 ID に落とし、型不正は boot 全体の拒否(isExposurePayloads と同じ fail-closed) */
+export const isConversionPayloads = (v: unknown): v is Record<string, ConversionPayload> => isRecord(v) && Object.values(v).every((p) => allStrings(p, ["goalId", "goalName"]));
 
 /**
  * §10.9「バージョンと異常時」: settings.analytics が無い(旧 record)なら既定の名前(extraKey を含む)を使う。

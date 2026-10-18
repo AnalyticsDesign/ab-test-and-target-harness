@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DEFAULT_ANALYTICS, type AnalyticsSettings, type ExposurePayload } from "./analytics-defaults";
+import { DEFAULT_ANALYTICS, type AnalyticsSettings, type ConversionPayload, type ExposurePayload } from "./analytics-defaults";
 
 /** spec §10.9 の検証値(GA4 の実制限に合わせる) */
 export const ANALYTICS_LIMITS = {
@@ -75,6 +75,24 @@ export const AnalyticsNameSchema = z.string().superRefine(refineWith(analyticsNa
 export const AnalyticsEventNameSchema = z.string().superRefine(refineWith(analyticsEventNameIssue));
 /** 値は文字列 1〜100 字。`.max` は `.length`(素の文字列長)で数える = 全角も 1 文字。URL エンコード後の長さでは数えない(§10.9) */
 export const AnalyticsValueSchema = z.string().min(1).max(ANALYTICS_LIMITS.valueMax);
+
+export type AnalyticsValueIssue = { code: "empty" | "too_long" | "invalid_char"; message: string };
+/** C0・DEL・C1 の制御文字と、行区切り・段落区切り(U+2028 / U+2029) */
+const ANALYTICS_VALUE_INVALID_CHAR_RE = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
+
+/**
+ * B77(K12): dataLayer に出す値(外部計測の名前の指定と追加の値)の共通の検査。目的は GA4 に入る値の質。
+ * **使うのは書き込みの時だけ**(control の保存と管理画面の保存の前)。compile の入力と compiled config の読み込みには入れない —
+ * 制御文字を含む古い値を持つサイトの公開と配信を止めないため(AnalyticsValueSchema は変えない)。
+ * `"` や `</script>` は弾かない(JSON.stringify で埋め込み、runtime はオブジェクトを push するので壊れない)。
+ * `message` は画面と API の両方にそのまま出す
+ */
+export function analyticsValueIssue(value: string): AnalyticsValueIssue | null {
+  if (value.length === 0) return { code: "empty", message: "値を入力してください" };
+  if (value.length > ANALYTICS_LIMITS.valueMax) return { code: "too_long", message: `${ANALYTICS_LIMITS.valueMax} 字以内で入力してください` };
+  if (ANALYTICS_VALUE_INVALID_CHAR_RE.test(value)) return { code: "invalid_char", message: "改行・タブなどの制御文字は使えません" };
+  return null;
+}
 
 const D = DEFAULT_ANALYTICS;
 /**
@@ -155,13 +173,36 @@ export const VariantAnalyticsSchema = z.strictObject({
   overrides: z.strictObject({ variantName: AnalyticsValueSchema.optional() }).optional(),
   extra: extraSchema,
 });
+/** 目標側(B77、K5): 目標名(ab_goal_name)だけを上書きできる。目標の extra は範囲外(strict なので拒否する) */
+export const GoalAnalyticsSchema = z.strictObject({
+  overrides: z.strictObject({ goalName: AnalyticsValueSchema.optional() }).optional(),
+});
 export type ExperimentAnalytics = z.infer<typeof ExperimentAnalyticsSchema>;
 export type VariantAnalytics = z.infer<typeof VariantAnalyticsSchema>;
+export type GoalAnalytics = z.infer<typeof GoalAnalyticsSchema>;
 
 /**
- * compiled config の `exposurePayloads[experimentId][variantId]`。`experimentName` / `variantName` は `ExperimentSchema` / `VariantSchema` と同じ `min(1)` のみで、**100 字の最大長だけを意図的に省く** —
- * 導出値(Experiment / Variant の name)は既存 config に 100 字超があり得て、共有スキーマで弾くと bootstrap 404 になる(§10.9)。
- * 拒否は control の保存 API(§13.5)、compile は警告(analyticsWarnings)。
+ * B77(K12): control の API の受け口(validator)用。キーの規則(論理フィールド・extra のキー名)と strict は compile の入力のスキーマと同じで、
+ * 値は `z.string()` で受けるだけにする。値の検査(空・100 字超・制御文字)はルートが analyticsValueIssue で、変わった値だけに行う
+ * (保存済みの古い値で他の欄の保存を止めないため)
+ */
+const extraRequestSchema = z.record(AnalyticsNameSchema, z.string()).optional();
+export const ExperimentAnalyticsRequestSchema = z.strictObject({
+  overrides: z.strictObject({ experimentName: z.string().optional() }).optional(),
+  extra: extraRequestSchema,
+});
+export const VariantAnalyticsRequestSchema = z.strictObject({
+  overrides: z.strictObject({ variantName: z.string().optional() }).optional(),
+  extra: extraRequestSchema,
+});
+export const GoalAnalyticsRequestSchema = z.strictObject({
+  overrides: z.strictObject({ goalName: z.string().optional() }).optional(),
+});
+
+/**
+ * compiled config の `exposurePayloads[experimentId][variantId]`。`experimentName` / `variantName` は `min(1)` のみで、**100 字の最大長だけを意図的に省く** —
+ * 既存の config には導出値(B77 より前は Experiment / Variant の name)が 100 字を超えるものがあり得て、共有スキーマで弾くと bootstrap 404 になる(§10.9)。
+ * 値の拒否は control の保存 API(analyticsValueIssue)、compile は警告(analyticsWarnings)。
  * `extra` のキー名・値の規則(予約接頭辞・1〜100 字)は既存 config が parse できなくなるため **緩める方向のみ**変更できる。厳しくする変更は `schemaVersion` を上げて edge 先行デプロイの手順を踏む
  */
 export const ExposurePayloadSchema = z.strictObject({
@@ -174,22 +215,36 @@ export const ExposurePayloadSchema = z.strictObject({
 const _payloadOut: ExposurePayload = {} as z.infer<typeof ExposurePayloadSchema>;
 void _payloadOut;
 
-type ExperimentCarrier = { id: string; name: string; analytics?: ExperimentAnalytics | undefined };
-type VariantCarrier = { id: string; name: string; analytics?: VariantAnalytics | undefined };
+/** compiled config の `conversionPayloads[goalId]`(B77、K5)。`goalName` は ExposurePayloadSchema の名前と同じ理由で `min(1)` のみ */
+export const ConversionPayloadSchema = z.strictObject({
+  goalId: z.string().min(1),
+  goalName: z.string().min(1),
+});
+const _conversionOut: ConversionPayload = {} as z.infer<typeof ConversionPayloadSchema>;
+void _conversionOut;
+
+type ExperimentCarrier = { id: string; analytics?: ExperimentAnalytics | undefined };
+type VariantCarrier = { id: string; analytics?: VariantAnalytics | undefined };
+type GoalCarrier = { id: string; analytics?: GoalAnalytics | undefined };
 
 /**
- * 合成規則(§10.9、2026-09-02 決定): Experiment 名は Experiment の overrides ← 無ければ Experiment の name、
- * Variant 名は Variant の overrides ← 無ければ Variant の name。レベルをまたぐ上書きは無い(スキーマが受け付けない)。
+ * 合成規則(§10.9、2026-09-02 決定。名前の既定は B77 で ID に): Experiment 名は Experiment の overrides ← 無ければ Experiment の ID、
+ * Variant 名は Variant の overrides ← 無ければ Variant の ID。管理用の名前は訪問者に届けない。レベルをまたぐ上書きは無い(スキーマが受け付けない)。
  * extra はキー単位の浅いマージ(Variant が Experiment の同名キーを上書き)。experimentId / variantId は上書きしない
  */
 export function resolveExposurePayload(exp: ExperimentCarrier, variant: VariantCarrier): ExposurePayload {
   return {
     experimentId: exp.id,
-    experimentName: exp.analytics?.overrides?.experimentName ?? exp.name,
+    experimentName: exp.analytics?.overrides?.experimentName ?? exp.id,
     variantId: variant.id,
-    variantName: variant.analytics?.overrides?.variantName ?? variant.name,
+    variantName: variant.analytics?.overrides?.variantName ?? variant.id,
     extra: { ...(exp.analytics?.extra ?? {}), ...(variant.analytics?.extra ?? {}) },
   };
+}
+
+/** B77(K5): ab_goal_name = 目標の外部計測の名前 ?? 目標 ID */
+export function resolveConversionPayload(goal: GoalCarrier): ConversionPayload {
+  return { goalId: goal.id, goalName: goal.analytics?.overrides?.goalName ?? goal.id };
 }
 
 /** 解決後の姿に対する検証(§10.9「検証は Experiment × Variant を解決した後の姿に対して行う」)。今は extra のキー数のみ */
@@ -202,31 +257,26 @@ export function exposurePayloadIssue(p: ExposurePayload): string | null {
 export type AnalyticsWarning = { path: string; message: string };
 
 /**
- * 拒否ではなく警告に留める検査(§10.9 / §13.5): 導出値(Experiment / Variant / Goal の name)が 100 字を超える。
+ * 拒否ではなく警告に留める検査(§10.9 / §13.5): dataLayer に出る名前(解決済みの exposurePayloads / conversionPayloads の値)が 100 字を超える。
  * GA4 は 100 字超のパラメータ値を破棄する。control の保存 API は 422 で拒否し、fixture CLI はこの警告を stderr に出す。
- * **元の name を直接見る** — 短い override で隠れた長い name も検出する(override を外した瞬間に GA4 が値を破棄するため)。
- * 解決済み payload 側(exposurePayloads)も見るのは、authored な override の 1〜100 字検証が将来緩んだ場合の保険
+ * B77 で管理用の名前(Experiment / Variant / Goal の name)は compiled config にも dataLayer にも出なくなったので見ない。
+ * 解決済みの値を見るのは、authored な override の 1〜100 字検証が将来緩んだ場合の保険
  */
 export function analyticsWarnings(config: {
-  goals: Array<{ id: string; name: string }>;
-  experiments: Array<{ id: string; name: string; variants: Array<{ id: string; name: string }> }>;
   exposurePayloads?: Record<string, Record<string, ExposurePayload>> | undefined;
+  conversionPayloads?: Record<string, ConversionPayload> | undefined;
 }): AnalyticsWarning[] {
   const max = ANALYTICS_LIMITS.valueMax;
   const out: AnalyticsWarning[] = [];
   const over = (path: string, label: string, value: string): void => {
     if (value.length > max) out.push({ path, message: `${label} is ${value.length} chars (GA4 drops parameter values over ${max}; control rejects this at save time)` });
   };
-  for (const g of config.goals) over(`goals.${g.id}.name`, `goal ${g.id}: name`, g.name);
-  for (const e of config.experiments) {
-    over(`experiments.${e.id}.name`, `experiment ${e.id}: name`, e.name);
-    for (const v of e.variants) over(`experiments.${e.id}.variants.${v.id}.name`, `experiment ${e.id} variant ${v.id}: name`, v.name);
-  }
   for (const [eid, byVariant] of Object.entries(config.exposurePayloads ?? {})) {
     for (const [vid, p] of Object.entries(byVariant)) {
       over(`exposurePayloads.${eid}.${vid}.experimentName`, `experiment ${eid} variant ${vid}: experimentName`, p.experimentName);
       over(`exposurePayloads.${eid}.${vid}.variantName`, `experiment ${eid} variant ${vid}: variantName`, p.variantName);
     }
   }
+  for (const [gid, p] of Object.entries(config.conversionPayloads ?? {})) over(`conversionPayloads.${gid}.goalName`, `goal ${gid}: goalName`, p.goalName);
   return out;
 }

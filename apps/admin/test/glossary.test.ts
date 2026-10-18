@@ -33,6 +33,10 @@ const BANNED: Array<{ re: RegExp; use: string }> = [
   { re: />\s*(?:Publish|Start|Pause|Resume|Stop|Variant|Change|Goal|Analytics|Identity|Mode|Role|Site|Workspace)\s*[<{]/, use: "用語表の日本語" },
   { re: /\b(?:label|title|heading|placeholder|caption)\s*[=:]\s*\{?\s*["'`](?:Publish|Start|Pause|Resume|Stop|Variant|Change|Goal|Analytics|Identity|Mode|Role|Site|Workspace)["'`]/, use: "用語表の日本語" },
   { re: /\.toUpperCase\(\)/, use: "roleLabel(ロールの表示は roleLabel だけ)" },
+  // B77: エクスペリエンスの編集のタブは「基本設定」/「パターン」(旧「概要」/「パターン」/「外部計測」)。タブの label と JSX のテキストに置いた「概要」を探す
+  { re: /label:\s*["'`]概要["'`]|>\s*概要\s*</, use: "基本設定(エクスペリエンスの編集のタブ)" },
+  // B77: description は「メモ」(オーディエンスの説明も表記は「メモ(任意)」)。半角・全角の括弧の両方
+  { re: /説明[(（]任意[)）]/, use: "メモ(任意)" },
 ];
 /** 画面の語ではない使い方(理由を書く) */
 const ALLOW: Array<{ file: string; re: RegExp; why: string }> = [
@@ -162,6 +166,9 @@ describe("screen strings follow the glossary (backlog B35)", () => {
       '"(直後に新しい version が active になったため、この version は履歴のみ)"',
       "<th>version</th>",
       "      Profile は retentionDays で消えます",
+      '{ id: "overview", label: "概要" }',
+      "<h2>概要</h2>",
+      "                説明(任意)",
     ];
     for (const line of bad) expect(bannedIn(line), line).not.toEqual([]);
     const good = [
@@ -193,6 +200,17 @@ describe("screen strings follow the glossary (backlog B35)", () => {
       '訪問者プロフィール(needsProfile=${result.needsProfile})', // 識別子は語の途中
       '<input autoComplete="off" /> 有効にする', // 属性値は文字列リテラルだが日本語を含まない
       "<p>retentionDays まで保持されます</p>", // 設定のキー名は英語のまま
+      // B77 の用語(用語表に足したもの)
+      '{ id: "overview", label: "基本設定" }',
+      '<span className="badge">オリジナル</span>',
+      '<span className="field-label">メモ(社内用。外部には出力されません)</span>',
+      "                メモ(任意)",
+      'title="外部計測(dataLayer 出力)"',
+      'title="パターン名"',
+      'title="パターン情報を追加"',
+      'title="エクスペリエンス名"',
+      'title="エクスペリエンス情報を追加"',
+      'title="出力される内容"',
     ];
 
     for (const line of good) expect(bannedIn(line), line).toEqual([]);
@@ -207,6 +225,26 @@ describe("screen strings follow the glossary (backlog B35)", () => {
       }
     }
     expect(hits).toEqual([]);
+  });
+
+  it("uses the B77 terms on screen (the glossary additions)", () => {
+    // 用語表に足した語が画面の文字列(コメントの外)に実際にある。言い換えたときに、この表と画面の両方を直すための目印
+    const terms = [
+      "オリジナル", // original
+      "メモ(社内用。外部には出力されません)", // description
+      "メモ(任意)", // オーディエンスの description
+      "基本設定", // タブ(旧「概要」)
+      "外部計測(dataLayer 出力)",
+      "パターン名",
+      "パターン情報を追加",
+      "エクスペリエンス名",
+      "エクスペリエンス情報を追加",
+      "出力される内容",
+    ];
+    const screen = DIRS.flatMap(files)
+      .map((file) => stripComments(readFileSync(path.join(ROOT, file), "utf8")))
+      .join("\n");
+    expect(terms.filter((t) => !screen.includes(t))).toEqual([]);
   });
 
   it("has no banned forms (including English terms in JSX text outside string literals)", () => {

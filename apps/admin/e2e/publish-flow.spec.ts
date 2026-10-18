@@ -318,8 +318,8 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     const nameInput = page.getByLabel("名前(100 字以内)");
     await nameInput.fill("E2E hero (edited)");
     await expect(page.getByTestId("save-state")).toHaveText("未保存の変更あり");
-    await page.getByRole("tab", { name: "外部計測" }).click();
-    await page.getByRole("tab", { name: "概要" }).click();
+    await page.getByRole("tab", { name: "パターン" }).click();
+    await page.getByRole("tab", { name: "基本設定" }).click();
     await expect(nameInput).toHaveValue("E2E hero (edited)");
     await page.getByRole("button", { name: "破棄" }).click();
     await expect(nameInput).toHaveValue(EXPERIMENT.name);
@@ -327,26 +327,17 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
 
     await openVariant(page, "b");
     const variantB = page.getByTestId("variant-b");
-    // Plan 10 B1: Variant の Analytics 節は畳まれていない(見出しがクリック無しで見える)。Variant ID は prompt() ではなく inline 入力
-    await expect(variantB.getByRole("heading", { name: "外部計測(このパターンの値)" })).toBeVisible();
-    await expect(variantB.getByText("variantName の上書き(空 = 名前をそのまま)")).toBeVisible();
-    await page.getByTestId("new-variant-id").fill("c");
+    // B77: パターンの外部計測は詳細の 3 枚目のカード。設定の無いパターンでは畳んだ状態で出る(開閉は variant-ui.spec.ts が見る)
+    await expect(variantB.getByRole("button", { name: /^外部計測\(dataLayer 出力\)/ })).toHaveAttribute("aria-expanded", "false");
+    // ID は自動の採番(入力欄は無い)。空いている最初の文字 `c`、名前の既定は ID の大文字化 `C`。足したパターンがそのまま開く
+    await expect(page.getByTestId("new-variant-id")).toHaveCount(0);
     await page.getByRole("button", { name: "パターンを追加" }).click();
     await expect(page.getByTestId("variant-c")).toBeVisible();
-    await expect(page.getByTestId("new-variant-id")).toHaveValue(""); // 追加後は入力欄が空に戻る
-    // ID と表示名は別フィールド(r2 CX-Medium-4): ID は入力どおり `c`、名前の既定は ID の大文字化 `C`(ユーザー決定 2026-09-11)
     await expect(page.getByTestId("variant-c").locator("strong code")).toHaveText("c");
     await expect(page.getByTestId("variant-c").getByLabel("名前(100 字以内)")).toHaveValue("C");
-    // 拒否経路(r1 CX-Medium-4 / CL-Medium-3): 形式違反と重複は理由を表示してボタンを無効にする
-    await page.getByTestId("new-variant-id").fill("A");
-    await expect(page.getByText("英小文字・数字で始まり")).toBeVisible();
-    await expect(page.getByRole("button", { name: "パターンを追加" })).toBeDisabled();
-    await page.getByTestId("new-variant-id").fill("b");
-    await expect(page.getByText('パターン ID "b" は既に使われています')).toBeVisible();
-    await expect(page.getByRole("button", { name: "パターンを追加" })).toBeDisabled();
-    await page.getByTestId("new-variant-id").fill("");
     await page.getByTestId("variant-c").getByRole("button", { name: "パターンを削除" }).click();
-    await expect(page.getByTestId("variant-c")).toHaveCount(0); // 以降の手順は A / B の 2 Variant のまま
+    await expect(page.getByTestId("variant-c")).toHaveCount(0); // 以降の手順は A / B の 2 パターンのまま(重みも 50 / 50 に戻る)
+    await expect(page.getByTestId("variant-weight-b")).toHaveValue("50");
     await openVariant(page, "b"); // 削除後は先頭の a が開くので b を開き直す
 
     // Variant B に TEXT Change を 1 件足して保存する
@@ -370,8 +361,14 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
 
     // 既存 Change を持つ実験の「2 回目の保存」。GET が返す Change には updatedBy / updatedAt が付いており、
     // それをそのまま PUT すると core の strictObject が 422 invalid_change で全件を拒否する
-    // (lib/change-wire.ts が落とす。Task 12 で実地確認された壊れ方のリグレッション)
+    // (lib/change-wire.ts が落とす。Task 12 で実地確認された壊れ方のリグレッション)。
+    // B77 K17: 保存は変わった段だけを送るので、読み込んだ変更の文を直して送り、元の文に戻してもう一度送る(どちらも読み込んだ変更の PUT)
+    await saved.locator("textarea").fill(`${HERO_TEXT}(2 回目)`);
     expect((await saveDraft(page, SITE.id, EXPERIMENT.id)).status()).toBe(200);
+    await expect(page.getByTestId("save-state")).toHaveText("変更はありません");
+    await saved.locator("textarea").fill(HERO_TEXT);
+    expect((await saveDraft(page, SITE.id, EXPERIMENT.id)).status()).toBe(200);
+    await expect(page.getByTestId("save-state")).toHaveText("変更はありません");
     await expect(appAlert(page)).toHaveCount(0);
 
     // Start は必ず自動 Publish を伴う(spec §13.8 / 決定 17)
@@ -408,7 +405,9 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     expect(body).toContain(`"id":"${EXPERIMENT.id}"`);
     expect(body).toContain(HERO_SELECTOR);
     expect(body).toContain(HERO_TEXT);
-    expect(body).toContain('"variantName":"B"'); // exposurePayloads(spec §10.9)
+    // B77: 名前は訪問者に届けない。dataLayer の名前は外部計測の指定 ?? ID なので、指定の無い b はパターン ID のまま(exposurePayloads)
+    expect(body).toContain('"variantName":"b"');
+    expect(body).not.toContain('"name":');
   });
 
   test("attribute_not_allowed shows a Japanese message and the HTML switch hint", async ({ page }) => {
@@ -421,11 +420,12 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await page.getByTestId("filter-running").click();
     await expect(page.getByTestId(`experiment-row-${EXPERIMENT.id}`)).toBeVisible();
     await page.getByRole("link", { name: EXPERIMENT.name }).click();
-    await openVariant(page, "a");
-    const variantA = page.getByTestId("variant-a");
-    await variantA.getByRole("button", { name: "変更を追加" }).click();
-    await pick(variantA.getByTestId("change-TEXT"), "変更の種類", /^ATTRIBUTE/);
-    const attribute = variantA.getByTestId("change-ATTRIBUTE");
+    // B77: a はオリジナル(変更を持てない)なので、変更のある b で確かめる。b には保存済みの TEXT が 1 件あるので、足した方(最後)を変える
+    await openVariant(page, "b");
+    const variantB = page.getByTestId("variant-b");
+    await variantB.getByRole("button", { name: "変更を追加" }).click();
+    await pick(variantB.getByTestId("change-TEXT").last(), "変更の種類", /^ATTRIBUTE/);
+    const attribute = variantB.getByTestId("change-ATTRIBUTE");
     await attribute.locator('input[maxlength="500"]').fill("a.cta");
     await attribute.locator('input[list="attr-allow"]').fill("onclick");
     await page.getByRole("button", { name: "保存(下書き)" }).click();
@@ -444,15 +444,12 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
 
     // compile を config_too_large(512KiB 超)で落とす。1 件あたりは 64KiB 未満なので保存時検証は通り、
     // 束ねたときだけ落ちる。60KiB のテキストを 10 回 UI に打ち込む意味は無いので、画面と同じ BFF に直接置く。
-    // Variant ごとに 5 件ずつに割るのは「A / B 両方に Change がある状態」を作るためで、件数の制約ではない
+    // B77: 作成の既定で a はオリジナル(変更を 1 件以上送ると 422 variant_original)なので、10 件とも b に置く
     // (かつては `PUT …/changes` が 1 行 12 個の bind 変数を使う単一の複数行 INSERT で、9 件以上が D1 の
-    // 「1 クエリ 100 変数」上限に当たって 500 になっていた。d51c5db で 8 行ずつに分割して解消済み)
-    const bigChanges = (prefix: string) =>
-      Array.from({ length: 5 }, (_, i) => ({ id: `${prefix}${i}`, type: "TEXT", selector: `.${prefix}${i}`, payload: { text: "x".repeat(60_000) } }));
-    for (const variant of ["a", "b"]) {
-      const seeded = await page.request.put(`/api/control/sites/${SITE_FAILED.id}/experiments/${EXPERIMENT_FAILED.id}/variants/${variant}/changes`, { data: bigChanges(`c_big${variant}`) });
-      expect(seeded.status()).toBe(200);
-    }
+    // 「1 クエリ 100 変数」上限に当たって 500 になっていた。d51c5db で 8 行ずつに分割して解消済み。10 件はその分割も通る)
+    const bigChanges = Array.from({ length: 10 }, (_, i) => ({ id: `c_big${i}`, type: "TEXT", selector: `.c_big${i}`, payload: { text: "x".repeat(60_000) } }));
+    const seeded = await page.request.put(`/api/control/sites/${SITE_FAILED.id}/experiments/${EXPERIMENT_FAILED.id}/variants/b/changes`, { data: bigChanges });
+    expect(seeded.status()).toBe(200);
 
     const started = await changeStatus(page, SITE_FAILED.id, EXPERIMENT_FAILED.id, /^開始/);
     expect(started.publish).toMatchObject({ ok: false, error: "config_too_large" });

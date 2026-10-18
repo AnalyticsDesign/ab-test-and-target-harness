@@ -10,7 +10,7 @@ it("pushes the namespace clear then ab_exposure once per experiment (spec §10.5
   t.expose("exp_hero"); // 2 回目は無視(Experiment ごとに 1 回)
   expect(pushed).toEqual([
     { ab_extra: null }, // 1 回目は名前空間の消去だけ。event を含まないので GTM トリガーは発火しない
-    { event: "ab_exposure", ab_experiment_id: "exp_hero", ab_experiment_name: "Hero", ab_variant_id: "vB", ab_variant_name: "B", ab_extra: null },
+    { event: "ab_exposure", ab_experiment_id: "exp_hero", ab_experiment_name: "exp_hero", ab_variant_id: "vB", ab_variant_name: "vB", ab_extra: null },
   ]);
 });
 
@@ -51,20 +51,20 @@ it("applies site key names and the resolved payload, nesting extra under extraKe
 });
 
 it("missing_exposure_payload_entry_uses_derived_defaults", () => {
-  // exposurePayloads に当該 Experiment × Variant のエントリが無い(旧 config / 部分欠落)→ experiments[] の id / name から導出し extra なし。
+  // exposurePayloads に当該 Experiment × Variant のエントリが無い(旧 config / 部分欠落)→ ID から導出し extra なし(B77: config の name は見ない)。
   // 名前空間の消去はこの場合も行う(§10.9「バージョンと異常時」)
   const partial = { ...namedConfig, exposurePayloads: { exp_other: { vA: { experimentId: "exp_other", experimentName: "X", variantId: "vA", variantName: "A", extra: { k: "v" } } } } };
   const pushed: Array<Record<string, unknown>> = [];
   createExposureTracker(partial, renamedAnalytics, { exp_hero: "vB" }, (e) => pushed.push(e)).expose("exp_hero");
   expect(pushed).toEqual([
     { wtt_x: null },
-    { event: "wtt_exposure", wtt_exp_id: "exp_hero", wtt_exp_name: "Hero", wtt_var_id: "vB", wtt_var_name: "B", wtt_x: null },
+    { event: "wtt_exposure", wtt_exp_id: "exp_hero", wtt_exp_name: "exp_hero", wtt_var_id: "vB", wtt_var_name: "vB", wtt_x: null },
   ]);
   // Variant 単位で欠けている場合も同じ
   const variantMissing = { ...namedConfig, exposurePayloads: { exp_hero: { vA: namedConfig.exposurePayloads!.exp_hero!.vA! } } };
   const pushed2: Array<Record<string, unknown>> = [];
   createExposureTracker(variantMissing, renamedAnalytics, { exp_hero: "vB" }, (e) => pushed2.push(e)).expose("exp_hero");
-  expect(pushed2[1]).toMatchObject({ wtt_exp_name: "Hero", wtt_var_name: "B", wtt_x: null });
+  expect(pushed2[1]).toMatchObject({ wtt_exp_name: "exp_hero", wtt_var_name: "vB", wtt_x: null });
 });
 
 it("pushes the assigned ids even if the baked payload carries different id copies", () => {
@@ -73,4 +73,13 @@ it("pushes the assigned ids even if the baked payload carries different id copie
   const pushed: Array<Record<string, unknown>> = [];
   createExposureTracker(drifted, renamedAnalytics, { exp_hero: "vB" }, (e) => pushed.push(e)).expose("exp_hero");
   expect(pushed[1]).toMatchObject({ wtt_exp_id: "exp_hero", wtt_var_id: "vB", wtt_exp_name: "Hero Q3", wtt_var_name: "New hero" });
+});
+
+it("exposure_falls_back_to_ids", () => {
+  // B77: 組が無いときの予備は ID。config に name が残っていても(古い config)使わない
+  expect(baseConfig.experiments[0]!.name).toBe("Hero");
+  expect(baseConfig.exposurePayloads).toBeUndefined();
+  const pushed: Array<Record<string, unknown>> = [];
+  createExposureTracker(baseConfig, DEFAULT_ANALYTICS, { exp_hero: "vA" }, (e) => pushed.push(e)).expose("exp_hero");
+  expect(pushed[1]).toMatchObject({ ab_experiment_name: "exp_hero", ab_variant_name: "vA" });
 });

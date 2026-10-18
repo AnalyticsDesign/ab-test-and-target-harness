@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ExposurePayloadSchema } from "./analytics";
+import { ConversionPayloadSchema, ExposurePayloadSchema, GoalAnalyticsSchema } from "./analytics";
 import { PAGE_OPS, PAGE_PARTS, type PageMatch, type PageOp, type PagePart } from "./page";
 import { REGEX_LIMITS } from "./regex-compile";
 import { RUN_ID_RE } from "./results";
@@ -260,9 +260,16 @@ export const ChangeSchema = z.discriminatedUnion("type", [
 ]);
 export type Change = z.infer<typeof ChangeSchema>;
 
+/**
+ * B77(K4): 配る形の `name`(パターン・エクスペリエンス・目標)は任意。compile はもう出さないが、KV に残る古い config(名前付き)を
+ * edge・deployer・control が読めるように受ける。compile の入力のスキーマ(VariantInputSchema・ExperimentInputSchema・GoalInputSchema)は必須のまま。
+ * `name` の受け入れを消すのは、次に `schemaVersion` を上げるとき
+ */
+const legacyName = z.string().min(1).optional();
+
 export const VariantSchema = z.strictObject({
   id: z.string().min(1),
-  name: z.string().min(1),
+  name: legacyName,
   weight: z.number().int().min(0).max(100),
   changes: z.array(ChangeSchema),
 });
@@ -276,7 +283,7 @@ export function refineVariantWeights(e: { variants: Array<{ weight: number }> },
 /** Experiment の共通 shape(urlMatch / targeting 以外)。compiled と compile の入力で urlMatch / targeting / variants を差し替える */
 export const ExperimentCommonShape = {
   id: z.string().min(1),
-  name: z.string().min(1),
+  name: legacyName, // B77(K4): compile の入力(ExperimentInputSchema)は必須に上書きする
   trafficPercentage: z.number().int().min(1).max(100),
   persistAssignment: z.boolean(),
 } as const;
@@ -293,23 +300,26 @@ export const ExperimentSchema = z
   .superRefine(refineVariantWeights);
 export type Experiment = z.infer<typeof ExperimentSchema>;
 
-const goalBase = { id: z.string().min(1), name: z.string().min(1) };
-const clickGoal = z.strictObject({ ...goalBase, type: z.literal("CLICK"), config: z.strictObject({ selector }) });
-const customGoal = z.strictObject({ ...goalBase, type: z.literal("CUSTOM"), config: z.strictObject({}) });
+/** 配る形の Goal の共通部分。`name` は古い config のためだけに受ける(K4)。外部計測は compile が conversionPayloads に焼くので置かない */
+const goalBase = { id: z.string().min(1), name: legacyName };
+/** 保存する形の Goal の共通部分。`name` は必須(管理画面の中で使う)、`analytics` = 目標の外部計測(B77、K5) */
+const goalInputBase = { id: z.string().min(1), name: z.string().min(1), analytics: GoalAnalyticsSchema.optional() };
+const clickConfig = z.strictObject({ selector });
+const customConfig = z.strictObject({});
 
 /** 配る形の Goal。PAGEVIEW は `{ page: ページの一致 }`(決定 49。版 1 の `{ urlOp, urlValue }` から名前を付け替えた) */
 export const GoalSchema = z.discriminatedUnion("type", [
   z.strictObject({ ...goalBase, type: z.literal("PAGEVIEW"), config: z.strictObject({ page: CompiledPageMatchSchema }) }),
-  clickGoal,
-  customGoal,
+  z.strictObject({ ...goalBase, type: z.literal("CLICK"), config: clickConfig }),
+  z.strictObject({ ...goalBase, type: z.literal("CUSTOM"), config: customConfig }),
 ]);
 export type Goal = z.infer<typeof GoalSchema>;
 
 /** 保存する形の Goal(control の API と compile の入力) */
 export const GoalInputSchema = z.discriminatedUnion("type", [
-  z.strictObject({ ...goalBase, type: z.literal("PAGEVIEW"), config: z.strictObject({ page: PageMatchInputSchema }) }),
-  clickGoal,
-  customGoal,
+  z.strictObject({ ...goalInputBase, type: z.literal("PAGEVIEW"), config: z.strictObject({ page: PageMatchInputSchema }) }),
+  z.strictObject({ ...goalInputBase, type: z.literal("CLICK"), config: clickConfig }),
+  z.strictObject({ ...goalInputBase, type: z.literal("CUSTOM"), config: customConfig }),
 ]);
 export type GoalInput = z.infer<typeof GoalInputSchema>;
 
@@ -335,6 +345,18 @@ export function refineExposurePayloads(
         ctx.addIssue({ code: "custom", path: ["exposurePayloads", eid, vid], message: `exposurePayloads references unknown variant ${vid} of ${eid}` });
       }
     }
+  }
+}
+
+/** B77(K5): conversionPayloads の record キーと payload の goalId の一致と、対応する目標の存在を検証する。欠落は runtime の予備の導出(ID)に任せる */
+export function refineConversionPayloads(
+  c: { goals: Array<{ id: string }>; conversionPayloads?: Record<string, { goalId: string }> | undefined },
+  ctx: z.RefinementCtx,
+): void {
+  if (!c.conversionPayloads) return;
+  for (const [gid, p] of Object.entries(c.conversionPayloads)) {
+    if (p.goalId !== gid) ctx.addIssue({ code: "custom", path: ["conversionPayloads", gid], message: `payload goalId ${p.goalId} must match record key ${gid}` });
+    if (!c.goals.some((g) => g.id === gid)) ctx.addIssue({ code: "custom", path: ["conversionPayloads", gid], message: `conversionPayloads references unknown goal ${gid}` });
   }
 }
 
@@ -378,12 +400,15 @@ export const CompiledConfigSchema = z
     goals: z.array(GoalSchema),
     experiments: z.array(ExperimentSchema),
     // spec §10.9(決定 32): experimentId → variantId → 解決済み exposure payload。compile が常に出力する。
-    // runtime は該当エントリが無ければ experiments[] の id / name から導出する(runtime が持つ唯一の導出)
+    // runtime は該当エントリが無ければ experiments[] から導出する(runtime が持つ唯一の導出。B77 で名前は ID)
     exposurePayloads: z.record(z.string(), z.record(z.string(), ExposurePayloadSchema)).optional(),
+    // B77(K5): goalId → 解決済み conversion payload(ab_goal_name = 目標の外部計測の名前 ?? ID)。compile はすべての目標について出す
+    conversionPayloads: z.record(z.string(), ConversionPayloadSchema).optional(),
     results: ResultsConfigSchema.optional(),
   })
   .superRefine((c, ctx) => {
     refineExposurePayloads(c, ctx);
+    refineConversionPayloads(c, ctx);
     // サイト全体の命令数(設計書 §10.2)。compile は上限内しか出さないので、超えるのは手書き・改竄。設定ごと読まない(fail-closed)
     const total = regexInstructionTotal(c);
     if (total > REGEX_LIMITS.instructionsPerSite) ctx.addIssue({ code: "custom", message: `regex instructions ${total} over ${REGEX_LIMITS.instructionsPerSite}` });

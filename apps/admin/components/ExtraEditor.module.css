@@ -1,0 +1,8 @@
+.wrap { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.rows { display: flex; flex-direction: column; gap: 6px; }
+/* キー | 値 | 印と削除。狭い幅でも 2 つの入力欄が押しつぶされないよう、欄は等分で縮む */
+.kv { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; }
+.kv input { min-width: 0; width: 100%; }
+.act { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.error { grid-column: 1 / -1; }
+.addRow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }

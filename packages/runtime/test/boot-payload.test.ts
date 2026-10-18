@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import type { CompiledConfig, RuntimeSettings } from "@wtt/core";
+import { bakeBootstrap, parseSiteSettings, withoutLegacyNames } from "@wtt/core";
 import { parseBootPayload } from "../src/runtime";
+import { isConversionPayloads, isExposurePayloads } from "../src/analytics";
+import { baseConfig } from "./fixtures";
 
 // 実 shape(@wtt/core)から組み立てる。ここが core の schema とズレたら検知できるようにする(review finding)
 const validConfig: CompiledConfig = {
@@ -130,5 +133,34 @@ describe("parseBootPayload (plan 3 task 2 — final implementation, no zod)", ()
     expect(parseBootPayload({ config: { ...validConfig, exposurePayloads: { exp: { vA: { ...p, extra: null } } } }, settings: validSettings })).toBeNull();
     expect(parseBootPayload({ config: { ...validConfig, exposurePayloads: { exp: { vA: { ...p, extra: [] } } } }, settings: validSettings })).toBeNull();
     expect(parseBootPayload({ config: { ...validConfig, exposurePayloads: { exp: { vA: { ...p, extra: { k: 1 } } } } }, settings: validSettings })).toBeNull();
+  });
+  it("rejects_malformed_conversion_payloads", () => {
+    const ok = { g: { goalId: "g", goalName: "G" } };
+    expect(parseBootPayload({ config: { ...validConfig, conversionPayloads: ok }, settings: validSettings })).not.toBeNull();
+    expect(parseBootPayload({ config: validConfig, settings: validSettings })).not.toBeNull(); // 欠落は目標 ID に落ちる
+    expect(parseBootPayload({ config: { ...validConfig, conversionPayloads: [] }, settings: validSettings })).toBeNull();
+    expect(parseBootPayload({ config: { ...validConfig, conversionPayloads: "x" }, settings: validSettings })).toBeNull();
+    expect(parseBootPayload({ config: { ...validConfig, conversionPayloads: { g: "G" } }, settings: validSettings })).toBeNull();
+    expect(parseBootPayload({ config: { ...validConfig, conversionPayloads: { g: { goalId: "g" } } }, settings: validSettings })).toBeNull();
+    expect(parseBootPayload({ config: { ...validConfig, conversionPayloads: { g: { goalId: "g", goalName: 1 } } }, settings: validSettings })).toBeNull();
+  });
+
+  it("baked_legacy_payloads_pass_runtime_checks", () => {
+    // 名前入り・conversionPayloads 無しの古い config を core が変換した出力を、runtime の起動前検査が通す
+    // (core が埋める payload の形と runtime の検査がずれたら、全サイトの計測が止まる)
+    expect(baseConfig.goals[0]!.name).toBe("CTA click");
+    expect(baseConfig.conversionPayloads).toBeUndefined();
+    const out = withoutLegacyNames(baseConfig);
+    expect(isExposurePayloads(out.exposurePayloads)).toBe(true);
+    expect(isConversionPayloads(out.conversionPayloads)).toBe(true);
+    // bake 経由(JSON 化した後)でも同じ。名前のキーは残らない
+    const site = parseSiteSettings({ settingsVersion: 1, siteId: "site_unit", hosts: ["a.example"], allowedOrigins: ["https://a.example"] })!;
+    const baked = bakeBootstrap(baseConfig, site, "/*RUNTIME*/");
+    const m = /self\.__WTT_BOOT__=(.*);\n/.exec(baked);
+    expect(m, "bootstrap に boot JSON がある").not.toBeNull();
+    const boot = JSON.parse(m![1]!) as { config: { exposurePayloads: unknown; conversionPayloads: unknown } };
+    expect(isExposurePayloads(boot.config.exposurePayloads)).toBe(true);
+    expect(isConversionPayloads(boot.config.conversionPayloads)).toBe(true);
+    expect(parseBootPayload(boot)).not.toBeNull();
   });
 });

@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   ANALYTICS_LIMITS, AnalyticsSettingsSchema, DEFAULT_ANALYTICS, ExperimentAnalyticsSchema, VariantAnalyticsSchema,
   analyticsEventNameIssue, analyticsNameIssue, GA4_RESERVED_EVENT_NAMES,
+  analyticsValueIssue, analyticsWarnings, resolveConversionPayload, resolveExposurePayload,
+  GoalAnalyticsSchema, ExperimentAnalyticsRequestSchema, VariantAnalyticsRequestSchema, GoalAnalyticsRequestSchema,
 } from "../src/index";
 
 describe("Analytics 命名設定のスキーマと検証(spec §10.9)", () => {
@@ -134,5 +136,67 @@ describe("Analytics 命名設定のスキーマと検証(spec §10.9)", () => {
     expect(VariantAnalyticsSchema.safeParse({ evil: 1 }).success).toBe(false);
     expect(ExperimentAnalyticsSchema.safeParse({ overrides: { evil: "x" } }).success).toBe(false);
     expect(VariantAnalyticsSchema.safeParse({ overrides: { evil: "x" } }).success).toBe(false);
+  });
+});
+
+describe("外部計測の値と dataLayer の名前(B77)", () => {
+  it("analyticsValueIssue: 空・100 字超・制御文字・行区切りを弾く", () => {
+    expect(analyticsValueIssue("")?.code).toBe("empty");
+    expect(analyticsValueIssue("a".repeat(100))).toBeNull();
+    expect(analyticsValueIssue("a".repeat(101))?.code).toBe("too_long");
+    for (const c of ["\n", "\t", "\u0000", "\u007f", "\u0085", "\u2028", "\u2029"]) expect(analyticsValueIssue(`購入${c}完了`)?.code).toBe("invalid_char");
+    expect(analyticsValueIssue('購入 "完了" \\ </script>')).toBeNull(); // JS では壊れないので受ける
+    expect(analyticsValueIssue("購入")).toBeNull();
+  });
+
+  it("analyticsValueIssue: message は画面と API にそのまま出す日本語(K12)", () => {
+    expect(analyticsValueIssue("")?.message).toBe("値を入力してください");
+    expect(analyticsValueIssue("a".repeat(101))?.message).toBe("100 字以内で入力してください");
+    expect(analyticsValueIssue("a\nb")?.message).toBe("改行・タブなどの制御文字は使えません");
+  });
+
+  it("resolveExposurePayload: 指定が無ければ ID", () => {
+    const p = resolveExposurePayload({ id: "exp1" }, { id: "b" });
+    expect([p.experimentName, p.variantName]).toEqual(["exp1", "b"]);
+    const q = resolveExposurePayload({ id: "exp1", analytics: { overrides: { experimentName: "Hero" } } }, { id: "b", analytics: { overrides: { variantName: "Blue" } } });
+    expect([q.experimentName, q.variantName]).toEqual(["Hero", "Blue"]);
+  });
+
+  it("resolveConversionPayload: 指定 ?? ID", () => {
+    expect(resolveConversionPayload({ id: "g_cta" })).toEqual({ goalId: "g_cta", goalName: "g_cta" });
+    expect(resolveConversionPayload({ id: "g_buy", analytics: { overrides: { goalName: "購入" } } })).toEqual({ goalId: "g_buy", goalName: "購入" });
+  });
+
+  it("GoalAnalyticsSchema: goalName だけを上書きでき、値は 1〜100 字(K5)", () => {
+    expect(GoalAnalyticsSchema.safeParse({}).success).toBe(true);
+    expect(GoalAnalyticsSchema.safeParse({ overrides: { goalName: "購入" } }).success).toBe(true);
+    expect(GoalAnalyticsSchema.safeParse({ overrides: { goalName: "" } }).success).toBe(false);
+    expect(GoalAnalyticsSchema.safeParse({ overrides: { goalName: "あ".repeat(101) } }).success).toBe(false);
+    expect(GoalAnalyticsSchema.safeParse({ overrides: { goalId: "x" } }).success).toBe(false);
+    expect(GoalAnalyticsSchema.safeParse({ extra: { k: "v" } }).success).toBe(false); // 目標の extra は範囲外
+  });
+
+  it("受け口のスキーマはキーの規則と strict が同じで、値は文字列なら何でも受ける(値の検査はルートの analyticsValueIssue。K12)", () => {
+    expect(ExperimentAnalyticsRequestSchema.safeParse({ overrides: { experimentName: "" }, extra: { k: "x".repeat(101) } }).success).toBe(true);
+    expect(VariantAnalyticsRequestSchema.safeParse({ overrides: { variantName: "a\nb" } }).success).toBe(true);
+    expect(GoalAnalyticsRequestSchema.safeParse({ overrides: { goalName: "" } }).success).toBe(true);
+    // キーの規則・レベルをまたぐ上書き・未知のキーは compile の入力のスキーマと同じく拒否する
+    expect(ExperimentAnalyticsRequestSchema.safeParse({ overrides: { variantName: "y" } }).success).toBe(false);
+    expect(VariantAnalyticsRequestSchema.safeParse({ overrides: { experimentName: "x" } }).success).toBe(false);
+    expect(ExperimentAnalyticsRequestSchema.safeParse({ extra: { ga_x: "v" } }).success).toBe(false);
+    expect(ExperimentAnalyticsRequestSchema.safeParse({ extra: { k: 1 } }).success).toBe(false);
+    expect(GoalAnalyticsRequestSchema.safeParse({ overrides: { goalName: 1 } }).success).toBe(false);
+    expect(GoalAnalyticsRequestSchema.safeParse({ extra: {} }).success).toBe(false);
+    for (const S of [ExperimentAnalyticsRequestSchema, VariantAnalyticsRequestSchema, GoalAnalyticsRequestSchema]) expect(S.safeParse({ evil: 1 }).success).toBe(false);
+  });
+
+  it("analyticsWarnings は解決済みの exposurePayloads と conversionPayloads の値だけを見る", () => {
+    const long = "x".repeat(101);
+    const w = analyticsWarnings({
+      exposurePayloads: { e1: { v1: { experimentId: "e1", experimentName: long, variantId: "v1", variantName: "v1", extra: {} } } },
+      conversionPayloads: { g1: { goalId: "g1", goalName: long }, g2: { goalId: "g2", goalName: "g2" } },
+    });
+    expect(w.map((x) => x.path)).toEqual(["exposurePayloads.e1.v1.experimentName", "conversionPayloads.g1.goalName"]);
+    expect(analyticsWarnings({})).toEqual([]);
   });
 });

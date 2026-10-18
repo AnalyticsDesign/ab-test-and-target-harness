@@ -44,11 +44,12 @@ test("runtime_unknown_schema_applies_nothing", async ({ context, page }) => {
 });
 
 test("control_variant_exposes_when_sibling_selector_present", async ({ context, page }) => {
-  // vA(対照、Change なし)でも exposureSelectors(.hero-title = vB の Change セレクタ)が DOM にあれば 1 回だけ Exposure(spec §10.5)
+  // vA(対照、Change なし)でも exposureSelectors(.hero-title = vB の Change セレクタ)が DOM にあれば 1 回だけ Exposure(spec §10.5)。
+  // B77: 名前(fixture の "Hero copy" / "A")は訪問者に届けない。外部計測の指定が無いので、dataLayer の名前は ID
   await presetVisitor(context, findVisitor("exp_hero", "A"));
   await page.goto("/");
   await expect.poll(async () => (await readDataLayer(page)).filter((e) => e.event === "ab_exposure" && e.ab_experiment_id === "exp_hero")).toEqual([
-    { event: "ab_exposure", ab_experiment_id: "exp_hero", ab_experiment_name: "Hero copy", ab_variant_id: "vA", ab_variant_name: "A", ab_extra: null },
+    { event: "ab_exposure", ab_experiment_id: "exp_hero", ab_experiment_name: "exp_hero", ab_variant_id: "vA", ab_variant_name: "vA", ab_extra: null },
   ]);
 });
 

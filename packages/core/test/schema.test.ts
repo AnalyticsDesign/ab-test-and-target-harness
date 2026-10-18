@@ -6,7 +6,10 @@ import {
 import { TargetingInputSchema } from "../src/targeting";
 import { parseCompiledConfig } from "../src/config-read";
 import { compileRegex } from "../src/regex-compile";
-import { AnalyticsSettingsSchema, ExperimentAnalyticsSchema, VariantAnalyticsSchema, ExposurePayloadSchema } from "../src/analytics";
+import {
+  AnalyticsSettingsSchema, ExperimentAnalyticsSchema, VariantAnalyticsSchema, ExposurePayloadSchema, GoalAnalyticsSchema, ConversionPayloadSchema,
+  ExperimentAnalyticsRequestSchema, VariantAnalyticsRequestSchema, GoalAnalyticsRequestSchema,
+} from "../src/analytics";
 import { SiteSettingsSchema } from "../src/settings";
 import { CompileInputSchema, ExperimentInputSchema, VariantInputSchema } from "../src/compile";
 import { ConsentBodySchema, DecisionBodySchema, DliteRequestSchema, EventBodySchema } from "../src/protocol";
@@ -253,6 +256,32 @@ describe("Goal / CompiledConfig", () => {
     expect(parseCompiledConfig({ ...cfg, schemaVersion: 3 })).toBeNull();
     expect(parseCompiledConfig("junk")).toBeNull();
   });
+  it("compiled_schema_accepts_legacy_names", () => {
+    // B77(K4): KV に残る古い config(名前付き)を edge・deployer・control が読めるように、配る形の name は任意
+    const legacy = {
+      ...cfg,
+      goals: [{ id: "g1", name: "lead", type: "CUSTOM", config: {} }],
+      experiments: [{
+        id: "exp_001", name: "hero", urlMatch: { op: "contains", value: "/lp/" }, trafficPercentage: 100, persistAssignment: false,
+        variants: [{ id: "vA", name: "A", weight: 50, changes: [] }, { id: "vB", name: "B", weight: 50, changes: [] }],
+      }],
+    };
+    const parsed = CompiledConfigSchema.parse(legacy);
+    expect(parsed.experiments[0]!.name).toBe("hero");
+    expect(parsed.goals[0]!.name).toBe("lead");
+    // 名前の無い版も読める。空の名前は今までどおり弾く
+    expect(CompiledConfigSchema.safeParse({ ...cfg, goals: [{ id: "g1", type: "CUSTOM", config: {} }] }).success).toBe(true);
+    expect(CompiledConfigSchema.safeParse({ ...cfg, goals: [{ id: "g1", name: "", type: "CUSTOM", config: {} }] }).success).toBe(false);
+  });
+  it("conversion_payloads_must_match_goals", () => {
+    const goals = [{ id: "g1", type: "CUSTOM", config: {} }];
+    expect(CompiledConfigSchema.safeParse({ ...cfg, goals, conversionPayloads: { g1: { goalId: "g1", goalName: "購入" } } }).success).toBe(true);
+    expect(CompiledConfigSchema.safeParse({ ...cfg, goals, conversionPayloads: {} }).success).toBe(true); // 欠落は runtime の予備の導出(ID)
+    expect(CompiledConfigSchema.safeParse({ ...cfg, goals, conversionPayloads: { g_ghost: { goalId: "g_ghost", goalName: "x" } } }).success).toBe(false); // 存在しない目標
+    expect(CompiledConfigSchema.safeParse({ ...cfg, goals, conversionPayloads: { g1: { goalId: "g2", goalName: "x" } } }).success).toBe(false); // キーと goalId の不一致
+    expect(CompiledConfigSchema.safeParse({ ...cfg, goals, conversionPayloads: { g1: { goalId: "g1", goalName: "" } } }).success).toBe(false); // 空名
+    expect(CompiledConfigSchema.safeParse({ ...cfg, goals, conversionPayloads: { g1: { goalId: "g1", goalName: "x", extra: {} } } }).success).toBe(false); // strict
+  });
   it("サイト全体の命令数が 500 を超える config は読まない(手書き・改竄。fail-closed)", () => {
     const big = (k: number) => ({ part: "path", op: "regex", value: `^/${k}`, prog: { v: 1, sets: [[0, 0, 0, 0]], code: Array.from({ length: 199 * 3 }, (_, i) => (i === 198 * 3 ? 5 : 0)) } });
     const patterns = { a: big(1), b: big(2) };
@@ -341,6 +370,16 @@ describe("schema strictness", () => {
     ["VariantAnalytics", VariantAnalyticsSchema, {}],
     ["VariantAnalytics overrides", VariantAnalyticsSchema, { overrides: { __unknown: "x" } }],
     ["ExposurePayload", ExposurePayloadSchema, { experimentId: "e", experimentName: "E", variantId: "v", variantName: "V", extra: {} }],
+    ["GoalAnalytics", GoalAnalyticsSchema, {}],
+    ["GoalAnalytics overrides", GoalAnalyticsSchema, { overrides: { __unknown: "x" } }],
+    ["ConversionPayload", ConversionPayloadSchema, { goalId: "g", goalName: "G" }],
+    ["ExperimentAnalyticsRequest", ExperimentAnalyticsRequestSchema, {}],
+    ["ExperimentAnalyticsRequest overrides", ExperimentAnalyticsRequestSchema, { overrides: { __unknown: "x" } }],
+    ["VariantAnalyticsRequest", VariantAnalyticsRequestSchema, {}],
+    ["VariantAnalyticsRequest overrides", VariantAnalyticsRequestSchema, { overrides: { __unknown: "x" } }],
+    ["GoalAnalyticsRequest", GoalAnalyticsRequestSchema, {}],
+    ["GoalAnalyticsRequest overrides", GoalAnalyticsRequestSchema, { overrides: { __unknown: "x" } }],
+    ["GoalInput CUSTOM analytics", GoalInputSchema, { id: "g", name: "n", type: "CUSTOM", config: {}, analytics: { overrides: { goalName: "G", __unknown: "x" } } }],
     ["SiteSettings", SiteSettingsSchema, { settingsVersion: 1, siteId: "site_1" }],
     ["SiteSettings resultsCollectUntil", SiteSettingsSchema, { settingsVersion: 1, siteId: "site_1", resultsCollectUntil: { AAAAAAAAAAAAAAAAAAAAAA: 1 } }],
     ["SiteSettings previousCookieNames", SiteSettingsSchema, { settingsVersion: 1, siteId: "site_1", previousCookieNames: [{ name: "_old", until: 1, __unknown: 1 }] }],

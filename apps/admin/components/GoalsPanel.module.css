@@ -1,0 +1,25 @@
+/* 目標の一覧の編集パネルと追加フォームの外部計測(B77。モック b77_goals_mock_v1 が正) */
+.table tr.open > td { background: var(--sunken); border-bottom: 0; }
+.table td.panelCell { padding: 0 14px 16px; background: var(--sunken); height: auto; }
+.actions { display: flex; gap: 8px; justify-content: flex-end; }
+.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+/* 一覧の「目標名 …」の印。長い名前は 220px で … に切り、全文は title で見せる(K15) */
+.nameBadge { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.none { color: var(--muted); font-size: 12.5px; }
+
+.panel { display: flex; flex-direction: column; gap: 14px; padding: 16px 20px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); }
+.panel :global(.field) { margin-bottom: 0; }
+.narrow { max-width: 440px; }
+.secHead { display: flex; align-items: center; gap: 6px; }
+.secHead h3 { margin: 0; font-size: 13.5px; font-weight: 600; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 12px; align-items: start; }
+.split input { width: 100%; }
+@media (max-width: 1000px) { .split { grid-template-columns: minmax(0, 1fr); } }
+.note { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.foot { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* 追加フォーム: ID の欄の ⓘ は label の外に置く(label の中のボタンは入力欄への紐づけを奪う) */
+.labelRow { display: inline-flex; align-items: center; gap: 4px; }
+.labelRow :global(.field-label) { margin: 0; }
+.addSplit { padding-left: 20px; }

@@ -38,6 +38,7 @@ export function ChangeEditor({
   disabled,
   pageUrl,
   imageUpload,
+  error,
 }: {
   change: Change;
   onChange: (c: Change) => void;
@@ -45,6 +46,8 @@ export function ChangeEditor({
   disabled?: boolean;
   pageUrl: string | null;
   imageUpload: boolean;
+  /** HTML の欄のエラー(B8: 保存の前に空の HTML を見つけたとき、呼び出し側が「HTML を入力してください」を渡す) */
+  error?: string;
 }) {
   const allowed = changeTypeOptions(imageUpload, change.type);
   const p = change.payload as Record<string, string | boolean>;
@@ -145,7 +148,13 @@ export function ChangeEditor({
               disabled={disabled}
               onChange={(e) => setP({ html: e.target.value })}
               onKeyDown={onCodeKeyDown("html")}
+              aria-invalid={error ? true : undefined}
             />
+            {error ? (
+              <span role="alert" className="field-error">
+                {error}
+              </span>
+            ) : null}
           </label>
           <div className="row">
             <Picker

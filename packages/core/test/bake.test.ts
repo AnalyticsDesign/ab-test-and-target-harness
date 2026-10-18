@@ -43,6 +43,24 @@ describe("bakeBootstrap", () => {
     const out = bakeBootstrap(cfg, settings, "x", { apiBase: null });
     expect(out).not.toContain("apiBase");
   });
+  it("bake_output_has_no_name_keys", () => {
+    const settings = parseSiteSettings({ settingsVersion: 1, siteId: "site_b" })!;
+    const named: CompiledConfig = {
+      ...cfg,
+      goals: [{ id: "g1", name: "購入完了", type: "CUSTOM", config: {} }],
+      experiments: [{
+        id: "e1", name: "社内名", trafficPercentage: 100, persistAssignment: false, urlMatch: { op: "contains", value: "/lp/" },
+        variants: [{ id: "a", name: "A案", weight: 50, changes: [] }, { id: "b", name: "B案", weight: 50, changes: [] }],
+      }],
+    };
+    const out = bakeBootstrap(named, settings, "/*RUNTIME*/");
+    const boot = JSON.parse(out.slice(out.indexOf("=") + 1, out.lastIndexOf(";\n")));
+    expect(JSON.stringify({ e: boot.config.experiments, g: boot.config.goals })).not.toMatch(/"name"/);
+    // 出力(dataLayer)を保つため、名前だった値は payload に移っている。runtime の isExposurePayloads との照合は runtime 側のテスト
+    expect(boot.config.exposurePayloads.e1.b).toEqual({ experimentId: "e1", experimentName: "社内名", variantId: "b", variantName: "B案", extra: {} });
+    expect(boot.config.conversionPayloads.g1).toEqual({ goalId: "g1", goalName: "購入完了" });
+    expect(named.experiments[0]!.name).toBe("社内名"); // 入力は書き換えない
+  });
   it("BOOTSTRAP_LIMITS は決定 50 の値で、runtime の build の検査値と同じ", async () => {
     expect(BOOTSTRAP_LIMITS).toEqual({ totalBytes: 14336, headerAllowance: 512, runtimeGzipMax: 11264 });
     const { readFileSync } = await import("node:fs");

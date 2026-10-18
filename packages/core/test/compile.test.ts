@@ -145,9 +145,9 @@ describe("compile", () => {
       extra: { test_group: "pricing_q3_b", campaign: "autumn" },
     };
     const cfg = compile({ ...base, experiments: [e] });
-    // vA: experimentName は Experiment の override、variantName は導出値(Variant の name)。extra は Experiment のもの
+    // vA: experimentName は Experiment の override、variantName は指定が無いので Variant の ID(B77)。extra は Experiment のもの
     expect(cfg.exposurePayloads!["exp_001"]!["vA"]).toEqual({
-      experimentId: "exp_001", experimentName: "Hero Q3", variantId: "vA", variantName: "A",
+      experimentId: "exp_001", experimentName: "Hero Q3", variantId: "vA", variantName: "vA",
       extra: { test_group: "pricing_q3", external_exp_id: "E-101" },
     });
     // vB: variantName は Variant の override。extra はキー単位の浅いマージで Variant が同名キーを上書き
@@ -162,12 +162,12 @@ describe("compile", () => {
     const crossed2 = exp();
     (crossed2.variants[1] as unknown as Record<string, unknown>).analytics = { overrides: { experimentName: "Mine" } };
     expect(() => compile({ ...base, experiments: [crossed2] })).toThrowError(expect.objectContaining({ code: "invalid_input" }));
-    // 導出値のみ(analytics 無し)でも必ずエントリを焼く。extra は {}
+    // 導出値のみ(analytics 無し)でも必ずエントリを焼く。名前は ID(B77: 管理用の名前は訪問者に届けない)。extra は {}
     const plain = compile({ ...base, experiments: [exp()] });
     expect(plain.exposurePayloads).toEqual({
       exp_001: {
-        vA: { experimentId: "exp_001", experimentName: "hero", variantId: "vA", variantName: "A", extra: {} },
-        vB: { experimentId: "exp_001", experimentName: "hero", variantId: "vB", variantName: "B", extra: {} },
+        vA: { experimentId: "exp_001", experimentName: "exp_001", variantId: "vA", variantName: "vA", extra: {} },
+        vB: { experimentId: "exp_001", experimentName: "exp_001", variantId: "vB", variantName: "vB", extra: {} },
       },
     });
   });
@@ -205,6 +205,44 @@ describe("compile", () => {
     const { exposurePayloads: _omit, ...legacy } = cfg;
     expect(CompiledConfigSchema.safeParse(legacy).success).toBe(true);
     expect(cfg.schemaVersion).toBe(2);
+  });
+
+  it("compile_output_has_no_names", () => {
+    // B77: エクスペリエンス・パターン・目標の名前は管理画面の中だけで使う。compiled config(訪問者のブラウザに届く)には出さない
+    const e = exp();
+    e.name = "社内の部長案";
+    e.variants[1]!.name = "部長の推しパターン";
+    const cfg = compile({ ...base, goals: [{ id: "g_lead", name: "社内の目標名", type: "CUSTOM", config: {} }], experiments: [e] });
+    for (const x of cfg.experiments) {
+      expect("name" in x).toBe(false);
+      for (const v of x.variants) expect("name" in v).toBe(false);
+    }
+    for (const g of cfg.goals) expect("name" in g).toBe(false);
+    const text = JSON.stringify(cfg);
+    for (const name of ["社内の部長案", "部長の推しパターン", "社内の目標名"]) expect(text).not.toContain(name);
+    // 入力では名前は必須のまま(管理画面の中で使う)
+    const { name: _n, ...nameless } = exp();
+    expect(() => compile({ ...base, experiments: [nameless] })).toThrowError(expect.objectContaining({ code: "invalid_input" }));
+    expect(() => compile({ ...base, goals: [{ id: "g_lead", type: "CUSTOM", config: {} }], experiments: [] })).toThrowError(expect.objectContaining({ code: "invalid_input" }));
+  });
+
+  it("compile_emits_conversion_payloads_for_every_goal", () => {
+    // B77(K5): ab_goal_name = 目標の外部計測の名前 ?? 目標 ID。compile はすべての目標について出し、著者の analytics は goals[] から取り除く
+    const cfg = compile({
+      ...base,
+      goals: [
+        { id: "g_buy", name: "購入(社内)", type: "CUSTOM", config: {}, analytics: { overrides: { goalName: "購入" } } },
+        { id: "g_cta", name: "CTA(社内)", type: "CLICK", config: { selector: ".cta" } },
+      ],
+      experiments: [],
+    });
+    expect(cfg.conversionPayloads).toEqual({ g_buy: { goalId: "g_buy", goalName: "購入" }, g_cta: { goalId: "g_cta", goalName: "g_cta" } });
+    for (const g of cfg.goals) expect("analytics" in g).toBe(false);
+    expect(cfg.goals[1]).toEqual({ id: "g_cta", type: "CLICK", config: { selector: ".cta" } });
+    // 目標の外部計測の値は 1〜100 字(compile の入力のスキーマ)
+    expect(() => compile({ ...base, goals: [{ id: "g", name: "g", type: "CUSTOM", config: {}, analytics: { overrides: { goalName: "" } } }], experiments: [] })).toThrowError(
+      expect.objectContaining({ code: "invalid_input" }),
+    );
   });
 
   it("exposure payload entries must match their record keys and refer to existing experiments / variants (spec §10.9 contract)", () => {
@@ -310,7 +348,7 @@ describe("compile: 版 2(決定 49)", () => {
   });
 
   it("目標の PAGEVIEW は保存形 { page } を受ける(版 1 の { urlOp, urlValue } は invalid_input)", () => {
-    expect(compile({ ...base, goals: [{ id: "g", name: "g", type: "PAGEVIEW", config: { page: { op: "contains", value: "/thanks" } } }], experiments: [] }).goals[0]).toEqual({ id: "g", name: "g", type: "PAGEVIEW", config: { page: { op: "contains", value: "/thanks" } } });
+    expect(compile({ ...base, goals: [{ id: "g", name: "g", type: "PAGEVIEW", config: { page: { op: "contains", value: "/thanks" } } }], experiments: [] }).goals[0]).toEqual({ id: "g", type: "PAGEVIEW", config: { page: { op: "contains", value: "/thanks" } } });
     expect(() => compile({ ...base, goals: [{ id: "g", name: "g", type: "PAGEVIEW", config: { urlOp: "contains", urlValue: "/thanks" } }], experiments: [] })).toThrowError(expect.objectContaining({ code: "invalid_input" }));
   });
 

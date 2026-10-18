@@ -24,6 +24,33 @@ describe("public strings carry no private design references", () => {
     noPrivateRef("analytics-recipe", JSON.stringify(await json(res)));
   });
 
+  it("b77_openapi_fields_and_value_envelopes", async () => {
+    // B77: 目標の analytics・パターンの original / description・パターンのメモのルートが文書に載り、その説明に非公開参照が無い
+    const doc = (await (await call("GET", "/openapi.json")).json()) as { paths: Record<string, Record<string, unknown>> };
+    const memoRoute = doc.paths["/sites/{sid}/experiments/{eid}/variants/{vid}"]?.patch;
+    expect(memoRoute).toBeDefined();
+    noPrivateRef("PATCH …/variants/{vid}", JSON.stringify(memoRoute));
+    for (const [path, method] of [
+      ["/sites/{sid}/goals", "post"],
+      ["/sites/{sid}/goals/{gid}", "patch"],
+      ["/sites/{sid}/experiments/{eid}/variants", "put"],
+    ] as const) {
+      const op = JSON.stringify(doc.paths[path]?.[method]);
+      expect(op, `${method} ${path}`).toMatch(/"(analytics|original)"/);
+      noPrivateRef(`${method} ${path}`, op);
+    }
+    // 値の検査の封筒と、名前の長さの封筒(hint を改めた)
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    const value = await call("POST", `/sites/${sid}/goals`, { token, body: { id: "g_x", name: "x", type: "CUSTOM", config: {}, analytics: { overrides: { goalName: "改\n行" } } } });
+    expect(value.status).toBe(422);
+    noPrivateRef("invalid_analytics_value", JSON.stringify(await json(value)));
+    const name = await call("POST", `/sites/${sid}/goals`, { token, body: { id: "g_y", name: "あ".repeat(101), type: "CUSTOM", config: {} } });
+    const nameBody = await json(name);
+    expect(nameBody.hint).toBe("名前は管理画面の中だけで使います。100 字以内にしてください");
+    noPrivateRef("name_too_long", JSON.stringify(nameBody));
+  });
+
   it("error_envelopes_with_hints", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);

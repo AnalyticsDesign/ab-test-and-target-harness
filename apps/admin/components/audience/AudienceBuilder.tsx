@@ -37,7 +37,7 @@ export function AudienceBuilder({ wid, siteId, audience, audiences, goals, site,
   const dndId = useId();
   // 保存値は unknown のまま渡す。core の検査を通らない値・変換できない値は null(= 読み取り専用。plan ② P16)
   const initial = audienceTreeFromDsl(audience ? audience.definition : null);
-  const raw = initial === null; // 画面で表せない定義(plan ② P16)。名前と説明だけ保存できる
+  const raw = initial === null; // 画面で表せない定義(plan ② P16)。名前とメモだけ保存できる
   const [root, setRoot] = useState<Group>(() => initial ?? audienceTreeFromDsl(null)!);
   const [name, setName] = useState(audience?.name ?? "");
   const [description, setDescription] = useState(audience?.description ?? "");
@@ -201,13 +201,13 @@ export function AudienceBuilder({ wid, siteId, audience, audiences, goals, site,
                 <input value={id} disabled={!!audience || ctx.disabled} pattern="[a-z0-9][a-z0-9_\-]{0,63}" onChange={(e) => setManualId(e.target.value)} />
               </label>
               <label style={{ gridColumn: "1 / -1" }}>
-                説明(任意)
+                メモ(任意)
                 <input value={description} maxLength={500} disabled={ctx.disabled} onChange={(e) => setDescription(e.target.value)} />
               </label>
             </div>
             {raw ? (
               <div className={t.raw} role="note">
-                この条件はこの画面で表せません(古い書式などを含みます)。画面からは条件を変更できないので、API で書き換えてください。名前と説明は保存できます。
+                この条件はこの画面で表せません(古い書式などを含みます)。画面からは条件を変更できないので、API で書き換えてください。名前とメモは保存できます。
                 <pre className={t.json}>{JSON.stringify(audience?.definition, null, 2)}</pre>
               </div>
             ) : (

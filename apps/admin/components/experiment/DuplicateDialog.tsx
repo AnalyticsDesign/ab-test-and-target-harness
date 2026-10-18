@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { api, describeError } from "@/lib/client";
-import { duplicateBody, duplicateNotes, duplicateVariantOptions, initialDuplicateState, withMode, withName, withVariant } from "@/lib/duplicate";
+import { duplicateBody, duplicateNotes, duplicateVariantModeIssue, duplicateVariantOptions, initialDuplicateState, withMode, withName, withVariant } from "@/lib/duplicate";
 import type { Experiment } from "@/lib/types";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Picker } from "../ui/Picker";
@@ -17,6 +17,8 @@ export function DuplicateDialog({ wid, siteId, experiment, open, onClose }: { wi
   const [error, setError] = useState<string | null>(null);
   const single = experiment.kind === "single";
   const notes = duplicateNotes(experiment, s);
+  // B77: 変更のあるパターンが無い(オリジナルだけの)テストは「選んだパターンだけを表示」を選べない。理由を選択肢の下に出す
+  const variantModeIssue = duplicateVariantModeIssue(experiment);
   return (
     <ConfirmDialog
       open={open}
@@ -55,17 +57,22 @@ export function DuplicateDialog({ wid, siteId, experiment, open, onClose }: { wi
             </span>
           </label>
           <label className="row" style={{ gap: 8, alignItems: "flex-start" }}>
-            <input type="radio" name="dup-mode" checked={s.mode === "variant"} onChange={() => setS(withMode(experiment, s, "variant"))} />
+            <input type="radio" name="dup-mode" checked={s.mode === "variant"} disabled={variantModeIssue !== null} onChange={() => setS(withMode(experiment, s, "variant"))} />
             <span>
               選んだパターンだけを表示するエクスペリエンスを作成
               <span className="muted" style={{ display: "block" }}>選んだパターンの変更を引き継ぎます。開始すると、条件に合う訪問者全員に表示します。振り分けや比較はしません</span>
+              {variantModeIssue ? (
+                <span className="field-hint" style={{ display: "block" }}>
+                  {variantModeIssue}
+                </span>
+              ) : null}
             </span>
           </label>
           <div style={{ marginLeft: 24 }}>
             {/* Picker は自分でラベルを描かない(aria-label だけ)ので見出しを前に置く。listbox を持つので label で包まない */}
             <div className="field">
               <span className="field-label">表示するパターン</span>
-              <Picker label="表示するパターン" value={s.variantId} options={duplicateVariantOptions(experiment)} disabled={s.mode !== "variant"} onChange={(v) => setS(withVariant(experiment, s, v))} />
+              <Picker label="表示するパターン" value={s.variantId} options={duplicateVariantOptions(experiment)} disabled={s.mode !== "variant" || variantModeIssue !== null} onChange={(v) => setS(withVariant(experiment, s, v))} />
             </div>
             {notes.map((n) => (
               <p key={n} className="banner-warn" style={{ display: "block" }}>

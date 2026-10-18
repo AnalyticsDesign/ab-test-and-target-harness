@@ -65,11 +65,12 @@ describe("experiments / variants", () => {
     res = await call("PATCH", `/sites/${sid}/experiments/${id}`, { token, body: { analytics: { overrides: { variantName: "x" } } } });
     expect(res.status).toBe(422);
     expect((await json(res)).error).toBe("validation_failed");
-    // 値の長さは core の schema が authored 段階で拒否する(§10.9)
+    // 値の長さは保存のルートの値の検査が拒否する(B77 K12。受け口のスキーマは値を文字列として受けるだけ)
     res = await call("PATCH", `/sites/${sid}/experiments/${id}`, { token, body: { analytics: { extra: { test_group: "x".repeat(101) } } } });
     const tooLong = await json(res);
     expect(res.status).toBe(422);
-    expect(tooLong.error).toBe("validation_failed");
+    expect(tooLong.error).toBe("invalid_analytics_value");
+    expect(tooLong.code).toBe("too_long");
     expect(tooLong.path).toEqual(["analytics", "extra", "test_group"]);
     expect((await call("PATCH", `/sites/${sid}/experiments/${id}`, { token, body: { analytics: { overrides: { experimentName: "Hero copy" }, extra: { test_group: "q3" } } } })).status).toBe(200);
     // 解決後のキー数(Experiment 15 + Variant 6 = 21 > 20)は保存時に invalid_analytics

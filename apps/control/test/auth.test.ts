@@ -177,6 +177,7 @@ describe("setup and sign-up gate", () => {
       "PATCH /sites/{sid}",
       "PATCH /sites/{sid}/audiences/{aid}",
       "PATCH /sites/{sid}/experiments/{eid}",
+      "PATCH /sites/{sid}/experiments/{eid}/variants/{vid}",
       "PATCH /sites/{sid}/goals/{gid}",
       "PATCH /usage/settings",
       "PATCH /workspaces/{wid}/members/{memberId}",

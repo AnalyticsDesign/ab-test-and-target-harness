@@ -56,12 +56,12 @@ export const SiteJsonSchema = z.object({
 });
 
 export function goalJson(row: GoalRow) {
-  return { id: row.id, name: row.name, type: row.type, config: JSON.parse(row.config_json), createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: row.id, name: row.name, type: row.type, config: JSON.parse(row.config_json), analytics: row.analytics_json ? JSON.parse(row.analytics_json) : null, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 export function experimentJson(row: ExperimentRow, extra: { unpublished: boolean }) {
   return {
-    id: row.id, siteId: row.site_id, name: row.name, kind: row.kind, status: row.status, publishedStatus: row.published_status,
+    id: row.id, siteId: row.site_id, name: row.name, description: row.description, kind: row.kind, status: row.status, publishedStatus: row.published_status,
     urlMatch: JSON.parse(row.url_match_json), targeting: row.targeting_json ? JSON.parse(row.targeting_json) : null,
     trafficPercentage: row.traffic_percentage, persistAssignment: row.persist_assignment === 1,
     analytics: row.analytics_json ? JSON.parse(row.analytics_json) : null,

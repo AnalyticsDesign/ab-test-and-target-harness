@@ -4,3 +4,5 @@
 .item:hover, .item[aria-current="true"] { background: var(--nav-active); color: var(--text); }
 .danger { color: var(--danger); }
 .mark { width: 6px; height: 6px; border-radius: 999px; background: var(--danger); margin-left: auto; }
+/* 狭い幅ではメニューと本文を縦に並べる(B31 ⑤。管理画面の区切り 760px にそろえる)。縦に並べたらメニューを貼り付けない(本文に重なるため) */
+@media (max-width: 760px) { .layout { grid-template-columns: minmax(0, 1fr); } .nav { position: static; } }

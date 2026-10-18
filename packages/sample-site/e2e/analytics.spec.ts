@@ -22,18 +22,19 @@ test("renamed_exposure_keys_reach_datalayer", async ({ context, page }) => {
   expect(pushes.filter((e) => e.event === EXPOSURE && e.wtt_exp_id === "exp_pricing")).toEqual([
     { event: EXPOSURE, wtt_exp_id: "exp_pricing", wtt_exp_name: "Pricing Q3", wtt_var_id: "vB", wtt_var_name: "New hero", [EXTRA]: { test_group: "pricing_q3_b", external_exp_id: "E-101" } },
   ]);
-  // exp_promo: 割当は ID 次第なので bucket から期待 Variant を算出。extra は Experiment 単位で Variant に依らない
+  // exp_promo: 割当は ID 次第なので bucket から期待 Variant を算出。extra は Experiment 単位で Variant に依らない。
+  // B77: 名前の指定が無いので、dataLayer の名前は ID(fixture の名前 "Promo" / "A" / "B" は訪問者に届けない)
   const promoVariant = bucketOf(id, "exp_promo") < 5000 ? "vA" : "vB";
   expect(pushes.filter((e) => e.event === EXPOSURE && e.wtt_exp_id === "exp_promo")).toEqual([
-    { event: EXPOSURE, wtt_exp_id: "exp_promo", wtt_exp_name: "Promo", wtt_var_id: promoVariant, wtt_var_name: promoVariant === "vA" ? "A" : "B", [EXTRA]: { campaign: "autumn" } },
+    { event: EXPOSURE, wtt_exp_id: "exp_promo", wtt_exp_name: "exp_promo", wtt_var_id: promoVariant, wtt_var_name: promoVariant, [EXTRA]: { campaign: "autumn" } },
   ]);
   // 既定名は一切出ない(名札はサイト単位で置き換わる)
   for (const p of pushes) for (const k of Object.keys(p)) expect(k.startsWith("ab_"), `${k} in ${JSON.stringify(p)}`).toBe(false);
   expect(pushes.some((p) => p.event === "ab_exposure")).toBe(false);
-  // conversion も同じサイト設定の名前で、名前空間を null にして 1 回で push する
+  // conversion も同じサイト設定の名前で、名前空間を null にして 1 回で push する。目標名の指定が無いので名前は目標 ID(B77)
   await page.click("#cta");
   await expect.poll(async () => (await readDataLayer(page)).filter((e) => e.event === CONVERSION)).toEqual([
-    { event: CONVERSION, wtt_goal_id: "g_cta", wtt_goal_name: "CTA click", [EXTRA]: null },
+    { event: CONVERSION, wtt_goal_id: "g_cta", wtt_goal_name: "g_cta", [EXTRA]: null },
   ]);
 });
 

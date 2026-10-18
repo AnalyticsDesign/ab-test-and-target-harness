@@ -1,4 +1,4 @@
-import type { ExperimentKind } from "@wtt/core";
+import type { AnalyticsSettings, ExperimentKind } from "@wtt/core";
 import type { PageMatchValue } from "./page-match";
 /**
  * control が返す JSON の形(apps/control/src/serialize.ts と各ルートの zod スキーマに一致させる)。
@@ -35,7 +35,8 @@ export type Invitation = { id: string; email: string; role: Role | null; status:
 /** `POST /workspaces/:wid/invitations` の結果。`extended: true` = 同じ Role の招待が既にあり、そのリンクの期限を延ばした(id / url は前と同じ) */
 export type InvitationResult = { id: string; url: string; expiresAt: number; extended: boolean };
 export type PublicInvitation = { id: string; email: string; role: Role | null; workspaceName: string; status: string; expiresAt: number };
-export type AnalyticsSettings = { dataLayerName: string; extraKey: string; exposure: { event: string; keys: Record<string, string> }; conversion: { event: string; keys: Record<string, string> } };
+/** サイトの外部計測の名札。control は既定値で埋めた全項目を返すので core の型をそのまま使う(B77: 出力プレビューがキー名を引くため) */
+export type { AnalyticsSettings };
 export type Site = {
   id: string; workspaceId: string; name: string; domain: string; mode: "A" | "B"; idSource: string; allowedOrigins: string[]; hosts: string[];
   retentionDays: number; consentMode: "implicit" | "required"; forgetOnRevoke: boolean; resultsEnabled: boolean; resultsRetentionDays: number; timezone: string; decisionTimeoutMs: number; visitorCookieName: string; uuidCookieEnabled: boolean; uuidCookieName: string;
@@ -51,11 +52,14 @@ export type ChangeType = "TEXT" | "IMAGE" | "HIDE" | "ATTRIBUTE" | "HTML" | "CSS
  * (type 切り替え・追加時は control が保存時に付け直すので値を持たない)ため任意にする
  */
 export type Change = { id: string; type: ChangeType; selector?: string; payload: Record<string, unknown>; updatedBy?: string; updatedAt?: number };
-export type Variant = { id: string; name: string; weight: number; analytics: { overrides?: { variantName?: string }; extra?: Record<string, string> } | null; changes: Change[] };
+/** B77: original = 元のページのまま表示するパターン(変更を持てない)、description = メモ(社内用。config には出ない) */
+export type Variant = { id: string; name: string; weight: number; original: boolean; description: string; analytics: { overrides?: { variantName?: string }; extra?: Record<string, string> } | null; changes: Change[] };
 export type Experiment = {
   id: string; siteId: string; name: string; kind: ExperimentKind; status: Status; publishedStatus: Status | null; urlMatch: PageMatchValue; targeting: unknown | null;
   trafficPercentage: number; persistAssignment: boolean; analytics: { overrides?: { experimentName?: string }; extra?: Record<string, string> } | null;
   createdBy: string; updatedBy: string; createdAt: number; updatedAt: number; unpublished: boolean;
+  /** メモ(社内用。config には出ない。B77) */
+  description: string;
   /** 結果の記録の ID(結果を記録する Site でテストを開始したときに 1 回だけ振る。無ければ null) */
   runId: string | null;
   /** `GET /sites/:sid/experiments/:eid` だけが返す */
@@ -79,7 +83,8 @@ export type PublishPreview = {
   /** 同じ対象 URL で同じ要素を変える配信中のエクスペリエンスの組(experimentIds = [優先の低い方, 高い方]) */
   overlaps: Array<{ path: string; message: string; experimentIds: string[] }>;
 };
-export type Goal = { id: string; name: string; type: "PAGEVIEW" | "CLICK" | "CUSTOM"; config: Record<string, unknown>; createdAt: number; updatedAt: number };
+/** analytics = 目標の外部計測(B77。goalName を指定しなければ ab_goal_name は目標 ID。無ければ null) */
+export type Goal = { id: string; name: string; type: "PAGEVIEW" | "CLICK" | "CUSTOM"; config: Record<string, unknown>; analytics: { overrides?: { goalName?: string } } | null; createdAt: number; updatedAt: number };
 /** backlog D13: 書き込みの凍結の状態。reason = null は「凍結の設定が読めない」(凍結中として扱う) */
 export type WriteFreezeState = { reason: string | null; until: string | null; since: number | null };
 /** `GET /capabilities`。この導入で使える機能(control の env から決まる) */

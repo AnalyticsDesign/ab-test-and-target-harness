@@ -14,6 +14,7 @@ export * from "./what-if";
 export * from "./targeting";
 export * from "./compile";
 export * from "./settings";
+export * from "./legacy-names";
 export * from "./bake";
 export * from "./static-deploy";
 export * from "./protocol";

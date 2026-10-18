@@ -103,14 +103,14 @@ const EvaluateResultSchema = z.object({
 
 /** compile を通していない Experiment(archived / 配信中の config に無いもの)の weights 用 */
 function stubExperiment(row: ExperimentRow, variants: VariantRow[]): Experiment {
+  // B77(K22): compile の出力と同じく名前を持たせない(名前は管理画面の中だけ)
   return {
     id: row.id,
-    name: row.name,
     urlMatch: JSON.parse(row.url_match_json),
     ...(row.targeting_json ? { targeting: JSON.parse(row.targeting_json) } : {}),
     trafficPercentage: row.traffic_percentage,
     persistAssignment: row.persist_assignment === 1,
-    variants: variants.filter((v) => v.experiment_id === row.id).map((v) => ({ id: v.id, name: v.name, weight: v.weight, changes: [] })),
+    variants: variants.filter((v) => v.experiment_id === row.id).map((v) => ({ id: v.id, weight: v.weight, changes: [] })),
   } as Experiment;
 }
 

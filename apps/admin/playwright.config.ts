@@ -66,5 +66,7 @@ export default defineConfig({
     { name: "write-freeze", testMatch: /write-freeze\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     { name: "experiment-kind", testMatch: /experiment-kind-flow/, dependencies: ["publish"], use: { browserName: "chromium" } },
     { name: "results-settings", testMatch: /results-settings\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    // B77: パターン UI と目標名(専用のサイトを作るので publish-flow の状態には触らないが、owner の setup は publish-flow が行う)
+    { name: "variant-ui", testMatch: /variant-ui\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
   ],
 });

@@ -25,15 +25,12 @@ export function createExposureTracker(
       if (variantId === undefined) return;
       exposed.add(experimentId);
       // compile が焼いた解決済み payload(§10.9)。形は parseBootPayload(isExposurePayloads)が起動前に検証済みで、ここでは欠落だけを扱う。
-      // 無ければ experiments[] から導出する — runtime が持つ唯一の導出で、exposurePayloads を持たない旧 config のための互換
-      //(合成ロジックはここには無い: overrides / extra は見ない)
+      // 無ければ ID を名前にする(B77: config は名前を持たない。古い config の名前は bake の前に core が payload へ移す)
       const resolved = config.exposurePayloads?.[experimentId]?.[variantId];
-      const exp = resolved ? undefined : config.experiments.find((e) => e.id === experimentId);
-      const variant = exp?.variants.find((v) => v.id === variantId);
       // ID は割当由来のローカル値を使い、payload 内の ID コピーは読まない — GA4 に出る ID とバケッティングに使った ID が
       // 食い違う経路を構造的に無くす(§10.9 合成規則が ID 上書きを禁じた根拠)。payload から読むのは name と extra だけ
-      const experimentName = resolved?.experimentName ?? exp?.name ?? experimentId;
-      const variantName = resolved?.variantName ?? variant?.name ?? variantId;
+      const experimentName = resolved?.experimentName ?? experimentId;
+      const variantName = resolved?.variantName ?? variantId;
       const extra = resolved?.extra ?? {};
       const k = names.exposure.keys;
       push({ [names.extraKey]: null });

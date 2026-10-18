@@ -153,7 +153,7 @@ it("AB.track pushes ab_conversion for a known CUSTOM goal (spec §10.6 / §10.8)
   api.track("g_cta");
   api.track("g_unknown"); // 未知は無視
   expect(dataLayer().filter((e) => e.event === "ab_conversion")).toEqual([
-    { event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "CTA click", ab_extra: null },
+    { event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "g_cta", ab_extra: null },
   ]);
 });
 
@@ -184,10 +184,35 @@ it("legacy_config_without_analytics_uses_default_names", async () => {
   await flush();
   expect(dataLayer()).toEqual([
     { ab_extra: null },
-    { event: "ab_exposure", ab_experiment_id: "exp_hero", ab_experiment_name: "Hero", ab_variant_id: "vB", ab_variant_name: "B", ab_extra: null },
+    { event: "ab_exposure", ab_experiment_id: "exp_hero", ab_experiment_name: "exp_hero", ab_variant_id: "vB", ab_variant_name: "vB", ab_extra: null },
   ]);
   api.track("g_cta");
-  expect(dataLayer()[2]).toEqual({ event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "CTA click", ab_extra: null });
+  expect(dataLayer()[2]).toEqual({ event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "g_cta", ab_extra: null });
+});
+
+it("conversion_uses_conversion_payload", async () => {
+  // B77: 目標名は compile が焼いた conversionPayloads から取る(config の goals[].name は見ない)
+  const f = deferredFetch();
+  const config = { ...baseConfig, conversionPayloads: { g_cta: { goalId: "g_cta", goalName: "購入" } } };
+  const api = createRuntime(makeDeps(f.fn), { config, settings: baseSettings });
+  await flush();
+  api.track("g_cta");
+  expect(dataLayer().filter((e) => e.event === "ab_conversion")).toEqual([
+    { event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "購入", ab_extra: null },
+  ]);
+});
+
+it("conversion_falls_back_to_goal_id", async () => {
+  // 組が無い(別の目標の組だけある)なら目標 ID。config に name が残っていても使わない
+  const f = deferredFetch();
+  const config = { ...baseConfig, conversionPayloads: { g_other: { goalId: "g_other", goalName: "別" } } };
+  expect(baseConfig.goals[0]!.name).toBe("CTA click");
+  const api = createRuntime(makeDeps(f.fn), { config, settings: baseSettings });
+  await flush();
+  api.track("g_cta");
+  expect(dataLayer().filter((e) => e.event === "ab_conversion")).toEqual([
+    { event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "g_cta", ab_extra: null },
+  ]);
 });
 
 it("custom_datalayer_name_receives_exposure_and_conversion", async () => {
@@ -544,7 +569,7 @@ it("pageview_goal_fires_once_per_load_and_posts_event", async () => {
   createRuntime(makeDeps(f.fn), { config: goalsConfig, settings: baseSettings });
   await flush();
   expect(dataLayer().filter((e) => e.event === "ab_conversion")).toEqual([
-    { event: "ab_conversion", ab_goal_id: "g_pv", ab_goal_name: "Pricing view", ab_extra: null },
+    { event: "ab_conversion", ab_goal_id: "g_pv", ab_goal_name: "g_pv", ab_extra: null },
   ]);
   expect(eventCalls(f)).toEqual([{ type: "goal", goalId: "g_pv", visitorId: VB }]);
   expect(f.calls.find((c) => c.url.includes("/event"))!.url).toBe("https://edge.test/v1/sites/site_unit/event"); // scriptSrc 基準
