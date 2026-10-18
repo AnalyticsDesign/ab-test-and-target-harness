@@ -61,12 +61,21 @@ export function edgeOnWorkersDev(env: Env): boolean {
   return host === "workers.dev" || host.endsWith(".workers.dev");
 }
 
+/**
+ * D9 ②(設計書 §6.6): 計測用 D1(wtt-results)の binding があるか。無ければ Site で結果の記録を有効にできず(409 results_store_missing)、
+ * 開始してもテストに run_id を振らない。edge 側の準備(binding と secret)は導入の手順で確かめる
+ */
+export function resultsStore(env: Env): boolean {
+  return env.RESULTS_DB !== undefined;
+}
+
 export const CapabilitiesSchema = z.object({
   imageUpload: z.boolean().describe("画像アップロードと IMAGE の変更が使えるか(R2 と公開ベース URL が設定されているとき true)"),
   edgeOrigin: z.string().nullable().describe("edge(訪問者のブラウザが decision / event を送る先)の公開 origin。未設定なら null"),
   tagOrigin: z.string().nullable().describe("設置タグ(/s/<siteId>.js)を配る公開 origin。未設定なら null"),
   edgeOnWorkersDev: z.boolean().describe("edge を *.workers.dev で公開しているか(ゾーンの WAF・キャッシュ・Mode B(サーバー発行 Cookie)が使えない構成)"),
   passwordLogin: z.boolean().describe("メール + パスワードのログインが開いているか(非常時だけ true。普段は Google ログインのみ)"),
+  resultsStore: z.boolean().describe("結果を記録するための計測用データベースが導入されているか"),
   writeFreeze: z
     .object({
       reason: z.string().nullable().describe("凍結の理由。null = 凍結の設定が読めない(凍結中として扱う)"),
@@ -80,5 +89,8 @@ export type Capabilities = z.infer<typeof CapabilitiesSchema>;
 
 /** env だけで決まる部分。凍結は D1 を読むのでルートで足す(writeFreeze) */
 export function capabilities(env: Env): Omit<Capabilities, "writeFreeze"> {
-  return { imageUpload: imageStore(env) !== null, edgeOrigin: edgeOrigin(env), tagOrigin: tagOrigin(env), edgeOnWorkersDev: edgeOnWorkersDev(env), passwordLogin: passwordLoginOpen(env) };
+  return {
+    imageUpload: imageStore(env) !== null, edgeOrigin: edgeOrigin(env), tagOrigin: tagOrigin(env), edgeOnWorkersDev: edgeOnWorkersDev(env), passwordLogin: passwordLoginOpen(env),
+    resultsStore: resultsStore(env),
+  };
 }

@@ -1,5 +1,7 @@
 import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/control";
+import { controlFetch, requireUser } from "@/lib/control";
+import { countExperimentsForResults } from "@/lib/results-settings";
+import type { Experiment } from "@/lib/types";
 import { loadCapabilities, loadSite, loadWorkspaces } from "@/lib/loaders";
 import { readParam } from "@/lib/url-state";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -13,11 +15,14 @@ export default async function SettingsPage({ params, searchParams }: { params: P
   const ws = (await loadWorkspaces()).find((w) => w.id === wid);
   if (site.status !== 200 || !ws) notFound();
   const caps = await loadCapabilities();
+  // 結果の記録を切り替えるときの確認に使う件数。一覧が取れなければ 0 件(確認を出さないだけで、保存の可否は control が決める)
+  const list = await controlFetch<Experiment[]>(`/sites/${sid}/experiments`);
+  const counts = countExperimentsForResults(list.status === 200 ? list.data : []);
   const initialSection = readParam(`?section=${(await searchParams).section ?? ""}`, "section", SECTION_IDS, "general");
   return (
     <div>
       <PageHeader title="設定" meta={site.data.name} />
-      <SiteSettingsForm site={site.data} canAdmin={ws.role === "owner" || ws.role === "admin"} canDelete={ws.role === "owner"} tagOrigin={caps.tagOrigin} initialSection={initialSection} />
+      <SiteSettingsForm site={site.data} canAdmin={ws.role === "owner" || ws.role === "admin"} canDelete={ws.role === "owner"} tagOrigin={caps.tagOrigin} initialSection={initialSection} resultsStore={caps.resultsStore} edgeOrigin={caps.edgeOrigin} runningTests={counts.runningTests} runningRecordedTests={counts.runningRecordedTests} />
     </div>
   );
 }

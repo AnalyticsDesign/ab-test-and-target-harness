@@ -1,0 +1,33 @@
+{
+  "siteId": "site_results",
+  "siteSalt": "results-salt-0001",
+  "settings": {
+    "mode": "A",
+    "allowedOrigins": ["http://localhost:4174"],
+    "visitorCookieName": "_wttr_vid",
+    "uuidCookieName": "_wttr_uuid"
+  },
+  "version": 1,
+  "goals": [{ "id": "g_results_buy", "name": "Buy click", "type": "CLICK", "config": { "selector": "#buy" } }],
+  "experiments": [
+    {
+      "id": "exp_results", "name": "Results hero",
+      "urlMatch": { "op": "contains", "value": "/results.html" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 50, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 50, "changes": [{ "id": "c_t", "type": "TEXT", "selector": ".hero-title", "payload": { "text": "結果 B" } }] }
+      ]
+    },
+    {
+      "id": "exp_results_late", "name": "Results late target",
+      "urlMatch": { "op": "contains", "value": "/results-late.html" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 50, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 50, "changes": [{ "id": "c_l", "type": "TEXT", "selector": ".late-target", "payload": { "text": "遅れて出る B" } }] }
+      ]
+    }
+  ],
+  "results": { "forget": true, "runs": { "exp_results": "e2eResultsModeA0000001", "exp_results_late": "e2eResultsLate00000001" } }
+}

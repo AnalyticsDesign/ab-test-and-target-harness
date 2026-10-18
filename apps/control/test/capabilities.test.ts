@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
-import { capabilities, edgeOnWorkersDev, edgeOrigin, imageStore, tagOrigin } from "../src/capabilities";
+import { capabilities, edgeOnWorkersDev, edgeOrigin, imageStore, resultsStore, tagOrigin } from "../src/capabilities";
 import type { Env } from "../src/env";
-import { call, setupOwner } from "./helpers";
+import { call, RESULTS_STORE, setupOwner } from "./helpers";
 
 const withEnv = (o: Partial<Env>): Env => ({ ...(env as unknown as Env), ...o }) as Env;
 
@@ -50,14 +50,20 @@ describe("capabilities", () => {
     expect(tagOrigin(withEnv({ AB_EDGE_ORIGIN: undefined, AB_STATIC_ORIGIN: undefined }))).toBeNull();
   });
 
+  // D9 ②(設計書 §6.6): 計測用 D1 の binding があるか。無い導入では Site で結果の記録を有効にできない
+  it("results_store_follows_the_binding", () => {
+    expect(resultsStore(base)).toBe(true); // vitest の miniflare が渡す
+    expect(resultsStore(withEnv({ RESULTS_DB: undefined }))).toBe(false);
+  });
+
   it("GET_capabilities_requires_session_and_reflects_env", async () => {
     expect((await call("GET", "/capabilities")).status).toBe(401);
     const { token } = await setupOwner();
-    const on = await call("GET", "/capabilities", { token, envOverride: { AB_EDGE_ORIGIN: "https://wtt-edge.my-sub.workers.dev" } });
+    const on = await call("GET", "/capabilities", { token, envOverride: { ...RESULTS_STORE, AB_EDGE_ORIGIN: "https://wtt-edge.my-sub.workers.dev" } });
     expect(on.status).toBe(200);
-    expect(await on.json()).toEqual({ imageUpload: true, edgeOrigin: "https://wtt-edge.my-sub.workers.dev", tagOrigin: "https://wtt-edge.my-sub.workers.dev", edgeOnWorkersDev: true, passwordLogin: false, writeFreeze: null });
+    expect(await on.json()).toEqual({ imageUpload: true, edgeOrigin: "https://wtt-edge.my-sub.workers.dev", tagOrigin: "https://wtt-edge.my-sub.workers.dev", edgeOnWorkersDev: true, passwordLogin: false, resultsStore: true, writeFreeze: null });
     const off = await call("GET", "/capabilities", { token, envOverride: { ASSETS: undefined, AB_EDGE_ORIGIN: undefined } });
-    expect(await off.json()).toEqual({ imageUpload: false, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, writeFreeze: null });
+    expect(await off.json()).toEqual({ imageUpload: false, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null });
     expect(capabilities(withEnv({ AB_ASSET_PUBLIC_BASE: "" })).imageUpload).toBe(false);
   });
 

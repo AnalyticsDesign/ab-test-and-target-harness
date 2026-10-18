@@ -23,3 +23,4 @@ export * from "./sha256";
 export * from "./pattern-id";
 export * from "./api-contract"; // zod-free(admin の BFF と control が使う)
 export * from "./duplicate"; // zod-free
+export * from "./results"; // zod-free(runtime が import する)

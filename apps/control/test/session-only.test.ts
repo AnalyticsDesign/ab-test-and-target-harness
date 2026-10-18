@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import app from "../src/index";
+import { app } from "../src/index";
 import { SESSION_ONLY } from "../src/session-only";
 import { BREAK_GLASS, call, expectEnvelope, inviteAndJoin, json, setupOwner } from "./helpers";
 

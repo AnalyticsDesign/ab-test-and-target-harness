@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:workers";
-import { createExecutionContext, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
-import { compile, deriveExternalUuid, generateVisitorId, isCanonicalModeAId, kvKeys, pickVariant, uuidToVisitorId, visitorIdIssuedAt, visitorIdToUuid, type Experiment } from "@wtt/core";
+import { applyD1Migrations, createExecutionContext, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
+import { compile, deriveExternalUuid, generateVisitorId, isCanonicalModeAId, kvKeys, pickVariant, shortVisitorHash, uuidToVisitorId, visitorIdIssuedAt, visitorIdToUuid, type Experiment } from "@wtt/core";
 import app from "../src/index";
 import { PROFILE_KEY, profileStub, type ProfileRecord } from "../src/profile";
+import { visitorKey } from "../src/results";
 import { __resetEdgeCaches } from "../src/store";
 import type { Env } from "../src/env";
 
@@ -63,7 +64,7 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
     const vid = cookieValue(set);
     expect(isCanonicalModeAId(vid)).toBe(true);
     const out = (await res.json()) as { v: number; experiments: Array<{ id: string; variant: string }> };
-    expect(out).toEqual({ v: 1, experiments: [{ id: "exp_001", variant: pickVariant(exp, vid) }] });
+    expect(out).toEqual({ v: 1, experiments: [{ id: "exp_001", variant: pickVariant(exp, vid) }], vh: await shortVisitorHash(vid) });
   });
   it("uuid_cookie_disabled_by_default", async () => {
     const res = await post(decisionBody());
@@ -175,7 +176,7 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
   it("unknown version keeps Set-Cookie and returns empty experiments (spec §9.3 のエラー時挙動に整合)", async () => {
     const res = await post({ ...decisionBody(), v: 9 });
     expect(res.status).toBe(200);
-    expect((await res.json()) as object).toEqual({ v: 9, experiments: [] });
+    expect((await res.json()) as object).toEqual({ v: 9, experiments: [], vh: await shortVisitorHash(cookieValue(cookieByName(res, "_ab_vid")!)) });
     expect(cookieByName(res, "_ab_vid")).toBeDefined();
   });
   it("unknown host 404 / bad body 400", async () => {
@@ -190,7 +191,7 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
     await env.CONFIG_KV.put(kvKeys.config("site_p", 2), JSON.stringify({ ...cfg, version: 2, needsProfile: true, patterns: { p_lp: { op: "contains", value: "/lp" } }, experiments: [{ ...exp, targeting: { hist: "visited", pattern: "p_lp" } }] }));
     const vid = generateVisitorId();
     const res = await post({ ...decisionBody(), v: 2 }, `_ab_vid=${vid}`);
-    expect((await res.json()) as object).toEqual({ v: 2, experiments: [{ id: "exp_001", variant: pickVariant(exp, vid) }] });
+    expect((await res.json()) as object).toEqual({ v: 2, experiments: [{ id: "exp_001", variant: pickVariant(exp, vid) }], vh: await shortVisitorHash(vid) });
     const p = await runInDurableObject(profileStub(env, "site_p", vid), (_i, state) => state.storage.get<ProfileRecord>(PROFILE_KEY));
     expect(p!.pages.p_lp!.count).toBe(1);
   });
@@ -232,5 +233,113 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
     const v4 = uuidToVisitorId("12345678-1234-4123-8123-123456789abc")!;
     const old = await post(decisionBody(), `_ab_vid=${v4}`);
     expect(((await old.json()) as { experiments: unknown[] }).experiments).toEqual([]);
+  });
+});
+
+// D9 ② Task 6(設計書 §6.2・§6.4): D-lite の結果の受信は Cookie の ID で行い、decision の応答に ID の短いハッシュ(vh)を返す
+describe("D-lite results (D9 ②)", () => {
+  const RUN = "r".repeat(22);
+  const resultsCfg = { ...cfg, version: 3, goals: [{ id: "g_buy", name: "Buy", type: "CUSTOM", config: {} }], results: { forget: true, runs: { exp_001: RUN } } };
+  async function postEvent(body: unknown, cookie?: string): Promise<Response> {
+    const headers = new Headers({ "Content-Type": "application/json" });
+    if (cookie) headers.set("Cookie", cookie);
+    const ctx = createExecutionContext();
+    const res = await app.fetch(new Request(`https://${HOST}/__ab/event`, { method: "POST", headers, body: JSON.stringify(body) }), env, ctx);
+    await waitOnExecutionContext(ctx);
+    return res;
+  }
+  beforeAll(async () => {
+    await applyD1Migrations(env.RESULTS_DB!, env.TEST_RESULTS_MIGRATIONS);
+  });
+  beforeEach(async () => {
+    await env.CONFIG_KV.put(kvKeys.config("site_p", 3), JSON.stringify(resultsCfg));
+    await env.CONFIG_KV.put(kvKeys.active("site_p"), "3");
+    __resetEdgeCaches();
+    // D1 の行は同じファイルのテストの間で残る
+    await env.RESULTS_DB!.batch([env.RESULTS_DB!.prepare("DELETE FROM participants"), env.RESULTS_DB!.prepare("DELETE FROM conversions")]);
+  });
+
+  it("d_lite_participant_is_stored_with_the_cookie_identity", async () => {
+    const vid = generateVisitorId();
+    const other = generateVisitorId(); // body の visitorId は無視する(Cookie が正)
+    const res = await postEvent({ type: "participant", v: 1, runId: RUN, variantId: pickVariant(exp, vid), device: "mobile", applied: "ok", visitorId: other }, `_ab_vid=${vid}`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ result: "stored" });
+    expect(res.headers.getSetCookie()).toEqual([]);
+    const row = await env.RESULTS_DB!.prepare("SELECT site_id, visitor_key, variant_id, device FROM participants WHERE run_id = ?").bind(RUN).first<Record<string, unknown>>();
+    expect(row).toMatchObject({ site_id: "site_p", variant_id: pickVariant(exp, vid), device: "mobile" });
+    expect([...new Uint8Array(row!.visitor_key as ArrayBuffer | number[])]).toEqual([...(await visitorKey(env, "site_p", vid))!]);
+    // CV も同じ Cookie の ID で
+    const cv = await postEvent({ type: "conversion", v: 1, goalId: "g_buy", runIds: [RUN] }, `_ab_vid=${vid}`);
+    expect(await cv.json()).toEqual({ result: "stored", runs: { [RUN]: { result: "stored" } } });
+    expect((await env.RESULTS_DB!.prepare("SELECT COUNT(*) AS n FROM conversions WHERE run_id = ?").bind(RUN).first<{ n: number }>())!.n).toBe(1);
+  });
+
+  // D9 ② Task 7(K13): 撤回(consent body)で計測用 D1 の行を消す。Cookie の ID が正本
+  async function seedRows(vid: string): Promise<void> {
+    const key = (await visitorKey(env, "site_p", vid))!;
+    const otherKey = (await visitorKey(env, "site_other", vid))!;
+    await env.RESULTS_DB!.batch([
+      env.RESULTS_DB!.prepare("INSERT INTO participants (run_id, visitor_key, site_id, variant_id, exposed_at, device, applied) VALUES (?1, ?2, 'site_p', 'vA', 1, 'mobile', 'ok')").bind(RUN, key),
+      env.RESULTS_DB!.prepare("INSERT INTO conversions (run_id, goal_id, visitor_key, converted_at) VALUES (?1, 'g_buy', ?2, 2)").bind(RUN, key),
+      env.RESULTS_DB!.prepare("INSERT INTO participants (run_id, visitor_key, site_id, variant_id, exposed_at, device, applied) VALUES (?1, ?2, 'site_other', 'vA', 1, 'mobile', 'ok')").bind(RUN, otherKey),
+    ]);
+  }
+  const count = async (table: string) => (await env.RESULTS_DB!.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>())!.n;
+
+  it("dlite consent revoke deletes results rows", async () => {
+    const vid = generateVisitorId();
+    await seedRows(vid);
+    const res = await post({ kind: "consent", value: "denied" }, `_ab_vid=${vid}`);
+    expect(res.status).toBe(204);
+    expect(cookieByName(res, "_ab_vid")).toContain("Max-Age=0"); // Cookie の削除は今のとおり
+    expect(await count("conversions")).toBe(0);
+    // 別の Site の同じ ID の行は残る
+    expect(await env.RESULTS_DB!.prepare("SELECT site_id FROM participants").all<{ site_id: string }>().then((r) => r.results)).toEqual([{ site_id: "site_other" }]);
+  });
+
+  it("dlite consent revoke keeps results rows when forgetOnRevoke is false", async () => {
+    await seedSettings({ forgetOnRevoke: false });
+    __resetEdgeCaches();
+    const vid = generateVisitorId();
+    await seedRows(vid);
+    const res = await post({ kind: "consent", value: "denied" }, `_ab_vid=${vid}`);
+    expect(res.status).toBe(204);
+    expect(cookieByName(res, "_ab_vid")).toContain("Max-Age=0");
+    expect(await count("participants")).toBe(2);
+    expect(await count("conversions")).toBe(1);
+  });
+
+  it("dlite consent revoke without a canonical cookie deletes nothing and still returns 204", async () => {
+    const vid = generateVisitorId();
+    await seedRows(vid);
+    const res = await post({ kind: "consent", value: "denied" }, "_ab_vid=not-a-canonical-id");
+    expect(res.status).toBe(204);
+    expect(await count("participants")).toBe(2);
+  });
+
+  it("dlite consent revoke still clears cookies when results deletion fails", async () => {
+    const vid = generateVisitorId();
+    await seedRows(vid);
+    const failing = { prepare: (sql: string) => env.RESULTS_DB!.prepare(sql), batch: async () => { throw new Error("D1_ERROR: down"); } } as unknown as D1Database;
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await post({ kind: "consent", value: "denied" }, `_ab_vid=${vid}`, { RESULTS_DB: failing });
+    spy.mockRestore();
+    expect(res.status).toBe(204);
+    expect(cookieByName(res, "_ab_vid")).toContain("Max-Age=0");
+  });
+
+  it("d_lite_results_event_without_cookie_is_ignored_with_204", async () => {
+    const res = await postEvent({ type: "participant", v: 1, runId: RUN, variantId: "vA", device: "mobile", applied: "ok" });
+    expect(res.status).toBe(204);
+    expect(await env.RESULTS_DB!.prepare("SELECT COUNT(*) AS n FROM participants WHERE run_id = ?").bind(RUN).first<{ n: number }>()).toEqual({ n: 0 });
+  });
+
+  it("d_lite_decision_returns_vh_of_the_cookie_identity", async () => {
+    const vid = generateVisitorId();
+    const res = await post({ ...decisionBody(), v: 3 }, `_ab_vid=${vid}`);
+    const out = (await res.json()) as { vh?: string };
+    expect(out.vh).toBe(await shortVisitorHash(vid));
+    expect(out.vh).toMatch(/^[A-Za-z0-9_-]{11}$/);
   });
 });

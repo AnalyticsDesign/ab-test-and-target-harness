@@ -150,3 +150,20 @@ describe("idSource validation (decision 29)", () => {
     expect(parseSiteSettings({ ...base, idSource: "cookie:_site_session" })).not.toBeNull();                    // 無関係な名前は通る
   });
 });
+
+describe("resultsCollectUntil (D9 ②、K7)", () => {
+  const min = { settingsVersion: 1, siteId: "site_1" };
+  it("reads a record with resultsCollectUntil and keeps records without it", () => {
+    const withIt = SiteSettingsSchema.parse({ ...min, resultsCollectUntil: { AAAAAAAAAAAAAAAAAAAAAA: 1_800_000_000_000 } });
+    expect(withIt.resultsCollectUntil).toEqual({ AAAAAAAAAAAAAAAAAAAAAA: 1_800_000_000_000 });
+    expect(SiteSettingsSchema.parse(min).resultsCollectUntil).toBeUndefined();
+  });
+  it("rejects a negative or non-integer value", () => {
+    expect(SiteSettingsSchema.safeParse({ ...min, resultsCollectUntil: { AAAAAAAAAAAAAAAAAAAAAA: -1 } }).success).toBe(false);
+    expect(SiteSettingsSchema.safeParse({ ...min, resultsCollectUntil: { AAAAAAAAAAAAAAAAAAAAAA: 1.5 } }).success).toBe(false);
+  });
+  it("is not baked into the runtime settings", () => {
+    const s = SiteSettingsSchema.parse({ ...min, resultsCollectUntil: { AAAAAAAAAAAAAAAAAAAAAA: 5 } });
+    expect(toRuntimeSettings(s)).not.toHaveProperty("resultsCollectUntil");
+  });
+});

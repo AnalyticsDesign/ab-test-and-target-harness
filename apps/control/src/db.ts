@@ -1,4 +1,4 @@
-import { Kysely } from "kysely";
+import { Kysely, type Generated } from "kysely";
 import { D1Dialect } from "kysely-d1";
 import type { ExperimentKind } from "@wtt/core";
 import type { Env } from "./env";
@@ -25,6 +25,8 @@ export type SiteRow = {
   active_version: number | null; active_kv_stale: number; last_activated_at: number | null; content_updated_at: number; created_at: number; updated_at: number;
   /** migrations/0012_static_delivery.sql(決定 52)。配信ファイルの出し直しの世代・印・配っている版・削除の印 */
   static_seq: number; static_stale: number; static_epoch: number; static_served_version: number | null; static_prev_served_version: number | null; static_served_at: number | null; static_removing: string | null;
+  /** migrations/0014_results_collection.sql(D9 ②、設計書 §6.6)。結果を記録するか(0 / 1)と個票の保持期間(日、7〜365) */
+  results_enabled: number; results_retention_days: number;
 };
 export type SiteHostRow = { host: string; site_id: string };
 /** migrations/0007_audiences.sql。definition_json = 保存する形の配信条件(core の Targeting) */
@@ -39,6 +41,10 @@ export type ExperimentRow = {
   started_at: number | null; stopped_at: number | null;
   /** 配信に入った時刻。開始・再開のたびに更新する。テストどうしの優先の順(決定 51) */
   last_started_at: number | null;
+  /** D9 ②(設計書 §6.3): 最初の開始のときに 1 回振る結果の記録の ID(core の newRunId)。振らなかったテスト・下書き・パーソナライズは null */
+  run_id: string | null;
+  /** 計測用 D1 の個票を消した時刻(epoch ミリ秒。③ の保持期限の削除が書く) */
+  results_purged_at: number | null;
   created_by: string; updated_by: string; created_at: number; updated_at: number;
 };
 export type VariantRow = { site_id: string; experiment_id: string; id: string; name: string; weight: number; position: number; analytics_json: string | null };
@@ -65,6 +71,13 @@ export type ApiKeyRow = {
 /** migrations/0011_instance_settings.sql(backlog D10 / brief K3)。導入全体の設定。value は JSON、updated_at は epoch ミリ秒、updated_by は書いた人の user ID(初回セットアップは null) */
 export type InstanceSettingRow = { key: string; value: string; updated_at: number; updated_by: string | null };
 
+/** migrations/0014_results_collection.sql(D9 ②)。一度開始したエクスペリエンスを削除した後の ID(設計書 §6.3) */
+export type RetiredExperimentIdRow = { site_id: string; experiment_id: string; retired_at: number };
+/** 同上。Publish で公開された収集の状態が変わった時刻(設計書 §6.6)。id は SQLite の rowid(足すときは省く) */
+export type ResultsCollectionLogRow = { id: Generated<number>; site_id: string; at: number; enabled: number; publish_version: number };
+/** 同上。Cron のジョブの実行の記録(last_run_day = UTC の YYYY-MM-DD) */
+export type CronJobRunRow = { job: string; last_run_day: string | null; last_success_at: number | null };
+
 export interface Tables {
   user: UserRow;
   verification: VerificationRow;
@@ -86,6 +99,9 @@ export interface Tables {
   goals: GoalRow;
   assets: AssetRow;
   publishes: PublishRow;
+  retired_experiment_ids: RetiredExperimentIdRow;
+  results_collection_log: ResultsCollectionLogRow;
+  cron_job_runs: CronJobRunRow;
 }
 export type Db = Kysely<Tables>;
 

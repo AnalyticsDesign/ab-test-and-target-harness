@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ExposurePayloadSchema } from "./analytics";
 import { PAGE_OPS, PAGE_PARTS, type PageMatch, type PageOp, type PagePart } from "./page";
 import { REGEX_LIMITS } from "./regex-compile";
+import { RUN_ID_RE } from "./results";
 import type { RegexProgram } from "./regex-run";
 import { BROWSERS, DEVICES, OSES, type Browser, type Device, type Os } from "./ua";
 import { WEEKDAYS, type Weekday } from "./time";
@@ -350,6 +351,16 @@ export function regexInstructionTotal(c: { patterns: Record<string, { prog?: Reg
 }
 
 /**
+ * 設計書 §6.3(D9 ②): 結果の収集。`runs` = 結果を記録する Site の running / paused のテストの experimentId → runId。
+ * `forget: true` は個票が残っている間の forget の送信(runs が空でもよい)。結果を記録しない Site には出さない
+ */
+export const ResultsConfigSchema = z.strictObject({
+  forget: z.literal(true),
+  runs: z.record(z.string(), z.string().regex(RUN_ID_RE)),
+});
+export type ResultsConfig = z.infer<typeof ResultsConfigSchema>;
+
+/**
  * 版 2 の compiled config(決定 49)。版 1 との差は設計書 §4.3 の表。`timezone` = サイトのタイムゾーン(IANA 名)。
  * 欠けていれば曜日・時間帯の条件は判定できない(対象外)
  */
@@ -369,6 +380,7 @@ export const CompiledConfigSchema = z
     // spec §10.9(決定 32): experimentId → variantId → 解決済み exposure payload。compile が常に出力する。
     // runtime は該当エントリが無ければ experiments[] の id / name から導出する(runtime が持つ唯一の導出)
     exposurePayloads: z.record(z.string(), z.record(z.string(), ExposurePayloadSchema)).optional(),
+    results: ResultsConfigSchema.optional(),
   })
   .superRefine((c, ctx) => {
     refineExposurePayloads(c, ctx);

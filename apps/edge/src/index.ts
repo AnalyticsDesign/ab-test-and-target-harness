@@ -1,11 +1,12 @@
 import { Hono, type Context } from "hono";
-import { DecisionBodySchema, DliteRequestSchema, EventBodySchema, isAcceptableVisitorId, isCanonicalModeAId, visitorIdIssuedAt, type DecisionBody } from "@wtt/core";
+import { DecisionBodySchema, DliteRequestSchema, EventBodySchema, isAcceptableVisitorId, isCanonicalModeAId, shortVisitorHash, visitorIdIssuedAt, type DecisionBody } from "@wtt/core";
 import type { Env } from "./env";
 import { corsHeaders, originAllowed, preflightHeaders } from "./cors";
 import { parseCookies, resolveDliteIdentity, revokeCookies } from "./cookies";
 import { evaluateDecision, readBodyWithin4kb } from "./decision";
-import { handleEvent } from "./event";
+import { handleEvent, isResultsEvent } from "./event";
 import { rateLimitOk } from "./ratelimit";
+import { forgetResults, handleResultsEvent } from "./results";
 import { loadActiveVersion, loadConfig, loadSettings, loadSiteIdByHost, SITE_ID_RE } from "./store";
 
 export const app = new Hono<{ Bindings: Env }>();
@@ -79,6 +80,11 @@ app.post("/v1/sites/:siteId/event", async (c) => {
   if (settings.mode !== "A") return c.text("not found", 404);
   const origin = c.req.header("Origin") ?? null;
   if (!originAllowed(settings, origin)) return c.text("forbidden", 403);
+  // 結果の参加・CV(D9 ② 設計書 §6.4)は常に 200 + 本文の result(訪問者の画面に影響させない)。時刻は edge の受信時刻
+  if (isResultsEvent(body.data)) {
+    const out = await handleResultsEvent(c.env, c.executionCtx, siteId, settings, body.data, visitorId, Date.now());
+    return c.json(out, 200, corsHeaders(origin));
+  }
   const outcome = await handleEvent(c.env, siteId, settings, body.data, visitorId);
   if (outcome === "failed") return c.text("profile unavailable", 503, corsHeaders(origin)); // 503 も CORS 付き — runtime が status を読めるように(§10.7)
   return c.body(null, 204, corsHeaders(origin));
@@ -105,6 +111,10 @@ app.post("/__ab/event", async (c) => {
   if (body.data.type === "forget") return c.body(null, 204); // spec §9.2: forget はブラウザ直接経路のみ。D-lite の撤回は Cookie 削除だけで DO 非接触(§16)
   const existing = parseCookies(c.req.header("Cookie") ?? null)[settings.visitorCookieName];
   if (existing === undefined || !isCanonicalModeAId(existing)) return c.body(null, 204); // body.visitorId は無視(Cookie が正)
+  if (isResultsEvent(body.data)) {
+    // 同一オリジンの経路なので CORS は付けない(Mode A と同じ判定・同じ応答の形)
+    return c.json(await handleResultsEvent(c.env, c.executionCtx, siteId, settings, body.data, existing, Date.now()), 200);
+  }
   const outcome = await handleEvent(c.env, siteId, settings, body.data, existing);
   if (outcome === "failed") return c.text("profile unavailable", 503);
   return c.body(null, 204);
@@ -132,7 +142,11 @@ app.post("/__ab/decision", async (c) => {
   if (!req.success) return c.text("bad request", 400);
   const cookieHeader = c.req.header("Cookie") ?? null;
   if ("kind" in req.data && req.data.kind === "consent") {
-    // spec §16: revoke は Set-Cookie(Max-Age=0)を返すだけ。DO へは転送しない
+    // spec §16: revoke は Set-Cookie(Max-Age=0)を返す。Profile の DO へは転送しない。
+    // 計測用 D1 の行は、forgetOnRevoke が false でなく正本の Cookie があるときに消す(D9 ② K13)。Cookie を消す前に ID を読む。
+    // forgetResults は失敗してもログだけで throw しない(Cookie の削除は必ず返す)
+    const canonical = parseCookies(cookieHeader)[settings.visitorCookieName];
+    if (settings.forgetOnRevoke !== false && canonical !== undefined && isCanonicalModeAId(canonical)) await forgetResults(c.env, siteId, canonical);
     const res = c.body(null, 204);
     for (const sc of revokeCookies(cookieHeader, settings)) res.headers.append("Set-Cookie", sc);
     return res;
@@ -147,6 +161,11 @@ app.post("/__ab/decision", async (c) => {
   // 決定 49 §7.3: D-lite は正本 Cookie が HttpOnly でブラウザから読めないので、初回の訪問は edge が ID(UUIDv7)から読む
   const out = await evaluateDecision(c.env, siteId, settings, config, body, visitorId, visitorIdIssuedAt(visitorId));
   // DO 障害(503)でも Identity の発行・Max-Age 延長は続ける(r1 CL-High-1)。落とすと DO 障害中は毎 PV 新しい ID → 新しい DO を叩く増幅になる
+  // 設計書 §6.2: D-lite の runtime は ID(HttpOnly の Cookie)を読めないので、送信済みの印と比べる短いハッシュを edge が返す
+  if (out !== null) {
+    const vh = await shortVisitorHash(visitorId);
+    if (vh !== null) out.vh = vh;
+  }
   const res = out === null ? c.text("profile unavailable", 503) : c.json(out, 200);
   for (const sc of setCookies) res.headers.append("Set-Cookie", sc);
   return res;
@@ -154,5 +173,7 @@ app.post("/__ab/decision", async (c) => {
 
 // Durable Object は Worker のモジュールから export されている必要がある(wrangler.jsonc の class_name と一致)
 export { VisitorProfile } from "./profile";
+export { ResultsBudget } from "./results-budget";
+export { ResultsHealth } from "./results-health";
 
 export default app;

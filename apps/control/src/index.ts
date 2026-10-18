@@ -3,6 +3,9 @@ import { z } from "zod";
 import { createApp, requireSession } from "./app";
 import { AUTH_ALLOW } from "./auth-paths";
 import { PASSWORD_AUTH_PATHS, passwordLoginOpen } from "./break-glass";
+import { CRON_JOBS } from "./cron/jobs";
+import { runCron } from "./cron/runner";
+import type { Env } from "./env";
 import { notFound } from "./errors";
 import { errorResponses, mountOpenApi } from "./openapi";
 import { AGENT_GUIDE } from "./generated/agent-guide";
@@ -120,4 +123,11 @@ app.get(
 // GET /openapi.json(決定 34)。全ルートを登録し終えてから文書を公開する
 mountOpenApi(app);
 
-export default app;
+/** Worker の入口。HTTP は Hono の app、Cron は runCron(テストは名前付きの export の app を使う) */
+export default {
+  fetch: app.fetch,
+  // D9 ②(plan ② の K5): 15 分ごとの Cron(wrangler.jsonc の triggers)。ジョブは cron/jobs.ts の登録表
+  scheduled(controller, env, ctx) {
+    ctx.waitUntil(runCron(env, controller.scheduledTime, CRON_JOBS));
+  },
+} satisfies ExportedHandler<Env>;

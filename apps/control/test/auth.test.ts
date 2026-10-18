@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import app from "../src/index";
+import { app } from "../src/index";
 import { errorHandler } from "../src/errors";
 import { alignToWindow, BREAK_GLASS, call, json, setupOwner, SETUP_TOKEN, uniqueEmail, expectEnvelope, failingD1Insert, failingD1Query, setupReq, googleSignIn } from "./helpers";
 import type { Env } from "../src/env";

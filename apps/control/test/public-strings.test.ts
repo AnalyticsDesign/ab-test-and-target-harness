@@ -54,6 +54,12 @@ describe("public strings carry no private design references", () => {
     const mode = await call("POST", `/sites/${sid}/experiments/exp_dup_single/duplicate`, { token, body: { mode: "variant", variantId: "b" } });
     expect(mode.status).toBe(422);
     noPrivateRef("duplicate_mode_not_allowed", JSON.stringify(await json(mode)));
+    // D9 ②: 計測用 D1 が無い導入で結果の記録を有効にしようとした
+    const store = await call("PATCH", `/sites/${sid}`, { token, body: { resultsEnabled: true } });
+    expect(store.status).toBe(409);
+    const storeBody = await json(store);
+    expect(storeBody.error).toBe("results_store_missing");
+    noPrivateRef("results_store_missing", JSON.stringify(storeBody));
     // backlog D13: 凍結中の 503 の封筒(4 通りの hint のうち、未来の見込みと読めない値)
     await env.DB.prepare("insert into instance_settings (key, value, updated_at) values ('writeFreeze', '{\"reason\":\"r\",\"until\":\"2099-01-01T00:00:00+09:00\"}', 1)").run();
     noPrivateRef("write_frozen", JSON.stringify(await json(await call("PATCH", `/sites/${sid}`, { token, body: {} }))));

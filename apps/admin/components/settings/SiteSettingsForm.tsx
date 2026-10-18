@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { api, describeError, fieldErrors } from "@/lib/client";
+import { cspNotice, resultsToggleNotice, splitCode } from "@/lib/results-settings";
 import type { AnalyticsSettings, Site } from "@/lib/types";
 import { replaceParam } from "@/lib/url-state";
 import { Field } from "../Field";
@@ -43,12 +44,22 @@ export function SiteSettingsForm({
   canDelete,
   tagOrigin,
   initialSection,
+  resultsStore,
+  edgeOrigin,
+  runningTests,
+  runningRecordedTests,
 }: {
   site: Site;
   canAdmin: boolean;
   canDelete: boolean;
   tagOrigin: string | null;
   initialSection: SectionId;
+  /** 計測用のデータベース(wtt-results)がこの導入にあるか(無いと結果の記録を有効にできない) */
+  resultsStore: boolean;
+  edgeOrigin: string | null;
+  /** 切り替えの確認に使う件数(エクスペリエンスの一覧から数える) */
+  runningTests: number;
+  runningRecordedTests: number;
 }) {
   const router = useRouter();
   const ask = useConfirm();
@@ -68,6 +79,8 @@ export function SiteSettingsForm({
   const [mode, setMode] = useState(site.mode);
   const [consent, setConsent] = useState(site.consentMode);
   const [tz, setTz] = useState(site.timezone);
+  // 無効のスイッチは disabled の入力として送られない(FormData に載らない)ので、値は state で持つ
+  const [resultsOn, setResultsOn] = useState(site.resultsEnabled);
   const [idSourceKind, setIdSourceKind] = useState<"ab" | "cookie">(site.idSource === "ab" ? "ab" : "cookie");
   const lines = (v: string) => String(v).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   // Analytics のフィールド error は control 側の 422 コードによって key の形が違う(どちらも path は配列):
@@ -103,6 +116,10 @@ export function SiteSettingsForm({
       }))
     )
       return;
+    // 結果の記録を切り替えるとき、実行中 / 記録中のテストがあれば影響を確認する(キャンセルなら保存しない)
+    const resultsChanged = resultsOn !== site.resultsEnabled;
+    const toggleNotice = resultsChanged ? resultsToggleNotice({ enabling: resultsOn, runningTests, runningRecordedTests }) : null;
+    if (toggleNotice !== null && !(await ask(resultsOn ? { title: "結果の記録を有効にしますか?", body: toggleNotice, confirmLabel: "有効にして保存" } : { title: "結果の記録を止めますか?", body: toggleNotice, confirmLabel: "止めて保存", tone: "danger" }))) return;
     const analytics: Record<string, unknown> = {};
     analytics.dataLayerName = String(fd.get("analytics.dataLayerName"));
     for (const f of ANALYTICS_FIELDS) setPath(analytics, f.path, String(fd.get(`analytics.${f.path}`)));
@@ -116,6 +133,8 @@ export function SiteSettingsForm({
       consentMode: fd.get("consentMode"),
       retentionDays: Number(fd.get("retentionDays")),
       forgetOnRevoke: fd.get("forgetOnRevoke") === "on",
+      resultsEnabled: resultsOn,
+      resultsRetentionDays: Number(fd.get("resultsRetentionDays")),
       timezone: fd.get("timezone"),
       decisionTimeoutMs: Number(fd.get("decisionTimeoutMs")),
       visitorCookieName,
@@ -205,13 +224,41 @@ export function SiteSettingsForm({
               <Field label="retentionDays(訪問者プロフィールと旧 Cookie 名の保持日数)" hint="最終訪問からこの日数で訪問者プロフィールを自動削除します。変更は次に訪問した訪問者から効きます(休眠中のプロフィールは変更前の日数で消えます)。" error={fields.retentionDays}>
                 <input name="retentionDays" type="number" min={1} max={3650} defaultValue={site.retentionDays} disabled={ro} />
               </Field>
-              <Field label="撤回時に訪問者プロフィールを削除(forgetOnRevoke)" hint="訪問者が同意を撤回(AB.consent(false))したとき、サーバー側の履歴(目標の達成・閲覧回数・保存済み割当)を即時に削除します。オフにすると retentionDays まで保持され、誤って拒否した訪問者の履歴は失われません — ただし Mode C(BYOID)では再許可時に撤回前の履歴へ再接続します。Mode B(サーバー発行 Cookie)では効きません — 撤回は Cookie の削除だけで、訪問者プロフィールは retentionDays で消えます。削除は best-effort です — 通信断や DO 障害で forget が届かなかった場合も retentionDays で消えます" error={fields.forgetOnRevoke}>
+              <Field label="撤回時に訪問者プロフィールを削除(forgetOnRevoke)" hint="訪問者が同意を撤回(AB.consent(false))したとき、サーバー側の履歴(目標の達成・閲覧回数・保存済み割当)を即時に削除します。オフにすると retentionDays まで保持され、誤って拒否した訪問者の履歴は失われません — ただし Mode C(BYOID)では再許可時に撤回前の履歴へ再接続します。Mode B(サーバー発行 Cookie)では訪問者プロフィールの削除には効きません — 撤回は Cookie の削除だけで、訪問者プロフィールは retentionDays で消えます。結果を記録するサイトでは、その訪問者の結果の記録も削除します(Mode B を含む)。削除は best-effort です — 通信断や DO 障害で forget が届かなかった場合も retentionDays で消えます" error={fields.forgetOnRevoke}>
                 <label>
                   <input name="forgetOnRevoke" type="checkbox" defaultChecked={site.forgetOnRevoke} disabled={ro} /> 有効にする(既定)
                 </label>
               </Field>
               <Field label="decisionTimeoutMs(300〜3000)" error={fields.decisionTimeoutMs}>
                 <input name="decisionTimeoutMs" type="number" min={300} max={3000} defaultValue={site.decisionTimeoutMs} disabled={ro} />
+              </Field>
+              <h3>結果を記録する</h3>
+              <p className="muted">テストの参加者と目標の達成を、この導入のデータベースに記録します。記録するのは、有効にした後に開始したテストだけです</p>
+              <Field
+                label="結果を記録する"
+                hint={resultsStore ? undefined : "計測用のデータベースが導入されていません。導入ガイドの手順で作ってください"}
+                error={fields.resultsEnabled}
+              >
+                {/* 計測用のデータベースが無い導入では有効にできない(すでに有効なら止められる)。値は state で持つ(送信時に FormData から読まない) */}
+                <label>
+                  <input
+                    name="resultsEnabled"
+                    type="checkbox"
+                    checked={resultsOn}
+                    onChange={(e) => setResultsOn(e.target.checked)}
+                    disabled={ro || (!resultsStore && !resultsOn)}
+                  />{" "}
+                  有効にする
+                </label>
+              </Field>
+              {resultsOn ? (
+                <p className="banner-warn" style={{ display: "block" }} data-testid="results-csp-notice">
+                  {/* 導入の形は保存前の選択(訪問者 ID の節)に合わせる。バッククォートの部分は <code> で出す */}
+                  {splitCode(cspNotice({ mode, edgeOrigin, tagOrigin, siteDomain: site.domain })).map((p, i) => (p.code ? <code key={i}>{p.text}</code> : <span key={i}>{p.text}</span>))}
+                </p>
+              ) : null}
+              <Field label="参加者ごとの記録を残す日数(7〜365 日)" error={fields.resultsRetentionDays}>
+                <input name="resultsRetentionDays" type="number" min={7} max={365} defaultValue={site.resultsRetentionDays} disabled={ro} required />
               </Field>
             </section>
             <section className={switched ? "card enter" : "card"} hidden={section !== "identity"}>

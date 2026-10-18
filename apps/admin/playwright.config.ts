@@ -65,5 +65,6 @@ export default defineConfig({
     // 「…d13-write-freeze」にも当たり、e2e/ のすべてのファイル(fake-cf-api.mjs まで)を読み込んでしまう)
     { name: "write-freeze", testMatch: /write-freeze\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     { name: "experiment-kind", testMatch: /experiment-kind-flow/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    { name: "results-settings", testMatch: /results-settings\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
   ],
 });

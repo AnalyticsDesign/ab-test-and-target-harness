@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RUN_ID_RE } from "./results";
 import { BROWSERS, DEVICES, OSES } from "./ua";
 
 /** spec §9.1: decision リクエスト。body 4KB 上限(§9.5)はスキーマでなく edge が先に検証する */
@@ -28,7 +29,12 @@ export const ConsentBodySchema = z.strictObject({
 export const DliteRequestSchema = z.union([ConsentBodySchema, DecisionBodySchema]);
 
 /** spec §7.5 */
-export type DecisionResponse = { v: number; experiments: Array<{ id: string; variant: string }> };
+export type DecisionResponse = {
+  v: number;
+  experiments: Array<{ id: string; variant: string }>;
+  /** 設計書 §6.2: 訪問者 ID の短いハッシュ(D9 ②)。D-lite は runtime が ID(HttpOnly の Cookie)を読めないので edge が返し、runtime が送信済みの印と比べる */
+  vh?: string;
+};
 
 /**
  * spec §9.2 / 決定 37: `/v1/sites/:siteId/event` と D-lite `/__ab/event` のボディ。
@@ -37,8 +43,25 @@ export type DecisionResponse = { v: number; experiments: Array<{ id: string; var
  * goalId の受理集合は compiled config の `goals[].id`(`GoalSchema` = 1 字以上の任意文字列)と同じ広さにし(上限は body 4KB が担う)、
  * 存在しない ID は edge が active config と照合して 204 にする(§9.2)。狭い regex を置くと fixture 経路で compile を通った Goal(`purchase.completed` 等)が 400 になる(r1 CX-Medium-1)
  */
+const RunId = z.string().regex(RUN_ID_RE);
+
+/**
+ * 決定 51(設計書 §6.3): 結果の参加。初回(`ok` / `failed`)は端末 `device` が必須、後から失敗(`failed_later`)と回復(`recovered`)は持たない。
+ * `v` は種類ごとの版(将来の形の変更は新しい `v` か `type` で足し、今の受信を壊さない)
+ */
+const ParticipantBodySchema = z.discriminatedUnion("applied", [
+  z.strictObject({ type: z.literal("participant"), v: z.literal(1), runId: RunId, variantId: z.string().min(1), device: z.enum(DEVICES), applied: z.enum(["ok", "failed"]), visitorId: z.string().optional() }),
+  z.strictObject({ type: z.literal("participant"), v: z.literal(1), runId: RunId, variantId: z.string().min(1), applied: z.enum(["failed_later", "recovered"]), visitorId: z.string().optional() }),
+]);
+/** 決定 51(設計書 §6.3): 結果の CV。1 回に 1〜20 件の runId(超える分は runtime が分けて送る) */
+const ConversionBodySchema = z.strictObject({ type: z.literal("conversion"), v: z.literal(1), goalId: z.string().min(1), runIds: z.array(RunId).min(1).max(20), visitorId: z.string().optional() });
+
 export const EventBodySchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("goal"), goalId: z.string().min(1), visitorId: z.string().optional() }),
   z.strictObject({ type: z.literal("forget"), visitorId: z.string().optional() }),
+  ParticipantBodySchema,
+  ConversionBodySchema,
 ]);
 export type EventBody = z.infer<typeof EventBodySchema>;
+export type ParticipantBody = z.infer<typeof ParticipantBodySchema>;
+export type ConversionBody = z.infer<typeof ConversionBodySchema>;

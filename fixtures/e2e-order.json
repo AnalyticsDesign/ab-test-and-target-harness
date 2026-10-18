@@ -1,0 +1,34 @@
+{
+  "siteId": "site_order",
+  "siteSalt": "order-salt-0001",
+  "settings": {
+    "mode": "A",
+    "allowedOrigins": ["http://localhost:4173"],
+    "visitorCookieName": "_wtto_vid",
+    "uuidCookieName": "_wtto_uuid"
+  },
+  "version": 1,
+  "goals": [],
+  "experiments": [
+    {
+      "id": "exp_order_s", "name": "Order personalization", "kind": "single",
+      "urlMatch": { "op": "contains", "value": "/order.html" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 100, "changes": [
+          { "id": "c_s_cta", "type": "TEXT", "selector": "#cta", "payload": { "text": "S の文言" } },
+          { "id": "c_s_fixed", "type": "TEXT", "selector": ".fixed", "payload": { "text": "S の文言(fixed)" } }
+        ] }
+      ]
+    },
+    {
+      "id": "exp_order_t", "name": "Order test",
+      "urlMatch": { "op": "contains", "value": "/order.html" },
+      "trafficPercentage": 100, "persistAssignment": false,
+      "variants": [
+        { "id": "vA", "name": "A", "weight": 50, "changes": [] },
+        { "id": "vB", "name": "B", "weight": 50, "changes": [{ "id": "c_t_cta", "type": "TEXT", "selector": "#cta", "payload": { "text": "T の文言" } }] }
+      ]
+    }
+  ]
+}

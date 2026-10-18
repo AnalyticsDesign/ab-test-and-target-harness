@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>WTT sample site — results (late target)</title>
+  <!-- 結果の E2E 用の edge へ転送する sample-site(4174)で開く -->
+  <script src="/s/site_results.js"></script>
+</head>
+<body>
+  <div id="slot"></div>
+  <button id="show">show</button>
+  <script>
+    // テストの対象の要素(.late-target)を後から出す(SPA の遅れた描画を模す)
+    document.getElementById("show").addEventListener("click", () => {
+      const p = document.createElement("p");
+      p.className = "late-target";
+      p.textContent = "元の文言";
+      document.getElementById("slot").append(p);
+    });
+  </script>
+</body>
+</html>

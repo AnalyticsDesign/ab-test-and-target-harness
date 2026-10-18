@@ -28,11 +28,14 @@ function readJsonc(file: string): Record<string, unknown> {
  * wrangler.jsonc の `services`(デプロイ専用の Worker の Service Binding)を除いた写しを作る。
  * vitest の workerd には wtt-deployer が無く、binding が解決できないと起動そのものが落ちるため。
  * テストの DEPLOYER は既定で無し(test/helpers.ts の testEnv)で、必要なテストだけ偽物を入れる。
+ * 同じ理由で、別の script(wtt-edge)の Durable Object を指す binding(`script_name` 付き。D9 ② の Task 12)も除く。
  * 写しは .wrangler/ に置くので、相対パス(main / migrations_dir)は絶対パスにする
  */
 function wranglerConfigForTests(): string {
   const cfg = readJsonc(path.join(import.meta.dirname, "wrangler.jsonc"));
   delete cfg.services;
+  const dos = cfg.durable_objects as { bindings?: Array<Record<string, string>> } | undefined;
+  if (dos?.bindings) dos.bindings = dos.bindings.filter((b) => b.script_name === undefined);
   cfg.main = path.join(import.meta.dirname, cfg.main as string);
   cfg.d1_databases = (cfg.d1_databases as Array<Record<string, string>>).map((d) => ({ ...d, migrations_dir: path.join(import.meta.dirname, d.migrations_dir!) }));
   const dir = path.join(import.meta.dirname, ".wrangler");
@@ -46,6 +49,10 @@ function wranglerConfigForTests(): string {
 // readD1Migrations は @cloudflare/vitest-plugin の直下 export(installed の dist/pool/index.d.mts で確認)
 export default defineConfig(async () => {
   const migrations = await readD1Migrations(path.join(import.meta.dirname, "migrations"));
+  // D9 ② (K4・K21): 計測用 D1(wtt-results)の表の形の正は edge の results-migrations/。control は同じファイルを当てる。
+  // 本番の control には ③ まで RESULTS_DB の binding を入れない(wrangler.jsonc に書かない)ので、テストの binding は下の miniflare で渡す。
+  // 適用は表を使うテストが applyD1Migrations で行う
+  const resultsMigrations = await readD1Migrations(path.join(import.meta.dirname, "../edge/results-migrations"));
   // backlog B35: 利用者向けの文言の検査(test/glossary.test.ts)。テストは workerd の中で走りファイルを読めないので、ここで読んで渡す。
   // 生成物(src/generated/ = agent-guide の埋め込み)は公開文書の検査(docs:check)が見るので除く
   const readSources = (prefix: string, dir: string): Record<string, string> =>
@@ -63,8 +70,11 @@ export default defineConfig(async () => {
       cloudflareTest({
         wrangler: { configPath: wranglerConfigForTests() },
         miniflare: {
+          // 計測用 D1。test/helpers.ts の testEnv は既定で外す(本番の ② の control と同じ「無い」状態)。有りにするテストは RESULTS_STORE を envOverride で渡す
+          d1Databases: { RESULTS_DB: "wtt-results-test" },
           bindings: {
             TEST_MIGRATIONS: migrations,
+            TEST_RESULTS_MIGRATIONS: resultsMigrations,
             TEST_SOURCES: sources,
             BETTER_AUTH_SECRET: "test-secret-0123456789abcdef0123456789abcdef",
             AB_SETUP_TOKEN: "test-setup-token",

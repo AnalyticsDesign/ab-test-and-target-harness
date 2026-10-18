@@ -8,6 +8,7 @@ export function siteJson(row: SiteRow) {
     id: row.id, workspaceId: row.workspace_id, name: row.name, domain: row.domain, mode: row.mode, idSource: row.id_source,
     allowedOrigins: JSON.parse(row.allowed_origins_json) as string[], hosts: JSON.parse(row.hosts_json) as string[],
     retentionDays: row.retention_days, consentMode: row.consent_mode, forgetOnRevoke: row.forget_on_revoke === 1, timezone: row.timezone, decisionTimeoutMs: row.decision_timeout_ms,
+    resultsEnabled: row.results_enabled === 1, resultsRetentionDays: row.results_retention_days,
     visitorCookieName: row.visitor_cookie_name, uuidCookieEnabled: row.uuid_cookie_enabled === 1, uuidCookieName: row.uuid_cookie_name,
     previousCookieNames: JSON.parse(row.previous_cookie_names_json) as Array<{ name: string; until: number }>,
     // 決定 62 より前に保存した行は dataLayerName を持たないので既定名で補う(edge へ配る record は SiteSettingsSchema が埋める)
@@ -35,6 +36,8 @@ export const SiteJsonSchema = z.object({
   forgetOnRevoke: z.boolean(),
   timezone: z.string().describe("曜日・時間帯の条件の判定に使うタイムゾーン(IANA 名)。変更は次の公開で効く"),
   decisionTimeoutMs: z.number().int(),
+  resultsEnabled: z.boolean().describe("結果を記録する(テストの参加と CV をツールの計測用データベースに残す)。切り替えは次の公開で効く"),
+  resultsRetentionDays: z.number().int().describe("結果の個票(参加者ごとの記録)の保持期間(日、7〜365)"),
   visitorCookieName: z.string(),
   uuidCookieEnabled: z.boolean(),
   uuidCookieName: z.string(),
@@ -62,6 +65,7 @@ export function experimentJson(row: ExperimentRow, extra: { unpublished: boolean
     urlMatch: JSON.parse(row.url_match_json), targeting: row.targeting_json ? JSON.parse(row.targeting_json) : null,
     trafficPercentage: row.traffic_percentage, persistAssignment: row.persist_assignment === 1,
     analytics: row.analytics_json ? JSON.parse(row.analytics_json) : null,
+    runId: row.run_id,
     createdBy: row.created_by, updatedBy: row.updated_by, createdAt: row.created_at, updatedAt: row.updated_at,
     unpublished: extra.unpublished,
   };

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { uuidToVisitorId, visitorIdToUuid, bucketOf, hashByoidValue } from "@wtt/core";
+import { uuidToVisitorId, visitorIdToUuid, bucketOf, hashByoidValue, compile, shortVisitorHash } from "@wtt/core";
 import type { CompiledConfig } from "@wtt/core";
 import { createRuntime, type AbApi, type RuntimeDeps } from "../src/runtime";
 import { baseConfig, baseSettings, goalsConfig, namedConfig, namedSettings, remoteConfig, renamedAnalytics } from "./fixtures";
@@ -68,6 +68,7 @@ function clearCookies(): void {
 beforeEach(() => {
   vi.useFakeTimers();
   clearCookies();
+  localStorage.clear(); // 結果の送信済みの印(D9 ②)をテストの間で持ち越さない
   document.body.innerHTML = `<h1 class="hero-title">orig</h1>`;
   // 前 test の engine が consent(false) の直前に(afterEach の consent(false) より先に届く MutationObserver 通知で)
   // 自身が手動 remove した <style> を再接続してしまうことがある(happy-dom のマイクロタスク配送順。r1 CL-Medium-3 と同種)。
@@ -967,4 +968,234 @@ it("rank_follows_config_order_not_decision_order", async () => {
   f.resolve(f.okRes({ v: config.version, experiments: [{ id: "exp_t", variant: "vB" }, { id: "exp_s", variant: "a" }] }));
   await flush();
   expect(document.querySelector(".hero-title")!.textContent).toBe("T");
+});
+
+// ---- D9 ②(設計書 §6.1・§6.2): 結果の参加・CV の送信を起動から通す。Mode A は crypto.subtle のハッシュを待つので本物のタイマーで待つ ----
+
+const RUN = "r".repeat(22);
+const RUN_P = "p".repeat(22);
+const MARKS = "_ab_vid_r";
+const withResults = (runs: Record<string, string> = { exp_hero: RUN }, config: CompiledConfig = baseConfig): CompiledConfig => ({ ...config, results: { forget: true, runs } });
+type Body = Record<string, unknown>;
+/** 結果のイベントに返す既定の応答(参加は stored、CV は runId ごとに stored) */
+const storedReply = (b: Body): unknown =>
+  b.type === "conversion" ? { result: "stored", runs: Object.fromEntries((b.runIds as string[]).map((r) => [r, { result: "stored" }])) } : { result: "stored" };
+
+/** 全リクエストの URL と本文を記録する fetch。decision には `decision` を、結果のイベントには reply(body) を返す(Promise も可) */
+function resultsFetch(o: { reply?: (b: Body) => unknown; decision?: unknown } = {}) {
+  const calls: Array<{ url: string; body: Body }> = [];
+  const fn = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Body;
+    calls.push({ url: String(url), body });
+    const out = String(url).includes("/decision") ? (o.decision ?? null) : body.type === "participant" || body.type === "conversion" ? await (o.reply ?? storedReply)(body) : null;
+    return { ok: true, status: out ? 200 : 204, json: async () => (out ? out : Promise.reject(new SyntaxError("empty"))) } as unknown as Response;
+  }) as typeof fetch;
+  const events = (type?: string): Body[] => calls.filter((c) => c.url.includes("/event") && (!type || c.body.type === type)).map((c) => c.body);
+  return { fn, calls, events };
+}
+/** 起動の処理(ハッシュ・送信)が落ち着くまで待つ */
+const settleReal = async (): Promise<void> => {
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 5));
+};
+
+it("results without config.results sends nothing", async () => {
+  vi.useRealTimers();
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const f = resultsFetch();
+  const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: baseSettings });
+  await settleReal();
+  api.track("g_cta");
+  await settleReal();
+  expect(f.calls).toEqual([]);
+  expect(localStorage.getItem(MARKS)).toBeNull();
+});
+
+it("single experiment does not send participant", async () => {
+  // single は control が results.runs に載せない。runs に無い実験は参加を送らない
+  vi.useRealTimers();
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const f = resultsFetch();
+  const api = createRuntime(makeDeps(f.fn), { config: withResults({}), settings: baseSettings });
+  await settleReal();
+  api.track("g_cta");
+  await settleReal();
+  expect(document.querySelector(".hero-title")!.textContent).toBe("B!"); // 適用はする
+  expect(f.events()).toEqual([]);
+});
+
+it("pending and denied consent send nothing; preview sends nothing", async () => {
+  vi.useRealTimers();
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const f = resultsFetch();
+  const pending = createRuntime(makeDeps(f.fn), { config: withResults(), settings: { ...baseSettings, consentMode: "required" } });
+  await settleReal();
+  pending.track("g_cta");
+  (window as unknown as Record<string, unknown> & Window).__ab = { consent: "denied" };
+  createRuntime(makeDeps(f.fn), { config: withResults(), settings: { ...baseSettings, consentMode: "required" } });
+  await settleReal();
+  delete (window as unknown as Record<string, unknown> & Window).__ab;
+  const before = location.href;
+  location.hash = "#__ab_preview=exp_hero:vB";
+  try {
+    createRuntime({ ...makeDeps(f.fn), scriptSrc: null }, { config: withResults(), settings: baseSettings });
+    await settleReal();
+  } finally {
+    history.replaceState(null, "", before);
+  }
+  expect(f.calls).toEqual([]);
+  expect(localStorage.getItem(MARKS)).toBeNull();
+});
+
+it("revoke clears marks and sends forget after inflight participant", async () => {
+  // forget_waits_for_inflight_participant: 参加の送信が settle してから forget を送る(edge で書いた後に消す)
+  vi.useRealTimers();
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  let release!: (v: unknown) => void;
+  const hold = new Promise((r) => (release = r));
+  const f = resultsFetch({ reply: (b) => (b.type === "participant" ? hold : storedReply(b)) });
+  const api = createRuntime(makeDeps(f.fn), { config: withResults(), settings: baseSettings });
+  await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
+  expect(localStorage.getItem(MARKS)).not.toBeNull(); // 起動で印を書いた(i だけ)
+  api.consent(false);
+  await settleReal();
+  expect(localStorage.getItem(MARKS)).toBeNull(); // 撤回で印を消す
+  expect(f.events("forget")).toEqual([]); // 参加が in-flight の間は送らない
+  release({ result: "stored" });
+  await vi.waitFor(() => expect(f.events("forget")).toEqual([{ type: "forget", visitorId: VB }]));
+  expect(localStorage.getItem(MARKS)).toBeNull(); // 撤回の後に届いた応答で印を書き直さない
+});
+
+it("revoke_clears_marks_without_a_sender", async () => {
+  // 結果の記録をやめた後の config(results なし)で、前の印が残っている。撤回で消す(送信側が無くても)
+  vi.useRealTimers();
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  localStorage.setItem(MARKS, JSON.stringify({ v: 1, i: "x", p: { [RUN]: "vB:o" }, c: {} }));
+  const f = resultsFetch();
+  const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: baseSettings });
+  await settleReal();
+  expect(localStorage.getItem(MARKS)).not.toBeNull();
+  api.consent(false);
+  expect(localStorage.getItem(MARKS)).toBeNull();
+  // Identity の確立の前に撤回しても消す(送信側はまだ無い)
+  localStorage.setItem(MARKS, JSON.stringify({ v: 1, i: "x", p: {}, c: {} }));
+  const api2 = createRuntime(makeDeps(f.fn), { config: withResults(), settings: baseSettings });
+  api2.consent(false);
+  expect(localStorage.getItem(MARKS)).toBeNull();
+});
+
+it("denied_at_load_clears_results_marks", async () => {
+  localStorage.setItem(MARKS, JSON.stringify({ v: 1, i: "x", p: { [RUN]: "vB:o" }, c: {} }));
+  (window as unknown as Record<string, unknown> & Window).__ab = { consent: "denied" };
+  const f = resultsFetch();
+  createRuntime(makeDeps(f.fn), { config: withResults(), settings: { ...baseSettings, consentMode: "required" } });
+  await flush();
+  expect(localStorage.getItem(MARKS)).toBeNull();
+  expect(f.calls).toEqual([]);
+});
+
+it("forget_deletes_results_after_all_tests_archived", async () => {
+  // すべてのテストが終わっても個票が残る間は results: { forget: true, runs: {} } が出る。撤回で forget を送る
+  vi.useRealTimers();
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const f = resultsFetch();
+  const api = createRuntime(makeDeps(f.fn), { config: { ...withResults({}), experiments: [] }, settings: baseSettings });
+  await settleReal();
+  api.consent(false);
+  await vi.waitFor(() => expect(f.events()).toEqual([{ type: "forget", visitorId: VB }]));
+});
+
+it("forget_deletes_results_after_results_disabled", async () => {
+  // 結果の記録を無効にした後(results の無い config)でも、撤回の forget は送る(edge が個票を消す。K13)
+  vi.useRealTimers();
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const f = resultsFetch();
+  const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: baseSettings });
+  await settleReal();
+  api.consent(false);
+  await vi.waitFor(() => expect(f.events()).toEqual([{ type: "forget", visitorId: VB }]));
+});
+
+it("participant_applied_pending_when_own_selector_is_absent", async () => {
+  // A は変更なし・B は .x・C は .y。.y だけのページで B に割り当てられた人は、和集合の .y で参加し、applied は ok(自分の要素は待ち)
+  vi.useRealTimers();
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  document.body.innerHTML = `<p class="y">y</p>`;
+  const exp = {
+    ...baseConfig.experiments[0]!,
+    variants: [
+      { id: "vA", name: "A", weight: 0, changes: [] },
+      { id: "vB", name: "B", weight: 100, changes: [{ id: "c", type: "TEXT" as const, selector: ".x", payload: { text: "B" } }] },
+      { id: "vC", name: "C", weight: 0, changes: [{ id: "c", type: "TEXT" as const, selector: ".y", payload: { text: "C" } }] },
+    ],
+  };
+  const f = resultsFetch();
+  const config = withResults({ exp_hero: RUN }, { ...baseConfig, prehide: { exp_hero: [".x", ".y"] }, exposureSelectors: { exp_hero: [".x", ".y"] }, experiments: [exp] });
+  createRuntime(makeDeps(f.fn), { config, settings: baseSettings });
+  await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
+  expect(f.events("participant")[0]).toMatchObject({ runId: RUN, variantId: "vB", applied: "ok" });
+  expect(document.querySelector(".y")!.textContent).toBe("y");
+});
+
+it("all-variants-without-changes test participates on :root and converts", async () => {
+  // A/A: compile が exposureSelectors に :root を入れる → 読み込みの直後に参加し、CV も送る
+  vi.useRealTimers();
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const config = compile({
+    siteId: "site_unit", siteSalt: "salt", version: 3,
+    goals: [{ id: "g_cta", name: "CTA", type: "CUSTOM", config: {} }],
+    experiments: [{ id: "exp_aa", name: "AA", urlMatch: { op: "contains", value: "/" }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "vA", name: "A", weight: 50, changes: [] }, { id: "vB", name: "B", weight: 50, changes: [] }] }],
+    results: { forget: true, runs: { exp_aa: RUN } },
+  });
+  expect(config.exposureSelectors.exp_aa).toEqual([":root"]);
+  const f = resultsFetch();
+  const api = createRuntime(makeDeps(f.fn), { config, settings: baseSettings });
+  await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
+  api.track("g_cta");
+  await vi.waitFor(() => expect(f.events("conversion")).toEqual([{ type: "conversion", v: 1, goalId: "g_cta", runIds: [RUN], visitorId: VB }]));
+});
+
+it("paused run receives conversion", async () => {
+  // 一時停止中のテストは experiments[] に無いが results.runs にある。参加済みなら CV を送る
+  vi.useRealTimers();
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  localStorage.setItem(MARKS, JSON.stringify({ v: 1, i: await shortVisitorHash(VB), p: { [RUN_P]: "vA:o" }, c: {} }));
+  const f = resultsFetch();
+  const api = createRuntime(makeDeps(f.fn), { config: withResults({ exp_hero: RUN, exp_paused: RUN_P }), settings: baseSettings });
+  await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
+  api.track("g_cta");
+  await vi.waitFor(() => expect(f.events("conversion")).toHaveLength(1));
+  expect(new Set(f.events("conversion")[0]!.runIds as string[])).toEqual(new Set([RUN, RUN_P]));
+});
+
+it("dlite uses vh from the decision response", async () => {
+  vi.useRealTimers();
+  const f = resultsFetch({ decision: { v: baseConfig.version, experiments: [{ id: "exp_hero", variant: "vB" }], vh: "dliteHash01" } });
+  createRuntime(makeDeps(f.fn), { config: withResults(), settings: { ...baseSettings, mode: "B" } });
+  await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
+  const sent = f.calls.find((c) => c.body.type === "participant")!;
+  expect(sent.url).toBe("/__ab/event");
+  expect(sent.body).toEqual({ type: "participant", v: 1, runId: RUN, variantId: "vB", device: "desktop", applied: "ok" }); // D-lite は ID を本文に入れない
+  await settleReal();
+  expect(JSON.parse(localStorage.getItem(MARKS)!)).toMatchObject({ i: "dliteHash01", p: { [RUN]: "vB:o" } });
+});
+
+it("participant pause and resume while sending", async () => {
+  // 送信中に一時停止(edge の config の experiments に無い)→ 一時的な ignored → 印を付けず、次のページで送る
+  vi.useRealTimers();
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const f = resultsFetch({ reply: () => ({ result: "ignored" }) });
+  createRuntime(makeDeps(f.fn), { config: withResults(), settings: baseSettings });
+  await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
+  await settleReal();
+  const kept = localStorage.getItem(MARKS);
+  expect(JSON.parse(kept!).p).toEqual({});
+  ((window as RuntimeDeps["win"]).AB as AbApi).consent(false); // 前のページのエンジンを止める(撤回は印を消すので、控えた印を戻して次のページへ)
+  localStorage.setItem(MARKS, kept!);
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  document.body.innerHTML = `<h1 class="hero-title">orig</h1>`;
+  const g = resultsFetch(); // 再開した後の次のページ
+  createRuntime(makeDeps(g.fn), { config: withResults(), settings: baseSettings });
+  await vi.waitFor(() => expect(g.events("participant")).toHaveLength(1));
+  await settleReal();
+  expect(JSON.parse(localStorage.getItem(MARKS)!).p).toEqual({ [RUN]: "vB:o" });
 });

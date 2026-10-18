@@ -29,7 +29,8 @@ export const SITE_PATCH_COLUMNS = [
   "name", "domain", "mode", "id_source", "allowed_origins_json", "hosts_json",
   "retention_days", "consent_mode", "decision_timeout_ms",
   "visitor_cookie_name", "uuid_cookie_enabled", "uuid_cookie_name", "previous_cookie_names_json",
-  "forget_on_revoke", "timezone", "analytics_json", "ga4_property_id", "bigquery_dataset", "updated_at",
+  "forget_on_revoke", "timezone", "analytics_json", "ga4_property_id", "bigquery_dataset",
+  "results_enabled", "results_retention_days", "updated_at",
 ] as const satisfies readonly (keyof SiteRow)[];
 
 /** Kysely の `compile()`(`sql` / `parameters`)を D1 の prepared statement 配列に写す(batch = 1 トランザクション用) */
@@ -79,8 +80,20 @@ export const SitePatchSchema = z.strictObject({
   allowedOrigins: z.array(z.string()).max(50).optional(),
   hosts: z.array(z.string()).max(50).optional(),
   retentionDays: z.number().int().min(1).max(3650).optional(),
-  forgetOnRevoke: z.boolean().optional().describe("撤回時に Profile を削除する(既定 true)。false は Retention に委ねる"),
+  forgetOnRevoke: z.boolean().optional().describe("撤回時に訪問者プロフィールを削除する(既定 true)。Mode B では訪問者プロフィールの削除には効かない(retentionDays で消える)。結果を記録するサイトでは、その訪問者の結果の記録(参加・目標の達成)も削除する(Mode B を含む)。false は retentionDays(結果の記録は resultsRetentionDays)に委ねる"),
   timezone: z.string().min(1).max(64).optional().describe("曜日・時間帯の条件の判定に使うタイムゾーン(IANA 名。例: Asia/Tokyo)。変更は次の公開で効く"),
+  // D9 ②(設計書 §6.6): 有効にするのは計測用 D1 がある導入だけ(無ければ PATCH のルートが 409 results_store_missing)
+  resultsEnabled: z
+    .boolean()
+    .optional()
+    .describe("結果を記録する(テストの参加と CV をツールの計測用データベースに残す)。切り替えは未公開の編集に数え、次の公開で効く。有効にした後に開始したテストだけが記録の対象になる"),
+  resultsRetentionDays: z
+    .number()
+    .int()
+    .min(7)
+    .max(365)
+    .optional()
+    .describe("結果の個票(参加者ごとの記録)の保持期間(日、7〜365。既定 90)。収集を終えてからこの日数を過ぎた個票を消す。判定した結果は消えない"),
   consentMode: z.enum(["implicit", "required"]).optional(),
   decisionTimeoutMs: z.number().int().optional(),
   visitorCookieName: z.string().optional(),
@@ -108,7 +121,7 @@ export function siteToSettings(row: SiteRow): SiteSettings {
  */
 export function applySitePatch(row: SiteRow, patch: SitePatch, nowMs: number): { next: SiteRow; error?: ApiError } {
   const nowSec = Math.floor(nowMs / 1000);
-  // Identity / Analytics 命名設定は KV 即時反映で Publish 不要。`content_updated_at` は Goal / オーディエンス(`touchSite`)と、タイムゾーンの変更(PATCH のルートが touchSite)だけが進める
+  // Identity / Analytics 命名設定は KV 即時反映で Publish 不要。`content_updated_at` は Goal / オーディエンス(`touchSite`)と、タイムゾーン・結果の記録の切り替え(PATCH のルートが touchSite)だけが進める
   const next: SiteRow = { ...row, updated_at: nowMs };
   if (patch.name !== undefined) next.name = patch.name;
   if (patch.domain !== undefined) next.domain = patch.domain;
@@ -120,6 +133,8 @@ export function applySitePatch(row: SiteRow, patch: SitePatch, nowMs: number): {
   if (patch.consentMode !== undefined) next.consent_mode = patch.consentMode;
   if (patch.decisionTimeoutMs !== undefined) next.decision_timeout_ms = patch.decisionTimeoutMs;
   if (patch.forgetOnRevoke !== undefined) next.forget_on_revoke = patch.forgetOnRevoke ? 1 : 0;
+  if (patch.resultsEnabled !== undefined) next.results_enabled = patch.resultsEnabled ? 1 : 0;
+  if (patch.resultsRetentionDays !== undefined) next.results_retention_days = patch.resultsRetentionDays;
   if (patch.timezone !== undefined) {
     // 大文字小文字だけを一覧の綴りにそろえて保存する(asia/tokyo → Asia/Tokyo。別名は置き換えない)。オフセット形式は IANA 名ではないので受けない(plan ② P14)
     const tz = canonicalTimeZone(patch.timezone);

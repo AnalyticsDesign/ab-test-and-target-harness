@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
-import { kvKeys, parseCompiledConfig } from "@wtt/core";
+import { kvKeys, parseCompiledConfig, RUN_ID_RE } from "@wtt/core";
 import { getDb } from "../src/db";
 import {
   call,
@@ -17,6 +17,7 @@ import {
   siteRow,
   experimentRow,
   runDirect,
+  RESULTS_STORE,
 } from "./helpers";
 
 const setStatus = (token: string, sid: string, eid: string, status: string, envOverride?: Record<string, unknown>) =>
@@ -300,5 +301,95 @@ describe("status transitions (spec §13.8)", () => {
     expect(afterArchive.started_at).toBe(afterFirstRun.started_at); // archive でも動かない
     expect(afterArchive.stopped_at).not.toBeNull();
     expect(afterArchive.stopped_at!).toBeGreaterThanOrEqual(before);
+  });
+});
+
+// D9 ②(plan ② の K14、設計書 §5.2・§6.3): 開始(draft → running)のときだけ run_id を振る。
+// 振るのは kind = test・Site が結果を記録する(results_enabled = 1)・計測用 D1 がある、のすべてを満たすときだけ
+describe("run_id の発行と開始の警告(D9 ②)", () => {
+  const NOT_RECORDED = { path: "results", message: "結果はツール上に残りません。後から結果の記録を有効にしても、このテストの結果は記録されません" };
+  /** 計測用 D1 がある導入で作った Site(results_enabled = 1)と、変更 1 件のテスト */
+  async function storeBase(expOverrides: Record<string, unknown> = {}) {
+    const owner = await setupOwner();
+    const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+    expect(res.status).toBe(201);
+    const { id: sid } = await json<{ id: string }>(res);
+    const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_hero", ...expOverrides });
+    return { owner, sid, eid };
+  }
+
+  it("issues run_id on first start of a test when site records results", async () => {
+    const { owner, sid, eid } = await storeBase();
+    const res = await setStatus(owner.token, sid, eid, "running", RESULTS_STORE);
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    const row = await experimentRow(sid, eid);
+    expect(row.run_id).toHaveLength(22);
+    expect(row.run_id).toMatch(RUN_ID_RE);
+    expect(body.experiment.runId).toBe(row.run_id);
+    expect(body.warnings).toEqual([]);
+  });
+
+  it("run_id_not_issued_when_site_results_disabled_at_start", async () => {
+    const { owner, sid, eid } = await storeBase();
+    expect((await call("PATCH", `/sites/${sid}`, { token: owner.token, body: { resultsEnabled: false }, envOverride: RESULTS_STORE })).status).toBe(200);
+    const res = await setStatus(owner.token, sid, eid, "running", RESULTS_STORE);
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect((await experimentRow(sid, eid)).run_id).toBeNull();
+    expect(body.experiment.runId).toBeNull();
+    expect(body.warnings).toEqual([NOT_RECORDED]);
+    // 後から Site で有効にしても、このテストには振らない(再開は開始ではない)
+    expect((await call("PATCH", `/sites/${sid}`, { token: owner.token, body: { resultsEnabled: true }, envOverride: RESULTS_STORE })).status).toBe(200);
+    expect((await setStatus(owner.token, sid, eid, "paused", RESULTS_STORE)).status).toBe(200);
+    expect((await setStatus(owner.token, sid, eid, "running", RESULTS_STORE)).status).toBe(200);
+    expect((await experimentRow(sid, eid)).run_id).toBeNull();
+  });
+
+  it("single never gets run_id", async () => {
+    const { owner, sid, eid } = await storeBase({ kind: "single" });
+    const res = await setStatus(owner.token, sid, eid, "running", RESULTS_STORE);
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect((await experimentRow(sid, eid)).run_id).toBeNull();
+    expect(body.experiment.runId).toBeNull();
+    expect(body.warnings).toEqual([]); // パーソナライズは結果を持たないので、警告も出さない
+  });
+
+  it("resume_keeps_run_id", async () => {
+    const { owner, sid, eid } = await storeBase();
+    expect((await setStatus(owner.token, sid, eid, "running", RESULTS_STORE)).status).toBe(200);
+    const first = (await experimentRow(sid, eid)).run_id;
+    expect(first).toMatch(RUN_ID_RE);
+    const paused = await json(await setStatus(owner.token, sid, eid, "paused", RESULTS_STORE));
+    expect(paused.warnings).toEqual([]);
+    const resumed = await json(await setStatus(owner.token, sid, eid, "running", RESULTS_STORE));
+    expect(resumed.warnings).toEqual([]);
+    expect(resumed.experiment.runId).toBe(first);
+    expect((await experimentRow(sid, eid)).run_id).toBe(first);
+    expect((await json(await setStatus(owner.token, sid, eid, "archived", RESULTS_STORE))).experiment.runId).toBe(first);
+  });
+
+  it("legacy_paused_test_can_resume", async () => {
+    // v1.0 より前に開始した(run_id の無い)一時停止中のテスト。結果を記録する Site でも、再開で振らない
+    const { owner, sid, eid } = await storeBase();
+    await runDirect(sid, eid, "paused");
+    const res = await setStatus(owner.token, sid, eid, "running", RESULTS_STORE);
+    expect(res.status).toBe(200);
+    expect((await json(res)).warnings).toEqual([]);
+    const row = await experimentRow(sid, eid);
+    expect(row.status).toBe("running");
+    expect(row.run_id).toBeNull();
+  });
+
+  it("start without store gives warning and no run_id", async () => {
+    // Site は結果を記録する設定のまま、導入から計測用 D1 が外れた(binding が無い)
+    const { owner, sid, eid } = await storeBase();
+    expect((await siteRow(sid)).results_enabled).toBe(1);
+    const res = await setStatus(owner.token, sid, eid, "running");
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect((await experimentRow(sid, eid)).run_id).toBeNull();
+    expect(body.warnings).toEqual([NOT_RECORDED]);
   });
 });

@@ -1,9 +1,18 @@
 import type { EventBody, SiteSettings } from "@wtt/core";
 import type { Env } from "./env";
 import { profileStub } from "./profile";
+import { forgetResults } from "./results";
 import { loadActiveVersion, loadConfig } from "./store";
 
 export type EventOutcome = "recorded" | "ignored" | "failed";
+
+/** Profile の DO に向かうイベント。結果のイベント(participant / conversion)は呼び出し側が results.ts へ分ける(D9 ②) */
+export type ProfileEventBody = Extract<EventBody, { type: "goal" } | { type: "forget" }>;
+
+/** 結果のイベント(D9 ② 設計書 §6.3)か。`/event` と `/__ab/event` が handleResultsEvent へ分けるのに使う */
+export function isResultsEvent(body: EventBody): body is Extract<EventBody, { type: "participant" } | { type: "conversion" }> {
+  return body.type === "participant" || body.type === "conversion";
+}
 
 /**
  * spec §9.2: `goal` は Profile の count を加算、`forget` は deleteAll。
@@ -13,12 +22,9 @@ export type EventOutcome = "recorded" | "ignored" | "failed";
  * 露出は decision 経路(既に URL 一致だけで DO を起こせる)より 1 件あたり安い。
  * 応答は呼び出し側が常に 204(ignored も 204)、failed は 503
  */
-export async function handleEvent(env: Env, siteId: string, settings: SiteSettings, body: EventBody, visitorId: string): Promise<EventOutcome> {
+export async function handleEvent(env: Env, siteId: string, settings: SiteSettings, body: ProfileEventBody, visitorId: string): Promise<EventOutcome> {
+  if (body.type === "forget") return handleForget(env, siteId, settings, visitorId);
   try {
-    if (body.type === "forget") {
-      await profileStub(env, siteId, visitorId).forget(); // config を見ない(決定 37 の r1 追記 C)
-      return "recorded";
-    }
     const version = await loadActiveVersion(env, siteId);
     const config = version === null ? null : await loadConfig(env, siteId, version);
     if (!config || !config.needsProfile) return "ignored"; // goal は DO namespace にも触れない(r2 CX-Medium-9)
@@ -29,4 +35,21 @@ export async function handleEvent(env: Env, siteId: string, settings: SiteSettin
     console.error("wtt: profile event failed", e);
     return "failed";
   }
+}
+
+/**
+ * forget: Profile(DO)の削除と、計測用 D1 の行の削除(D9 ② K13)をそれぞれ別の例外境界で両方試す。
+ * 一方の失敗で他方を飛ばさない。応答は今のとおり Profile の結果だけで決める(計測用 D1 の失敗はログだけ。forgetResults が握る)。
+ * 計測用 D1 の削除は `forgetOnRevoke !== false` のときだけ。応答が「消した」と約束するので waitUntil に回さず待つ(数行)
+ */
+async function handleForget(env: Env, siteId: string, settings: SiteSettings, visitorId: string): Promise<EventOutcome> {
+  let outcome: EventOutcome = "recorded";
+  try {
+    await profileStub(env, siteId, visitorId).forget(); // config を見ない(決定 37 の r1 追記 C)
+  } catch (e) {
+    console.error("wtt: profile event failed", e);
+    outcome = "failed";
+  }
+  if (settings.forgetOnRevoke !== false) await forgetResults(env, siteId, visitorId);
+  return outcome;
 }

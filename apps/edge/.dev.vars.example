@@ -1,0 +1,5 @@
+# 手で `wrangler dev` するときの秘密の写し(`.dev.vars` にコピーして使う。`.dev.vars` は git に入れない)。
+# 本番では使わない: 本番の鍵は `wrangler secret put RESULTS_VISITOR_KEY` で入れる(導入手順)。
+# sample-site の E2E も使わない(playwright.config.ts が --var で固定値を渡す)。
+# 訪問者 ID の HMAC の鍵。`openssl rand -base64 32` の値(復号して 32 バイト以上)に置き換える
+RESULTS_VISITOR_KEY=<openssl rand -base64 32 の値>

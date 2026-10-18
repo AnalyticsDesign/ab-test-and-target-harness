@@ -428,4 +428,44 @@ describe("experiment kind (決定 51、設計書 §3.1・§3.2)", () => {
     const cfg = compile({ ...base, experiments: [single("exp_z"), { ...exp(), id: "exp_b" }, { ...exp(), id: "exp_a" }] });
     expect(cfg.experiments.map((e) => e.id)).toEqual(["exp_z", "exp_b", "exp_a"]);
   });
+
+  describe("results (D9 ②、K15)", () => {
+    const runId = "AAAAAAAAAAAAAAAAAAAAAA";
+    const codeOf = (input: unknown): string | null => {
+      try {
+        compile(input);
+        return null;
+      } catch (e) {
+        return e instanceof CompileError ? e.code : "other";
+      }
+    };
+    it("copies results from the input to the output and omits it when absent", () => {
+      const results = { forget: true as const, runs: { exp_001: runId } };
+      const cfg = compile({ ...base, experiments: [exp()], results });
+      expect(cfg.results).toEqual(results);
+      expect(CompiledConfigSchema.safeParse(cfg).success).toBe(true);
+      expect("results" in compile({ ...base, experiments: [exp()] })).toBe(false);
+    });
+    it("accepts results with an empty runs (forget only)", () => {
+      expect(compile({ ...base, experiments: [exp()], results: { forget: true, runs: {} } }).results).toEqual({ forget: true, runs: {} });
+    });
+    it("rejects a runId that does not match RUN_ID_RE and a results with forget false", () => {
+      expect(codeOf({ ...base, experiments: [exp()], results: { forget: true, runs: { exp_001: "short" } } })).toBe("invalid_input");
+      expect(codeOf({ ...base, experiments: [exp()], results: { forget: false, runs: {} } })).toBe("invalid_input");
+    });
+    it("does not put kind in the output (unchanged from D9 ①)", () => {
+      const cfg = compile({ ...base, experiments: [{ ...exp(), kind: "test" as const }] });
+      expect(cfg.experiments[0]).not.toHaveProperty("kind");
+    });
+    it("all_variants_without_changes_adds_root_to_exposure_selectors", () => {
+      // A/A のテスト(全パターンの Change が 0 件)も ab_exposure が出るよう :root を足す(K20)。prehide は空のまま
+      const aa: Experiment = { ...exp(), variants: [
+        { id: "vA", name: "A", weight: 50, changes: [] },
+        { id: "vB", name: "B", weight: 50, changes: [] },
+      ] };
+      const cfg = compile({ ...base, experiments: [aa] });
+      expect(cfg.exposureSelectors["exp_001"]).toEqual([":root"]);
+      expect(cfg.prehide["exp_001"]).toEqual([]);
+    });
+  });
 });

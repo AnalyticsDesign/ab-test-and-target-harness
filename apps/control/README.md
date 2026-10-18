@@ -13,8 +13,16 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 
 ### 書き込みの凍結と版のヘッダー
 
-- 書き込みの凍結: D1 の `instance_settings` のキー `writeFreeze` に行があるあいだ、`/auth/*`・`/break-glass/*`・`POST /sites/:sid/evaluate` 以外の POST / PUT / PATCH / DELETE を `503 write_frozen` で断る(`src/write-freeze.ts`。行が読めなくても凍結中)。入切は `docs/deploy.md` 6.6。GET に伴う業務データの書き込み(`GET /sites/:sid` の配信の写しの自己修復と、設置タグの配信ファイルの自己修復(`reconcileStatic`)など)は `isWriteFrozen()` で凍結中かを確かめ、凍結中は見送る。後から足す Cron や自己修復も同じ関数を使う。`/auth/*` が開くパスの一覧は `src/auth-paths.ts`(業務の書き込みを足すと凍結から素通しになる)
+- 書き込みの凍結: D1 の `instance_settings` のキー `writeFreeze` に行があるあいだ、`/auth/*`・`/break-glass/*`・`POST /sites/:sid/evaluate` 以外の POST / PUT / PATCH / DELETE を `503 write_frozen` で断る(`src/write-freeze.ts`。行が読めなくても凍結中)。入切は `docs/deploy.md` 6.6。GET に伴う業務データの書き込み(`GET /sites/:sid` の配信の写しの自己修復と、設置タグの配信ファイルの自己修復(`reconcileStatic`)など)は `isWriteFrozen()` で凍結中かを確かめ、凍結中は見送る。Cron(下の「Cron」)と、後から足す自己修復も同じ関数を使う。`/auth/*` が開くパスの一覧は `src/auth-paths.ts`(業務の書き込みを足すと凍結から素通しになる)
 - 版のヘッダー: 全応答に `x-wtt-api-version`(`@wtt/core` の `API_CONTRACT_VERSION`)。管理画面は `x-wtt-client-version` を付けてくる。今は判定しない
+
+### Cron
+
+- Cron Trigger は 1 本だけ(`*/15 * * * *`。`wrangler.jsonc` の `triggers`)。ジョブは `src/cron/jobs.ts` の登録表に足し、Trigger は増やさない(Cron Trigger の数はアカウント単位の上限がある)。実行の枠は `src/cron/runner.ts`
+- ジョブの形 = `{ name, cadence: { every: "tick" } | { daily: { afterUtcHour } }, writesControl, run(ctx) }`。1 回の実行でジョブを登録の順に 1 本ずつ走らせ、1 本の例外はほかのジョブを止めない(どのジョブも冪等に作る)。`daily` は UTC のその時以降の最初の実行で 1 日 1 回動き、成功を `cron_job_runs` に記録する(失敗・凍結で見送った日は次の実行で取り直す)。`daily` は `writesControl: true` に限る
+- 書き込みの凍結: 実行の最初に 1 回凍結を読み、`writesControl: true` のジョブは凍結中なら丸ごと見送る。さらにジョブは `wtt-control` に書く区切りの直前に毎回 `ctx.assertNotFrozen()` を呼び、凍結中ならそこで止まる(残りは次の回)。`writesControl: false` のジョブは凍結中も動く
+- 今のジョブ: `results-account-guard`(毎回・`writesControl: false`)。使用状況(`getUsage`)で、Free のアカウント全体の Workers のリクエストか D1 の書き込みの行数が日次上限の 8 割以上なら、edge の `ResultsBudget`(binding `RESULTS_BUDGET`。`script_name: "wtt-edge"`)に `stop("account_usage", 次の UTC 0 時)` を立てる。使用量が取れない・Paid・binding が無いときは何もしない(ログだけ)
+- `RESULTS_BUDGET` は edge の Durable Object を参照するので、`ResultsBudget` を含む edge を先にデプロイしないと control をデプロイできない
 
 ## ルート
 
@@ -31,7 +39,7 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 | `GET /login-options` | — | この導入で使えるログイン方法 `{ google, passwordLogin }`(ログイン画面は認証前なので `/capabilities` を読めない) |
 | `POST /break-glass/reset-link` | — | 非常時に OWNER のパスワード再設定リンクを発行(非常用トークン + OWNER のメール。条件を満たさない要求はすべて 404) |
 | `POST /auth/sign-in/email` ほか | — | Better Auth のパススルー(`sign-in/email` `sign-out` `sign-up/email` `get-session` `request-password-reset` `reset-password` のみ公開)。**このうちパスワードを使う 4 経路は非常用トークンがあるときだけ開き、普段は 404** |
-| `GET /capabilities` | 認証のみ | この導入で使える機能 `{ imageUpload, edgeOrigin, tagOrigin, edgeOnWorkersDev, passwordLogin }`(R2 と公開ベースの有無、edge の公開 origin、設置タグを配る origin、パスワードログインが開いているか) |
+| `GET /capabilities` | 認証のみ | この導入で使える機能 `{ imageUpload, edgeOrigin, tagOrigin, edgeOnWorkersDev, passwordLogin, resultsStore, writeFreeze }`(R2 と公開ベースの有無、edge の公開 origin、設置タグを配る origin、パスワードログインが開いているか、計測用 D1(`RESULTS_DB`)の binding があるか、書き込みの凍結の状態) |
 | `GET /me` | 認証のみ | 現在のセッション(または API キー)の持ち主 |
 | `GET /me/api-keys` | 認証のみ | 自分の API キー一覧(平文は含まない) |
 | `POST /me/api-keys` | 認証のみ | API キーを発行(平文はこの応答限り)。範囲 `workspaceId` は必須(`null` = フルはシステム管理者のみ) |
@@ -63,9 +71,9 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 | ルート | Role | 内容 |
 |---|---|---|
 | `GET /workspaces/:wid/sites` | VIEWER | Workspace 配下の Site 一覧 |
-| `POST /workspaces/:wid/sites` | ADMIN | Site を作成 |
+| `POST /workspaces/:wid/sites` | ADMIN | Site を作成(計測用 D1 の binding があれば「結果を記録する」を有効で作る) |
 | `GET /sites/:sid` | VIEWER | Site 1 件(+ `hasUnpublishedChanges` / `activeKvStale` / `staticStale` / `staticRemoving`) |
-| `PATCH /sites/:sid` | ADMIN | Site 設定を更新(Identity / Analytics 命名は KV 即時反映で Publish 不要) |
+| `PATCH /sites/:sid` | ADMIN | Site 設定を更新(Identity / Analytics 命名は KV 即時反映で Publish 不要)。`resultsEnabled`(結果を記録する。切り替えは未公開の変更に数え、次の Publish で効く)と `resultsRetentionDays`(個票の保持期間 7〜365 日、既定 90)。計測用 D1 の binding が無い導入で無効 → 有効にすると 409 `results_store_missing` |
 | `DELETE /sites/:sid` | OWNER | Site を削除(KV の settings / host / active / config と R2 の画像(binding があるとき)も消す) |
 
 ### オーディエンス / Goal
@@ -87,20 +95,20 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 | ルート | Role | 内容 |
 |---|---|---|
 | `GET /sites/:sid/experiments` | VIEWER | Experiment 一覧 |
-| `POST /sites/:sid/experiments` | EDITOR | 作成(`kind` = test はパターン a / b を 50 / 50、single はパターン a を重み 100 で自動作成) |
+| `POST /sites/:sid/experiments` | EDITOR | 作成(`kind` = test はパターン a / b を 50 / 50、single はパターン a を重み 100 で自動作成)。一度開始してから削除したエクスペリエンスの ID は 409 `id_taken` |
 | `GET /sites/:sid/experiments/:eid` | VIEWER | 1 件(Variant と Change を含む) |
 | `PATCH /sites/:sid/experiments/:eid` | EDITOR | 更新(id は不変、status は `/status` 経由) |
-| `DELETE /sites/:sid/experiments/:eid` | EDITOR | 削除(draft / archived のみ) |
+| `DELETE /sites/:sid/experiments/:eid` | EDITOR | 削除(draft / archived のみ)。一度開始したエクスペリエンスの ID は、削除しても使い直せない(`retired_experiment_ids` に残し、同じ ID の作成・複製は 409 `id_taken`) |
 | `PUT /sites/:sid/experiments/:eid/variants` | EDITOR | Variant を全置換(test は 2 つ以上・single は 1 つ・weight 合計 100。draft のみ) |
 | `PUT /sites/:sid/experiments/:eid/variants/:vid/changes` | EDITOR | Change を全置換(1 件でも保存時検証に落ちれば何も書かない) |
-| `POST /sites/:sid/experiments/:eid/duplicate` | EDITOR | 複製(下書きを作る。mode = same / variant) |
-| `POST /sites/:sid/experiments/:eid/status` | ADMIN | status 遷移(成功した遷移は必ず Site を自動 Publish) |
+| `POST /sites/:sid/experiments/:eid/duplicate` | EDITOR | 複製(下書きを作る。mode = same / variant。`runId` は写さない)。退役した ID は 409 `id_taken` |
+| `POST /sites/:sid/experiments/:eid/status` | ADMIN | status 遷移(成功した遷移は必ず Site を自動 Publish)。テストの開始(`draft → running`)で、Site が結果を記録し計測用 D1 の binding があれば `runId`(結果の記録の ID)を振る。再開では振らない。結果を記録しないテストの開始は応答の `warnings` に `path: "results"` を足す |
 
 ### Publish
 
 | ルート | Role | 内容 |
 |---|---|---|
-| `POST /sites/:sid/publish` | ADMIN | Publish(失敗も 200 + `ok:false`)。成功の結果の `staticDeploy`(`deployed` / `pending` / `skipped`)が設置タグの配信ファイルの更新の状態 |
+| `POST /sites/:sid/publish` | ADMIN | Publish(失敗も 200 + `ok:false`)。成功の結果の `staticDeploy`(`deployed` / `pending` / `skipped`)が設置タグの配信ファイルの更新の状態。compiled config の `results`(結果を記録する Site の running / paused のテストの `runId`。個票が残っている間は forget のために出し続ける)は Publish の経路でだけ足し、公開した収集の状態が変わったら `results_collection_log` に記録する |
 | `POST /sites/:sid/static/redeploy` | ADMIN | 設置タグの配信ファイルを今の公開内容で作り直す(更新が済んでいないとき、削除が途中で止まったとき。結果 `{ staticDeploy }`) |
 | `GET /sites/:sid/publish-preview` | VIEWER | 前回 activation 以降に変わった Experiment / Change |
 | `GET /sites/:sid/publishes` | VIEWER | 公開履歴(新しい順・最大 100 件) |

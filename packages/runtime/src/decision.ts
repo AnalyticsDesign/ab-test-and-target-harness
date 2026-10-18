@@ -1,7 +1,8 @@
 import { decide, matchesUrl } from "@wtt/core";
 import type { CompiledConfig, PageContext, RuntimeSettings } from "@wtt/core";
 
-export type DecisionOutcome = { experiments: Array<{ id: string; variant: string }> } | null;
+/** vh = D-lite の decision の応答の訪問者 ID の短いハッシュ(結果の送信済みの印の i。設計書 §6.2) */
+export type DecisionOutcome = { experiments: Array<{ id: string; variant: string }>; vh?: string } | null;
 
 /**
  * spec §7.1: Mode A + needsProfile=false はブラウザ内評価(リクエストなし)。
@@ -39,7 +40,7 @@ export async function requestDecision(
       signal,
     });
     if (!res.ok) return null;
-    const json = (await res.json()) as { v?: unknown; experiments?: unknown };
+    const json = (await res.json()) as { v?: unknown; experiments?: unknown; vh?: unknown };
     if (typeof json !== "object" || json === null || !Array.isArray(json.experiments)) return null;
     if (json.v !== expectedVersion) return null;
     const experiments: Array<{ id: string; variant: string }> = [];
@@ -47,7 +48,7 @@ export async function requestDecision(
       if (typeof e?.id !== "string" || typeof e?.variant !== "string") return null;
       experiments.push({ id: e.id, variant: e.variant });
     }
-    return { experiments };
+    return { experiments, vh: json.vh as string | undefined }; // 形は見ない(印の i と等しいかを比べるだけ)
   } catch {
     return null;
   }

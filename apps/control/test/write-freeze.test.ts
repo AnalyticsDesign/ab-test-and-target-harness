@@ -1,7 +1,7 @@
 // apps/control/test/write-freeze.test.ts
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import app from "../src/index";
+import { app } from "../src/index";
 import { getDb } from "../src/db";
 import type { Env } from "../src/env";
 import { kvKeys } from "@wtt/core";

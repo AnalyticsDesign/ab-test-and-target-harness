@@ -38,7 +38,7 @@ export type PublicInvitation = { id: string; email: string; role: Role | null; w
 export type AnalyticsSettings = { dataLayerName: string; extraKey: string; exposure: { event: string; keys: Record<string, string> }; conversion: { event: string; keys: Record<string, string> } };
 export type Site = {
   id: string; workspaceId: string; name: string; domain: string; mode: "A" | "B"; idSource: string; allowedOrigins: string[]; hosts: string[];
-  retentionDays: number; consentMode: "implicit" | "required"; forgetOnRevoke: boolean; timezone: string; decisionTimeoutMs: number; visitorCookieName: string; uuidCookieEnabled: boolean; uuidCookieName: string;
+  retentionDays: number; consentMode: "implicit" | "required"; forgetOnRevoke: boolean; resultsEnabled: boolean; resultsRetentionDays: number; timezone: string; decisionTimeoutMs: number; visitorCookieName: string; uuidCookieEnabled: boolean; uuidCookieName: string;
   previousCookieNames: Array<{ name: string; until: number }>; analytics: AnalyticsSettings; ga4PropertyId: string | null; bigqueryDataset: string | null;
   activeVersion: number | null; activeKvStale: boolean; staticStale: boolean; staticRemoving: boolean; lastActivatedAt: number | null; contentUpdatedAt: number; createdAt: number; updatedAt: number;
   /** `GET /sites/:sid` だけが返す(spec §13.9 の badge / banner 用) */
@@ -56,6 +56,8 @@ export type Experiment = {
   id: string; siteId: string; name: string; kind: ExperimentKind; status: Status; publishedStatus: Status | null; urlMatch: PageMatchValue; targeting: unknown | null;
   trafficPercentage: number; persistAssignment: boolean; analytics: { overrides?: { experimentName?: string }; extra?: Record<string, string> } | null;
   createdBy: string; updatedBy: string; createdAt: number; updatedAt: number; unpublished: boolean;
+  /** 結果の記録の ID(結果を記録する Site でテストを開始したときに 1 回だけ振る。無ければ null) */
+  runId: string | null;
   /** `GET /sites/:sid/experiments/:eid` だけが返す */
   variants?: Variant[];
 };
@@ -81,7 +83,7 @@ export type Goal = { id: string; name: string; type: "PAGEVIEW" | "CLICK" | "CUS
 /** backlog D13: 書き込みの凍結の状態。reason = null は「凍結の設定が読めない」(凍結中として扱う) */
 export type WriteFreezeState = { reason: string | null; until: string | null; since: number | null };
 /** `GET /capabilities`。この導入で使える機能(control の env から決まる) */
-export type Capabilities = { imageUpload: boolean; edgeOrigin: string | null; tagOrigin: string | null; edgeOnWorkersDev: boolean; passwordLogin: boolean; writeFreeze: WriteFreezeState | null };
+export type Capabilities = { imageUpload: boolean; edgeOrigin: string | null; tagOrigin: string | null; edgeOnWorkersDev: boolean; passwordLogin: boolean; resultsStore: boolean; writeFreeze: WriteFreezeState | null };
 /** `GET /me/api-keys` の各要素。`revokedAt` は失効した時刻(有効な鍵は null。失効から 30 日で一覧から消える) */
 /** B42: scope = 鍵の範囲(null = 範囲を持たない古い鍵で使えない)。workspace.name = null はワークスペースが削除済み */
 export type ApiKey = {

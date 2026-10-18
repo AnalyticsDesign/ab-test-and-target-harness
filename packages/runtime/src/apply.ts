@@ -4,8 +4,20 @@ import { activateScripts, runCustomJs, setNonce } from "./code";
 /** rank = config の experiments の並びの番号(後ろほど優先が高い。決定 51、設計書 §3.2)。省略は 0 */
 export type ActiveChange = { experimentId: string; variantId: string; change: Change; rank?: number };
 export type ControlWatch = { experimentId: string; selectors: string[] };
-export type EngineCallbacks = { onApplied(experimentId: string): void; onControlSeen(experimentId: string): void };
-export type ApplyEngine = { start(changes: ActiveChange[], watches: ControlWatch[]): void; stop(): void };
+/**
+ * D9 ②(設計書 §6.1)の 3 つは省略可。onTargetSeen = 参加の契機(targets のどれかが初めて見つかった)、
+ * onApplyFailed = 要素はあるのに適用しなかった・できなかった(上書きされた前の順位を含む。ページの中で何度呼んでもよく、重複は送信側が除く)、
+ * onScanEnd = scan の適用がすべて終わった後に 1 回(適用の状態を参加の契機の後に確定させるため)
+ */
+export type EngineCallbacks = {
+  onApplied(experimentId: string): void;
+  onControlSeen(experimentId: string): void;
+  onTargetSeen?(experimentId: string): void;
+  onApplyFailed?(experimentId: string): void;
+  onScanEnd?(): void;
+};
+/** targets = 結果を送るテストの exposureSelectors(パターンを問わない。設計書 §6.1) */
+export type ApplyEngine = { start(changes: ActiveChange[], watches: ControlWatch[], targets?: ControlWatch[]): void; stop(): void };
 
 export type HtmlChange = Extract<Change, { type: "HTML" }>;
 export type CssChange = Extract<Change, { type: "CSS" }>;
@@ -22,6 +34,10 @@ export type PageState = {
   styles: Map<string, HTMLStyleElement>; // CSS: changeKey -> 注入した <style>
   owners: WeakMap<Element, Map<string, number>>; // 決定 51(設計書 §3.2): 要素の部分 → それを書いたエクスペリエンスの順位
 };
+// 同意の撤回 → 再許可でも、前の世代の部分の記録(owners)は残す。同じページで割当が変わったとき、前の世代の表示が一貫して残る
+// (今の世代の低い順位の変更は止まる)のは、撤回の既知の制約(DOM を巻き戻さない)と同じ扱い(① の Minor 5)。
+// 同じ根から、同じページで撤回 → 再許可した後の新しい世代の参加の契機(D9 ②)もずれうる: 前の世代の書き換え(replace・CUSTOM_JS)で
+// exposureSelectors の要素が消えた・増えたまま新しい世代が探すため。次のページの読み込みで解消する(既知の制約。コードでは扱わない)
 export function createPageState(): PageState {
   return { applied: new WeakMap(), executed: new Set(), succeeded: new Set(), styles: new Map(), owners: new WeakMap() };
 }
@@ -52,22 +68,23 @@ export function markApplied(applied: PageState["applied"], el: Element, key: str
 
 /**
  * 決定 51(設計書 §3.2): 変更が書く「要素の部分」。"*" = HTML の replace(要素のすべての部分)。
- * null = 優先を保証しないもの(HTML の挿入は両方入る・CSS は詳細度・CUSTOM_JS は保証しない)
+ * 空 = 優先を保証しないもの(HTML の挿入は両方入る・CSS は詳細度・CUSTOM_JS は保証しない)
  */
-export function partOf(change: Change): string | null {
+export function partOf(change: Change): string[] {
   switch (change.type) {
     case "TEXT":
-      return "content";
+      return ["content"];
     case "IMAGE":
-      return "attr:src"; // ATTRIBUTE の src と同じ属性を書くので同じ部分(レビュー r1 CX-High-1)
+      // ATTRIBUTE の src と同じ属性を書くので同じ部分(レビュー r1 CX-High-1)。srcset も除去する(書く)ので ATTRIBUTE の srcset とも重なる(① の Minor 4)
+      return ["attr:src", "attr:srcset"];
     case "HIDE":
-      return "display";
+      return ["display"];
     case "ATTRIBUTE":
-      return `attr:${change.payload.name.toLowerCase()}`;
+      return [`attr:${change.payload.name.toLowerCase()}`];
     case "HTML":
-      return change.payload.position === "replace" ? "*" : null;
+      return change.payload.position === "replace" ? ["*"] : [];
     default:
-      return null;
+      return [];
   }
 }
 
@@ -80,15 +97,6 @@ function blocked(owners: PageState["owners"], el: Element, part: string, rank: n
     return false;
   }
   return (m.get(part) ?? -1) > rank || (m.get("*") ?? -1) > rank;
-}
-
-/** 部分を自分の順位で書いたと記録する。上書きした前の順位(無ければ null)を返す(② が「後から失敗」を数えるのに使う) */
-function claim(owners: PageState["owners"], el: Element, part: string, rank: number): number | null {
-  let m = owners.get(el);
-  if (!m) owners.set(el, (m = new Map()));
-  const prev = m.get(part) ?? null;
-  m.set(part, rank);
-  return prev !== null && prev < rank ? prev : null;
 }
 
 /** spec §11: TEXT / IMAGE / HIDE / ATTRIBUTE を 1 要素に適用する。例外はスキップして false(§10.7)。Code Change はエンジンが扱う */
@@ -157,6 +165,8 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
   const credited = new Set<string>();
   let active: ActiveChange[] = [];
   let watches: ControlWatch[] = [];
+  let targets: ControlWatch[] = [];
+  let byRank = new Map<number, string>(); // 順位 → experiment ID(上書きされた前の順位の側に失敗を知らせるため。owners は順位だけを持つ)
   let observer: MutationObserver | null = null;
   let scheduled = false;
   let stopped = false;
@@ -172,6 +182,21 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
     succeeded.add(key);
     credited.add(experimentId);
     cbs.onApplied(experimentId);
+  }
+
+  const fail = (experimentId: string): void => cbs.onApplyFailed?.(experimentId);
+  /** 後ろの順位(rank)が、前の順位 r が書いた部分を上書きした: r の experiment の「後から失敗」(設計書 §6.1)。同じ順位(同じ experiment)は数えない */
+  function lost(r: number | undefined, rank: number): void {
+    const id = r !== undefined && r < rank ? byRank.get(r) : undefined;
+    if (id !== undefined) fail(id);
+  }
+  /** 部分を自分の順位で書いたと記録する。前の順位が書いていたその部分か、要素全体(replace の "*")を上書きしたら知らせる */
+  function claim(el: Element, part: string, rank: number): void {
+    let m = owners.get(el);
+    if (!m) owners.set(el, (m = new Map()));
+    lost(m.get(part), rank);
+    lost(m.get("*"), rank);
+    m.set(part, rank);
   }
 
   /** 適用済みとして記録する。既に記録済みなら false */
@@ -200,6 +225,7 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
       appliedNow(experimentId, key);
     } else {
       console.debug("wtt: custom js failed", change.id, r.error);
+      fail(experimentId);
     }
   }
 
@@ -207,7 +233,10 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
     for (const el of query(change.selector)) {
       if (applied.get(el)?.has(key)) continue; // 同一要素へは 1 回だけ(§10.4)
       const replace = change.payload.position === "replace";
-      if (replace && blocked(owners, el, "*", rank)) continue; // 決定 51: 後ろのエクスペリエンスが要素のどこかを書いている。印を付けず、要素が変われば再試行
+      if (replace && blocked(owners, el, "*", rank)) {
+        fail(experimentId); // 決定 51: 後ろのエクスペリエンスが要素のどこかを書いている。印を付けず、要素が変われば再試行
+        continue;
+      }
       const before = replace ? owners.get(el) : undefined;
       let inserted: Element[] | null;
       try {
@@ -216,7 +245,11 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
         inserted = null; // 不正な HTML でも他の Change は続行(§10.7)
         console.debug("wtt: html insert failed", change.id, e);
       }
-      if (inserted === null) continue;
+      if (inserted === null) {
+        fail(experimentId); // 挿入の例外、または replace で html / head / body を指した(要素はあるのに適用できない)
+        continue;
+      }
+      if (before) for (const r of before.values()) lost(r, rank); // replace は前の順位が書いた部分をすべて上書きする
       mark(el, key);
       // <script> の作り直しを先に行う(Plan 10 B2): activateScripts は <script> を新しい要素に差し替えるため、
       // 差し替え前にマークすると、マークは外れた旧要素に付きクローンは未マークのまま残る(self-matching selector で再適用される)
@@ -260,32 +293,23 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
     if (change.type === "CSS") return applyCss(experimentId, variantId, change, key);
     if (change.type === "CUSTOM_JS") return applyCustomJs(experimentId, variantId, change, key);
     if (change.type === "HTML") return applyHtmlChange(experimentId, change, key, rank);
-    const part = partOf(change);
+    const parts = partOf(change);
     for (const el of query(change.selector)) {
       if (applied.get(el)?.has(key)) continue; // 同一要素へは 1 回だけ(§10.4)
-      if (part !== null && blocked(owners, el, part, rank)) continue; // 決定 51: 後ろのエクスペリエンスが書いた部分は上書きしない(印を付けない)
-      if (!applyChangeTo(el, change)) continue;
+      // 決定 51: 後ろのエクスペリエンスが書いた部分は上書きしない(印を付けない)。applyChangeTo の false(IMAGE の対象が img でない等)と同じく失敗
+      if (parts.some((p) => blocked(owners, el, p, rank)) || !applyChangeTo(el, change)) {
+        fail(experimentId);
+        continue;
+      }
       mark(el, key);
-      if (part !== null) claim(owners, el, part, rank);
+      for (const p of parts) claim(el, p, rank);
       appliedNow(experimentId, key);
     }
   }
 
-  function scan(): void {
-    if (stopped) return;
-    for (const { experimentId, variantId, change, rank } of active) {
-      try {
-        applyOne(experimentId, variantId, change, rank ?? 0);
-      } catch (e) {
-        // Change 単位の例外境界(§10.7)。要素生成や <style> 挿入の例外(Trusted Types 等)で後続の Change と対照 watch を止めない。
-        // CUSTOM_JS / HTML <script> / CSS は試行前に executed へ入るので MutationObserver の再スキャンで繰り返さない
-        console.debug("wtt: change failed", change.id, e);
-      }
-    }
-    // 対照 watch(§10.5)は発火したら退役させる。Exposure は Experiment ごとに 1 回で(exposure.ts の exposed Set)、
-    // 発火後も毎 scan で全 selector を querySelector し続ける理由が無い(SPA の変異が多いページでは純粋なコスト。Plan 10 B2)。
-    // 退役状態はエンジン寿命でよい: 再許可の新世代は start(changes, watches) で watch を渡し直し、§16 の Exposure 再発火を保つ
-    watches = watches.filter((w) => {
+  /** 一覧の selector のどれかが文書にある watch について cbs[cb] を呼び、まだ見つからないものだけを返す(見つかったら退役) */
+  function sweep(list: ControlWatch[], cb: "onControlSeen" | "onTargetSeen"): ControlWatch[] {
+    return list.filter((w) => {
       const seen = w.selectors.some((s) => {
         try {
           return doc.querySelector(s) !== null;
@@ -293,9 +317,30 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
           return false;
         }
       });
-      if (seen) cbs.onControlSeen(w.experimentId);
+      if (seen) cbs[cb]?.(w.experimentId);
       return !seen;
     });
+  }
+
+  function scan(): void {
+    if (stopped) return;
+    // 参加の契機(設計書 §6.1)は Change の適用より前に探す: replace で要素が消えたり、CUSTOM_JS が class を変えたりしても見逃さない
+    targets = sweep(targets, "onTargetSeen");
+    for (const { experimentId, variantId, change, rank } of active) {
+      try {
+        applyOne(experimentId, variantId, change, rank ?? 0);
+      } catch (e) {
+        // Change 単位の例外境界(§10.7)。要素生成や <style> 挿入の例外(Trusted Types 等)で後続の Change と対照 watch を止めない。
+        // CUSTOM_JS / HTML <script> / CSS は試行前に executed へ入るので MutationObserver の再スキャンで繰り返さない
+        console.debug("wtt: change failed", change.id, e);
+        fail(experimentId); // CSS の <style> の挿入の例外など
+      }
+    }
+    // 対照 watch(§10.5)は発火したら退役させる。Exposure は Experiment ごとに 1 回で(exposure.ts の exposed Set)、
+    // 発火後も毎 scan で全 selector を querySelector し続ける理由が無い(SPA の変異が多いページでは純粋なコスト。Plan 10 B2)。
+    // 退役状態はエンジン寿命でよい: 再許可の新世代は start(changes, watches) で watch を渡し直し、§16 の Exposure 再発火を保つ
+    watches = sweep(watches, "onControlSeen");
+    cbs.onScanEnd?.();
   }
 
   function schedule(): void {
@@ -308,9 +353,11 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
   }
 
   return {
-    start(changes, controlWatches) {
+    start(changes, controlWatches, targetWatches = []) {
       active = changes;
       watches = controlWatches;
+      targets = targetWatches; // 退役はエンジン寿命(watches と同じ)。再許可の新世代は渡し直す
+      byRank = new Map(changes.map((c) => [c.rank ?? 0, c.experimentId]));
       scan();
       observer = new MutationObserver(schedule); // §10.4: SPA の差替・遅延要素への再適用
       // attributes も監視する: 既存要素に class / id / data-* が後から付いて selector に一致する

@@ -21,3 +21,32 @@ describe("EventBodySchema (spec §9.2)", () => {
     }
   });
 });
+
+describe("results events (決定 51、設計書 §6.3)", () => {
+  const runId = "AAAAAAAAAAAAAAAAAAAAAA";
+  it("accepts participant with device for ok / failed and without device for failed_later / recovered", () => {
+    expect(EventBodySchema.safeParse({ type: "participant", v: 1, runId, variantId: "b", device: "mobile", applied: "ok" }).success).toBe(true);
+    expect(EventBodySchema.safeParse({ type: "participant", v: 1, runId, variantId: "b", device: "tablet", applied: "failed" }).success).toBe(true);
+    expect(EventBodySchema.safeParse({ type: "participant", v: 1, runId, variantId: "b", applied: "failed_later" }).success).toBe(true);
+    expect(EventBodySchema.safeParse({ type: "participant", v: 1, runId, variantId: "b", applied: "recovered", visitorId: "x" }).success).toBe(true);
+    expect(EventBodySchema.safeParse({ type: "participant", v: 1, runId, variantId: "b", applied: "ok" }).success).toBe(false); // device 必須
+    expect(EventBodySchema.safeParse({ type: "participant", v: 1, runId, variantId: "b", device: "mobile", applied: "recovered" }).success).toBe(false); // device を持たない
+    expect(EventBodySchema.safeParse({ type: "participant", v: 1, runId, variantId: "b", device: "mobile", applied: "failed_later" }).success).toBe(false);
+  });
+  it("rejects a malformed runId and an empty variantId", () => {
+    expect(EventBodySchema.safeParse({ type: "participant", v: 1, runId: "short", variantId: "b", device: "mobile", applied: "ok" }).success).toBe(false);
+    expect(EventBodySchema.safeParse({ type: "participant", v: 1, runId, variantId: "", device: "mobile", applied: "ok" }).success).toBe(false);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 1, goalId: "g", runIds: ["short"] }).success).toBe(false);
+  });
+  it("conversion takes 1 to 20 runIds", () => {
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 1, goalId: "g", runIds: [runId] }).success).toBe(true);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 1, goalId: "g", runIds: Array(20).fill(runId) }).success).toBe(true);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 1, goalId: "g", runIds: [] }).success).toBe(false);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 1, goalId: "g", runIds: Array(21).fill(runId) }).success).toBe(false);
+  });
+  it("rejects unknown version and extra keys", () => {
+    expect(EventBodySchema.safeParse({ type: "participant", v: 2, runId, variantId: "b", device: "mobile", applied: "ok" }).success).toBe(false);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 1, goalId: "g", runIds: [runId], x: 1 }).success).toBe(false);
+    expect(EventBodySchema.safeParse({ type: "participant", v: 1, runId, variantId: "b", device: "mobile", applied: "ok", x: 1 }).success).toBe(false);
+  });
+});

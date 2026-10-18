@@ -45,5 +45,6 @@ owner_email: <you@example.com>                                   # E3 管理画�
 # edge_waf_rate_limit: true          # /v1/sites/* と /__ab/* に WAF Rate Limiting Rule を作る(推奨)
 # edge_waf_requests_per_10s: 100     # そのしきい値(同一 IP から 10 秒あたり)。検証だけなら 20
 # asset_max_mb: 5                    # 画像アップロード 1 件の上限(MB)
+# results_db_name: wtt-results       # 計測用のデータベース(テストの結果の記録。D1)の名前。どの構成でも作る(デプロイガイド 2.2)。ほかのリソースの名前と同じく固定で、手順はこの名前で書いてあるので変えない
 # admin_address: workers-dev       # workers-dev | custom。管理画面の公開アドレス。custom のときは admin_host も書く(招待・リセットリンクの見た目が整い、Access / WAF をゾーンで掛けられる)
 # admin_host: admin.example.com    # admin_address: custom のときのホスト(DNS と証明書は wrangler が作る)

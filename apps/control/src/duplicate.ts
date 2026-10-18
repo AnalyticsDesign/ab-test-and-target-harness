@@ -14,6 +14,15 @@ export type CopyOptions = {
   sourceUpdatedAt: number;
 };
 
+/**
+ * D9 ②(設計書 §6.3、plan ② の K16): 一度開始してから削除したエクスペリエンスの ID。作成と複製(指定の id・自動の候補)は、
+ * 使われている ID にこれを足して判定する(訪問者に残った割り当てが、同じ ID の新しいエクスペリエンスに効かないように)
+ */
+export async function retiredIds(db: Db, siteId: string): Promise<Set<string>> {
+  const rows = await db.selectFrom("retired_experiment_ids").select("experiment_id").where("site_id", "=", siteId).execute();
+  return new Set(rows.map((r) => r.experiment_id));
+}
+
 /** 元がまだ読んだ版のままか(3 文に共通の条件)。調べてから書くまでの間に元が編集・削除されたら、どの文も 0 行になる */
 const sourceUnchanged = (o: CopyOptions) => (eb: ExpressionBuilder<Tables, any>) =>
   eb.exists(eb.selectFrom("experiments as g").select("g.id").where("g.site_id", "=", o.siteId).where("g.id", "=", o.sourceId).where("g.updated_at", "=", o.sourceUpdatedAt));
@@ -45,6 +54,9 @@ export function duplicateExperimentRow(e: ExperimentRow, o: CopyOptions): Experi
     started_at: null,
     stopped_at: null,
     last_started_at: null,
+    // D9 ②(設計書 §6.3): 複製は別のテスト。元の結果の記録の ID と個票の削除の印は写さない(開始で新しく振る)
+    run_id: null,
+    results_purged_at: null,
     created_by: o.user,
     updated_by: o.user,
     created_at: o.now,

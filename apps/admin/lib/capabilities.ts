@@ -1,7 +1,7 @@
 import type { Capabilities, ChangeType, WriteFreezeState } from "./types";
 import { formatLocalTime } from "./local-time";
 
-export const DEFAULT_CAPABILITIES: Capabilities = { imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, writeFreeze: null };
+export const DEFAULT_CAPABILITIES: Capabilities = { imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null };
 
 export const CHANGE_TYPES: ChangeType[] = ["TEXT", "IMAGE", "HIDE", "ATTRIBUTE", "HTML", "CSS", "CUSTOM_JS"];
 
@@ -18,6 +18,7 @@ export function parseCapabilities(data: unknown): Capabilities | null {
   if (bad("tagOrigin", (v) => v === null || typeof v === "string")) return null;
   if (bad("edgeOnWorkersDev", (v) => typeof v === "boolean")) return null;
   if (bad("passwordLogin", (v) => typeof v === "boolean")) return null;
+  if (bad("resultsStore", (v) => typeof v === "boolean")) return null;
   if (bad("writeFreeze", (v) => v === null || isWriteFreezeState(v))) return null;
   return {
     imageUpload: typeof d.imageUpload === "boolean" ? d.imageUpload : DEFAULT_CAPABILITIES.imageUpload,
@@ -26,6 +27,7 @@ export function parseCapabilities(data: unknown): Capabilities | null {
     tagOrigin: typeof d.tagOrigin === "string" ? d.tagOrigin : typeof d.edgeOrigin === "string" ? d.edgeOrigin : null,
     edgeOnWorkersDev: d.edgeOnWorkersDev === true,
     passwordLogin: d.passwordLogin === true,
+    resultsStore: d.resultsStore === true,
     writeFreeze: isWriteFreezeState(d.writeFreeze) ? d.writeFreeze : null,
   };
 }

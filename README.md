@@ -63,6 +63,7 @@ flowchart LR
     deployer[wtt-deployer Worker<br/>配信ファイルの作り直し<br/>デプロイ用トークンを持つ] -->|デプロイ| static
     edge[edge Worker<br/>decision / event] --> kv[(KV: compiled config)]
     edge --> do[(Durable Objects: Visitor Profile)]
+    edge -->|結果を記録するサイト| d1r[(D1: 計測用 wtt-results)]
     control[control Worker<br/>API / 認証 / 公開] --> d1[(D1)]
     control --> r2[(R2: 画像)]
     control -->|公開| kv
@@ -72,7 +73,7 @@ flowchart LR
   admin -->|BFF| control
   agent[外部 AI エージェント] -->|API キー| control
   tag -.->|読み込み| static
-  rt -->|needsProfile のとき| edge
+  rt -->|needsProfile のとき・結果を記録するとき| edge
 ```
 
 ## 前提
@@ -181,11 +182,12 @@ AB Test and Target Harness を更新してください。作業ディレクト�
 
 本製品は、次を運用者自身の Cloudflare アカウントに保存する。
 
-- 設定とユーザー(D1)
+- 設定とユーザー(D1 の `wtt-control`)
 - 画像(R2。使う場合)
 - 訪問者ごとの履歴(Durable Objects の Visitor Profile。履歴の条件を使うときに作る)。訪問者の識別子、閲覧したページの回数と最終日時、目標の達成回数、割り当てたパターンを持つ。生のイベントは保存せず、最終訪問から `retentionDays` で消える
+- テストの参加者ごとの記録(D1 の `wtt-results`。サイトの設定の「結果を記録する」が有効なサイトだけ)。テストごとに、表示したパターン・端末の種類・変更の適用の状態・最初の参加の時刻と、目標を最初に達成した時刻を持つ。訪問者の識別子はそのまま保存せず、鍵付きのハッシュにする。テストの記録を終えてから、サイトの設定の保持期間(既定 90 日)を過ぎると消える。同意の撤回でも消す(`forgetOnRevoke` が on のとき)
 
-テストの結果の集計は保存しない。訪問者の識別子と行動履歴は `dataLayer` 経由で GA4 に送る。外部送信規律など各種規律への対応は運用者が行う。公表用の情報一覧の材料は [サイト導入ガイド「14. 外部送信規律への対応」](docs/site-install.md#14-外部送信規律への対応)にまとめてある。
+「結果を記録する」が無効のサイトでは、テストの結果に関わるものは保存しない。訪問者の識別子と行動履歴は `dataLayer` 経由で GA4 に送る。外部送信規律など各種規律への対応は運用者が行う。公表用の情報一覧の材料は [サイト導入ガイド「14. 外部送信規律への対応」](docs/site-install.md#14-外部送信規律への対応)にまとめてある。
 
 ## 開発
 

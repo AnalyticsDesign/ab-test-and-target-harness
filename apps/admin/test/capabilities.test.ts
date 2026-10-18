@@ -10,6 +10,7 @@ describe("resolveCapabilities", () => {
       tagOrigin: "https://wtt-static.x.workers.dev",
       edgeOnWorkersDev: true,
       passwordLogin: true,
+      resultsStore: false,
       writeFreeze: null,
     });
   });
@@ -21,12 +22,21 @@ describe("resolveCapabilities", () => {
     expect(resolveCapabilities({ status: 200, data: { imageUpload: false, edgeOrigin: 1, edgeOnWorkersDev: true } })).toEqual(DEFAULT_CAPABILITIES);
     expect(resolveCapabilities({ status: 200, data: { imageUpload: false, edgeOrigin: "https://x.workers.dev", edgeOnWorkersDev: "yes" } })).toEqual(DEFAULT_CAPABILITIES);
     // edgeOrigin が null で edgeOnWorkersDev が true は control の実装上あり得ないが、形としては正しいのでそのまま通す
-    expect(resolveCapabilities({ status: 200, data: { imageUpload: true, edgeOrigin: null, edgeOnWorkersDev: true } })).toEqual({ imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: true, passwordLogin: false, writeFreeze: null });
+    expect(resolveCapabilities({ status: 200, data: { imageUpload: true, edgeOrigin: null, edgeOnWorkersDev: true } })).toEqual({ imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: true, passwordLogin: false, resultsStore: false, writeFreeze: null });
     // 決定 46: パスワード欄・リセットリンク・帯は「型が正しい true」だけで出す(型不正は応答全体を既定に倒す)
     expect(resolveCapabilities({ status: 200, data: { imageUpload: true, passwordLogin: "yes" } })).toEqual(DEFAULT_CAPABILITIES);
-    expect(DEFAULT_CAPABILITIES).toEqual({ imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, writeFreeze: null });
+    expect(DEFAULT_CAPABILITIES).toEqual({ imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null });
     // tagOrigin が「存在するが型不正」なら応答全体を既定に倒す
     expect(resolveCapabilities({ status: 200, data: { imageUpload: true, tagOrigin: 1 } })).toEqual(DEFAULT_CAPABILITIES);
+  });
+  it("resultsStore_is_true_only_for_a_true_boolean_and_defaults_to_false", () => {
+    expect(resolveCapabilities({ status: 200, data: { imageUpload: true, resultsStore: true } }).resultsStore).toBe(true);
+    expect(resolveCapabilities({ status: 200, data: { imageUpload: true, resultsStore: false } }).resultsStore).toBe(false);
+    // 古い control(フィールドなし)は既定の false
+    expect(resolveCapabilities({ status: 200, data: { imageUpload: true } }).resultsStore).toBe(false);
+    // 型不正は応答全体を既定に倒す(結果の記録を誤って有効にできるように見せない)
+    expect(resolveCapabilities({ status: 200, data: { imageUpload: false, resultsStore: "yes" } })).toEqual(DEFAULT_CAPABILITIES);
+    expect(DEFAULT_CAPABILITIES.resultsStore).toBe(false);
   });
   it("tagOrigin_is_passed_through_and_falls_back_to_edgeOrigin_for_old_control", () => {
     expect(resolveCapabilities({ status: 200, data: { imageUpload: true, edgeOrigin: "https://e.x", tagOrigin: "https://s.x" } }).tagOrigin).toBe("https://s.x");
@@ -36,7 +46,7 @@ describe("resolveCapabilities", () => {
   });
   it("fills_missing_fields_with_defaults", () => {
     // 古い control(/capabilities に edgeOrigin が無い版)にも耐える
-    expect(resolveCapabilities({ status: 200, data: { imageUpload: false } })).toEqual({ imageUpload: false, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, writeFreeze: null });
+    expect(resolveCapabilities({ status: 200, data: { imageUpload: false } })).toEqual({ imageUpload: false, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null });
     expect(resolveCapabilities({ status: 200, data: { imageUpload: false, passwordLogin: true } }).passwordLogin).toBe(true);
   });
 });

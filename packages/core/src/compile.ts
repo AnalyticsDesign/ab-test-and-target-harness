@@ -1,7 +1,7 @@
 import { dslNeedsProfile } from "./evaluate";
 import {
   CompiledConfig, CompiledConfigSchema, DslNode, Experiment, ExperimentCommonShape, Goal, GoalInputSchema, LIMITS,
-  PageMatchInputSchema, PatternDef, Variant, VariantSchema, refineVariantWeights,
+  PageMatchInputSchema, PatternDef, ResultsConfigSchema, Variant, VariantSchema, refineVariantWeights,
 } from "./schema";
 import { ExperimentAnalyticsSchema, VariantAnalyticsSchema, exposurePayloadIssue, resolveExposurePayload } from "./analytics";
 import type { ExposurePayload } from "./analytics-defaults";
@@ -81,6 +81,8 @@ export const CompileInputSchema = z.strictObject({
   goals: z.array(GoalInputSchema),
   /** オーディエンスの定義(id → 保存する形の配信条件)。参照されたものだけを、展開の時点で検査する(壊れた未使用のオーディエンスで Publish を止めない) */
   audiences: z.record(z.string(), z.unknown()).default({}),
+  /** 結果の収集(D9 ②、設計書 §6.3)。control の publish が足す。compile は形を確かめてそのまま出力に写す */
+  results: ResultsConfigSchema.optional(),
 });
 export type CompileInput = z.infer<typeof CompileInputSchema>;
 
@@ -204,10 +206,12 @@ export function compile(input: unknown): CompiledConfig {
       }
     }
     prehide[exp.id] = selectors;
+    const noChanges = exp.variants.every((v) => v.changes.length === 0); // A/A(全パターンの Change が 0 件)
     // spec §10.5 / 決定 38 (1): selector を持たない Change は注入した瞬間に適用成功になる。対照 Variant にも同じ瞬間
     // (= 起動直後)に Exposure させるため、常に存在する :root を exposureSelectors にだけ足す(prehide に足すと全画面が隠れる)。
     // 運用者が selector として :root を使っていれば二重にしない
-    exposureSelectors[exp.id] = selectorless && !selectors.includes(":root") ? [...selectors, ":root"] : selectors;
+    // A/A のテスト(全パターンの Change が 0 件)も起動直後に Exposure させる。今までは selector が空で ab_exposure が出なかった(D9 ② K20)
+    exposureSelectors[exp.id] = (selectorless || (noChanges && exp.kind === "test")) && !selectors.includes(":root") ? [...selectors, ":root"] : selectors;
 
     // spec §10.9: Experiment × Variant ごとに合成・検証し exposurePayloads に焼く。著者の analytics は出力から取り除く
     const byVariant: Record<string, ExposurePayload> = {};
@@ -247,6 +251,7 @@ export function compile(input: unknown): CompiledConfig {
     goals,
     experiments,
     exposurePayloads,
+    ...(parsed.data.results !== undefined ? { results: parsed.data.results } : {}),
   };
   const out = CompiledConfigSchema.parse(config);
   const bytes = new TextEncoder().encode(JSON.stringify(out)).length;

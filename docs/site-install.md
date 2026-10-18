@@ -271,7 +271,8 @@ runtime は失敗を `console.debug`(`wtt: …` で始まる)に出す。Chrome 
 - **Mode B**: 正本 Cookie は HttpOnly で edge が持っているので、`AB.consent(false)` が `/__ab/decision` に撤回を 1 回送り、edge が Cookie を消す。**呼ばれなければ Cookie は消えない**
 - 撤回後に再び `AB.consent(true)` が呼ばれると、**新しい ID で**やり直す(前の ID は復元しない)。**Mode C は例外**で、サイトの既存 Cookie から作る ID なので同じ ID に戻る([8 節](#8-mode-c-と-mode-b))
 - 適用済みの変更は、撤回しても元に戻らない
-- **サーバー側の履歴の削除**: `AB.consent(false)` のときに `/v1/sites/<siteId>/event` へ削除要求(`{ "type": "forget" }`)を 1 回送り、[9 節](#9-履歴条件と-visitor-profile)の Visitor Profile(目標達成・閲覧回数・保存済みの割当)を即時に消す。**いま公開中の設定が履歴条件を使っていなくても送る**(以前の設定で作られた Profile が残っていることがあるため。Profile を一度も使っていないサイトでは、消すものが無いまま 1 要求が返るだけ)。サイト設定 `撤回時に Profile を削除(forgetOnRevoke)` を off にすると送らず、`retentionDays` の経過で消える(誤操作の拒否で履歴を失いたくない場合向け)。Mode B は対象外(Cookie の削除だけで、履歴は `retentionDays` で消える)。削除は確実ではなく、撤回直後のページ遷移や通信断で届かなかった分は `retentionDays` で消える
+- **テストの結果の記録**(サイトの設定の「結果を記録する」が有効なサイト): 結果の送信は、上の `consentMode` の表で「動く」状態のときだけ行う(既定の `implicit` では `pending` も含む。`denied` と同意待ちの間は送らない)。撤回すると、送信をやめ、ブラウザの送信済みの印(`localStorage`。[14 節](#14-外部送信規律への対応))を消す。`撤回時に訪問者プロフィールを削除(forgetOnRevoke)` が on なら、計測用のデータベースにあるその訪問者の結果の記録(テストの参加と目標の達成)も消す。Mode A と Mode C は下の削除要求で、Mode B は `/__ab/decision` への撤回で消す。撤回の直前に送った結果の送信が削除より後に届いた場合は、その行が残ることがある。Mode C は撤回しても ID が変わらないので、再び同意した後の送信は新しい記録になる(撤回前の記録は消えている)
+- **サーバー側の履歴の削除**: `AB.consent(false)` のときに `/v1/sites/<siteId>/event` へ削除要求(`{ "type": "forget" }`)を 1 回送り、[9 節](#9-履歴条件と-visitor-profile)の Visitor Profile(目標達成・閲覧回数・保存済みの割当)を即時に消す。**いま公開中の設定が履歴条件を使っていなくても送る**(以前の設定で作られた Profile が残っていることがあるため。Profile を一度も使っていないサイトでは、消すものが無いまま 1 要求が返るだけ)。サイト設定 `撤回時に訪問者プロフィールを削除(forgetOnRevoke)` を off にすると送らず、`retentionDays` の経過で消える(誤操作の拒否で履歴を失いたくない場合向け)。Mode B は Profile の削除の対象外(Cookie の削除だけで、履歴は `retentionDays` で消える。結果の記録は上のとおり消す)。削除は確実ではなく、撤回直後のページ遷移や通信断で届かなかった分は `retentionDays` で消える
 
 ## 8. Mode C と Mode B
 
@@ -294,7 +295,7 @@ A から B へは後から移せるが、Cookie の発行元が変わるので�
 
 - 値はブラウザ内で `SHA-256(site_salt + 値)` に変換してから送る(base64url 43 文字)。生の値は送らず、保存もしない
 - 値が取れない訪問者は Mode A の匿名 ID で動く。ページ読み込み後に値が現れても、そのページでは切り替えない(次のページから)
-- **同意を撤回しても ID は変わらない。** ツールが消せるのは自分が発行した Cookie だけで、参照先の Cookie はサイトのもの。再び同意すると同じ ID に戻り、撤回前の履歴に再びつながる(サーバー側の履歴の削除は `撤回時に Profile を削除(forgetOnRevoke)` が担う。[7 節](#7-consent-の配線cmp-を使うサイト))
+- **同意を撤回しても ID は変わらない。** ツールが消せるのは自分が発行した Cookie だけで、参照先の Cookie はサイトのもの。再び同意すると同じ ID に戻り、撤回前の履歴に再びつながる(サーバー側の履歴の削除は `撤回時に訪問者プロフィールを削除(forgetOnRevoke)` が担う。[7 節](#7-consent-の配線cmp-を使うサイト))
 - **`参照する Cookie 名` は `正本 Cookie 名` / `UUID Cookie 名` / 削除待ちの旧 Cookie 名と同じにできない**(保存時に 422)。同じだと、値が取れなかったときに自分で書いた匿名 ID を次のページで参照先として読み、同じ訪問者の ID が変わってしまうため
 - **メールアドレスなど個人データに由来する値は使わない。** `site_salt` はタグの中に入る公開値なので、この変換は「生の値を保存しない」ための措置で匿名化ではない。値の種類が少ないもの(低エントロピー)は逆算され得る
 - Mode B とは併用できない(Mode B では `訪問者 ID の取得元` は `ab` 固定)
@@ -323,7 +324,7 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 
 - タグは `/__ab/decision` に訪問者 ID を含めずに送り、edge が `Set-Cookie`(HttpOnly)で正本 Cookie を発行する。ID は JavaScript から読めない
 - 同意の撤回で Cookie が消えるのは、`AB.consent(false)` が呼ばれたときだけ([7 節](#7-consent-の配線cmp-を使うサイト))。ページ読み込み時点で `denied` の場合は通信そのものを行わないため、既に発行された Cookie は残る(Cookie 自体の有効期限は 1 年)。`retentionDays` が決めるのはサーバー側の Visitor Profile の寿命で、Cookie ではない
-- `撤回時に Profile を削除(forgetOnRevoke)` は Mode B では効かない
+- `撤回時に訪問者プロフィールを削除(forgetOnRevoke)` は、Mode B では訪問者プロフィールの削除には効かない(結果の記録の削除には効く。[7 節](#7-consent-の配線cmp-を使うサイト))
 
 ## 9. 履歴条件と Visitor Profile
 
@@ -372,7 +373,7 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 | allowlist 方式(ホストの列挙だけで nonce なし) | 作る inline の `<script>` / `<style>` が通らない。`'unsafe-inline'` を足せば通るが推奨しない — nonce 方式への移行を勧める(他社ツールや GTM も同じ案内をしている) |
 | Trusted Types の強制(`require-trusted-types-for 'script'`) | **非対応**。HTML(`innerHTML` による挿入そのものが拒否される。`<script>` の有無を問わない)と CUSTOM_JS は動かない。TEXT / IMAGE / HIDE / ATTRIBUTE / CSS は動く(`<style>` の `textContent` は Trusted Types の対象外)。失敗はその変更だけに閉じる |
 
-**設置タグや edge が設置サイトと別オリジンの構成**(`*.workers.dev` や別ドメインで公開している)では、`connect-src` に edge のホストを足す(decision / event の送信先)。設置タグの `script-src` には、設置タグを配るホスト(配信専用の Worker)を allowlist 方式のサイトだけ足す(nonce 方式なら設置タグの nonce で通る)。同一オリジンの構成(設置サイトのゾーンの Route)では不要。
+**設置タグや edge が設置サイトと別オリジンの構成**(`*.workers.dev` や別ドメインで公開している)では、`connect-src` に edge のホストを足す(decision / event の送信先)。結果を記録する場合も、テストの参加と目標の達成を同じ edge の `/event` に送るので、`connect-src` に edge のホストが要る(足さないと送信がブラウザで止まり、ツールの側では失敗として数えられない)。設置タグの `script-src` には、設置タグを配るホスト(配信専用の Worker)を allowlist 方式のサイトだけ足す(nonce 方式なら設置タグの nonce で通る)。同一オリジンの構成(設置サイトのゾーンの Route)では不要。
 
 **プレビューを設置タグ経由で開くときの追加の読み込み**: 設置したページでプレビューを開く(URL の末尾に `#__ab_preview=<experimentId>:<variantId>` を付けて開く)と、タグが設置タグと同じオリジンから `/s/preview/<hash>.js` を 1 本追加で読む。この `<script>` にも設置タグの nonce を付けるので、上の表のとおり設置タグに nonce を付けていれば CSP の設定を足す必要はない(allowlist 方式のサイトでは、設置タグと同じホストがすでに許可されていれば通る)。読み込めなかったときは、プレビューを適用せずに元の表示のままにする。通常の訪問者の読み込みでは、このファイルは読まない。
 
@@ -408,7 +409,9 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 | `同意の扱い` | 一般 | 設定のキーは `consentMode`。`同意を待たずに動かす`(既定。`implicit`)または `訪問者が同意するまで動かさない`(`required`)。[7 節](#7-consent-の配線cmp-を使うサイト) |
 | `decisionTimeoutMs(300〜3000)` | 一般 | decision の応答を待つ時間。超えるとその読み込みではエクスペリエンスを出さない(元の表示のまま) |
 | `retentionDays(Profile と旧 Cookie 名の保持日数)` | 一般 | 既定 90(1〜3650)。最終訪問からこの日数で Visitor Profile を自動削除する。変更は次に訪問した訪問者から効く(休眠中の Profile は変更前の日数で消える。[9 節](#9-履歴条件と-visitor-profile)) |
-| `撤回時に Profile を削除(forgetOnRevoke)` | 一般 | 既定 on。同意の撤回時にサーバー側の履歴をすぐ消す([7 節](#7-consent-の配線cmp-を使うサイト))。off にすると `retentionDays` まで残す |
+| `撤回時に訪問者プロフィールを削除(forgetOnRevoke)` | 一般 | 既定 on。同意の撤回時にサーバー側の履歴をすぐ消す([7 節](#7-consent-の配線cmp-を使うサイト))。off にすると `retentionDays` まで残す。結果を記録するサイトでは、その訪問者の結果の記録も同じ設定で消す |
+| `結果を記録する` | 一般 | テストの参加と目標の達成を、この導入の計測用のデータベースに記録する。新しいサイトは、計測用のデータベースがある導入なら有効で作られる。既存のサイトは無効のまま。切り替えは次の公開から効き、記録するのは有効にした後に開始したテストだけ(有効にする前に開始したテストは、複製して開始し直す)。テストの途中で無効にすると、止めていた期間はそのテストの記録が欠ける。計測用のデータベースが無い導入では有効にできない(409 `results_store_missing`)。有効にすると、送信先の確認の案内(`/v1/*` の Route(Mode B では `/__ab/*` の Route)、または CSP の `connect-src`。[10 節](#10-コードの変更と-csp))が出る |
+| `参加者ごとの記録を残す日数(7〜365 日)` | 一般 | 既定 90。テストの記録を終えてからこの日数を過ぎた参加者ごとの記録(個票)を消す |
 | `外部計測の名前(dataLayer の名札)` | 外部計測の名前 | `dataLayer の変数名`(既定 `dataLayer`) / `extra の名前空間キー` / `露出のイベント名` / `露出: experimentId キー` / `露出: experimentName キー` / `露出: variantId キー` / `露出: variantName キー` / `コンバージョンのイベント名` / `コンバージョン: goalId キー` / `コンバージョン: goalName キー` の 10 項目。既定のままで使える([12 節](#12-datalayer-の契約と命名の規則)) |
 | `ga4PropertyId(数値の GA4 プロパティ ID。G- で始まる測定 ID ではありません)` | 外部 ID | 管理者以上。分析レシピ(`analytics-recipe`)がプロパティ ID を埋めるのに使う。空 = 未設定(レシピはプレースホルダのまま)。[分析ガイド 2 節 (d)](analytics.md#d-サイトに外部-id-を設定する) |
 | `bigqueryDataset(<GCP プロジェクト ID>.<データセット名>)` | 外部 ID | 同上。ドット区切りで `<GCP プロジェクト ID>.<BQ データセット>`(データセット名だけは不可) |
@@ -498,12 +501,16 @@ dataLayer.push({ event: "ab_conversion", ab_goal_id: "g_cta", ab_goal_name: "CTA
 |---|---|---|---|
 | 運営者自身の Cloudflare アカウント上で動く Worker(`<設置ホスト>` の Route)。第三者への送信ではない | **decision**(エクスペリエンスの割当の要求): `v`(設定のバージョン)、`url`(閲覧中のページの URL。クエリ・フラグメントを含む)、`referrer`(参照元の URL)、`device`(`desktop` / `mobile` / `tablet` の判定結果)、`viewport`(ブラウザの表示領域の幅・高さ)、`browser`(ブラウザの判定結果)、`os`(OS の判定結果)、`firstVisitAt`(初回の訪問時刻。匿名の ID の発行時刻から読み取る)、`visitorId`(Mode A。ツールが発行した匿名の ID。ID の先頭に発行時刻(初回の訪問日時)を含む) | A/B テストの割当(どのパターンを出すか)の決定 | `_ab_vid`(`正本 Cookie 名`。ツールが発行する匿名の識別子。値の先頭に発行時刻(初回の訪問日時)を含む。Mode C でも、初回の訪問の時刻を持つためだけに置く)、`UUID Cookie` を有効にしている場合はその Cookie(正本から導出した UUID) |
 | 同上 | **event**(目標の達成・同意の撤回): `type`(`goal` / `forget`)、`goalId`(達成した目標の識別子。`type` が `goal` のとき)、`visitorId`(Mode A) | A/B テストの効果測定(Conversion の計上)、および同意撤回時のサーバー側の履歴の削除 | 同上 |
+| 同上(**結果を記録するサイトだけ**。サイトの設定の「結果を記録する」) | **event の結果の送信**: テストの参加(`type` = `participant`。`runId`(テストの記録の識別子)、`variantId`(表示したパターン)、`device`(`desktop` / `mobile` / `tablet` の判定結果)、`applied`(変更の適用の状態: 成功 / 失敗 / 後から失敗 / 回復))と、目標の達成(`type` = `conversion`。`goalId`、`runIds`(参加しているテストの記録の識別子の一覧))。`visitorId`(Mode A・Mode C) | テストの結果(パターンごとの参加者と目標の達成)の集計。保存先は運営者の Cloudflare アカウントの計測用のデータベース(D1)で、訪問者 ID はそのまま保存せず、鍵付きのハッシュ(HMAC-SHA-256)にして保存する。保存の期間は、テストの記録を終えてからサイトの設定の保持期間(既定 90 日)まで | 同上。ほかにブラウザの `localStorage` に送信済みの印を 1 つ置く(下の注記) |
 
 - **明示的な拒否(`denied`)の間は、`consentMode` に関係なく Cookie も送信も発生しない。** `window.__ab` の事前状態が `denied` の場合と、`AB.consent(false)` で撤回された後がこれにあたる。`pending`(同意も拒否もまだ)で止まるのは `consentMode: "required"` のサイトだけで、**既定の `consentMode: "implicit"` では `pending` を無視してすぐに動き、上の表の送信を行う**。同意を得てから送信を始める形にするには `required` を選ぶ([7 節](#7-consent-の配線cmp-を使うサイト))
 - **ツールは氏名・メールアドレスなどの入力項目を持たない。** 訪問者 ID はツールが発行する乱数、または Mode C ではサイトの既存 ID を `SHA-256(site_salt + 値)` に変換した値([8 節](#8-mode-c-と-mode-b)。変換元が個人データの場合の扱いは同節を参照)
 - **ただし `url`(閲覧中のページの URL)と `referrer` は加工せずにそのまま送る。** URL のクエリやフラグメントに個人情報(メールアドレス、氏名、会員 ID など)が含まれるページに設置すると、それも送信内容に含まれる。設置するページの URL 設計を確認し、含まれ得るなら公表用の情報一覧にその旨を書く
 - **Mode C** でも匿名の Cookie(`_ab_vid`)を置く。識別には使わず、判定の要求にはこの ID を含めず初回の訪問時刻(`firstVisitAt`)だけを送る([8 節](#8-mode-c-と-mode-b))
 - **Mode B** では、HTTP `Set-Cookie` で発行した HttpOnly Cookie が `/__ab/*` への要求に自動的に付く(`visitorId` は本文に含めない。この Cookie の値にも発行時刻(初回の訪問日時)が含まれる)
+- **結果を記録するサイトの送信**は、訪問者 × テストの参加の初回(と、その後に適用が失敗・回復したときに 1 回ずつ)と、訪問者 × テスト × 目標の達成の初回だけ(ページビューごとではない)。送るのは、実行中か一時停止中のテストだけで、パーソナライズでは送らない。プレビューでも送らない。edge が受けた時刻を記録し、ブラウザの時計は使わない
+- **送信済みの印(`localStorage`)**: 結果を記録するサイトでは、同じ参加・達成を何度も送らないために、`<訪問者 ID の Cookie 名>_r`(既定 `_ab_vid_r`)のキーに JSON を 1 つ置く。中身は、訪問者 ID の短いハッシュ(ID が変わったかを見分けるためだけの値)、テストの記録の識別子ごとの表示したパターンと適用の状態、送った目標の識別子、記録を止めている期限。印は、同意の撤回・訪問者 ID の変化(ハッシュが違えば全部捨てる)・終わったテスト(次のページで捨てる)で消える。`localStorage` を使えない環境と、Mode A・Mode C の http のページ(ハッシュの計算に使うブラウザの暗号の機能が無い)では置かず、ページの中のメモリだけで重複を防ぐ(ページを開くたびに送り直すが、記録は 1 件にまとまる)
+- **保存した結果の記録の削除**: 保持期間を過ぎた記録と、同意を撤回した訪問者の記録(`撤回時に訪問者プロフィールを削除(forgetOnRevoke)` が on のとき)を消す。消した後も、Cloudflare の D1 の Time Travel の保持期間(Workers Free は 7 日、Workers Paid は 30 日)のあいだは過去の時点として残り、運営者が取った書き出し(export)にも残る
 - **プレビューを設置タグ経由で開いたときだけ**、設置タグと同じオリジンからスクリプト 1 本(`/s/preview/<hash>.js`)を追加で読む(設置タグの nonce 付き)。これは読み込みだけで、訪問者の情報を送らない。通常の訪問者は読まない
 - **GA4 / GTM への送信はこのツールの送信ではない。** タグはサイトの `dataLayer` に push するだけで、そこから先は GTM のタグが送る。GA4 / GTM は運営者の外部送信ポリシーに既に書かれているはずの送信先で、このツールが増やすのはイベント名とパラメータ([12 節](#12-datalayer-の契約と命名の規則))だけ
 

@@ -14,10 +14,12 @@ import {
   type ExperimentAnalytics,
   type ExperimentKind,
   type VariantAnalytics,
+  newRunId,
 } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
+import { resultsStore } from "../capabilities";
 import { toStatement, type Db, type ExperimentRow, type SiteRow, type VariantRow } from "../db";
-import { copyChangesQuery, copyVariantsQuery, duplicateExperimentRow, insertExperimentQuery } from "../duplicate";
+import { copyChangesQuery, copyVariantsQuery, duplicateExperimentRow, insertExperimentQuery, retiredIds } from "../duplicate";
 import { ApiError, notFound, validationFailed } from "../errors";
 import { SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
@@ -28,6 +30,14 @@ import { experimentJson } from "../serialize";
 import { assertExperimentAnalytics, assertName, assertTargetingRefs, normalizedPageMatch, normalizedTargeting, parseChange, targetingValidationFailed } from "../validation";
 
 export const experimentRoutes = new Hono<AppEnv>();
+
+/** D9 ②(設計書 §6.3): 一度開始したエクスペリエンスの ID(削除済み)を指定した作成・複製 */
+const retiredIdTaken = (id: string) =>
+  new ApiError(409, "id_taken", {
+    id,
+    message: "このエクスペリエンス ID は使い直せません",
+    hint: "この ID は以前に開始したエクスペリエンスで使われていました。別の ID を指定してください",
+  });
 
 // spec §13.1: id は Site 内一意のスラッグで作成後は変更不可(割当ハッシュの入力なので特に)。status は Task 7 の /status 専用
 const ExperimentName = z.string().min(1);
@@ -106,6 +116,10 @@ const ExperimentJsonSchema = z.object({
   trafficPercentage: z.number().int(),
   persistAssignment: z.boolean(),
   analytics: Analytics,
+  runId: z
+    .string()
+    .nullable()
+    .describe("結果の記録の ID。結果を記録するサイトでテストを開始したときに 1 回だけ振る。下書き・パーソナライズ・結果を記録しないサイトで開始したテストは null"),
   createdBy: z.string(),
   updatedBy: z.string(),
   createdAt: z.number().int().describe("epoch ミリ秒"),
@@ -148,7 +162,15 @@ const DuplicateBody = z
   })
   .refine((b) => b.mode !== "variant" || b.variantId !== undefined, { message: "variantId is required when mode is variant", path: ["variantId"] });
 const StatusBody = z.strictObject({ status: z.enum(["running", "paused", "archived"]) });
-const StatusResponseSchema = z.object({ experiment: ExperimentJsonSchema, publish: PublishResultSchema });
+const StatusResponseSchema = z.object({
+  experiment: ExperimentJsonSchema,
+  publish: PublishResultSchema,
+  warnings: z
+    .array(z.object({ path: z.string(), message: z.string() }))
+    .describe("遷移は成功したが知らせたいこと(いつも配列。無ければ空)。結果を記録しないテストを開始したときは path = results"),
+});
+/** D9 ②(設計書 §5.2): 結果を記録しないテストの開始で応答に足す警告。拒否はしない(画面は確認のモーダルで出す) */
+const RESULTS_NOT_RECORDED = { path: "results", message: "結果はツール上に残りません。後から結果の記録を有効にしても、このテストの結果は記録されません" };
 
 /** spec §13.9: Experiment 単位の「未公開の変更」。Site の最終 Publish 時刻より後に触られていれば未公開 */
 export const isUnpublished = (exp: ExperimentRow, site: Pick<SiteRow, "last_activated_at">): boolean => exp.updated_at > (site.last_activated_at ?? 0);
@@ -234,6 +256,7 @@ experimentRoutes.post(
     if (await db.selectFrom("experiments").select("id").where("site_id", "=", site.id).where("id", "=", body.id).executeTakeFirst()) {
       throw new ApiError(409, "id_taken", { id: body.id, message: "このエクスペリエンス ID は既に使われています", hint: "別の ID を指定してください" });
     }
+    if ((await retiredIds(db, site.id)).has(body.id)) throw retiredIdTaken(body.id);
     assertName(body.name, ["name"]);
     const urlMatch = normalizedPageMatch(body.urlMatch, ["urlMatch"]);
     const targeting = normalizedTargeting(body.targeting ?? null, "experiment", "targeting");
@@ -258,6 +281,8 @@ experimentRoutes.post(
       started_at: null,
       stopped_at: null,
       last_started_at: null,
+      run_id: null,
+      results_purged_at: null,
       created_by: user,
       updated_by: user,
       created_at: now,
@@ -374,7 +399,7 @@ experimentRoutes.delete(
   "/sites/:sid/experiments/:eid",
   describeRoute({
     tags: ["experiments"],
-    summary: "エクスペリエンスを削除(編集者以上)。draft / archived のみ",
+    summary: "エクスペリエンスを削除(編集者以上)。draft / archived のみ。一度開始したエクスペリエンスの ID は、削除した後もこのサイトでは作成・複製に使えない",
     security: [{ bearer: [] }],
     responses: { 204: { description: "削除した" }, ...errorResponses(401, 403, 404, 409) },
   }),
@@ -385,7 +410,26 @@ experimentRoutes.delete(
     const exp = await loadExperiment(db, site.id, c.req.param("eid"));
     if (exp.status === "running" || exp.status === "paused")
       throw new ApiError(409, "experiment_active", { message: "配信中のエクスペリエンスは削除できません", hint: "終了(archived)してから削除してください" });
-    await db.deleteFrom("experiments").where("site_id", "=", site.id).where("id", "=", exp.id).execute(); // variants / changes は CASCADE
+    // D9 ②(設計書 §6.3、K16): 一度開始した(started_at がある)ものは ID を退役させる。読んだ行ではなく D1 の中の行で判定し、
+    // 削除と同じ batch = 1 トランザクションで書く(退役の記録だけ・削除だけが残らない)
+    await c.env.DB.batch([
+      toStatement(
+        c.env,
+        db
+          .insertInto("retired_experiment_ids")
+          .columns(["site_id", "experiment_id", "retired_at"])
+          .expression((eb) =>
+            eb
+              .selectFrom("experiments")
+              .select((s) => ["site_id", "id", s.val(Date.now()).as("retired_at")])
+              .where("site_id", "=", site.id)
+              .where("id", "=", exp.id)
+              .where("started_at", "is not", null),
+          )
+          .onConflict((oc) => oc.doNothing()),
+      ),
+      toStatement(c.env, db.deleteFrom("experiments").where("site_id", "=", site.id).where("id", "=", exp.id)), // variants / changes は CASCADE
+    ]);
     return c.body(null, 204);
   },
 );
@@ -545,7 +589,7 @@ experimentRoutes.post(
   "/sites/:sid/experiments/:eid/status",
   describeRoute({
     tags: ["experiments"],
-    summary: "エクスペリエンスの status を遷移する(管理者以上)。成功した遷移は必ずサイトを自動公開する",
+    summary: "エクスペリエンスの status を遷移する(管理者以上)。成功した遷移は必ずサイトを自動公開する。結果を記録しないテストを開始したときは warnings で知らせる",
     security: [{ bearer: [] }],
     responses: {
       200: {
@@ -567,11 +611,19 @@ experimentRoutes.post(
     if (!TRANSITIONS[exp.status].includes(body.status)) throw new ApiError(409, "invalid_transition", { from: exp.status, to: body.status });
     const now = Date.now();
     // 決定 34: analytics-recipe の期間に使う。started_at は最初の running のみ(Pause → Resume で動かさない)、stopped_at は archived
+    // D9 ②(plan ② の K14、設計書 §5.2・§6.3): 開始(draft → running)のテストで、Site が結果を記録し計測用 D1 があるときだけ run_id を振る。
+    // 再開(paused → running)では振らない(run_id の無いまま一時停止していたテストも再開はできる)。
+    // `where run_id is null` は付けない: draft → running は 1 回だけで、下の status の CAS が二重の発行を防ぐ
+    const starting = exp.status === "draft" && body.status === "running";
+    const isTest = exp.kind === "test";
+    const issue = starting && isTest && exp.run_id === null && site.results_enabled === 1 && resultsStore(c.env);
+    const warnings = starting && isTest && !issue ? [RESULTS_NOT_RECORDED] : [];
     const stamps = {
       ...(body.status === "running" && exp.started_at === null ? { started_at: now } : {}),
       // 決定 51(K5、2026-10-06 ユーザー決定): 配信に入った時刻。開始・再開のたびに更新し、テストどうしの優先の順に使う
       ...(body.status === "running" ? { last_started_at: now } : {}),
       ...(body.status === "archived" ? { stopped_at: now } : {}),
+      ...(issue ? { run_id: newRunId() } : {}),
     };
     // 読んだ status のままであることを条件に更新する(並行 status 変更の stale read を弾く。負けた側は 409 で上書きしない)
     const upd = await db
@@ -603,13 +655,13 @@ experimentRoutes.post(
       fresh = { ...exp, status: body.status, ...stamps, updated_at: now, updated_by: c.get("user").id };
       freshSite = site; // この失敗パスでは activation まで届いていないので last_activated_at は進んでいない
     }
-    return c.json({ experiment: experimentJson(fresh, { unpublished: isUnpublished(fresh, freshSite) }), publish: publicPublishResult(publish) });
+    return c.json({ experiment: experimentJson(fresh, { unpublished: isUnpublished(fresh, freshSite) }), publish: publicPublishResult(publish), warnings });
   },
 );
 
 /**
  * 決定 51(設計書 §4.1): 複製(編集者以上。下書きを作るだけで公開しないため)。元の状態は問わず、元には何も書かない。
- * 写さないもの: 状態(いつも draft)・開始 / 終了の時刻・公開の履歴
+ * 写さないもの: 状態(いつも draft)・開始 / 終了の時刻・公開の履歴・結果の記録の ID(run_id。D9 ②)
  */
 experimentRoutes.post(
   "/sites/:sid/experiments/:eid/duplicate",
@@ -642,11 +694,14 @@ experimentRoutes.post(
       throw new ApiError(422, "unknown_variant", { path: ["variantId"], message: "指定したパターンがこのエクスペリエンスにありません" });
     const idTaken = (id: string) => new ApiError(409, "id_taken", { id, message: "このエクスペリエンス ID は既に使われています", hint: "別の ID を指定してください" });
     const allTaken = () => new ApiError(409, "id_taken", { message: "複製の ID の候補がすべて使われています", hint: "使っていない複製を削除してから、もう一度複製してください(API では id を指定できます)" });
+    // 使われている ID に、一度開始してから削除した ID を足して判定する(D9 ②、K16)
     const freeId = async (): Promise<string | undefined> => {
-      const taken = new Set((await db.selectFrom("experiments").select("id").where("site_id", "=", site.id).execute()).map((r) => r.id));
+      const taken = await retiredIds(db, site.id);
+      for (const r of await db.selectFrom("experiments").select("id").where("site_id", "=", site.id).execute()) taken.add(r.id);
       return duplicateIdCandidates(src.id).find((x) => !taken.has(x));
     };
     if (body.id !== undefined && (await db.selectFrom("experiments").select("id").where("site_id", "=", site.id).where("id", "=", body.id).executeTakeFirst())) throw idTaken(body.id);
+    if (body.id !== undefined && (await retiredIds(db, site.id)).has(body.id)) throw retiredIdTaken(body.id);
     const firstId = body.id ?? (await freeId());
     if (firstId === undefined) throw allTaken();
     const name = body.name ?? duplicateName(body.mode, src.name, picked?.name);

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  DslNodeSchema, ChangeSchema, ExperimentSchema, GoalSchema, GoalInputSchema, CompiledConfigSchema, dslDepth, LIMITS,
+  DslNodeSchema, ChangeSchema, ExperimentSchema, GoalSchema, GoalInputSchema, CompiledConfigSchema, ResultsConfigSchema, dslDepth, LIMITS,
   VariantSchema, attributeChangeIssue, PageMatchInputSchema, CompiledPageMatchSchema, RegexProgramSchema, StoredCtxSchema,
 } from "../src/schema";
 import { TargetingInputSchema } from "../src/targeting";
@@ -330,6 +330,7 @@ describe("schema strictness", () => {
     ["Goal CUSTOM config", GoalSchema, { id: "g", name: "n", type: "CUSTOM", config: { __unknown: 1 } }],
     ["Experiment", ExperimentSchema, experiment],
     ["CompiledConfig", CompiledConfigSchema, compiled],
+    ["ResultsConfig", ResultsConfigSchema, { forget: true, runs: { exp_001: "AAAAAAAAAAAAAAAAAAAAAA" } }],
     ["AnalyticsSettings", AnalyticsSettingsSchema, {}],
     ["AnalyticsSettings exposure", AnalyticsSettingsSchema, { exposure: { __unknown: 1 } }],
     ["AnalyticsSettings exposure.keys", AnalyticsSettingsSchema, { exposure: { keys: { __unknown: "x" } } }],
@@ -341,6 +342,7 @@ describe("schema strictness", () => {
     ["VariantAnalytics overrides", VariantAnalyticsSchema, { overrides: { __unknown: "x" } }],
     ["ExposurePayload", ExposurePayloadSchema, { experimentId: "e", experimentName: "E", variantId: "v", variantName: "V", extra: {} }],
     ["SiteSettings", SiteSettingsSchema, { settingsVersion: 1, siteId: "site_1" }],
+    ["SiteSettings resultsCollectUntil", SiteSettingsSchema, { settingsVersion: 1, siteId: "site_1", resultsCollectUntil: { AAAAAAAAAAAAAAAAAAAAAA: 1 } }],
     ["SiteSettings previousCookieNames", SiteSettingsSchema, { settingsVersion: 1, siteId: "site_1", previousCookieNames: [{ name: "_old", until: 1, __unknown: 1 }] }],
     ["VariantInput", VariantInputSchema, { id: "v", name: "A", weight: 100, changes: [] }],
     ["ExperimentInput", ExperimentInputSchema, experiment],
@@ -350,6 +352,9 @@ describe("schema strictness", () => {
     ["ConsentBody", ConsentBodySchema, { kind: "consent", value: "denied" }],
     ["EventBody goal", EventBodySchema, { type: "goal", goalId: "g" }],
     ["EventBody forget", EventBodySchema, { type: "forget" }],
+    ["EventBody participant", EventBodySchema, { type: "participant", v: 1, runId: "AAAAAAAAAAAAAAAAAAAAAA", variantId: "b", device: "mobile", applied: "ok" }],
+    ["EventBody participant failed_later", EventBodySchema, { type: "participant", v: 1, runId: "AAAAAAAAAAAAAAAAAAAAAA", variantId: "b", applied: "failed_later" }],
+    ["EventBody conversion", EventBodySchema, { type: "conversion", v: 1, goalId: "g", runIds: ["AAAAAAAAAAAAAAAAAAAAAA"] }],
     ["DliteRequest decision", DliteRequestSchema, { v: 1, url: "https://a.test/", device: "desktop" }],
     ["DliteRequest consent", DliteRequestSchema, { kind: "consent", value: "denied" }],
     ["StaticDeployRequest", StaticDeployRequestSchema, { protocol: 1, siteId: "site_1", generation: { epoch: 1, seq: 1 }, config: {}, settings: {}, apiBase: null }],

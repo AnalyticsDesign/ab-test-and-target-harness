@@ -36,4 +36,22 @@ export type Env = {
   DEPLOYER?: import("@wtt/core").StaticDeployer;
   /** 設置タグの origin(配信専用の Worker の公開 origin)。省略時は AB_EDGE_ORIGIN と同じ(同じホストの Route 構成) */
   AB_STATIC_ORIGIN?: string;
+  /**
+   * D9(設計書 §6.6): 計測用 D1(wtt-results。テストの結果の個票)。無ければ Site で結果の記録を有効にできない(capabilities.ts の resultsStore)。
+   * 表の形の正は edge の results-migrations/(control は読み取りと削除だけ)。② の間は wrangler.jsonc に書かない(plan ② の K21。vitest だけが渡す)
+   */
+  RESULTS_DB?: D1Database;
+  /**
+   * D9 ②(plan ② の K12): edge の結果の予算の DO(script 間の binding。wrangler.jsonc の script_name = wtt-edge)。
+   * Cron の results-account-guard が使用量で収集を止める。無ければそのジョブは何もしない(vitest の既定は無し)
+   */
+  RESULTS_BUDGET?: DurableObjectNamespace<ResultsBudgetRpc>;
 };
+
+/**
+ * edge の ResultsBudget(apps/edge/src/results-budget.ts)のうち、control が呼ぶ RPC だけの形。
+ * edge の型を control に持ち込まず、core にも置かない(plan ② の Task 12)。edge の引数の形を変えたらここも直す
+ */
+export interface ResultsBudgetRpc extends Rpc.DurableObjectBranded {
+  stop(reason: "write_budget" | "d1_limit" | "account_usage" | "capacity", until: number, now: number): Promise<void>;
+}

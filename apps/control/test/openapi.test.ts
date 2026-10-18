@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
-import app from "../src/index";
+import { app } from "../src/index";
 
 /**
  * 決定 34 / DoD 7b: 契約がルート定義から漏れていないことを固定する。

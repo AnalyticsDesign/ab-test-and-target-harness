@@ -11,6 +11,7 @@ import {
   type AnalyticsWarning,
   type CompiledConfig,
   type ExperimentKind,
+  type ResultsConfig,
   type StaticGeneration,
 } from "@wtt/core";
 import { RUNTIME_HASH, RUNTIME_SOURCE } from "@wtt/runtime/source";
@@ -108,6 +109,21 @@ export async function buildCompileInput(
         })),
     })),
   };
+}
+
+/**
+ * D9 ②(設計書 §6.3・§9.3、plan ② の K15): compiled config の `results`。`all` は Site の全エクスペリエンス行(状態を問わない)。
+ * `runs` = 結果を記録する Site の、running / paused のテストで run_id があるもの(paused は experiments[] に載らないので別に集める)。
+ * 出すのは runs が空でないとき、または run_id があって個票を消していない(results_purged_at が無い)エクスペリエンスが残っているとき
+ * (結果の記録を無効にした後・すべて終了した後も、個票が残っている間は forget のために出す)。
+ * compile の入力に足すのは publishSite だけ(buildCompileInput は足さない: エージェントの what-if・下書きの bootstrap・公開前の差分に入れない)
+ */
+export function resultsForCompile(site: SiteRow, all: ExperimentRow[]): ResultsConfig | undefined {
+  const runs: Record<string, string> = {};
+  if (site.results_enabled === 1)
+    for (const e of all) if (e.kind === "test" && (e.status === "running" || e.status === "paused") && e.run_id !== null) runs[e.id] = e.run_id;
+  const rowsMayRemain = all.some((e) => e.run_id !== null && e.results_purged_at === null);
+  return Object.keys(runs).length > 0 || rowsMayRemain ? { forget: true, runs } : undefined;
 }
 
 /**
@@ -262,7 +278,9 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, userId: strin
     const experiments = await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute();
     statusSnapshot = experiments.map((e) => ({ id: e.id, status: e.status }));
     const input = await buildCompileInput(db, site, version, experiments);
-    config = compile(input);
+    // D9 ②(K15): results は Publish の経路だけで足す(写しと同じ SELECT の行から作る)
+    const results = resultsForCompile(site, experiments);
+    config = compile(results ? { ...input, results } : input);
     // §10.9: compile は警告に留める。拒否は保存 API(`assertName`)側
     warnings = analyticsWarnings(config);
     // 決定 51(設計書 §3.3): 同じ対象 URL・同じセレクタを変える組。拒否はしない(どちらが優先されるかを文に入れる)
@@ -376,6 +394,15 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, userId: strin
   for (const row of statusSnapshot) {
     await db.updateTable("experiments").set({ published_status: row.status }).where("site_id", "=", site.id).where("id", "=", row.id).where(stillActive).execute();
   }
+  // D9 ②(設計書 §6.6・§9.3): 公開した収集の状態(結果を記録する Site か = results.runs を出すか)が前回の記録と違えば 1 行足す。
+  // 行が無いときは有効のときだけ足す(最初から記録しない Site には行を作らない)。published_status と同じ fence の中で、
+  // 比べるのと足すのを 1 文にする(追い越された Publish は書かない。収集の停止の期間はこの記録から出す)
+  const collecting = site.results_enabled === 1 ? 1 : 0;
+  await sql`
+    insert into results_collection_log (site_id, at, enabled, publish_version)
+    select ${site.id}, ${nowMs}, ${collecting}, ${version}
+    where exists (select 1 from sites where id = ${site.id} and active_version = ${version})
+      and coalesce((select enabled from results_collection_log where site_id = ${site.id} order by id desc limit 1), 0) <> ${collecting}`.execute(db);
 
   // 削除してはいけないのは「いま配信されている版」。自分が KV に書いた版(`written`)を渡し、
   // cleanup 側はそれに加えて KV の `active` レコードそのものも読んで守る(自分の版は activated_at = nowMs で 5 分ルールが守る)。

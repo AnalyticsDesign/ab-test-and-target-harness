@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
-import { call, createExperiment, createSite, expectEnvelope, inviteAndJoin, json, setupOwner, TEXT_CHANGE } from "./helpers";
+import { RUN_ID_RE } from "@wtt/core";
+import { call, createExperiment, createSite, expectEnvelope, experimentRow, inviteAndJoin, json, RESULTS_STORE, setupOwner, TEXT_CHANGE } from "./helpers";
 
 async function sourceTest() {
   const owner = await setupOwner();
@@ -30,6 +31,31 @@ describe("POST …/duplicate (決定 51、設計書 §4.1)", () => {
     expect(JSON.stringify(published.config)).toContain("Hello"); // 配信中の設定は書き換え前(TEXT_CHANGE の "Hello")のまま
     const row = await env.DB.prepare("select started_at, stopped_at from experiments where site_id = ? and id = ?").bind(sid, created.id).first();
     expect(row).toEqual({ started_at: null, stopped_at: null }); // 開始 / 終了の時刻は写さない
+  });
+
+  it("duplicate_does_not_copy_run_id", async () => {
+    // D9 ②: 計測用 D1 がある導入で作った Site(結果を記録する)の実行中のテスト。複製は別のテストなので run_id を写さない
+    const owner = await setupOwner();
+    const created = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+    const { id: sid } = await json<{ id: string }>(created);
+    await createExperiment(owner.token, sid, { id: "exp_src" });
+    await call("PUT", `/sites/${sid}/experiments/exp_src/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
+    expect((await call("POST", `/sites/${sid}/experiments/exp_src/status`, { token: owner.token, body: { status: "running" }, envOverride: RESULTS_STORE })).status).toBe(200);
+    const src = await experimentRow(sid, "exp_src");
+    expect(src.run_id).toMatch(RUN_ID_RE);
+    for (const [mode, id] of [["same", "exp_same"], ["variant", "exp_variant"]] as const) {
+      const res = await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token: owner.token, body: { mode, id, ...(mode === "variant" ? { variantId: "b" } : {}) } });
+      expect(res.status).toBe(201);
+      expect((await json(res)).runId).toBeNull();
+      const row = await experimentRow(sid, id);
+      expect(row.run_id).toBeNull();
+      expect(row.results_purged_at).toBeNull();
+    }
+    // 複製を開始すると、元とは別の run_id が振られる(variant の複製はパーソナライズなので振らない)
+    expect((await call("POST", `/sites/${sid}/experiments/exp_same/status`, { token: owner.token, body: { status: "running" }, envOverride: RESULTS_STORE })).status).toBe(200);
+    const copied = (await experimentRow(sid, "exp_same")).run_id;
+    expect(copied).toMatch(RUN_ID_RE);
+    expect(copied).not.toBe(src.run_id);
   });
 
   it("variant_duplicate_sets_traffic_100_and_persist_off", async () => {

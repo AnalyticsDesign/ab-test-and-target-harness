@@ -3,15 +3,16 @@ import { analyticsNames, isAnalyticsSettings, isExposurePayloads } from "./analy
 import { createConsent } from "./consent";
 import { collectContext } from "./context";
 import { decideLocally, needsRemoteDecision, requestDecision, type DecisionOutcome } from "./decision";
-import { sendEvent } from "./events";
+import { postEvent, sendEvent } from "./events";
 import { createExposureTracker } from "./exposure";
 import { startGoalDetection } from "./goals";
 import { establishIdentity, revokeIdentity } from "./identity";
 import { injectPrehide, prehideSelectors, removePrehide } from "./prehide";
 import { parsePreviewHash, previewPrehideSelectors, type PreviewReport } from "./preview";
+import { clearMarks, createResultsSender, localStore, type ResultsSender } from "./results";
 import type { createPreviewEngine } from "./preview";
 import type { ActiveChange, ApplyEngine, ControlWatch } from "./apply";
-import type { CompiledConfig, Goal, RuntimeSettings } from "@wtt/core";
+import { shortVisitorHash, type CompiledConfig, type Goal, type RuntimeSettings } from "@wtt/core";
 
 export type BootPayload = { config: CompiledConfig; settings: RuntimeSettings; apiBase?: string };
 
@@ -106,6 +107,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
     return NOOP_API;
   }
   const { config, settings, apiBase } = payload;
+  const dlite = settings.mode === "B"; // Mode B(D-lite)。それ以外は Mode A(Mode C を含む)
 
   // spec §12.3 (a) / 決定 39 (4): 完全隔離モード。ここから下(Identity / consent / decision / Goals / Exposure)には一切入らない。
   // Cookie も読まず、dataLayer にも触れず、通信もしない。指定された Experiment の Variant を強制適用するだけ
@@ -166,6 +168,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
   }
 
   const assignments: Record<string, string> = {};
+  const storage = localStore(deps.win); // 結果の送信済みの印(D9 ②)の置き場所
   let engine: ApplyEngine | null = null;
   const pageState = createPageState(); // §10.4: 適用済み・実行済み・注入済みはページ寿命(撤回 → 再許可で作り直すエンジンに引き継ぐ)
   let generation = 0; // 起動世代。revoke → 再 grant で進み、旧世代の応答・タイマーは無効になる
@@ -174,6 +177,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
   let aborter: AbortController | null = null;
   let currentVisitorId: string | null = null; // 現世代の Identity(forget の宛先)。Mode B は常に null(Cookie は edge 所有)
   let stopGoals: (() => void) | null = null;
+  let results: ResultsSender | null = null; // 現世代の結果の送信(D9 ②)。config.results があるときだけ
   /**
    * §9.2 / r1 CX-High-1: /event は「Mode A = Identity 確立後」「D-lite = 最初の decision 応答(Set-Cookie)が settle した後」でないと
    * edge に Identity が無く 204 で無視される。それまでの検知はここに溜め、準備できたら同じ順で送る。撤回で捨てる
@@ -181,7 +185,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
   let eventsReady = false;
   let pendingGoals: Goal[] = [];
   /** in-flight の goal event。撤回時はこれらの settle を待ってから forget を送る(r2 CX-High-2: DO で処理済みになってから消す) */
-  const inflightEvents = new Set<Promise<void>>();
+  const inflightEvents = new Set<Promise<unknown>>();
   /** 撤回で送った forget の settle。次世代は期限タイマーと prehide より前にこれを待つ(r2 CX-High-1) */
   let pendingForget: Promise<void> | null = null;
   const FORGET_WAIT_MS = 2000; // in-flight goal の settle を待つ上限(通信断で撤回を無期限に遅らせない)
@@ -208,33 +212,31 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
     for (const k of Object.keys(assignments)) delete assignments[k];
   }
 
-  function decisionUrl(): string {
-    if (settings.mode === "B") return "/__ab/decision"; // 同一ゾーン相対(§9.6)
-    const base = apiBase ?? deps.scriptSrc ?? deps.win.location.href;
-    return new URL(`/v1/sites/${encodeURIComponent(config.siteId)}/decision`, base).toString();
-  }
-
-  function eventUrl(): string {
-    if (settings.mode === "B") return "/__ab/event"; // 同一ゾーン相対(§9.6)
-    const base = apiBase ?? deps.scriptSrc ?? deps.win.location.href;
-    return new URL(`/v1/sites/${encodeURIComponent(config.siteId)}/event`, base).toString();
+  /** decision / event の宛先。D-lite は同一ゾーン相対(§9.6)、Mode A は edge の公開 origin(無ければ設置タグの src)の /v1/sites/<id>/ の下 */
+  function apiUrl(path: "decision" | "event"): string {
+    if (dlite) return "/__ab/" + path;
+    return new URL(`/v1/sites/${encodeURIComponent(config.siteId)}/${path}`, apiBase ?? deps.scriptSrc ?? deps.win.location.href).toString();
   }
 
   function goalBody(goal: Goal): Record<string, unknown> | null {
     const body: Record<string, unknown> = { type: "goal", goalId: goal.id };
-    if (settings.mode === "A") {
+    if (!dlite) {
       if (currentVisitorId === null) return null; // 到達しない(flush は Identity 確立後にしか呼ばれない)
       body.visitorId = currentVisitorId;
     }
     return body;
   }
 
-  function postGoal(goal: Goal): void {
-    const body = goalBody(goal);
-    if (!body) return;
-    const p = sendEvent(deps.fetchFn, eventUrl(), body);
+  /** in-flight の送信として持つ(撤回の forget はこれらの settle を待つ)。goal と結果の参加・CV で共有 */
+  function track<T>(p: Promise<T>): Promise<T> {
     inflightEvents.add(p);
     void p.finally(() => inflightEvents.delete(p));
+    return p;
+  }
+
+  function postGoal(goal: Goal): void {
+    const body = goalBody(goal);
+    if (body) track(sendEvent(deps.fetchFn, apiUrl("event"), body));
   }
 
   /** 送信準備が整った世代で、溜めた Goal を検知順に送る */
@@ -249,6 +251,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
   function conversion(goal: Goal): void {
     const k = names.conversion.keys;
     pushDataLayer({ event: names.conversion.event, [k.goalId]: goal.id, [k.goalName]: goal.name, [names.extraKey]: null });
+    results?.conversion(goal.id); // 結果の CV は goal の /event とは別の要求(needsProfile に関係なく送る。設計書 §6.2)
     if (!config.needsProfile) return;
     if (!eventsReady) {
       pendingGoals.push(goal);
@@ -269,6 +272,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
       if (revoked || gen !== generation) return;
     }
     let expired = false;
+    let ready = (): void => {}; // 結果の送信を始める(Mode A。finally で呼ぶ)
     const myAborter = new AbortController(); // 起動ごとに新品。共有変数は現世代を指すが、期限タイマーは自分の分だけ中断する
     aborter = myAborter;
     const isStale = (): boolean => expired || revoked || gen !== generation; // decision の適用可否(期限を含む)
@@ -288,6 +292,28 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
       const identity = await establishIdentity(settings, config.siteSalt, deps.doc, () => !isRevoked());
       if (isRevoked()) return; // Identity 確立中に撤回された世代は何も始めない(検知も decision も)
       currentVisitorId = identity.visitorId;
+      // D9 ②(設計書 §6.2): 結果の参加・CV。config.results があるときだけ(結果を記録しない Site は何も送らない)。ここに来るのは同意が granted のときだけ
+      const rs = config.results
+        ? (results = createResultsSender({
+            config,
+            settings,
+            storage,
+            now: Date.now,
+            send: (b) => {
+              if (identity.visitorId) b.visitorId = identity.visitorId; // Mode A は goal と同じく本文に ID(D-lite は Cookie が正)
+              // 2xx で JSON を読めないもの(D-lite の Cookie なしの 204)・非 2xx(429 など)・通信の失敗は、すべて印を付けない応答
+              // (送信側は result が stored などのときだけ印を付ける。次のページで送り直す)
+              return track(
+                postEvent(deps.fetchFn, apiUrl("event"), b)
+                  .then((r) => r.ok && r.json())
+                  .catch(() => null),
+              );
+            },
+          }))
+        : null;
+      // Mode A の印の i は ID の短いハッシュ。始めるのは最初の scan の参加を積んだ後(start の finally)。
+      // それより前の CV(PAGEVIEW)も、同じページの参加の settle を待ってから送り先を決める(D-lite も decision の応答の後に始めるので同じ)
+      if (rs && !dlite) ready = () => void shortVisitorHash(identity.visitorId!).then(rs.begin);
       const { ctx, viewport } = collectContext({
         url: deps.win.location.href,
         referrer: deps.doc.referrer,
@@ -301,21 +327,24 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
       // §10.6: Goals は実験の有無に関係なく検知する。decision の結果や期限には依存しない(PAGEVIEW はここで即発火 → Mode A は直後に送る、D-lite は decision 応答後)
       stopGoals?.();
       stopGoals = startGoalDetection(config, deps.doc, ctx.url, conversion);
-      if (settings.mode === "A") flushEvents(); // Identity は確立済み。D-lite は Cookie が decision 応答で発行されるまで待つ
+      if (!dlite) flushEvents(); // Identity は確立済み。D-lite は Cookie が decision 応答で発行されるまで待つ
       if (isStale()) return; // 期限切れなら decision は送らない(Goal 検知は続く)
 
       let outcome: DecisionOutcome;
       if (needsRemoteDecision(settings, config, ctx.url)) {
         const body: Record<string, unknown> = { v: config.version, url: ctx.url, referrer: ctx.referrer, device: ctx.device, browser: ctx.browser, os: ctx.os };
         if (viewport) body.viewport = viewport; // viewport の meta が無い時点の幅は送らない(不明)
-        if (settings.mode === "A" && identity.visitorId !== null) {
+        if (!dlite && identity.visitorId !== null) {
           body.visitorId = identity.visitorId; // D-lite は Cookie が正(§9.1)
           body.firstVisitAt = identity.firstVisitAt; // Mode C でも参考用の匿名 ID そのものは送らない(時刻だけ。決定 49 §7.4)
         }
-        outcome = await requestDecision(deps.fetchFn, decisionUrl(), body, myAborter.signal, config.version);
+        outcome = await requestDecision(deps.fetchFn, apiUrl("decision"), body, myAborter.signal, config.version);
         // D-lite: 応答(Set-Cookie)が settle した。応答が空・失敗・期限切れの abort でも送信を始める(r1 CL-High-1 / r2 CX-High-1)。
         // 期限で abort された初回訪問は Cookie が届いていないことがあり、その Goal は edge が 204 で無視する(既知の制約)
-        if (settings.mode === "B" && !isRevoked()) flushEvents();
+        if (dlite && !isRevoked()) {
+          flushEvents();
+          rs?.begin(outcome?.vh ?? null); // D-lite の印の i は decision の応答の vh(無ければ印を localStorage に書かない)
+        }
       } else {
         outcome = identity.visitorId === null ? null : decideLocally(config, ctx, identity.visitorId);
       }
@@ -328,6 +357,8 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
       for (const e of outcome.experiments) assignments[e.id] = e.variant;
       const changes: ActiveChange[] = [];
       const watches: ControlWatch[] = [];
+      // 参加の契機(テストごとに 1 つ = exposureSelectors の和集合。設計書 §6.1)。results.runs に無いもの(single など)は送信側が捨てる
+      const targets: ControlWatch[] = [];
       // 決定 51(設計書 §3.2): 順位 = config の並びの番号(後ろほど優先)。decision の応答の順には頼らない。
       // 適用も並びの順(前 → 後)に行う(HTML の挿入と CSS の順を並びのとおりにするため)
       const chosen = new Map(outcome.experiments.map((e) => [e.id, e.variant]));
@@ -335,6 +366,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
         const vid = chosen.get(exp.id);
         const variant = vid === undefined ? undefined : exp.variants.find((v) => v.id === vid);
         if (!variant) return;
+        if (rs) targets.push({ experimentId: exp.id, selectors: config.exposureSelectors[exp.id] ?? [] });
         if (variant.changes.length === 0) {
           watches.push({ experimentId: exp.id, selectors: config.exposureSelectors[exp.id] ?? [] }); // 対照 Variant(§10.5)
         } else {
@@ -347,12 +379,19 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
       engine = createApplyEngine(
         deps.doc,
         {
-          onApplied: (experimentId) => exposure.expose(experimentId),
+          onApplied: (experimentId) => {
+            exposure.expose(experimentId);
+            rs?.applied(experimentId);
+          },
           onControlSeen: (experimentId) => exposure.expose(experimentId),
+          // 送信側の入口は例外を投げない(エンジンはコールバックの例外を隔離しない)
+          onTargetSeen: (experimentId) => rs?.participant(experimentId, chosen.get(experimentId)!, ctx.device!),
+          onApplyFailed: rs?.applyFailed, // 送信側のメソッドは this を使わない(そのまま渡せる)
+          onScanEnd: rs?.endScan,
         },
         { nonce: deps.nonce, state: pageState },
       );
-      engine.start(changes, watches);
+      engine.start(changes, watches, targets);
     }
 
     // §10.7: 起動経路のどの例外もサイトを壊さない。prehide を deadline 任せにせずここで必ず解除する(r1 CL-High-1)
@@ -362,6 +401,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
       console.debug("wtt: start failed", e);
     } finally {
       clearTimeout(deadlineTimer);
+      ready();
       if (gen === generation) {
         aborter = null; // 現世代の in-flight は無くなった(新世代が張り替えた controller は消さない)
         removePrehide(deps.doc); // 旧世代の終了で現世代の prehide を剥がさない
@@ -371,14 +411,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
 
   function sendDliteConsentDenied(): void {
     // §16: D-lite は consent body を 1 回送り、edge が両 Cookie に Max-Age=0 を返す(DO へは転送しない)
-    void deps
-      .fetchFn("/__ab/decision", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "consent", value: "denied" }),
-        keepalive: true,
-      })
-      .catch(() => {});
+    void sendEvent(deps.fetchFn, "/__ab/decision", { kind: "consent", value: "denied" }); // 同じ POST・keepalive。失敗は握る
   }
 
   const consentMachine = createConsent(settings.consentMode, deps.win.__ab?.consent, {
@@ -409,7 +442,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
       // 前の書き換えが残る既知の制約(spec §10.4)。次のページ読込で解消する
       clearAssignments();
       exposure.reset();
-      if (settings.mode === "B") {
+      if (dlite) {
         sendDliteConsentDenied(); // D-lite は DO 非接触のまま(§16)
       } else {
         // §16 / 決定 37: 撤回時点の ID を控えて forget を 1 回送る。既定 on、Site 設定で off。
@@ -420,14 +453,17 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
         // edge の forget は config を見ずに処理する(決定 37 C)。Profile を使ったことの無い Site でも撤回時の 1 要求で済む(backlog B53)
         const forgetId = currentVisitorId;
         if (settings.forgetOnRevoke !== false && forgetId !== null) {
-          const inflight = [...inflightEvents];
+          const inflight = [...inflightEvents]; // 結果の参加・CV も含む(edge で書いた後に消す)
           pendingForget = Promise.race([
             Promise.allSettled(inflight).then(() => undefined),
             new Promise<void>((resolve) => setTimeout(resolve, FORGET_WAIT_MS)),
-          ]).then(() => sendEvent(deps.fetchFn, eventUrl(), { type: "forget", visitorId: forgetId }));
+          ]).then(() => sendEvent(deps.fetchFn, apiUrl("event"), { type: "forget", visitorId: forgetId }));
         }
         revokeIdentity(settings, deps.doc); // Cookie は即時に消す(forget は控えた ID で送る)
       }
+      results?.clear(); // 撤回の後に届いた応答でも印を書き直さない
+      results = null;
+      clearMarks(storage, settings); // 送信済みの印を消す(送信側が無い撤回でも: Identity の確立の前・results の無い config)
       currentVisitorId = null;
     },
   });
@@ -455,13 +491,14 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
   deps.win.AB = api;
   if (consentMachine.state === "granted") {
     void start();
-  } else if (consentMachine.state === "denied" && settings.mode === "A") {
+  } else if (consentMachine.state === "denied" && !dlite) {
     // 事前状態が denied のまま読み込まれた場合も、残存 Identity を 1 回だけ掃除する(r1 CX-High-1)。
     // 通信は伴わない(§16: denied の間は decision / event を送らない)。
     // D-lite(mode B)はここで何もしない — 正本 Cookie は edge 所有で削除に通信が要るため、
     // 「denied の間は通信しない」規律を優先する(§16 の 2026-09-01 決定)。撤回の伝達は
     // サイト側が AB.consent(false) を呼ぶことで成立する(導入ガイドの必須手順)
     revokeIdentity(settings, deps.doc);
+    clearMarks(storage, settings); // 結果の送信済みの印も消す(設計書 §6.2)
   }
   return api;
 }

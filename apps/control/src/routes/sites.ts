@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
+import { resultsStore } from "../capabilities";
 import type { SiteRow } from "../db";
 import { ApiError, validationFailed } from "../errors";
 import { newId, randomToken } from "../ids";
@@ -29,7 +30,7 @@ export const siteRoutes = new Hono<AppEnv>();
 
 /** spec §13.9: `GET /sites/:sid` は siteJson に badge/banner 用の 1 フラグを足して返す */
 const SiteGetSchema = SiteJsonSchema.extend({
-  hasUnpublishedChanges: z.boolean().describe("エクスペリエンスのいずれかが unpublished、または目標 / パターン / タイムゾーンの変更が前回 activation より後"),
+  hasUnpublishedChanges: z.boolean().describe("エクスペリエンスのいずれかが unpublished、または目標 / パターン / タイムゾーン / 結果の記録の切り替えが前回 activation より後"),
 });
 
 siteRoutes.get(
@@ -85,6 +86,8 @@ siteRoutes.post(
       active_version: null, active_kv_stale: 0, last_activated_at: null, content_updated_at: now, created_at: now, updated_at: now,
       // 列の既定と同じ値(世代の epoch は created_at になる)
       static_seq: 0, static_stale: 0, static_epoch: 0, static_served_version: null, static_prev_served_version: null, static_served_at: null, static_removing: null,
+      // D9 ②(設計書 §6.6): 新しい Site は、計測用 D1 がある導入なら結果を記録する(無ければ 0。後から有効にできる)
+      results_enabled: resultsStore(c.env) ? 1 : 0, results_retention_days: 90,
     };
     const { next, error } = applySitePatch(base, {
       mode: body.mode, hosts: body.mode === "B" ? [body.domain] : [],
@@ -160,7 +163,7 @@ siteRoutes.patch(
   "/sites/:sid",
   describeRoute({
     tags: ["sites"],
-    summary: "サイトの設定を更新(管理者以上)。訪問者 ID / 外部計測の名前は設置タグの配信ファイルを作り直して反映するので、公開は不要。タイムゾーンは次の公開で効く",
+    summary: "サイトの設定を更新(管理者以上)。訪問者 ID / 外部計測の名前は設置タグの配信ファイルを作り直して反映するので、公開は不要。タイムゾーンと結果の記録の切り替えは次の公開で効く",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "更新後のサイト", content: { "application/json": { schema: resolver(SiteJsonSchema) } } },
@@ -175,6 +178,14 @@ siteRoutes.patch(
     const { site } = await loadSite(c, c.req.param("sid"), "admin");
     const { next, error } = applySitePatch(site, c.req.valid("json"), Date.now());
     if (error) throw error;
+    // D9 ②(設計書 §6.6): 計測用 D1 が無い導入では、結果の記録を有効にする操作を拒む(既存の導入先の更新で、D1 を作る前に有効にしても壊れない)。
+    // 判定は無効 → 有効の切り替えだけ(有効のまま D1 が外れた Site で、ほかの設定の保存まで止めない)。無効にする向きは受ける
+    if (next.results_enabled === 1 && site.results_enabled === 0 && !resultsStore(c.env))
+      throw new ApiError(409, "results_store_missing", {
+        path: ["resultsEnabled"],
+        message: "結果を記録するためのデータベースが導入されていません",
+        hint: "導入ガイドの手順で計測用のデータベースを作り、control を設定し直してから有効にしてください",
+      });
     const db = c.get("db");
     if (next.retention_days < site.retention_days) {
       const conflicts = await retentionConflicts(db, site, next.retention_days);
@@ -217,8 +228,9 @@ siteRoutes.patch(
       console.error("host_in_use (batch)", e);
       throw new ApiError(409, "host_in_use", { message: "ホスト名の登録が競合しました", hint: "再試行してください" });
     }
-    // 決定 49: タイムゾーンは compiled config で配るので、変えたら未公開の変更に数える(応答の contentUpdatedAt も合わせる)
-    if (next.timezone !== site.timezone) {
+    // 決定 49: タイムゾーンは compiled config で配るので、変えたら未公開の変更に数える(応答の contentUpdatedAt も合わせる)。
+    // D9 ②(設計書 §6.6): 結果の記録の切り替えも次の Publish で compiled config の results が変わるので数える(保持期間だけの変更は config に載らないので数えない)
+    if (next.timezone !== site.timezone || next.results_enabled !== site.results_enabled) {
       await touchSite(db, next.id, next.updated_at);
       next.content_updated_at = next.updated_at;
     }

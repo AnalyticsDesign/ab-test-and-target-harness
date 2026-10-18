@@ -137,13 +137,31 @@ pnpm runtime:build
 
 確認: `git status --short packages/runtime/generated/` が空。差分が出ても進んでよい(2.1 の「期待と違うとき」)。
 
-**7. KV を作る**(2.2)
+**7. KV と計測用のデータベースを作る**(2.2)
 
 ```bash
 pnpm -C apps/control exec wrangler kv namespace create wtt-config </dev/null   # </dev/null = 「設定ファイルに追記するか」の問いを非対話にして、追記しない(id は下の手順で書く)
 ```
 
 出力の `id` の 32 桁を、`apps/edge/wrangler.jsonc` と `apps/control/wrangler.jsonc` の両方の `kv_namespaces[0].id` に書く。`Would you like Wrangler to add it on your behalf?` と聞かれたら No。確認は 2.2 のブロックで行う。両ファイルに同じ id が 1 回ずつあり、雛形の 32 桁の 0 が残っていなければよい。
+
+続けて、テストの結果を記録する計測用のデータベース(D1 の `wtt-results`)を作る:
+
+```bash
+pnpm -C apps/edge exec wrangler d1 create wtt-results </dev/null   # KV と同じく、設定ファイルへの追記は非対話なので行わない(database_id は下の手順で書く)
+```
+
+出力の `database_id` を `apps/edge/wrangler.jsonc` の `d1_databases[0].database_id` に書く(雛形の値は仮の ID `00000000-0000-0000-0000-000000000000`)。追記の問いには No と答える。書いたら、表を作り、訪問者 ID を変換する鍵を登録する:
+
+```bash
+pnpm -C apps/edge results:migrate:remote   # 表を作る。期待: 0001_results.sql が適用される(適用済みなら No migrations to apply)
+```
+
+```bash
+openssl rand -base64 32 | pnpm -C apps/edge exec wrangler secret put RESULTS_VISITOR_KEY   # 鍵を作り、画面に出さずに edge の secret に入れる
+```
+
+確認は 2.2 の「計測用のデータベース」の確認のブロックで行う。鍵を変えると同じ訪問者が別の人として記録されるので、一度登録したら変えない。
 
 **8. Route を書く**(2.3)
 
@@ -262,7 +280,7 @@ pnpm -C apps/control exec wrangler secret list | jq -r '.[].name' | sort   # 期
 | `AB_GOOGLE_CLIENT_ID` | `deploy-secrets.env` の `GOOGLE_CLIENT_ID` の値 |
 | `AB_EDGE_ORIGIN` | `https://<設置ホスト>` |
 | `CF_ACCOUNT_ID` | `<Account ID>` |
-| `AB_USAGE_RESOURCES` | `d1` に手順 11 の `database_id`、`kv` に手順 7 の id を JSON のオブジェクトで書く(形は 3.4 の表) |
+| `AB_USAGE_RESOURCES` | `d1` に手順 11 の `database_id`(`wtt-control`)と手順 7 の `database_id`(`wtt-results`)、`kv` に手順 7 の KV の id を JSON のオブジェクトで書く(形は 3.4 の表) |
 
 **15. control をデプロイする**(3.5)
 
@@ -472,6 +490,7 @@ node tools/deploy-answers/cli.mjs; echo "exit=$?"   # 期待: exit=0、「## 指
 | `owner_email` / `workspace_name` | 5 節の初回セットアップ(`POST /setup`)。`owner_email` はログインに使う Google アカウントと同じメールアドレス。`workspace_name` は質問の表に無く、0.5 の人への依頼で一緒に聞いて書く |
 | `usage_visibility` | 5 節の初回セットアップ(`POST /setup` の `usageVisibility`)。使用状況を見られる人(`members` / `instance_admins`)。省略 = `members` |
 | `plan` | 0.5(`paid` で、アカウントがまだ Free なら切り替えを依頼)、5 節(管理画面の使用状況のプラン) |
+| `results_db_name` | 2.2(計測用のデータベースの名前)、3.4 `AB_USAGE_RESOURCES`。既定 `wtt-results` のまま使う。ほかのリソースの名前と同じく固定で、手順とスクリプト(`results:migrate:remote`)はこの名前で書いてある。入力ファイルに書かれていなくても作る |
 | 上段の答え(`features` など)・`accepted` | 検査スクリプトが読む。以下の手順が上段から読むのは `cloudflare_account`(0.4 のアカウントを作る・ログインの後の確認)と `install_host`・`owner_email` だけ |
 
 ### 0.3 本体の取得とバージョン
@@ -813,8 +832,10 @@ admin のリクエストの数え方:
 | ゾーン 1 つ(カスタムドメイン) | edge を訪問者と同一オリジンで公開する。Cache Rule と WAF もこのゾーンに置く。ドメインなし構成(`edge_address: workers-dev`)では不要 | edge |
 | Workers KV(`wtt-config`) | 配信中の config とサイト設定を配信用に複製したもの(元データは D1)。control が書き、edge が読む | 両方(同じ namespace) |
 | D1(`wtt-control`) | ユーザー・ワークスペース・サイト・エクスペリエンス・公開履歴 | control |
+| D1(`wtt-results`。計測用のデータベース) | テストの結果の記録(参加者と目標の達成。訪問者 ID はそのまま置かず、鍵付きのハッシュにする)。結果を記録するサイトの分だけ増える | edge が書き、control が読む |
 | R2(`wtt-assets`) | IMAGE の変更のアップロード先。R2 なし構成(`asset_public_base: none`)では不要 | control |
 | Durable Objects(`VisitorProfile`) | 履歴条件・`persistAssignment`・目標の訪問者状態 | edge |
+| Durable Objects(`ResultsBudget`・`ResultsHealth`) | 結果の記録の 1 日の予算(導入全体で 1 つ)と、収集できなかった送信の数(サイトごと) | edge(`ResultsBudget` は control の Cron も使う) |
 | Durable Objects(`DeployQueue`) | 設置タグのファイルの作り直しを 1 本ずつ流し、失敗したら再試行する | デプロイ専用の Worker |
 | Rate Limiting binding | 無認証入口の補助的な絞り(実効は限定的。[運用ガイド 7 節](operations.md#7-レート制限の実効)) | 両方 |
 
@@ -857,7 +878,9 @@ pnpm runtime:build
 
 期待と違うとき: 差分が出る → Node のバージョン差で生成結果が変わっている。差分を残したまま進めてよい(deploy には生成後の内容が使われる)。
 
-### 2.2 KV を作り、両方の設定に書く
+### 2.2 KV と計測用のデータベースを作り、設定に書く
+
+**KV(`wtt-config`)**:
 
 ```bash
 pnpm -C apps/control exec wrangler kv namespace create wtt-config </dev/null   # </dev/null = 「設定ファイルに追記するか」の問いを非対話にして、追記しない(id は下の手順で書く)
@@ -878,6 +901,58 @@ pnpm -C apps/control exec wrangler kv namespace list | jq -r '.[] | select(.titl
 ```
 
 期待と違うとき: `wrangler kv namespace create` が `already exists` を含むエラーを返す → 前回の作業で作った namespace が残っている。`kv namespace list` で id を引いて同じように書く。
+
+**計測用のデータベース(D1 の `wtt-results`)**: テストの結果(参加者と目標の達成)を記録する D1。設定用の `wtt-control`(3.1)とは分けてある(書き込みの量と保持期間が違い、`wtt-control` の控えと Time Travel を個票で大きくしないため)。edge の設定がこのデータベースを参照するので、どの構成でも作る。順は、作成 → `database_id` を書く → 表を作る(マイグレーション)→ 鍵の登録 → 2.4 の edge のデプロイ。
+
+```bash
+pnpm -C apps/edge exec wrangler d1 create wtt-results </dev/null   # KV と同じく、設定ファイルへの追記は非対話なので行わない(database_id は下の手順で書く)
+```
+
+出力の `database_id` を `apps/edge/wrangler.jsonc` の `d1_databases[0].database_id` に書く。リポジトリの値は仮の ID(`00000000-0000-0000-0000-000000000000`)で、KV の id と同じく導入ごとに自分の ID に書き換える。仮の ID のまま edge をデプロイしない。
+
+表を作る。`database_id` を書いた後に行う(wrangler は設定ファイルの ID でデータベースを探す):
+
+```bash
+pnpm -C apps/edge results:migrate:remote   # 表を作る。期待: 0001_results.sql が適用される(適用済みなら No migrations to apply)
+```
+
+**訪問者 ID を変換する鍵(edge の secret `RESULTS_VISITOR_KEY`)**: edge は計測用のデータベースに訪問者 ID をそのまま書かず、この鍵で計算したハッシュ(HMAC-SHA-256 の先頭 16 バイト)を書く。
+
+- 鍵は 32 バイトの乱数を base64 にした文字列。下のコマンドが作り、画面に出さずにそのまま登録する。エージェントも鍵の値を表示せず、会話・`deploy-log.md` に書かない。人が手で作るときも、チャットに貼らない
+- edge は、base64 として読めない・復号して 32 バイトに満たない・空の鍵を使わない。鍵が無いときと同じく結果を書かず、その送信を「収集できなかった送信」として数える。エクスペリエンスの配信は止まらない
+- **鍵を変えると、同じ訪問者が別の人として記録される**(ハッシュが変わるため)。一度登録したら変えない。鍵を入れ替える手順は無い
+- edge がまだデプロイされていなければ、wrangler は空の Worker `wtt-edge` を作ってから secret を入れる(3.3 で control のデプロイの前に secret を入れるのと同じ扱い)。2.4 のデプロイで中身が入る
+
+```bash
+openssl rand -base64 32 | pnpm -C apps/edge exec wrangler secret put RESULTS_VISITOR_KEY   # 鍵を作り、画面に出さずに edge の secret に入れる
+```
+
+確認:
+
+```bash
+grep -c '"binding": "RESULTS_DB"' apps/edge/wrangler.jsonc   # 期待: 1(RESULTS_DB の binding が 1 つ)
+grep -c 00000000-0000-0000-0000-000000000000 apps/edge/wrangler.jsonc || true   # 期待: 0(仮の ID が残っていない)
+pnpm -C apps/edge exec wrangler d1 list --json | jq -r '.[] | select(.name == "wtt-results") | .uuid'   # 期待: apps/edge/wrangler.jsonc に書いた database_id
+pnpm -C apps/edge exec wrangler secret list | jq -r '.[].name'   # 期待: RESULTS_VISITOR_KEY
+```
+
+期待と違うとき:
+
+- `wrangler d1 create` が `already exists` を含むエラーを返す → 前回の作業で作ったデータベースが残っている。`d1 list --json` の uuid を書く
+- `results:migrate:remote` がデータベースが見つからない旨のエラーで止まる → `database_id` を書いていないか、違う ID を書いている。上の確認の 3 行目と見比べる
+- `secret list` に `RESULTS_VISITOR_KEY` が無い → 鍵の登録をやり直す。登録の前に結果の送信を受けても、edge は書かずに数えるだけで、配信は止まらない
+
+**結果の記録の 1 日の予算(`apps/edge/wrangler.jsonc` の `vars`)**: 既定のままでよい。Cloudflare の Free の日次上限(D1 の書き込み 10 万行・読み取り 500 万行)はアカウント全体で `wtt-control` と分け合うので、結果の記録に使う量に上限を設けてある。守る順は「配信 > 管理操作(公開・終了など)> 結果の記録」で、予算を使い切った日は、次の UTC 0 時まで結果を記録しない(エクスペリエンスの配信は続く)。
+
+| キー | 既定 | 内容 |
+|---|---|---|
+| `RESULTS_WRITE_BUDGET` | `"70000"` | 結果の書き込みの 1 日(UTC)の上限の行数(インデックスの書き込みを含む)。D1 の書き込みの上限 10 万行のうち、残りを control と管理画面に残す |
+| `RESULTS_READ_BUDGET` | `"3000000"` | 結果の集計の読み取りの 1 日(UTC)の上限の行数(D1 の読み取りの上限は 500 万行) |
+| `RESULTS_LEASE_ROWS` | `"200"` | edge が予算から 1 回に受け取る行数。大きいほど予算の確認の回数が減るが、使われずに捨てる行が増える |
+
+- 値は正の整数を文字列で書く。`"0"`・数でない値・省略は既定値として扱う(0 にしても記録は止まらない。記録を止めるのはサイトの設定の「結果を記録する」)
+- `wrangler.jsonc` の `vars` は、デプロイのたびにダッシュボードで変えた値を上書きする。変えるときはこのファイルを直してデプロイする
+- 予算は導入全体で 1 つで、サイトごとには分けない。1 つのサイトへの送信が集中すると、ほかのサイトの記録もその日の残りは止まる
 
 ### 2.3 Route を書く
 
@@ -904,7 +979,7 @@ pnpm -C apps/control exec wrangler kv namespace list | jq -r '.[] | select(.titl
 
 パスごとの意味:
 
-- `/v1/*`(必須): decision / event。履歴条件または `persistAssignment` を使うサイト(`needsProfile`)で使う。目標はこのサイトでだけ `/event` にも送られる(目標だけでは `needsProfile` にならず、`ab_conversion` は `dataLayer` にのみ出る)。設置タグのファイルに edge の宛先(control の `AB_EDGE_ORIGIN`)が書き込まれるので、runtime はそこへ送る
+- `/v1/*`(必須): decision / event。履歴条件または `persistAssignment` を使うサイト(`needsProfile`)、または結果を記録するサイトで使う。目標は `needsProfile` のサイトでだけ `/event` にも送られる(目標だけでは `needsProfile` にならず、`ab_conversion` は `dataLayer` にのみ出る)。結果を記録するサイトでは、テストの参加と目標の達成を `needsProfile` に関係なく `/event` に送る。設置タグのファイルに edge の宛先(control の `AB_EDGE_ORIGIN`)が書き込まれるので、runtime はそこへ送る
 - `/s/*`: **edge には書かない**。設置タグのファイルは配信専用の Worker `wtt-static` が配る。`/s/*` を `wtt-static` に向けるのは 2.9
 - `/__ab/*`: Mode B(サーバー発行 Cookie。旧称 D-lite)のサイトを置く場合に追加する。パターンは `<ページのホスト>/__ab/*`(Mode B ではタグがページのホストへ相対 URL で送るため。[サイト導入ガイド 8 節](site-install.md#8-mode-c-と-mode-b))。Mode B の `/__ab/decision` は Cookie の無い要求のたびに新しい visitorId を発行するため、2.7 の WAF ルールを**必ず**作る(`edge_waf_rate_limit: false` を選ばない。Mode B はゾーンの Route が前提なので、ルールは常に作れる)
 
@@ -927,7 +1002,8 @@ pnpm -C apps/edge exec wrangler deploy
 
 補足:
 
-- 初回は Durable Objects の migration(`wrangler.jsonc` の `migrations[].tag`、`new_sqlite_classes: ["VisitorProfile"]`)を wrangler が自動で適用する。以後、クラス名を変えない限り tag は増やさない
+- 初回は Durable Objects の migration(`wrangler.jsonc` の `migrations[].tag`。`v1` = `VisitorProfile`、`v2` = 結果の記録の `ResultsBudget`・`ResultsHealth`。どれも `new_sqlite_classes`)を wrangler が自動で適用する。以後、クラス名を変えない限り tag は増やさない
+- 2.2 の計測用のデータベースの `database_id` が仮の ID のままならデプロイしない(2.2 の確認)
 - Rate Limiting binding は wrangler 4.36 以上が必要。`namespace_id` はアカウント内で一意な整数文字列
 
 確認: 出力の末尾に `Deployed wtt-edge triggers` と Route が 1 本(`/v1/*`。Mode B があればその分も)並べば OK。`workers-dev` では triggers に `https://wtt-edge.<アカウントのサブドメイン>.workers.dev` が 1 行出る。この URL が edge の公開 origin で、3.4 の `AB_EDGE_ORIGIN` に使う(設置タグの `src` のホストは 2.9 の `wtt-static` のアドレス)。
@@ -1041,6 +1117,8 @@ curl -sSI "https://<設置ホスト>/s/<siteId>.js" | grep -iE 'cache-control|cf
 
 **なぜ要るか**: `/v1/sites/*` と `/__ab/*` は無認証(Origin 検証のみ)で、パターン一致 URL とランダムな visitorId を送られると Visitor Profile が量産される。Workers の Rate Limiting binding は本番で実効しない実測がある([運用ガイド 7 節](operations.md#7-レート制限の実効))。そのため、実効的な防御はゾーン側のルールに置く。
 
+結果を記録するサイトの送信(テストの参加と目標の達成)も同じ `/v1/sites/*/event`(Mode B は `/__ab/event`)に届くので、このルールで受ける。結果の送信のために別のルールは作らない。
+
 #### 既定: API で作る(エージェントはこちら)
 
 `edge_waf_rate_limit: true`(既定)のとき。トークンは 2.6 と同じ `CF_TOKEN`(Zone → WAF → Edit を含む)。
@@ -1106,7 +1184,7 @@ echo "hit=$HIT"   # 期待: hit=1
 
 - 実サイトでは、正常な NAT 環境の通信を遮断しない水準(目安 100〜200 回 / 10 秒)に上げる。Free でも `requests_per_period` は変更できる
 - 自社オフィスなど既知の送信元は、式に `and not ip.src in { <IP> }` を足して除外できる
-- `needsProfile: false` のサイトは `/event` を送らないので decision も event も送られず、この上限に触れない
+- `needsProfile: false` のサイトは decision を送らない。`/event` も、結果を記録しないサイトなら送らないので、この上限に触れない。結果を記録するサイトは、テストの参加(訪問者 × テストで初回)と目標の達成(訪問者 × 目標で初回)を `/event` に送る(ページビューごとではない)
 - Cookie / ヘッダ単位のカウントや段階付けは Pro 以上
 
 429 は本文で判別する。`error code: 1015` は Cloudflare の遮断で、上の確認が検出するのはこの遮断。edge の binding が返す平文の 429 `rate limited` とは、本文で区別する。
@@ -1194,7 +1272,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置タグのホスト>/s/
 
 ## 3. control のデプロイ
 
-**control のデプロイより前に 2.9 を済ませる**(control は `wtt-deployer` への binding を持つので、`wtt-deployer` が無いとデプロイできない)。
+**control のデプロイより前に 2.4 と 2.9 を済ませる**(control は `wtt-deployer` への binding と、edge の Durable Object `ResultsBudget` への binding を持つ。`wtt-deployer` と、`ResultsBudget` を含む edge が無いとデプロイできない)。
 
 ### 3.1 D1
 
@@ -1203,6 +1281,8 @@ pnpm -C apps/control exec wrangler d1 create wtt-control </dev/null   # 2.2 と�
 ```
 
 出力される `database_id` を `apps/control/wrangler.jsonc` の `d1_databases[0].database_id` に反映する(ローカル / vitest は wrangler のローカル D1 を使うので値は問われない)。設定ファイルへの追記の問いは 2.2 と同じく **No**。
+
+ここで作るのは設定用の `wtt-control` だけ。計測用のデータベース `wtt-results` は 2.2 で作ってある。
 
 確認:
 
@@ -1328,7 +1408,7 @@ edge の公開 origin(必ず書く):
 | キー | 内容 |
 |---|---|
 | `CF_ACCOUNT_ID` | Cloudflare のアカウント ID(32 桁の 16 進。`pnpm -C apps/control exec wrangler whoami` の Account ID) |
-| `AB_USAGE_RESOURCES` | 内訳に出す本製品のリソース。`wrangler.jsonc` には文字列ではなく **JSON のオブジェクト**として書く。雛形は `d1` と `kv` が空の配列なので、本製品の D1 と KV を足す: `"d1": [{ "id": "<3.1 の database_id>", "name": "wtt-control" }]`、`"kv": [{ "id": "<2.2 の KV の id>", "name": "CONFIG_KV" }]`(`workers` は既定で `["wtt-edge", "wtt-control", "wtt-admin"]`)。設置タグを配る `wtt-static` と、デプロイ専用の `wtt-deployer`(2.9)も内訳に出すなら、その名前も `workers` に足す。`d1` が空のまま、または書いた ID がどのデータベースとも一致しないと、D1 の 1 データベースあたりの上限は「判定していません」と表示される |
+| `AB_USAGE_RESOURCES` | 内訳に出す本製品のリソース。`wrangler.jsonc` には文字列ではなく **JSON のオブジェクト**として書く。雛形は `d1` と `kv` が空の配列なので、本製品の D1 と KV を足す: `"d1": [{ "id": "<3.1 の database_id>", "name": "wtt-control" }, { "id": "<2.2 の計測用のデータベースの database_id>", "name": "wtt-results" }]`、`"kv": [{ "id": "<2.2 の KV の id>", "name": "CONFIG_KV" }]`(`workers` は既定で `["wtt-edge", "wtt-control", "wtt-admin"]`)。設置タグを配る `wtt-static` と、デプロイ専用の `wtt-deployer`(2.9)も内訳に出すなら、その名前も `workers` に足す。`d1` が空のまま、または書いた ID がどのデータベースとも一致しないと、D1 の 1 データベースあたりの上限は「判定していません」と表示される。`wtt-results` も書くのは、テストの結果の記録で大きくなるデータベースの容量を上限(Free は 1 データベース 500 MB)と比べるため |
 
 **`wrangler.jsonc` の `vars` は本番値を置く場所。** ローカル開発・テストは次の 3 か所で localhost 値に上書きする: `wrangler dev` は `apps/control/.dev.vars`(`.dev.vars.example` を写す)、vitest は `apps/control/vitest.config.ts` の `miniflare.bindings`、admin の E2E は `apps/admin/playwright.config.ts` の control 起動コマンドの `--var`。
 
@@ -1345,6 +1425,12 @@ deploy の回数:
 - 取れなかった場合だけ「1 回デプロイ → 出力の URL で 3.4 を書く → 再デプロイ」の 2 回になる
 - カスタムドメイン(7.1)に置くなら、先に 7.1 を済ませてから 3.4 を書く。`control_address: custom` の場合、`AB_CONTROL_URL` に使う URL は `https://<control_host>`(deploy の出力に workers.dev の URL も出るが使わない)
 
+Cron と edge への binding:
+
+- control は 15 分ごとの Cron Trigger(`*/15 * * * *`。`apps/control/wrangler.jsonc` の `triggers`)を 1 本持つ。Cron Trigger の数にはアカウントごとの上限がある(Free は 5 本)。この製品が使うのは、デプロイ専用の Worker の毎時の 1 本(2.9)と合わせて 2 本。deploy の出力の triggers に `schedule: */15 * * * *` が出る
+- この Cron は、使用状況の表示と同じ値(3.3 の `CF_USAGE_TOKEN`・3.4 の `CF_ACCOUNT_ID`)でアカウント全体の使用量を見る。Free で Workers のリクエストか D1 の書き込みの行数が日次上限の 8 割に届いたら、結果の記録を次の UTC 0 時まで止める(配信と管理操作に残りを残すため)。使用状況の設定が無いとき・取得に失敗したときは何もしない。Paid では判定しない
+- control は edge の Durable Object `ResultsBudget` を参照する(Worker をまたぐ binding)。そのため edge(2.4)を先にデプロイする。control だけを先にデプロイすると失敗する。更新(6.3)でも edge を先にデプロイする
+
 deploy の出力の URL が、0.5 で確定した control の URL(= Google に登録したリダイレクト URI の元)と一致することを確認する。違っていれば(0.5 でサブドメインが取れなかった場合を含む)**【人に依頼】** `<AB_CONTROL_URL>/auth/callback/google` を承認済みのリダイレクト URI に登録し直してもらう。後で control の URL を変えたときも同じ。
 
 確認:
@@ -1358,6 +1444,7 @@ curl -sS "<control URL>/llms.txt" -o /dev/null -w '%{http_code}\n'   # 期待: 2
 
 - deploy の直後(特に、0.5 で作ったばかりのサブドメインへの初回 deploy)に 404 や本文 `error code: 1042` が返る → 公開の反映待ち(数十秒)。**30 秒待ってから同じ確認をやり直す**。2 回目も同じなら、deploy の出力に `https://wtt-control.<サブドメイン>.workers.dev` の行があるかを確かめる(無ければ 0.5 のサブドメインの作成と、`wrangler.jsonc` に `workers_dev: false` が入っていないかを見る)
 - `d1:migrate:remote` が `✅ No migrations to apply` 以外の失敗で止まる → 3.1 の `database_id` を疑う
+- `wrangler deploy` が `wtt-edge` か `ResultsBudget` を含むエラーで失敗する → edge がまだデプロイされていないか、`ResultsBudget` を含まない古い edge のまま。2.4(更新では 6.3 の手順 1)で edge をデプロイしてからやり直す
 
 ### 3.6 公開アドレス
 
@@ -1588,7 +1675,7 @@ curl -sS "$AB_CONTROL_URL/me" -H "Authorization: Bearer $AB_API_KEY" | jq '{emai
 
 更新は `git pull` ではなく **tag から tag へ** 行う。流れ: 6.1 現在と目標の確認 → 6.2 取得 → 6.3 凍結を入れてデプロイ → 6.4 確認して凍結を外す。戻すときは 6.5。
 
-**edge → deployer → control → admin の順にデプロイする。** 理由: core の共有スキーマ(`SiteSettingsSchema` / `CompiledConfigSchema`)は `z.strictObject` で未知フィールドを拒否するため、逆順にすると古い edge が新しい形式の record を parse できず、当該サイトの decision / event が 404(fail-closed)になる。deployer も同じスキーマで検証してから設置タグのファイルを作るので、control より先に更新する。
+**edge → deployer → control → admin の順にデプロイする。** 理由: core の共有スキーマ(`SiteSettingsSchema` / `CompiledConfigSchema`)は `z.strictObject` で未知フィールドを拒否するため、逆順にすると古い edge が新しい形式の record を parse できず、当該サイトの decision / event が 404(fail-closed)になる。deployer も同じスキーマで検証してから設置タグのファイルを作るので、control より先に更新する。control は edge の Durable Object(`ResultsBudget`)を参照するので、この点でも edge が先になる。
 
 ### 6.1 現在と目標の確認
 
@@ -1606,11 +1693,11 @@ git tag --list 'v*' --sort=-v:refname | head -3   # 目標の tag(例 v1.0)
 
 `git show <目標 tag>:CHANGELOG.md` で現在 tag と目標 tag の間の項目を読み、次の 3 つがあるか確認する。6.3・6.4 では (a)(b)(c) として参照する:
 
-- (a) **マイグレーション**(`apps/control/migrations` の追加)
+- (a) **マイグレーション**(`apps/control/migrations` か、計測用のデータベースの `apps/edge/results-migrations` の追加)
 - (b) **サイト設定のフィールド追加**(既存サイトの record を書き直す必要)
 - (c) **runtime の変更**
 
-CHANGELOG に次の目印があるリリースは、6.3 の該当する項も読む: 「配る設定の版(`schemaVersion`)が上がる」「システム管理者を導入する」「パスワード再設定リンクの発行条件が変わる」。パスワードでログインしていた版からの更新も 6.3 に項がある。
+CHANGELOG に次の目印があるリリースは、6.3 の該当する項も読む: 「配る設定の版(`schemaVersion`)が上がる」「システム管理者を導入する」「パスワード再設定リンクの発行条件が変わる」「計測用のデータベースを足す」。パスワードでログインしていた版からの更新も 6.3 に項がある。
 
 ### 6.2 取得
 
@@ -1651,9 +1738,22 @@ pnpm install
 - 代わりに、手順 0 の前に管理画面の利用者とエージェントに書き込みを止めてもらい、進行中の操作が終わってから手順 0 に進む
 - 6.4 の読み取りの確認が成功し、admin の deploy を終えるまで止めてもらったままにする。その後に書き込みを再開してもらう。6.4 の「外す」の手順は飛ばす
 
+**計測用のデータベースを足すリリースの更新**(CHANGELOG の目印「計測用のデータベースを足す」。この 1 回だけ): 新しい版の edge は計測用のデータベース `wtt-results` と鍵 `RESULTS_VISITOR_KEY` を使う。下の手順 0(控え)の後、`pnpm runtime:build` と手順 1(edge)の前に、2.2 の「計測用のデータベース」を上から行う。順は次のとおりで、新規の導入(2.2 → 2.4)と同じ:
+
+1. `wrangler d1 create wtt-results` で作り、`apps/edge/wrangler.jsonc` の `database_id` を書き換える(6.2 で戻した設定ファイルには、新しい版の仮の ID が入っている)
+2. `pnpm -C apps/edge results:migrate:remote` で表を作る
+3. `RESULTS_VISITOR_KEY` を登録する
+4. 2.2 の確認のブロックを流す
+5. 下のコマンドの `pnpm runtime:build` から続ける(`pnpm -C apps/edge results:migrate:remote`(2 で済んでいるので "No migrations to apply")→ edge → deployer → `pnpm -C apps/control d1:migrate:remote` → control → admin)
+
+- 3.4 の `AB_USAGE_RESOURCES` の `d1` にも `wtt-results` を足しておく(control のデプロイの前)
+- control は計測用のデータベースが無くても動く。サイトの設定の「結果を記録する」を有効にできない(`409 results_store_missing`)だけで、ほかの機能は壊れない。更新しても、既存のサイトの「結果を記録する」は無効のまま
+- control だけを先にデプロイすると失敗する(edge の `ResultsBudget` を参照するため。3.5)
+
 ```bash
 pnpm -C apps/control exec wrangler d1 export wtt-control --remote --output "deploy-backups/wtt-control-$(date -u +%Y%m%dT%H%M%SZ).sql"   # 0. 更新前の控え(必須。10.1。mkdir -p deploy-backups を先に)
 pnpm runtime:build                                   # (c) が無くても実行してよい(冪等)
+pnpm -C apps/edge results:migrate:remote             # 0.5 計測用のデータベースの (a) があれば。無ければ "No migrations to apply"(冪等)
 pnpm -C apps/edge exec wrangler deploy               # 1. edge
 pnpm -C apps/deployer exec wrangler deploy           # 1.5 デプロイ専用の Worker(更新のたびに `wrangler deploy` する。secret と `wtt-static` の作成は 2.9 で 1 回済ませてあるので繰り返さない。配信ファイルの作り直しは自動で、次の公開か 1 時間以内)
 pnpm -C apps/control d1:migrate:remote               # 2. (a) があれば。無ければ "No migrations to apply"
@@ -1735,12 +1835,18 @@ curl -sS -X POST "<control URL>/workspaces" | jq -r '.error'   # 期待: "unauth
 
 ただし (a) のマイグレーションは戻せない(D1 のスキーマは進んだまま)。戻す前に `CHANGELOG.md` でそのマイグレーションが後方互換かを確認し、後方互換でない、またはデータが壊れたときは、D1 を更新前の時点に戻す(10.2 の Time Travel。手順 0 の export からの読み戻しは 10.3)。
 
+**計測用のデータベースを足すリリースより前の版へ戻すとき**(CHANGELOG の目印「計測用のデータベースを足す」): edge だけは戻さず、新しい版のまま残す。ほかの Worker(deployer・control・admin)は前の版に戻してよい。
+
+- 理由: 新しい版の edge は Durable Object の `ResultsBudget` と `ResultsHealth` を足している。前の版の edge はこの 2 つを持たない。Cloudflare は、使われている Durable Object を消す版のデプロイを、消すためのマイグレーションの指定が無いと受け付けないことがある(実機では確かめていない)
+- 新しい版の edge は、前の版の control・前の版の設置タグ・結果の設定が無い配る設定と組み合わせても動く。結果の送信が無ければ、計測用のデータベースに何も書かない
+- 新しい版の control も edge の `ResultsBudget` を参照している。control を新しい版のまま残すときも、edge は新しい版でなければならない
+
 ### 6.6 書き込みの凍結(メンテナンス中)
 
 更新・データベースを戻す作業・SQL での修復の間、管理画面と API からの変更操作を止める。
 
 - 止まるもの: ログイン以外の変更操作(保存・公開・エクスペリエンスの開始と一時停止・招待の受諾など)。`503 write_frozen` になる
-- 止まらないもの: 読み取り・ログイン・配信条件の確認(`POST /sites/{sid}/evaluate`)・訪問者への配信
+- 止まらないもの: 読み取り・ログイン・配信条件の確認(`POST /sites/{sid}/evaluate`)・訪問者への配信・テストの結果の記録(訪問者の送信は edge が受け、計測用のデータベースに書く)
 - 管理画面の全ページに「メンテナンス中」のバナーが出る。開いたままの画面にも 1 分ほどで出て、外すと 1 分ほどで消える
 - 凍結は入れた人がコマンドで外すまで続く。再開の見込みの時刻を過ぎても自動では外れない
 
@@ -1762,6 +1868,8 @@ curl -sS -X POST "<control URL>/workspaces" | jq '{error, hint}'   # 期待: err
 ```
 
 1 分の意味と限界: 1 分は通常の処理が終わる目安で、保証ではない。まれに 1 分を過ぎて書き込みが届いても、データベースの控えを取る間は他の要求が待たされる。そのため控えは一時点のまま取れ、その書き込みは控えに入らない。
+
+control の Cron(15 分ごと。3.5)も、`wtt-control` に書く前に毎回凍結を確かめ、凍結中ならそこで止まる。凍結の後に残りうる Cron の書き込みは、確かめた直後の 1 回だけになる。1 分が目安で保証ではないのは、ほかの書き込みと同じ。使用量で結果の記録を止める処理は `wtt-control` に書かないので、凍結中も動く(メンテナンス中も訪問者の送信は続くため)。
 
 マイグレーションは 1 ファイルの中では割り込まれない。ただし、ファイルとファイルの間や、マイグレーションの後に、更新前の版の処理が書くことはあり得る。まれに、そうした遅れた書き込みでデータが食い違うことがある(例: 公開の履歴に無い版の番号が公開中になる)。
 
@@ -1997,6 +2105,8 @@ GA4 の DebugView で `ab_exposure` イベントが届くことを確認する�
 
 - 運用データの原本は **D1(`wtt-control`)**。KV の公開済み config と R2 の画像はそこから作り直せる(KV は公開で、R2 の画像は再アップロードで)
 - Durable Objects の Visitor Profile(訪問者の割当と履歴)は列挙も複製もできないので、バックアップの対象にしない。失われても割当はハッシュで同じパターンに戻り、履歴条件だけが最初からになる
+- 計測用のデータベース(`wtt-results`)にあるのは、テストの参加者ごとの記録(個票)だけ。サイト・エクスペリエンスの設定と、固定した結果の記録は `wtt-control` にある。`wtt-results` も Time Travel で過去の時点に戻せる(10.2 のコマンドの `wtt-control` を `wtt-results` に読み替える。凍結と KV の整合の手順は要らない)
+- 個票を消しても(保持期間の削除・同意の撤回による削除)、D1 の Time Travel の保持期間(Workers Free は 7 日、Workers Paid は 30 日)のあいだは過去の時点として残り、運用者が取った export(10.1)にも残る
 
 ### 10.1 手元バックアップ(`wrangler d1 export --remote`)
 
@@ -2086,25 +2196,26 @@ pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --com
 
 ### 10.4 撤去(導入全体を消す)
 
-Cloudflare アカウントから本ツールをすべて取り除く。**取り消せない**ので、必要なら先に 10.1 の export を取る。順序は「訪問者に見える側から」= 設置サイトのタグ → edge → admin → control → データ → ゾーンのルール → 外部の資格情報。
+Cloudflare アカウントから本ツールをすべて取り除く。**取り消せない**ので、必要なら先に 10.1 の export を取る。順序は「訪問者に見える側から」= 設置サイトのタグ → admin → control → edge → データ → ゾーンのルール → 外部の資格情報(edge は、edge の Durable Object を参照する control の後に消す)。
 
 1. **【人が行う】設置サイトからタグを外す**(GTM のタグを一時停止して公開、または `<script src=".../s/<siteId>.js">` を削除)。先に Worker を消すと、タグが残ったページで設置タグのファイルが 404 / 522 になる(ページ自体は壊れない: 読み込みに失敗しても元のページが出るだけ)
 2. Worker を 5 つ消す。Route・Custom Domain・Durable Objects(Visitor Profile の全データ)は Worker と一緒に消える。`wtt-deployer` を消すと設置タグのファイルの作り直しが止まるので、`wtt-static` より後に消す:
 
 ```bash
-pnpm -C apps/edge exec wrangler delete                        # wtt-edge。Route と DO を含む
 pnpm -C apps/admin exec wrangler delete --config dist/server/wrangler.json    # wtt-admin(dist が無ければ先に pnpm -C apps/admin build。または --config を付けず wrangler delete wtt-admin)
-pnpm -C apps/control exec wrangler delete                     # wtt-control。secret(BETTER_AUTH_SECRET など)も一緒に消える。deploy 用の Worker への binding もこれで外れる
+pnpm -C apps/control exec wrangler delete                     # wtt-control。secret(BETTER_AUTH_SECRET など)も一緒に消える。deploy 用の Worker と edge の Durable Object への binding もこれで外れる
+pnpm -C apps/edge exec wrangler delete                        # wtt-edge。Route と DO(結果の記録の予算を含む)と secret(RESULTS_VISITOR_KEY)を含む
 pnpm -C apps/deployer exec wrangler delete wtt-static         # 配信専用の Worker。設置タグのファイルと Route も消える(`wrangler deploy` では作っていない Worker なので、名前を明示する)
 pnpm -C apps/deployer exec wrangler delete                    # wtt-deployer。secret(CF_DEPLOY_TOKEN)と Durable Objects も一緒に消える
 ```
 
-それぞれ `y` で確認する。期待: `Successfully deleted <name>`。DO を持つ edge で `--force` を求められたら、付けて再実行する(依存する Worker は無い)。
+それぞれ `y` で確認する。期待: `Successfully deleted <name>`。DO を持つ edge で `--force` を求められたら、付けて再実行する(edge の Durable Object を参照する control は先に消してある)。
 
 3. データを消す:
 
 ```bash
 pnpm -C apps/control exec wrangler d1 delete wtt-control                                  # D1(Time Travel の履歴ごと消える)
+pnpm -C apps/edge exec wrangler d1 delete wtt-results                                     # 計測用のデータベース(個票。Time Travel の履歴ごと消える)
 pnpm -C apps/control exec wrangler kv namespace delete --namespace-id <apps/edge/wrangler.jsonc の kv_namespaces[0].id>   # KV
 pnpm -C apps/control exec wrangler r2 bucket delete wtt-assets                            # R2(R2 を使っていた構成のみ)
 ```

@@ -3,7 +3,7 @@ import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test"
 import { sql } from "kysely";
 import { expect, vi } from "vitest";
 import { kvKeys, SITE_REMOVED_SEQ, type StaticDeployer, type StaticDeployRequest, type StaticDeployResult, type StaticGeneration, type StaticRemoveRequest, type StaticSiteStatus } from "@wtt/core";
-import app from "../src/index";
+import { app } from "../src/index";
 import { getDb, type ExperimentRow, type SiteRow } from "../src/db";
 import type { Env } from "../src/env";
 import { ErrorEnvelopeSchema } from "../src/openapi";
@@ -23,9 +23,16 @@ export async function alignToWindow() {
 
 /**
  * テストの env。wrangler.jsonc の services から vitest が作る DEPLOYER(本物の wtt-deployer を指す binding)は
- * 外す(出し直しは skipped)。偽物は必要なテストだけ envOverride(または `{ ...testEnv, DEPLOYER: fake }`)で入れる(7i)
+ * 外す(出し直しは skipped)。偽物は必要なテストだけ envOverride(または `{ ...testEnv, DEPLOYER: fake }`)で入れる(7i)。
+ * 計測用 D1(RESULTS_DB)も既定で外す(D9 ② の本番の control と同じ「無い」状態。plan ② の K21)。有りにするのは `testEnvWith({ resultsStore: true })` か envOverride の RESULTS_STORE
  */
-export const testEnv = { ...env, DEPLOYER: undefined } as unknown as Env;
+export function testEnvWith(opts: { resultsStore?: boolean } = {}): Env {
+  return { ...env, DEPLOYER: undefined, RESULTS_DB: opts.resultsStore ? env.RESULTS_DB : undefined } as unknown as Env;
+}
+export const testEnv = testEnvWith();
+
+/** D9 ②: 計測用 D1 がある導入にする envOverride(`call(…, { envOverride: RESULTS_STORE })`) */
+export const RESULTS_STORE: Partial<Env> = { RESULTS_DB: env.RESULTS_DB };
 
 export type CallOpts = { token?: string; body?: unknown; headers?: Record<string, string>; envOverride?: Partial<Env>; raw?: BodyInit };
 

@@ -50,6 +50,9 @@ export const SiteSettingsSchema = z
     retentionDays: z.number().int().min(1).max(3650).default(90),
     // spec §16 / 決定 37: 撤回時に runtime が forget を送り DO を deleteAll する。off = Retention に委ねる
     forgetOnRevoke: z.boolean().default(true),
+    // 設計書 §5.3 / D9 ② K7: 結果の収集の締め切り(runId → epoch ミリ秒)。この時刻以降のその run への参加・CV は edge が捨てる。
+    // 無い run = 締め切りなし。bootstrap には焼かない(toRuntimeSettings に入れない)。値を書くのは D9 ③ の control
+    resultsCollectUntil: z.record(z.string(), z.number().int().min(0)).optional(),
   })
   .refine((s) => s.visitorCookieName !== s.uuidCookieName, { message: "visitorCookieName and uuidCookieName must differ" })
   // spec §4(決定 1): Mode B の BYOID は Bridge フック(Phase 2)。MVP では併用不可(r2 CX-Medium-10)

@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import { app } from "../src/index";
 import { getAuth } from "../src/auth";
 import type { Env } from "../src/env";
 import { TEST_FLOW, call, expectEnvelope, failingD1Insert, googleCallback, googleSignIn, googleStart, json, setupOwner, setupReq, uniqueEmail } from "./helpers";
