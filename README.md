@@ -1,5 +1,7 @@
 # AB Test and Target Harness
 
+[![CI](https://github.com/AnalyticsDesign/ab-test-and-target-harness/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AnalyticsDesign/ab-test-and-target-harness/actions/workflows/ci.yml)
+
 自分の Cloudflare アカウントにデプロイして使う、OSS の Web A/B テスト / パーソナライズツール。役割は 3 つに分かれている。
 
 - 管理: エクスペリエンスの作成と運用は、管理画面(Cloudflare Workers)で行う
