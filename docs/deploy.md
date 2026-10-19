@@ -377,6 +377,7 @@ curl -s https://<設置ホスト>/s/<siteId>.js | head -c 400
 | ダッシュボードで Workers Paid に切り替える | `plan: paid` で、アカウントがまだ Free のとき。0.5 で一度に |
 | ダッシュボードの Workers & Pages を一度開く | 0.5 でサブドメインを API で作れなかったときだけ |
 | 更新時の設定の再保存 | 6.4 で (b) があるとき |
+| ゾーンのレート制限ルールの式の書き換え・回数の変更(Free で 1 本のルールをほかの用途と分け合うとき) | 2.7 で既存のルールに OR で足すとき、7.2 で control のパスを足して 1 本にしたルールの回数を変えるとき |
 | 撤去時の R2 の中身の削除、OAuth クライアント・API トークン・Access の削除 | 10.4 |
 
 **ダッシュボードの画面名の書き方**(この文書と、エージェントが人に示す依頼文の両方):
@@ -1159,8 +1160,8 @@ curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/http_r
 - `could not find entrypoint ruleset` または `rules: []` → 下の PUT で作る
 - 既にルールが 1 本あり、式に `/v1/sites/` が無い → Free プランでは枠が無い。運用者に「既存ルールに OR で `/v1/sites/` と `/__ab/` を足す」か「作らない(`edge_waf_rate_limit: false`)」かを聞く
   - 作らないを選んだら、`deploy-answers.yaml` の `edge_waf_rate_limit` を `false` にする(後の更新で WAF の有無を決めるのがこのキーなので、6.2)。あわせて `apps/edge/wrangler.jsonc` の `limit` を 2.3 の WAF が無い構成の値(`edge_waf_requests_per_10s`)に書き直し、edge を deploy し直す。2.3 では WAF がある構成の値(1000)を書いているため
-  - OR で足すなら、しきい値はその既存ルールの回数になる。binding はその回数と 2.3 の規則で比べる
-- 式に `/v1/sites/` が既にある → 作らずに終わる(再実行時)
+  - OR で足すなら、しきい値はその既存ルールの回数になる。binding はその回数と 2.3 の規則で比べる。足すのは、**【人に依頼】** ダッシュボードでそのルールを開いて式を書き換えてもらう(下の PUT はレート制限ルールを丸ごと置き換えるので、既存のルールが消える)
+- 式に `/v1/sites/` が既にある → 作らずに終わる(再実行時)。式に `/setup` も含まれる(7.2 で control のパスを足して 1 本にした Free のルール)なら、回数を変えるときも下の PUT を使わない。PUT で置き換えると control のパスが消える。**【人に依頼】** ダッシュボードでそのルールを開いて回数を変えてもらう
 
 ```bash
 RL=$(cat <<JSON
@@ -1982,7 +1983,7 @@ Workers 内の Rate Limiting binding は本番で実効していなかった実�
 | 選択 | 向く相手 | 前提 | コード変更 |
 |---|---|---|---|
 | (1) 何もしない(`*.workers.dev` のまま) | 個人利用、管理者 1 人 | なし(パスワードの経路は普段閉じており、総当たりの標的が無い。本人確認と多要素認証は Google 側) | なし |
-| (2) ゾーンの WAF Rate Limiting Rules | 小規模チームの標準 | control をカスタムドメインに置く(7.1) | なし |
+| (2) ゾーンの WAF Rate Limiting Rules | 小規模チームの標準 | control をカスタムドメインに置く(7.1)。Free のゾーンでは、同じゾーンのほかのサイトが control と同じパスを使っていないこと(7.2) | なし |
 | (3) Cloudflare Access(単独または (2) と併用) | 外部エージェントに API を呼び出させる、到達自体を絞りたい | カスタムドメイン(7.1)+ サービストークン対応 | admin / エージェント経路に小変更(将来) |
 
 3 つは互いに干渉しない。(1) で始めて後から (2)(3) へ移るコストは小さい(7.1 の作業 + `AB_CONTROL_URL` の差し替えだけで、ユーザー・API キー・公開履歴は引き続き使える。招待 / リセットのリンクは `AB_ADMIN_URL` 側なので影響しない)。
@@ -2021,14 +2022,54 @@ Workers 内の Rate Limiting binding は本番で実効していなかった実�
 
 ### 7.2 (2) WAF Rate Limiting Rules
 
-Free プランでも 1 ルール使える(条件は IP 単位、期間 10 秒固定)。edge 用のルール(2.7)と枠を取り合う点に注意する:
+ルールの本数と、条件に使える項目は、ゾーンのプランで違う(Cloudflare の文書 [Rate limiting rules](https://developers.cloudflare.com/waf/rate-limiting-rules/) の Availability の表。2026-10-20 に確認):
 
-- Free で両方が要るなら、条件式を OR で結合した 1 本にする。しきい値は edge と共通(2.7 の値)になる。control 側でこれ以上絞りたいなら (3) Access を足す
+| プラン | 本数 | 条件に使える項目 |
+|---|---|---|
+| Free | 1 | パスと Verified Bot だけ。**ホスト名は使えない** |
+| Pro | 2 | ホスト名・パス・URI・クエリ・Verified Bot |
+| Business | 5 | Pro の項目 + メソッド・送信元 IP・User Agent |
+
+数える単位は Free と Pro では IP だけ。期間は Free では 10 秒に決まっている。
+
+**Free の注意**: ホスト名で絞れないので、下の control のパスの条件は、ゾーンのすべてのホストへの要求で数える。同じゾーンに会社のサイトなどほかのホストがあり、そこで同じパスを使っていると、そのサイトへの要求も数える。しきい値を超えた IP からは、そのサイトのそのパスへの要求も遮断される(そのサイトのほかのパスは遮断されない)。Free で使う前に、下の「Free で使う前の確認」を行う。
+
+edge 用のルール(2.7)と枠を取り合う点に注意する:
+
+- Free で両方が要るなら、新しいルールは作れない。2.7 のルールの条件式に、control のパスを OR で足して 1 本にする(手順 2 の Free の式)。しきい値は edge と共通(2.7 の値)になる。edge と control への要求は IP ごとに合わせて数えるので、会社の拠点などで訪問者の閲覧がしきい値を超えると、同じ IP の管理者のログインも遮断される(逆も同じ)。1 本にした後は、2.7 の API の PUT を流し直さない(ルールが edge の式だけで置き換わり、control のパスが消える)。control 側でこれ以上絞りたいなら (3) Access を足す(admin の対応の後。7.3)
 - 別々のしきい値が要るなら Pro 以上(Pro は 2 本まで)
 - 専用のルールを持てるなら(別のゾーン、または Pro 以上)、50 回 / 10 秒にする。WAF は経路を区別せずに数え、Google ログインは開始と戻りで 1 人 2 回になる。50 なら、同じ拠点から 10 秒に約 25 人がログインできる(研修などの一斉ログインの目安)
 
-1. ダッシュボード → 対象ゾーン → Security(セキュリティ)→ Security rules(セキュリティ ルール)→ Create rule(ルールを作成)→ **Rate limiting rules(レート制限ルール)**
-2. 条件: `Hostname equals control.<運用者ドメイン>` かつ `URI Path starts with /auth/` **または** `URI Path equals /setup` **または** `URI Path contains /accept` **または** `URI Path equals /break-glass/reset-link`(Edit expression(式を編集)で OR の式に書く)。最後の 1 つは非常用トークンを照合する入口で、`/auth/` にも `/setup` にも当たらないので明示的に足す(`/login-options` は秘密を扱わない読み取りなので足さない)
+#### Free で使う前の確認
+
+1. ゾーンでプロキシが有効なホストを一覧にする。ダッシュボード → 対象ゾーン → DNS → Records(レコード)で、Proxy status(プロキシ ステータス)がプロキシ(オレンジの雲)の行がそれに当たる。プロキシが無効(DNS only(DNS のみ))のホストは、WAF を通らないので数えない
+2. この製品のホスト(control・edge・設置タグの配信・admin)以外の各ホストで、次のパスを使っていないかを、そのサイトの担当者に確かめる(サイトのルーティングの設定やサイトマップで探してもらう): `/auth/` で始まるパス・`/setup`・`/invitations/` で始まるパス・`/break-glass/reset-link`。手早い目安として `curl -sS -o /dev/null -w '%{http_code}\n' https://<ホスト>/setup` が 404 なら、`/setup` は使われていない。ただし `/auth/` や `/invitations/` で始まるパスの有無はこれでは分からないので、担当者への確認は省かない。admin を同じゾーンに置いた場合、admin にも `/setup` の画面があるが、最初の導入のときにだけ使う画面なので、数えられても困らない
+3. どのホストでも使っていなければ、下の手順で Free の式を書く
+4. 使っているホストがあれば、次から選ぶ:
+   - control のパスを WAF に入れない。control の無認証の入口の制限は、control の Rate Limiting binding(`AUTH_RATE_LIMITER`。経路ごと・IP 単位で 30 回 / 10 秒)だけになる。この binding の本番での効き方は限定的([運用ガイド 7 節](operations.md#7-レート制限の実効))なので、(1) と同じ扱いにして、7.0 の必須条件を守る。入力ファイルの `control_protection` は `none` にする
+   - (3) Access に任せる(7.3)。入力ファイルの `control_protection` は `access` にする。ただし、admin の BFF がサービストークンを付ける対応はまだ無い。いま control に Access を掛けると、管理画面から control に届かなくなるので、この案は admin の対応の後に選べる
+   - ゾーンを Pro 以上にして、手順 2 の Pro 以上の式(ホスト名の条件つき)を書く
+   - control を、ほかのサイトを置いていない別のゾーン(別のドメイン)に置く(7.1)。そのゾーンの 1 本を control 専用に使える
+
+#### 手順
+
+1. ダッシュボード → 対象ゾーン → Security(セキュリティ)→ Security rules(セキュリティ ルール)→ Create rule(ルールを作成)→ **Rate limiting rules(レート制限ルール)**。Free で 2.7 のルールを作ってあるなら、新しく作らずに、そのルールを開いて条件を書き換える
+2. 条件(Edit expression(式を編集)で書く):
+   - **Pro 以上**: ホスト名の条件とパスの条件を `and` でつなぐ。パスの 4 つは括弧でくくる(括弧が無いと `and` が先に結びつき、後ろの 3 つがゾーンのすべてのホストに掛かる)
+
+     ```text
+     (http.host eq "control.<運用者ドメイン>") and (starts_with(http.request.uri.path, "/auth/") or http.request.uri.path eq "/setup" or starts_with(http.request.uri.path, "/invitations/") or http.request.uri.path eq "/break-glass/reset-link")
+     ```
+
+   - **Free**: ホスト名を書かず、パスだけで書く。2.7 のルールと 1 本にするときは、次の式で 2.7 の式を置き換える(前半の 2 つが 2.7 の式)。2.7 のルールが無く control だけで使うなら、後半の 4 つだけにする
+
+     ```text
+     (starts_with(http.request.uri.path, "/v1/sites/")) or (starts_with(http.request.uri.path, "/__ab/")) or (starts_with(http.request.uri.path, "/auth/")) or (http.request.uri.path eq "/setup") or (starts_with(http.request.uri.path, "/invitations/")) or (http.request.uri.path eq "/break-glass/reset-link")
+     ```
+
+     招待の受諾の入口は、`/accept` を含むパスではなく `/invitations/` で始まるパスで書く(Pro 以上の式も同じ)。Free ではゾーンのすべてのホストで数えるので、ほかのサイトでも使われやすい `/accept` を含むパスを広く対象にしないため。admin の画面の内部の経路にも `/accept` を含むものがある。control の `/invitations/` の下にあるのは、招待の内容の表示と受諾だけで、どちらも無認証の入口
+
+   `/break-glass/reset-link` は非常用トークンを照合する入口で、`/auth/` にも `/setup` にも当たらないので明示的に足す(`/login-options` は秘密を扱わない読み取りなので足さない)
 3. 同一 IP から 10 秒あたり、上の値(edge と 1 本にするなら 2.7 の値、専用のルールなら 50 回)を超えたら Block(Block の継続時間は選べる範囲で最短にする)
 4. 保存後にスモーク: 誤ったトークンの `POST /setup` を 50 並列で、30 秒を上限に繰り返す。本文が `error code: 1015` の 429(Cloudflare の遮断)が出れば有効。control の封筒の 429 `rate_limited` は control の binding の遮断なので数えない。そのため、状態コードではなく本文で判定する
 
