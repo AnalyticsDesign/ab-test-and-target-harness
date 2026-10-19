@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BREAK_GLASS, call, createExperiment, createSite, expectEnvelope, inviteAndJoin, json, setupOwner } from "./helpers";
+import { alignToWindow, AUTH_RATE_LIMIT, BREAK_GLASS, call, createExperiment, createSite, expectEnvelope, inviteAndJoin, json, setupOwner } from "./helpers";
 
 /**
  * 決定 34: 代表的な status ごとに `{ error, message }` の封筒を持つことを 1 箇所で固定する。
@@ -39,18 +39,16 @@ describe("error envelope contract", () => {
         call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id: "Bad ID", name: "x", domain: "x.example.com" } })],
       // content-type 無しの壊れた body は validator が読まずに素通しするので、空 object として 422 になる(400 ではない)
       [422, "validation_failed", () => call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, raw: "{not json" })],
-      // 無認証の POST 6 経路は経路ごとに IP 単位で 10 回 / 10 秒。11 回目が 429(枠の作り自体は auth.test.ts が固定する)
+      // 無認証の POST 6 経路は経路ごとに IP 単位で 30 回 / 10 秒。31 回目が 429(枠の作り自体は auth.test.ts が固定する)
       [429, "rate_limited", async () => {
-        // Rate Limiting binding の枠は period 秒ごとの壁時計固定枠(miniflare 実装)。境界をまたぐと数え直しになる
-        const PERIOD_MS = 10_000;
-        const remaining = PERIOD_MS - (Date.now() % PERIOD_MS);
-        if (remaining < 5_000) await new Promise((r) => setTimeout(r, remaining + 50));
+        // Rate Limiting binding の枠は period 秒ごとの壁時計固定枠(miniflare 実装)。境界をまたぐと数え直しになるので窓の頭から始める
+        await alignToWindow({ fresh: true });
         let last!: Response;
-        for (let i = 0; i < 11; i++)
+        for (let i = 0; i < AUTH_RATE_LIMIT + 1; i++)
           last = await call("POST", "/invitations/inv_missing/accept", {
             body: { name: "x", password: "password123" },
             headers: { "cf-connecting-ip": "203.0.113.77" },
-            envOverride: BREAK_GLASS, // 枠そのものを試すので、パスワード経路を開けた状態で 11 回叩く(決定 46 (2))
+            envOverride: BREAK_GLASS, // 枠そのものを試すので、パスワード経路を開けた状態で 31 回叩く(決定 46 (2))
           });
         return last;
       }],
@@ -66,7 +64,7 @@ describe("error envelope contract", () => {
       // hint はあるが message が無く、code がそのまま出ていた回帰の再発防止)
       expect(body.message, `status ${status} (${code}): message が code そのまま`).not.toBe(code);
     }
-  }, 20_000); // 429 の枠の境界待ち(最大 5 秒)+ 11 回の試行
+  }, 30_000); // 429 の窓の待ち(最大 10 秒)+ 31 回の試行
 
   it("validation failures carry a machine-readable path and issues", async () => {
     const owner = await setupOwner();

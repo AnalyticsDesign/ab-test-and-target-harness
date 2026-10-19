@@ -50,6 +50,30 @@ else {
   for (const k of ["features", "daily_pv", "image_upload", "cloudflare_account", "existing_plan", "site_on_cloudflare", "install_host", "other_workers", "owner_email", "edge_address", "zone_name", "asset_public_base", "dlite_hosts", "plan", "accepted", "release_tag", "control_address", "control_host", "control_protection", "edge_waf_rate_limit", "edge_waf_requests_per_10s", "asset_max_mb", "admin_address", "admin_host"]) {
     if (!new RegExp(`^#? ?${k}:`, "m").test(y)) problems.push(`${ANSWERS_EXAMPLE}:0 answers-key: 項目 ${k} が無い`);
   }
+  // レート制限の既定どうしの関係(7q / K6)。数値は正規表現で抜き出す(JSONC は構文解析しない)。抜き出せないときも黙って通さない
+  // (1) 答えのファイルの edge_waf_requests_per_10s と、デプロイガイドの LIMIT= は同じ値
+  // (2) 開発側(release/overlay がある)だけ、ひな形の edge の binding の既定が max(1000, その値) 以上。公開リポジトリには release/ が無く、
+  //     apps/edge/wrangler.jsonc は導入する人が自分の値を書くファイルなので比べない
+  const DEPLOY_GUIDE = "docs/deploy.md";
+  const EDGE_OVERLAY = "release/overlay/apps/edge/wrangler.jsonc";
+  const RL = "rate-limit-default";
+  const answerN = /^#? ?edge_waf_requests_per_10s:\s*(\d+)/m.exec(y)?.[1];
+  if (answerN === undefined) problems.push(`${ANSWERS_EXAMPLE}:0 ${RL}: edge_waf_requests_per_10s の値(数字)を読み取れない`);
+  const guideN = existsSync(join(root, DEPLOY_GUIDE)) ? /^LIMIT=(\d+)/m.exec(readFileSync(join(root, DEPLOY_GUIDE), "utf8"))?.[1] : undefined;
+  if (guideN === undefined) problems.push(`${DEPLOY_GUIDE}:0 ${RL}: 行頭の LIMIT=<数字> を読み取れない`);
+  if (answerN !== undefined && guideN !== undefined && answerN !== guideN) {
+    problems.push(`${DEPLOY_GUIDE}:0 ${RL}: ${ANSWERS_EXAMPLE} の edge_waf_requests_per_10s(${answerN})とデプロイガイドの LIMIT(${guideN})は同じ値にする`);
+  }
+  if (existsSync(join(root, EDGE_OVERLAY))) {
+    const bindingN = /"name":\s*"DECISION_RATE_LIMITER"[^\n]*?"limit":\s*(\d+)/.exec(readFileSync(join(root, EDGE_OVERLAY), "utf8"))?.[1];
+    if (bindingN === undefined) problems.push(`${EDGE_OVERLAY}:0 ${RL}: DECISION_RATE_LIMITER の limit(数字)を読み取れない`);
+    else if (answerN !== undefined) {
+      const need = Math.max(1000, Number(answerN));
+      if (Number(bindingN) < need) {
+        problems.push(`${EDGE_OVERLAY}:0 ${RL}: edge の Rate Limiting binding の既定(${bindingN})は、1000 と WAF の回数(${answerN})の大きいほう(${need})以上にする。WAF の後ろで止めにくくするため`);
+      }
+    }
+  }
 }
 for (const f of explicit ?? REQUIRED) if (!existsSync(join(root, f))) problems.push(`${f}:0 missing-file: ${explicit ? "指定されたファイル" : "必須文書"}が存在しない`);
 const files = (explicit ?? defaultFiles).filter((f) => existsSync(join(root, f)));

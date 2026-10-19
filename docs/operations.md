@@ -320,13 +320,13 @@ CUSTOM_JS だけのパターンが CSP でブロックされると、**処理群
 
 ### edge(訪問者のブラウザが直接叩く経路)
 
-`/v1/sites/*`(decision / event)に **IP あたり 20 回 / 10 秒**の Rate Limiting binding を掛けている。**Mode B(サーバー発行 Cookie)の `/__ab/*` は binding の対象外**で、こちらの守りは最初からゾーンの WAF に委ねている。
+`/v1/sites/*`(decision / event)に、IP あたりの Rate Limiting binding を掛けている。上限は**導入時に決めた値**で、ゾーンの WAF がある構成では大きめの値(既定 1000 回 / 10 秒)、WAF が無い構成では設定値 `edge_waf_requests_per_10s`(既定 200 回 / 10 秒)にする([デプロイガイド 2.3](deploy.md#23-route-を書く))。binding は 1 つの IP からの合計で数え、WAF の NAT 支援や送信元の除外は引き継がない。**Mode B(サーバー発行 Cookie)の `/__ab/*` は binding の対象外**で、こちらの守りは最初からゾーンの WAF に委ねている。
 
-そのうえ Workers の binding 自体が permissive・結果整合で、本番の負荷では実効しなかった実測がある。**実効的な守りはゾーンの WAF Rate Limiting Rule**([デプロイガイド 2.7](deploy.md#27-waf-rate-limiting-rule推奨))のほうで、`/v1/sites/*` と `/__ab/*` の両方をこれで受ける。
+そのうえ Workers の binding 自体が permissive・結果整合で、本番の負荷では実効しなかった実測がある。**実効的な守りはゾーンの WAF Rate Limiting Rule**([デプロイガイド 2.7](deploy.md#27-waf-rate-limiting-rule推奨))のほうで、`/v1/sites/*` と `/__ab/*` の両方をこれで受ける。WAF が遮断した要求は、ダッシュボードの Security Events で見られる(手順は[デプロイガイド 2.7](deploy.md#27-waf-rate-limiting-rule推奨) の「遮断を見る」)。
 
 ### control(無認証の入口 10 経路)
 
-`auth/google/start`(Google へ送り出す)/ `auth/callback/google`(Google からの戻り)/ `auth/handoff/exchange`(ログイン直後に管理画面がセッションを受け取る使い捨てコードの交換)/ `break-glass/reset-link`(非常用トークンの照合)/ `setup` / 招待受諾 と、非常時だけ開くパスワードの 4 経路(`auth/sign-in/email` / `auth/sign-up/email` / `auth/request-password-reset` / `auth/reset-password`)に、**経路ごとに 10 回 / 10 秒**を掛けている。
+`auth/google/start`(Google へ送り出す)/ `auth/callback/google`(Google からの戻り)/ `auth/handoff/exchange`(ログイン直後に管理画面がセッションを受け取る使い捨てコードの交換)/ `break-glass/reset-link`(非常用トークンの照合)/ `setup` / 招待受諾 と、非常時だけ開くパスワードの 4 経路(`auth/sign-in/email` / `auth/sign-up/email` / `auth/request-password-reset` / `auth/reset-password`)に、**経路ごとに 30 回 / 10 秒**を掛けている。1 つの送信元 IP から、経路ごとに 10 秒に 30 回まで通す。同じ拠点(NAT)から研修などで 30 人規模が一斉にログインしても止めないための値。ログインのライブラリに内蔵されたレート制限は使っておらず、control の制限はこの binding だけ。
 
 `GET /login-options` は無認証で、非常口が開いているかどうかが分かる。守りは sign-in のレート制限と、開いている間の管理画面の帯(と、用が済んだら secret を消す運用)。
 
@@ -336,7 +336,7 @@ control を**直接**叩く経路(API キーを使うエージェント、curl�
 
 **運用者にとっての意味**
 
-- 管理者が数人〜十数人なら、手作業で 10 回 / 10 秒にはまずぶつからない。ぶつかるのは自動化された連続ログイン。CI や運用スクリプトから繰り返しログインする場合は枠を数える
+- 管理者が数人〜十数人なら、手作業で 30 回 / 10 秒にはまずぶつからない。ぶつかるのは自動化された連続ログイン。CI や運用スクリプトから繰り返しログインする場合は枠を数える
 - ログインのブルートフォース対策を本気で掛けたいなら、ゾーン側の WAF か Cloudflare Access を前段に置く([デプロイガイド 7 節](deploy.md#7-無認証入口の防御))
 - limiter 自体が壊れたときは、edge / control とも **fail-open**(通してログに残す)
 

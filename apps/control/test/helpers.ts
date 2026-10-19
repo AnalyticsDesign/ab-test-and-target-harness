@@ -13,12 +13,17 @@ export const SETUP_TOKEN = "test-setup-token"; // vitest.config.ts の miniflare
 /** 決定 46 (2): テストでパスワード経路を開けるときの envOverride(16 文字以上) */
 export const BREAK_GLASS = { AB_BREAK_GLASS_TOKEN: "test-break-glass-token-0123456789" } as const;
 
+/** `wrangler.jsonc` の `AUTH_RATE_LIMITER`(`simple.limit`)と同じ値。上限の回数を数えるテストはこれを使い、数値を直書きしない(7q) */
+export const AUTH_RATE_LIMIT = 30;
+
 // Rate Limiting binding のウィンドウは period 秒ごとの壁時計固定枠(miniflare 実装)。
-// 連続試行が境界をまたぐと数え直しになるので、残りが短ければ次の枠の頭まで待つ
-export async function alignToWindow() {
+// 連続試行が境界をまたぐと数え直しになるので、残りが短ければ次の枠の頭まで待つ。
+// `fresh: true` は残りにかかわらず次の窓の頭まで待つ(上限の回数を数えるテスト用。
+// 窓の途中から始めると、AUTH_RATE_LIMIT + 1 回の送信の途中で窓が変わり数え直しになりうる)
+export async function alignToWindow(opts: { fresh?: boolean } = {}) {
   const PERIOD_MS = 10_000;
   const remaining = PERIOD_MS - (Date.now() % PERIOD_MS);
-  if (remaining < 5_000) await new Promise((r) => setTimeout(r, remaining + 50));
+  if (opts.fresh || remaining < 5_000) await new Promise((r) => setTimeout(r, remaining + 50));
 }
 
 /**

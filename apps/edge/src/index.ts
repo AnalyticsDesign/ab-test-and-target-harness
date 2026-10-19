@@ -30,7 +30,7 @@ app.post("/v1/sites/:siteId/decision", async (c) => {
   const visitorId = body.data.visitorId;
   if (!visitorId || !isAcceptableVisitorId(visitorId)) return c.text("bad request", 400);
   if (!(await rateLimitOk(c.env, c.req.header("CF-Connecting-IP")))) {
-    return c.text("rate limited", 429, { "Retry-After": "10" }); // §9.5 の 20req/10s に合わせた再試行目安
+    return c.text("rate limited", 429, { "Retry-After": "10" }); // binding の period(10 秒)に合わせた再試行目安
   }
   const settings = await loadSettings(c.env, siteId);
   if (!settings) return c.text("not found", 404);

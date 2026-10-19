@@ -5,8 +5,8 @@
   // KV。`wrangler kv namespace create wtt-config` で作った id に置き換える。`--local` 実行時はこの id をキーにした
   // ローカルシミュレータが使われるため、e2e / edge:dev はこのままでも動く
   "kv_namespaces": [{ "binding": "CONFIG_KV", "id": "00000000000000000000000000000000" }],
-  // IP あたり 20 req / 10 秒(wrangler >= 4.36。period は 10 か 60 のみ)
-  "ratelimits": [{ "name": "DECISION_RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 20, "period": 10 } }],
+  // IP あたりの上限 / 10 秒。導入時に書く: ゾーンの WAF を作るなら 1000(WAF の回数がそれより大きければ WAF の回数)、WAF を作らないなら edge_waf_requests_per_10s(既定 200)。docs/deploy.md 2.3。wrangler >= 4.36。period は 10 か 60 のみ
+  "ratelimits": [{ "name": "DECISION_RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 1000, "period": 10 } }],
   // Visitor Profile。SQLite-backed(Free プランで利用可)。ID は idFromName("<siteId>:<visitorId>")
   // 結果の記録の 1 日の予算(ResultsBudget)は導入全体で 1 つ(idFromName("global"))。収集できなかった送信の数(ResultsHealth)はサイトごと(idFromName("<siteId>"))
   "durable_objects": {

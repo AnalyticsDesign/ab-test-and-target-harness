@@ -4,7 +4,8 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { app } from "../src/index";
 import { errorHandler } from "../src/errors";
-import { alignToWindow, BREAK_GLASS, call, json, setupOwner, SETUP_TOKEN, uniqueEmail, expectEnvelope, failingD1Insert, failingD1Query, setupReq, googleSignIn } from "./helpers";
+import { getAuth } from "../src/auth";
+import { alignToWindow, AUTH_RATE_LIMIT, BREAK_GLASS, call, json, setupOwner, SETUP_TOKEN, uniqueEmail, expectEnvelope, failingD1Insert, failingD1Query, setupReq, googleSignIn } from "./helpers";
 import type { Env } from "../src/env";
 
 describe("setup and sign-up gate", () => {
@@ -260,31 +261,35 @@ describe("setup and sign-up gate", () => {
   const setup = (headers: Record<string, string> = ip) => call("POST", "/setup", { body: {}, headers: { ...headers, "x-setup-token": "wrong" } });
   const accept = (id: string) => call("POST", `/invitations/${id}/accept`, { body: { name: "x", password: "password123" }, headers: ip, envOverride: BREAK_GLASS });
 
-  it("each unauthenticated entry point has its own per-ip limit of 10 per 10 seconds", async () => {
-    await alignToWindow();
-    // 1 経路を使い切る。sign-in はパスワードハッシュ比較を挟むため 11 回連続だと(並行実行される他
+  it("each unauthenticated entry point has its own per-ip limit of 30 per 10 seconds", async () => {
+    await alignToWindow({ fresh: true });
+    // 1 経路を使い切る。sign-in はパスワードハッシュ比較を挟むため 31 回連続だと(並行実行される他
     // ファイルの Miniflare インスタンスの分だけ CPU を取り合い)10 秒窓を超えうる — setup はトークン
     // 不一致で即 403 になり計算コストが軽いので、ここでは setup を使って枠を使い切る
     const statuses: number[] = [];
-    for (let i = 0; i < 11; i++) statuses.push((await setup()).status);
-    expect(statuses.slice(0, 10).every((s) => s !== 429)).toBe(true);
-    expect(statuses[10]).toBe(429);
+    for (let i = 0; i < AUTH_RATE_LIMIT + 1; i++) statuses.push((await setup()).status);
+    expect(statuses.slice(0, AUTH_RATE_LIMIT).every((s) => s !== 429)).toBe(true);
+    expect(statuses[AUTH_RATE_LIMIT]).toBe(429);
     // 決定 35 (3): 他の経路は巻き込まれない(同じ IP でも別枠)
     expect((await signIn()).status).not.toBe(429);
     expect((await requestReset()).status).not.toBe(429);
     expect((await accept("inv_x")).status).not.toBe(429);
     // 別 IP は別枠(同じ経路でも)
     expect((await setup({ "cf-connecting-ip": "198.51.100.1" })).status).not.toBe(429);
-  }, 15_000);
+  }, 25_000); // 窓の待ち(最大 10 秒)+ 31 回
 
   it("invitation accept shares one limit across invitation ids", async () => {
-    await alignToWindow();
+    await alignToWindow({ fresh: true });
     // 招待 ID を変えても枠は同じ(ID ごとに枠が分かれると総当たりの枠が無限になる)
     const statuses: number[] = [];
-    for (let i = 0; i < 11; i++) statuses.push((await accept(`inv_${i}`)).status);
-    expect(statuses.slice(0, 10).every((s) => s !== 429)).toBe(true);
-    expect(statuses[10]).toBe(429);
-  }, 15_000);
+    for (let i = 0; i < AUTH_RATE_LIMIT + 1; i++) statuses.push((await accept(`inv_${i}`)).status);
+    expect(statuses.slice(0, AUTH_RATE_LIMIT).every((s) => s !== 429)).toBe(true);
+    expect(statuses[AUTH_RATE_LIMIT]).toBe(429);
+  }, 25_000); // 窓の待ち(最大 10 秒)+ 31 回
+
+  it("disables Better Auth's built-in rate limit (AUTH_RATE_LIMITER is the only limiter)", () => {
+    expect(getAuth(env).options.rateLimit?.enabled).toBe(false);
+  });
 
   it("rate limiter failure is fail-open (the request goes through and the error is logged)", async () => {
     const boom = { limit: async () => { throw new Error("limiter down"); } } as unknown as Env["AUTH_RATE_LIMITER"];

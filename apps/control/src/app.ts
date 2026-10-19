@@ -26,7 +26,7 @@ export function createApp(): Hono<AppEnv> {
     await next();
     c.header(API_VERSION_HEADER, String(API_CONTRACT_VERSION));
   });
-  // 無認証の入口だけ経路ごとに IP 単位で 10 回 / 10 秒(Cloudflare Rate Limiting binding)。超過は 429 の封筒。
+  // 無認証の入口だけ経路ごとに IP 単位で 30 回 / 10 秒(Cloudflare Rate Limiting binding)。超過は 429 の封筒。
   // AUTH_ALLOW(auth-paths.ts)のうち無認証で叩ける POST と、下の GET 2 本はすべてここに入れる — sign-up / reset-password は
   // トークンのエントロピーがあるので総当たりは現実的でないが、無認証の入口を 1 つでも素通しにすると
   // 「無認証の入口には制限がある」という docs/deploy.md 7 節 の約束が崩れる(多層防御)

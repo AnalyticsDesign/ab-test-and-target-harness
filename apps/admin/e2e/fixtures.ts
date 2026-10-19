@@ -56,14 +56,14 @@ export const HERO_TEXT = "E2E から書き換え";
 /**
  * ログイン。BFF(`/api/session/login`)が HttpOnly Cookie を張り、`/w` に着地するところまでを 1 単位にする。
  *
- * control の無認証 POST(sign-in / setup / 招待受諾)は **経路ごとに** IP 単位で 10 回 / 10 秒(決定 35 (3))。
+ * control の無認証 POST(sign-in / setup / 招待受諾)は **経路ごとに** IP 単位で 30 回 / 10 秒(決定 35 (3))。
  * admin BFF は接続元 IP を転送しないので(決定 35 (4))、この E2E のすべての無認証 POST は control からは
  * 同じ IP に見え、経路ごとに 1 枠を共有する(apps/control/src/app.ts)。
  *
  * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 24 回(publish-flow 10 / audience-flow 8 / invite-flow 1 / login-screen 1 / write-freeze 1 / experiment-kind-flow 1 / results-settings 1 / variant-ui 1、
  * うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 / 招待受諾 1 回 /
  * `break-glass/reset-link` 1 回 / `reset-password` 1 回で、
- * 10 秒窓に入る sign-in は実測でも 10 回未満に収まっている。これ以上ログインを増やすなら、
+ * 10 秒窓に入る sign-in は 30 回未満に収まっている。これ以上ログインを増やすなら、
  * 各テストでログインし直すのをやめて `storageState` でセッションを引き回すこと(ログインの検証は 1 本残せばよい)。
  * API キーの失効の確認(`publish-flow.spec.ts` の "a site without a publish is refused by the edge")は
  * 新しい login() を足さず、既にログイン済みのこのテストに相乗りしている(予算は変わらない)。

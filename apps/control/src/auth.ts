@@ -88,6 +88,10 @@ function buildAuth(env: Env) {
     return Number(row?.n ?? 0) === 1 && Number(row?.c ?? 0) === 0;
   };
   return betterAuth({
+    // Better Auth 内蔵のレート制限は切る(7q / K7)。経路 + IP の AUTH_RATE_LIMITER に一本化するため:
+    // 内蔵は本番で NODE_ENV=production により有効になっていたが、memory 保存でアイソレートごとに数え、x-forwarded-for を鍵にするので効き方が読めない。
+    // AUTH_RATE_LIMITER なら 429 の形も control の封筒にそろう(apiKey の rateLimit は下で別に切っている)
+    rateLimit: { enabled: false },
     baseURL: env.AB_CONTROL_URL,
     basePath: "/auth",
     secret: env.BETTER_AUTH_SECRET,

@@ -28,7 +28,7 @@ AB Test and Target Harness を運用者自身の Cloudflare アカウントへ�
 - 設置サイトのドメインが Cloudflare のゾーンにあり、DNS がプロキシ(オレンジの雲)になっている。edge と設置タグはそのゾーンの Workers Route で公開する(`<設置ホスト>/v1/*`・`/s/*`)。ドメインを用意せずに `*.workers.dev` で始めるなら、2.3・2.9・3.4 の `workers-dev` のときの手順と、1 節の制約 (3) を読む
 - control と管理画面は `*.workers.dev` のアドレスで公開する。自分のドメインに置くなら 3.6・4.2
 - 画像のアップロードに R2 を使う。使わない構成も手順 12 で選べる
-- ゾーンの Cache Rule(2.6)と WAF Rate Limiting Rule(2.7)は推奨の保護設定で、動いた後に足せる。ここでは作らない。作るときは 0.5 の 2 のトークンが要る。Mode B(サーバー発行 Cookie)のサイトを置くなら 2.7 は必須
+- ゾーンの Cache Rule(2.6)と WAF Rate Limiting Rule(2.7)は推奨の保護設定で、動いた後に足せる。ここでは作らない。作るときは 0.5 の 2 のトークンが要る。Mode B(サーバー発行 Cookie)のサイトを置くなら 2.7 は必須。WAF を作らないので、edge の Rate Limiting binding の値は手順 8 で 200 にする(後から 2.7 で WAF を作ったら、2.3 の規則で書き直す)
 
 ここで使う値。手を動かす前に控える。0.2 の入力ファイルはエージェントが質問の答えを記録するためのもので、手で進めるときは作らなくてよい。
 
@@ -165,7 +165,9 @@ openssl rand -base64 32 | pnpm -C apps/edge exec wrangler secret put RESULTS_VIS
 
 **8. Route を書く**(2.3)
 
-`apps/edge/wrangler.jsonc` の `routes` を次にする。`<設置ホスト>`・`<ゾーン名>` は実際の値に置き換える:
+先に、`apps/edge/wrangler.jsonc` の `ratelimits` の行の `"limit": 1000` を `200` に書き換える。この手順では WAF を作らないので、2.3 の「WAF が無い構成」の値にする。後から 2.7 で WAF を作ったら、2.3 の規則で書き直して edge を deploy し直す。
+
+続けて、`apps/edge/wrangler.jsonc` の `routes` を次にする。`<設置ホスト>`・`<ゾーン名>` は実際の値に置き換える:
 
 ```jsonc
 "routes": [
@@ -432,7 +434,7 @@ AI エージェントに任せる場合、構成は 0.2 の質問と検査スク
 | 設置タグの配信 | 配信専用の Worker `wtt-static` を `<設置ホスト>/s/*` に置く。訪問者のタグの読み込みは Worker のリクエストに数えられない | ドメインなし構成(`*.workers.dev`)では `wtt-static` の workers.dev のアドレスで配る | 2.9 |
 | control の公開アドレス | `https://wtt-control.<アカウントのサブドメイン>.workers.dev` | 自分のドメインに置いて WAF / Access を掛けたい | 3.6 / 7.1 |
 | control の無認証入口の防御 | (1) 何もしない(ログインは Google アカウントで、パスワードの経路は普段閉じている) | 複数人で使う、外部エージェントに API を呼び出させる | 7 節。(2)(3) は実機未検証 |
-| edge の WAF Rate Limiting Rule | 作る(100 回 / 10 秒) | 既に別のレート制限ルールで Free の 1 枠を使っている | 2.7 |
+| edge の WAF Rate Limiting Rule | 作る(200 回 / 10 秒) | 既に別のレート制限ルールで Free の 1 枠を使っている | 2.7 |
 | 画像の公開ベース | 必ず指定する。R2 のカスタムドメイン、暫定の dev-assets、または none(R2 を使わない)。検査スクリプトは `auto` = `https://wtt-assets.<ゾーン名>` を書く | 支払い方法を登録せずに導入したい(none) | 3.2 |
 | 管理画面の公開アドレス | `https://wtt-admin.<アカウントのサブドメイン>.workers.dev` | 自分のドメインに置いてリンクの見た目を整える / Access・WAF を掛ける | 4.2 |
 
@@ -484,7 +486,7 @@ node tools/deploy-answers/cli.mjs; echo "exit=$?"   # 期待: exit=0、「## 指
 | `release_tag` | 0.3 |
 | `control_address` / `control_host` | 3.4 `AB_CONTROL_URL`、3.6、7.1 |
 | `control_protection` | 7 節 |
-| `edge_waf_rate_limit` / `edge_waf_requests_per_10s` | 2.7 |
+| `edge_waf_rate_limit` / `edge_waf_requests_per_10s` | 2.3(Rate Limiting binding)、2.7 |
 | `admin_address` / `admin_host` | 3.4 `AB_ADMIN_URL`、4.2 |
 | `dlite_hosts` | 2.3 の `/__ab/*` Route |
 | `owner_email` / `workspace_name` | 5 節の初回セットアップ(`POST /setup`)。`owner_email` はログインに使う Google アカウントと同じメールアドレス。`workspace_name` は質問の表に無く、0.5 の人への依頼で一緒に聞いて書く |
@@ -956,7 +958,22 @@ pnpm -C apps/edge exec wrangler secret list | jq -r '.[].name'   # 期待: RESUL
 
 ### 2.3 Route を書く
 
-`edge_address` で分かれる。
+**先に、edge の Rate Limiting binding の値を書く**(どの構成でも)。`apps/edge/wrangler.jsonc` の `ratelimits[0].simple.limit` が、1 つの IP から 10 秒あたりに受ける回数の上限になる。値は構成で決まる:
+
+- **WAF がある構成**(`edge_address: route` で、`edge_waf_rate_limit` が `false` でない。既定): 1000 と、2.7 の WAF の 1 期間あたりの回数(`edge_waf_requests_per_10s`)の大きいほう。雛形の値は 1000 なので、WAF の回数が 1000 以下ならそのままでよい。2.7 で WAF の期間を 60 秒にしたときは、60 秒あたりの回数をそのまま 1000 と比べる
+- **WAF が無い構成**(`edge_address: workers-dev`、または `edge_waf_rate_limit: false`): `edge_waf_requests_per_10s`(既定 200)
+
+理由: binding は WAF の後ろにあり、IP ごとに数える。WAF より厳しい値にすると、WAF が通した訪問を後ろで止めてしまう。WAF がある構成では主に WAF で保護するので、binding は大きめの値にする。
+
+binding は WAF の設定を引き継がない。WAF で数える単位を IP with NAT support(Cloudflare の画面の名前。日本語の表示は未確認)にしても、自社オフィスなどの送信元を式で除外しても、binding は 1 つの IP からの合計で数える。たとえば WAF から除外したオフィスから 10 秒に 1000 回を超えて届くと、binding が止める。1 つの IP からの合計が binding の上限を超えうるなら、binding をその合計まで上げる。
+
+確認:
+
+```bash
+grep -n '"limit"' apps/edge/wrangler.jsonc   # 期待: 書いた値の行が 1 つ
+```
+
+続けて Route を書く。`edge_address` で分かれる。
 
 **`workers-dev` のとき**: `routes` を書かず、`apps/edge/wrangler.jsonc` に次を書く(`routes` があれば削除する。`dev.host` は不要):
 
@@ -1115,6 +1132,8 @@ curl -sSI "https://<設置ホスト>/s/<siteId>.js" | grep -iE 'cache-control|cf
 
 `edge_address: workers-dev` ではここを飛ばす。ゾーンが無いので作れない。
 
+WAF を作るとき・値を変えるときは、edge の Rate Limiting binding の値が 2.3 の規則の値(1000 と WAF の 1 期間あたりの回数の大きいほう)以上かを確かめる。下回っていれば `apps/edge/wrangler.jsonc` の `limit` を 2.3 の規則の値に上げ、edge を deploy し直す。2.3 の注意に従って規則の値より上げてあるときは、そのままにする。
+
 **なぜ要るか**: `/v1/sites/*` と `/__ab/*` は無認証(Origin 検証のみ)で、パターン一致 URL とランダムな visitorId を送られると Visitor Profile が量産される。Workers の Rate Limiting binding は本番で実効しない実測がある([運用ガイド 7 節](operations.md#7-レート制限の実効))。そのため、実効的な防御はゾーン側のルールに置く。
 
 結果を記録するサイトの送信(テストの参加と目標の達成)も同じ `/v1/sites/*/event`(Mode B は `/__ab/event`)に届くので、このルールで受ける。結果の送信のために別のルールは作らない。
@@ -1124,7 +1143,7 @@ curl -sSI "https://<設置ホスト>/s/<siteId>.js" | grep -iE 'cache-control|cf
 `edge_waf_rate_limit: true`(既定)のとき。トークンは 2.6 と同じ `CF_TOKEN`(Zone → WAF → Edit を含む)。
 
 ```bash
-LIMIT=100    # edge_waf_requests_per_10s。検証だけなら 20
+LIMIT=200    # edge_waf_requests_per_10s
 # 既存のレート制限ルールの有無(Free は 1 ルールまで)
 curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/http_ratelimit/entrypoint" -H "$H" \
   | jq '{success, errors, id: .result.id, rules: [.result.rules[]? | {id, expression, requests_per_period: .ratelimit.requests_per_period}]}'
@@ -1134,6 +1153,8 @@ curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/http_r
 
 - `could not find entrypoint ruleset` または `rules: []` → 下の PUT で作る
 - 既にルールが 1 本あり、式に `/v1/sites/` が無い → Free プランでは枠が無い。運用者に「既存ルールに OR で `/v1/sites/` と `/__ab/` を足す」か「作らない(`edge_waf_rate_limit: false`)」かを聞く
+  - 作らないを選んだら、`deploy-answers.yaml` の `edge_waf_rate_limit` を `false` にする(後の更新で WAF の有無を決めるのがこのキーなので、6.2)。あわせて `apps/edge/wrangler.jsonc` の `limit` を 2.3 の WAF が無い構成の値(`edge_waf_requests_per_10s`)に書き直し、edge を deploy し直す。2.3 では WAF がある構成の値(1000)を書いているため
+  - OR で足すなら、しきい値はその既存ルールの回数になる。binding はその回数と 2.3 の規則で比べる
 - 式に `/v1/sites/` が既にある → 作らずに終わる(再実行時)
 
 ```bash
@@ -1154,17 +1175,17 @@ curl -sS -X PUT "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases
 確認はサイト作成前でも実行できる。`/v1/sites/*` は 404 を返すが、404 もカウントされる。本番しきい値での確認は下の並列送信で行う。間隔が長すぎると 10 秒の期間をまたいで永遠に遮断されないので、連続で送る:
 
 ```bash
-# 20 並列で 30 秒以内に LIMIT を超える。429 が 1 つでも出れば有効
+# 50 並列で 30 秒以内に LIMIT を超える。429 が 1 つでも出れば有効
 END=$((SECONDS+30)); HIT=0
 while [ $SECONDS -lt $END ]; do
-  seq 1 20 | xargs -P 20 -I{} curl -sS -o /dev/null -w '%{http_code}\n' "https://$HOST/v1/sites/probe/decision" | grep -q '^429$' && { HIT=1; break; }
+  seq 1 50 | xargs -P 50 -I{} curl -sS -o /dev/null -w '%{http_code}\n' "https://$HOST/v1/sites/probe/decision" | grep -q '^429$' && { HIT=1; break; }
 done
 echo "hit=$HIT"   # 期待: hit=1
 ```
 
 期待と違うとき:
 
-- hit=1 → 有効。10 秒待って `curl -sS -o /dev/null -w '%{http_code}\n' "https://$HOST/v1/sites/probe/decision"` が 404 に戻ることを確認
+- hit=1 → 有効。10 秒待って `curl -sS -o /dev/null -w '%{http_code}\n' "https://$HOST/v1/sites/probe/decision"` が 404 に戻ることを確認。既定の構成では binding(1000、2.3)が WAF(200)より大きく、WAF が先に止めるので、この確認で出る 429 は WAF の遮断
 - hit=0 かつ API の読み戻し(上の entrypoint GET)にルールが無い → 作成に失敗している
 - hit=0 かつルールはある → 判定不能(反映待ち・検出遅延・送信量不足)。1 分後に再実行し、それでも hit=0 なら人に報告する
 
@@ -1178,21 +1199,40 @@ echo "hit=$HIT"   # 期待: hit=1
 
 #### 確認と指針(API・ダッシュボード共通)
 
-**しきい値の指針(NAT 合算に注意)**: Free プランのカウント単位は IP だけ。企業オフィスのように多数の人が 1 つの送信元 IP(NAT)を共有する環境では、全員分が合算される。`needsProfile` のサイトは PV ごとに decision 1 回と、一致する目標ごとに event 1 回を送る。20 回 / 10 秒は検証用の低い値で、同じオフィスから 10 秒に 10 PV 前後で上限に触れる。
+**しきい値の指針(NAT 合算に注意)**: Free プランのカウント単位は IP だけ。企業オフィスのように多数の人が 1 つの送信元 IP(NAT)を共有する環境では、全員分が合算される。IP 単位の制限で止められるのは 1 か所からの大量送信だけで、分散した送信元は止められない。そのため、しきい値は攻撃をどこまで絞るかではなく、1 つの IP の後ろにいる正常な訪問者を何人まで通すかで決める。
+
+規模ごとの目安(`edge_waf_requests_per_10s`):
+
+| 規模 | 回 / 10 秒 | 1 つの IP の後ろで同時に閲覧していても通る人数の目安 | あわせて行うこと |
+|---|---|---|---|
+| 既定(小〜中規模) | 200 | 約 300 人 | なし |
+| 企業からの訪問が多い BtoB、中〜大規模 | 500 | 約 750 人 | 自社オフィスなど既知の送信元を式で除外する(ゾーンが Business 以上のとき。下の箇条)。binding はこの除外を引き継がないので、除外した送信元からの合計が binding の上限を超えうるなら binding も上げる(2.3) |
+| 大規模 | 1000 | 約 1500 人 | ゾーンが Business 以上なら、数える単位を IP with NAT support にする。Pro 以上なら、期間を 60 秒にして回数を 6 倍(6000)にする。短い一斉アクセスは通し、続く大量送信は止められる。binding は NAT 支援を引き継がず IP ごとの合計で数えるので、1 つの IP からの合計が binding の上限を超えうるなら binding も上げる。期間を 60 秒にしたときの binding の値は 2.3 の規則で 6000 になる |
+| 1000 でも当たる | 上げない | — | そのサイトで `needsProfile` を使わない構成(decision を送らない)にできないかを先に検討する |
+
+IP with NAT support は Cloudflare の画面の名前で、日本語の表示は未確認。
+
+人数の目安の前提: `needsProfile` のサイトでは 1 PV で decision 1 回と event 約 1 回を送り、閲覧中の人は 30 秒に 1 PV 程度とした(1 人あたり 10 秒に約 0.7 回)。これは結果を記録しないサイトの値。結果を記録するサイトでは、テストの参加(参加したテストごとに 1 回)と目標の達成の送信が足される。送信済みの印をブラウザに保存できれば同じ訪問者 × テスト(目標)には 1 回だけで、続けて閲覧している間は増えないが、保存できない環境(`localStorage` が使えないなど)ではページごとに送り直す。1 テスト・1 目標のページを初めて開くと 1 PV で 4 回程度になり、テストや目標が多いページではさらに増える。多くの人が同時に初めて開く場面(朝礼で同じページを案内するなど)では目安より少ない人数で当たるので、表の人数をそのまま当てはめない。
 
 上限に触れてもブロックされるのは `/v1/*` だけで、ページ本体・GTM・bootstrap は無傷。ただし decision が 429 を受けた runtime は再試行せず元の表示に戻るため、エクスペリエンスは適用されず Exposure も出ない。目標の `ab_conversion` は `dataLayer` に push され GA4 に届くが、`needsProfile` のサイトの `/event` 転送(Profile の `converted` 履歴の更新)は失われる。その組織の露出だけが黙って欠ける。
 
-- 実サイトでは、正常な NAT 環境の通信を遮断しない水準(目安 100〜200 回 / 10 秒)に上げる。Free でも `requests_per_period` は変更できる
-- 自社オフィスなど既知の送信元は、式に `and not ip.src in { <IP> }` を足して除外できる
+- 値は Free でも `requests_per_period` で変えられる。変えたら、binding の値が 2.3 の規則の値以上かを確かめる(下回っていれば 2.3 の規則の値に上げる)
+- 自社オフィスなど既知の送信元は、式に `and not ip.src in { <IP> }` を足して除外できる。レート制限ルールの式で送信元の IP を使えるのは、ゾーンが Business 以上のとき(Free の式で使えるのは URI Path など)。除外は WAF だけに効き、binding はその送信元も 1 つの IP からの合計で数える
 - `needsProfile: false` のサイトは decision を送らない。`/event` も、結果を記録しないサイトなら送らないので、この上限に触れない。結果を記録するサイトは、テストの参加(訪問者 × テストで初回)と目標の達成(訪問者 × 目標で初回)を `/event` に送る(ページビューごとではない)
-- Cookie / ヘッダ単位のカウントや段階付けは Pro 以上
+- プランごとの違い: Free は 1 本・期間 10 秒・IP 単位だけ。Pro は 2 本・期間 1 分まで。Business は 5 本・期間 10 分まで・IP with NAT support も使える。Cookie・ヘッダ単位で数えられるのは Enterprise だけ
 
 429 は本文で判別する。`error code: 1015` は Cloudflare の遮断で、上の確認が検出するのはこの遮断。edge の binding が返す平文の 429 `rate limited` とは、本文で区別する。
+
+**遮断を見る**: しきい値が合っているかは、遮断が起きたかを見て判断する。上限に触れても訪問者には何も表示されないので、見に行かないと気づけない。ダッシュボード → 対象ゾーン → Security(セキュリティ)→ Analytics → Events のタブで、Cloudflare が遮断した要求を見られる(Security Events。Analytics・Events・Sampled logs の日本語の表示は未確認)。ゾーンを選んだ状態で `https://dash.cloudflare.com/?to=/:account/:zone/security/analytics` を開いても同じ画面に着く。
+
+- Free で見られるのは Sampled logs(遮断の記録の抜き出し)だけ。行を開くと、送信元の IP・時刻・当たったルールが分かる。IP ごとの回数の集計とグラフは Pro 以上で出る
+- 記録は過去 31 日分
+- 同じ IP の遮断が繰り返し出ていたら、その IP の後ろにいる訪問者の数を見積もり、上の目安で値を見直す
 
 **しきい値の限界(Free プラン)**:
 
 - このルールは IP 単位なので、1 台の機械からの送信を 10 秒あたり `LIMIT` 回に抑えるだけで、1 日の送信量は抑えない
-- `needsProfile` のサイトでは、新しい visitorId 1 つにつき Durable Object の書き込みが 2 行ずつ増える。Free プランの日次の上限(10 万行)は約 5 万件で尽きる。既定の 100 回 / 10 秒(10 回 / 秒)では、1 つの IP からでも約 1.4 時間で達する。20 回 / 10 秒でも約 7 時間で達する
+- `needsProfile` のサイトでは、新しい visitorId 1 つにつき Durable Object の書き込みが 2 行ずつ増える。Free プランの日次の上限(10 万行)は約 5 万件で尽きる。既定の 200 回 / 10 秒(20 回 / 秒)では、1 つの IP からでも約 42 分で達する
 - 尽きた日は decision / event が止まり、訪問者には元の表示が出る。ページ本体・設置タグは無傷
 - Free プランではこれが上限で、分散した送信元を止める手段は無い。アクセスの多いサイトや標的にされる可能性のあるサイトは、Workers Paid(日次の上限が無く従量)にするか、`needsProfile` を使わない構成にする。この構成は decision を送らないので Durable Object に触れない
 
@@ -1560,7 +1600,7 @@ SETUP_TOKEN=$(openssl rand -hex 16) \
   - それでも 403 なら (a) = 登録済みなので手順 2 へ進む。人が Google でログインできれば確定する
   - 直前に 503 が返っていた場合は下の 503 の項に従う
 - 422 → `owner_email` の形式か `workspace_name` の長さ(1〜100 文字)、または `usage_visibility` が `members` / `instance_admins` 以外。入力ファイルを直して再実行
-- 429 → 10 秒待って再実行(無認証入口は IP 単位で 10 回 / 10 秒)
+- 429 → 10 秒待って再実行(無認証入口は IP 単位で 30 回 / 10 秒)
 - 503 `setup_failed` → ワークスペースの作成に失敗。60 秒待ってから上のブロックをもう一度、変更せずに実行する。途中の状態は、60 秒たつと次の実行が片付ける。60 秒以内に再実行すると 403 `setup_closed` が返ることがある。その 403 は上の (a) ではないので、60 秒待ってからやり直す
 - 400 → JSON の形。上のコマンドの引用符を確認
 
@@ -1697,11 +1737,11 @@ git tag --list 'v*' --sort=-v:refname | head -3   # 目標の tag(例 v1.0)
 - (b) **サイト設定のフィールド追加**(既存サイトの record を書き直す必要)
 - (c) **runtime の変更**
 
-CHANGELOG に次の目印があるリリースは、6.3 の該当する項も読む: 「配る設定の版(`schemaVersion`)が上がる」「システム管理者を導入する」「パスワード再設定リンクの発行条件が変わる」「計測用のデータベースを足す」。パスワードでログインしていた版からの更新も 6.3 に項がある。
+CHANGELOG に次の目印があるリリースは、6.3 の該当する項も読む: 「配る設定の版(`schemaVersion`)が上がる」「システム管理者を導入する」「パスワード再設定リンクの発行条件が変わる」「計測用のデータベースを足す」「レート制限の既定値が変わる」。パスワードでログインしていた版からの更新も 6.3 に項がある。「レート制限の既定値が変わる」は 6.2 の衝突の項も読む。
 
 ### 6.2 取得
 
-`wrangler.jsonc` の id・routes・vars はローカルで編集した値なので、tag を切り替えても失わないように退避する。
+`wrangler.jsonc` の id・routes・vars と、edge の `ratelimits` の `limit` はローカルで編集した値なので、tag を切り替えても失わないように退避する。
 
 ```bash
 # 退避の対象は「今 checkout している版に存在する設定ファイル」だけにする。存在しないパスを
@@ -1724,7 +1764,9 @@ pnpm install
 期待と違うとき:
 
 - 差分なし(初回導入で `wrangler.jsonc` を編集していない = 通常あり得ない)→ stash を作らずに進む
-- apply で衝突 → 両方の変更を見て id・routes・vars を残し、`git stash drop "$S"` を手で行う。解消後は `grep -n '<<<<<<<' apps/*/wrangler.jsonc` が空であることを確認し、`git restore --staged apps/edge/wrangler.jsonc apps/control/wrangler.jsonc apps/admin/wrangler.jsonc apps/deployer/wrangler.jsonc`(存在するものだけを並べる)で index を戻す(`git status --short` が ` M` の行だけになる)
+- apply で衝突 → 両方の変更を見て id・routes・vars・`ratelimits` の `limit` を残し、`git stash drop "$S"` を手で行う。解消後は `grep -n '<<<<<<<' apps/*/wrangler.jsonc` が空であることを確認し、`git restore --staged apps/edge/wrangler.jsonc apps/control/wrangler.jsonc apps/admin/wrangler.jsonc apps/deployer/wrangler.jsonc`(存在するものだけを並べる)で index を戻す(`git status --short` が ` M` の行だけになる)
+  - レート制限の既定値が変わる版(CHANGELOG の目印)への更新では、`apps/edge/wrangler.jsonc` の KV の id の行から `ratelimits` の行までの 3 行が 1 回衝突する。KV の id は手元の値にし、その下のコメントと `ratelimits` の行は新しい版の形にして、`limit` は 2.3 の規則で書く。Route などほかの行は自動で戻る
+  - ゾーンの WAF があるかは、`deploy-answers.yaml` の `edge_address`・`edge_waf_rate_limit` で見る。ファイルが無ければ 2.7 の GET で確かめる。見るのはルールの有無ではなく、式に `/v1/sites/` を含むルールがあるか(既存の別のルールがあるだけでは WAF があるとは言えない。別のルールがあるために「作らない」を選んだ導入があるため)。そのためのトークンも無ければ人に聞く。更新は別の会話で始まるので、導入時の答えが手元に残っていないことがある
 - `git stash list` に `wtt-deploy-config` が残っている → 前回の更新の取りこぼし。中身を確認して drop
 - `git checkout` が `Your local changes to the following files would be overwritten` で失敗 → 表示されたファイルの差分を確認し、生成物なら `git checkout -- <file>` で捨て、設定ファイルなら stash の対象に加えてから 6.2 をやり直す(失敗したまま先に進まない。`git describe --tags --exact-match` が目標 tag でなければここに戻る)
 
@@ -1796,6 +1838,12 @@ runtime を作り直したら control と deployer も必ず再デプロイす�
 - control → admin の順に deploy し、Google でログインできることを確かめてからトークンを消す
 - 既存のユーザーは、同じメールアドレスの Google アカウントでログインすれば、同じユーザーとして入れる。ロールも招待も引き継がれる。Google アカウントを持たないメールアドレスのユーザーは、Google アカウントのあるメールアドレスで招待し直す
 - オーナー自身が Google アカウントを持たないとき(オーナーのメールアドレスで Google アカウントを作れない)は、何もしないと更新後に誰も入れなくなる。どちらかを先に行う: (a) そのメールアドレスで Google アカウントを作る / (b) 8 節の非常用トークンを置いたまま更新し、非常口から入って Google アカウントのあるメールアドレスを管理者として招待 → その人が Google でログインして受諾 → メンバー画面でオーナーにする → 確認できてからトークンを消す
+
+**レート制限の既定値が変わるリリースの更新**:
+
+- edge の Rate Limiting binding の値は、6.2 の衝突の解消で 2.3 の規則の値になっている。手順 1 の edge の deploy で反映される
+- ゾーンの WAF Rate Limiting Rule が以前の既定(100 回 / 10 秒)のままなら、200 に上げるのを勧める(必須ではない)。変え方は 2.7。上げた後も binding の値が 2.3 の規則の値以上かを確かめる(下回っていれば 2.3 の規則の値に上げる)
+- 7.2 の control の WAF を「10 秒に 10 回」で作っていたら、7.2 の新しい目安に見直すのを勧める(必須ではない)
 
 ```bash
 pnpm -C apps/admin build && pnpm -C apps/admin deploy:cf   # 4. admin
@@ -1954,13 +2002,25 @@ Workers 内の Rate Limiting binding は本番で実効していなかった実�
 
 Free プランでも 1 ルール使える(条件は IP 単位、期間 10 秒固定)。edge 用のルール(2.7)と枠を取り合う点に注意する:
 
-- Free で両方が要るなら、条件式を OR で結合した 1 本にする。しきい値は共通になるので 2.7 の指針(100〜200 回 / 10 秒)に合わせる。control 側でこれ以上絞りたいなら (3) Access を足す
-- 別々のしきい値が要るなら Pro 以上
+- Free で両方が要るなら、条件式を OR で結合した 1 本にする。しきい値は edge と共通(2.7 の値)になる。control 側でこれ以上絞りたいなら (3) Access を足す
+- 別々のしきい値が要るなら Pro 以上(Pro は 2 本まで)
+- 専用のルールを持てるなら(別のゾーン、または Pro 以上)、50 回 / 10 秒にする。WAF は経路を区別せずに数え、Google ログインは開始と戻りで 1 人 2 回になる。50 なら、同じ拠点から 10 秒に約 25 人がログインできる(研修などの一斉ログインの目安)
 
 1. ダッシュボード → 対象ゾーン → Security(セキュリティ)→ Security rules(セキュリティ ルール)→ Create rule(ルールを作成)→ **Rate limiting rules(レート制限ルール)**
 2. 条件: `Hostname equals control.<運用者ドメイン>` かつ `URI Path starts with /auth/` **または** `URI Path equals /setup` **または** `URI Path contains /accept` **または** `URI Path equals /break-glass/reset-link`(Edit expression(式を編集)で OR の式に書く)。最後の 1 つは非常用トークンを照合する入口で、`/auth/` にも `/setup` にも当たらないので明示的に足す(`/login-options` は秘密を扱わない読み取りなので足さない)
-3. 同一 IP から **10 秒に 10 回**を超えたら Block(Block の継続時間は選べる範囲で最短にする)
-4. 保存後にスモーク: 誤ったトークンで `POST /setup` を 15 回連打し、11 回目以降に 429(Cloudflare の遮断ページであって control の封筒ではない)が返ることを確認する
+3. 同一 IP から 10 秒あたり、上の値(edge と 1 本にするなら 2.7 の値、専用のルールなら 50 回)を超えたら Block(Block の継続時間は選べる範囲で最短にする)
+4. 保存後にスモーク: 誤ったトークンの `POST /setup` を 50 並列で、30 秒を上限に繰り返す。本文が `error code: 1015` の 429(Cloudflare の遮断)が出れば有効。control の封筒の 429 `rate_limited` は control の binding の遮断なので数えない。そのため、状態コードではなく本文で判定する
+
+```bash
+# 50 並列で 30 秒以内にしきい値を超える。本文が error code: 1015 の応答が 1 つでも出れば有効
+END=$((SECONDS+30)); HIT=0
+while [ $SECONDS -lt $END ]; do
+  seq 1 50 | xargs -P 50 -I{} curl -sS -X POST "https://control.<運用者ドメイン>/setup" -H 'X-Setup-Token: wrong' -H 'content-type: application/json' -d '{}' -w '\n' | grep -q 'error code: 1015' && { HIT=1; break; }
+done
+echo "hit=$HIT"   # 期待: hit=1
+```
+
+hit=0 なら 1 分後に 1 回だけやり直す。それでも hit=0 なら人に報告する。
 
 管理画面経由の無認証 POST は admin Worker からの接続元 IP(Cloudflare 内部の固定の値で、操作した人の IP とは無関係。実測済み)で control に届くので、経路ごとに全員で 1 枠を共有する。CI や運用スクリプトから連続ログインする場合は枠を数える。**実機検証は未実施。**
 
@@ -2025,6 +2085,7 @@ Zero Trust(Free で 50 ユーザーまで)の Access アプリケーション(Se
 - 開くのはオーナーのためだけではない。**過去にパスワードを設定したことのあるメンバーは、そのときのパスワードでログインできる状態に戻る**(パスワードはユーザーごとに D1 に残っているため)
 - トークンを置いているあいだは、メール + パスワードのログイン・招待リンクからのパスワードでのアカウント作成・メンバー画面の「リセットリンク」も開く
 - **管理画面にログインしているあいだ、どのページにも**「非常用のパスワードログインが開いています」の帯が出る(ログイン前の画面には出ない)。トークンに期限は無いので、ログインして帯が出ていたら閉じ忘れを疑う
+- 開いているあいだ、パスワードの試行を絞るのは補助的な制限だけになる。control の Rate Limiting binding(経路ごと・IP 単位で 30 回 / 10 秒。本番での効き方は限定的。[運用ガイド 7 節](operations.md#7-レート制限の実効))で、パスワードの総当たりを止める仕組みではない。使い終わったらすぐ閉じ、パスワードは推測しにくい長いものにする
 
 ## 9. 稼働の確認
 

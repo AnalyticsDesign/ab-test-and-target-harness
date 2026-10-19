@@ -68,7 +68,7 @@ Free では Cloudflare の課金通知が使えないので、ダッシュボー
 
 - **支払い方法の登録を求められることがある**: R2(画像の置き場)をアカウントで有効化するとき。無料枠内なら請求は発生しない([デプロイガイド 3.2](deploy.md#32-r2-と公開ドメイン))。**登録したくない場合は R2 を使わない構成(`asset_public_base: none`)を選ぶ**。画像アップロードと IMAGE の変更が無効になるだけで、画像の差し替えは ATTRIBUTE の `src` で行える(5 節)
 - **配信ファイルのデプロイ用の API トークンを 1 本作る(どの構成でも)**: Workers Scripts の Edit だけの権限、期限なし。デプロイ専用の Worker にだけ置く。導入時に人に頼む作業の一部として、ほかのトークンと同じ画面でまとめて作る([デプロイガイド 0.5](deploy.md#05-人に用意してもらうもの一度に集める))
-- **ゾーンのプランは Free でよい**。Cache Rule と WAF Rate Limiting Rule(1 本、IP 単位、10 秒窓)は Free で作れる。WAF を Cookie やヘッダ単位で数えたい、ルールを複数本に分けたいときだけ Pro 以上
+- **ゾーンのプランは Free でよい**。Cache Rule と WAF Rate Limiting Rule(1 本、IP 単位、10 秒窓)は Free で作れる。ルールを複数本に分けたい・期間を 1 分にしたいときは Pro 以上(Pro は 2 本)。Cookie やヘッダ単位で数えられるのは Enterprise だけ
 
 ## 4. control と管理画面(問い 3)
 
@@ -103,7 +103,7 @@ Free では Cloudflare の課金通知が使えないので、ダッシュボー
 | control を自分のドメインに載せる | `control_address: custom` / `control_host` |
 | 管理画面を自分のドメインに載せる | `admin_address: custom` / `admin_host` |
 | 入口の守り | `control_protection`(`none` / `waf` / `access`) |
-| edge の WAF ルール | `edge_waf_rate_limit` / `edge_waf_requests_per_10s` |
+| edge の WAF ルールと、edge の Rate Limiting binding の値 | `edge_waf_rate_limit` / `edge_waf_requests_per_10s` |
 | Mode B(サーバー発行 Cookie) | `dlite_hosts` |
 | 料金プラン | `plan`(`free` / `paid`。`paid` なら導入の前にダッシュボードで切り替える) |
 

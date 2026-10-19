@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BREAK_GLASS, alignToWindow, call, expectEnvelope, inviteAndJoin, json, setupOwner, uniqueEmail } from "./helpers";
+import { AUTH_RATE_LIMIT, BREAK_GLASS, alignToWindow, call, expectEnvelope, inviteAndJoin, json, setupOwner, uniqueEmail } from "./helpers";
 
 const ORIGIN = { origin: "http://localhost:3000" };
 const open = { envOverride: BREAK_GLASS };
@@ -83,13 +83,13 @@ describe("break-glass (決定 46 (2)(3))", () => {
     expect((await call("POST", path, { token: owner.token, ...open })).status).toBe(200);
   });
 
-  it("reset-link is rate limited per IP: 10 pass the limiter, the 11th is 429", async () => {
-    await alignToWindow(); // 10 秒の固定窓をまたぐと数え直しになる
+  it("reset-link is rate limited per IP: 30 pass the limiter, the 31st is 429", async () => {
+    await alignToWindow({ fresh: true }); // 10 秒の固定窓をまたぐと数え直しになるので窓の頭から始める
     // nextTestIp() が払い出す 198.18.0.0/15 の外の固定 IP(他のテストと枠を食い合わない)
     const headers = { "cf-connecting-ip": "203.0.113.88" };
     const statuses: number[] = [];
-    for (let i = 0; i < 11; i++) statuses.push((await call("POST", "/break-glass/reset-link", { body: { token: "x".repeat(20), email: "a@example.com" }, headers })).status);
-    expect(statuses.slice(0, 10).every((s) => s === 404)).toBe(true);
-    expect(statuses[10]).toBe(429);
-  }, 15_000);
+    for (let i = 0; i < AUTH_RATE_LIMIT + 1; i++) statuses.push((await call("POST", "/break-glass/reset-link", { body: { token: "x".repeat(20), email: "a@example.com" }, headers })).status);
+    expect(statuses.slice(0, AUTH_RATE_LIMIT).every((s) => s === 404)).toBe(true);
+    expect(statuses[AUTH_RATE_LIMIT]).toBe(429);
+  }, 25_000); // 窓の待ち(最大 10 秒)+ 31 回
 });

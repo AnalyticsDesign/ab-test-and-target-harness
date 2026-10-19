@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { API_CONTRACT_VERSION, API_VERSION_HEADER } from "@wtt/core";
-import { alignToWindow, call } from "./helpers";
+import { alignToWindow, AUTH_RATE_LIMIT, call } from "./helpers";
 
 // backlog D13 / 決定 56 (1): control は全応答に自分の API 契約の版を付ける(判定はしない)
 describe("api contract version header (D13 / decision 56 (1))", () => {
@@ -20,11 +20,12 @@ describe("api contract version header (D13 / decision 56 (1))", () => {
   });
 
   it("is on the 429 of the rate limiter (the first middleware runs before it)", async () => {
-    await alignToWindow();
+    await alignToWindow({ fresh: true });
     const ip = "198.19.0.1";
+    // 誤ったトークンの POST /setup はすぐ 403 になる(sign-in はパスワードの比較で遅く、窓に収まらないおそれがある)
     let last: Response | undefined;
-    for (let i = 0; i < 12; i++) last = await call("POST", "/auth/sign-in/email", { headers: { "cf-connecting-ip": ip }, body: {} });
+    for (let i = 0; i < AUTH_RATE_LIMIT + 1; i++) last = await call("POST", "/setup", { headers: { "cf-connecting-ip": ip, "x-setup-token": "wrong" }, body: {} });
     expect(last!.status).toBe(429);
     expectVersion(last!, "429 envelope");
-  });
+  }, 25_000); // 窓の待ち(最大 10 秒)+ 31 回
 });

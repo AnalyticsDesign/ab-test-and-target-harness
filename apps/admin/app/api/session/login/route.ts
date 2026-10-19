@@ -24,7 +24,7 @@ export async function POST(req: Request): Promise<Response> {
     // セッション作成のフックが断った場合(その人はもうどの Workspace にも属していない)。
     // これも Better Auth 素の封筒で返るので、拾わないとパスワード誤りに丸められてしまう。
     // この 403 は「パスワードは合っている」ことを相手に教えるが、非常用の経路が開いているあいだしか到達できず、
-    // その入口は control が IP 単位で 10 回 / 10 秒に絞っているので受容する(理由を隠すと運用者が原因を追えない)
+    // その入口は control が IP 単位で 30 回 / 10 秒に絞っているので受容する(理由を隠すと運用者が原因を追えない)
     if (res.status === 403 && data?.message === "not_invited") {
       return Response.json({ error: "not_invited", message: NOT_INVITED }, { status: 403 });
     }
