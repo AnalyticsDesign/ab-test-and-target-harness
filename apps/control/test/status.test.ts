@@ -4,6 +4,7 @@ import { kvKeys, parseCompiledConfig, RUN_ID_RE } from "@wtt/core";
 import { getDb } from "../src/db";
 import {
   call,
+  choosePrimaryGoal,
   json,
   setupOwner,
   inviteAndJoin,
@@ -315,6 +316,8 @@ describe("run_id の発行と開始の警告(D9 ②)", () => {
     expect(res.status).toBe(201);
     const { id: sid } = await json<{ id: string }>(res);
     const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_hero", ...expOverrides });
+    // 結果を記録する開始は判定に使う目標が要る(D9 ③ Task 5)。パーソナライズには評価計画が無い
+    if (expOverrides.kind !== "single") await choosePrimaryGoal(owner.token, sid, eid);
     return { owner, sid, eid };
   }
 

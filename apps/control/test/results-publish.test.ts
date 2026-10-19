@@ -4,7 +4,7 @@ import { sql } from "kysely";
 import { RUN_ID_RE, type CompiledConfig } from "@wtt/core";
 import { getDb } from "../src/db";
 import { publishSite } from "../src/publish";
-import { call, createExperiment, experimentRow, json, publishRes, RESULTS_STORE, runDirect, setupOwner, siteRow, testEnv, TEXT_CHANGE } from "./helpers";
+import { call, choosePrimaryGoal, createExperiment, experimentRow, json, publishRes, RESULTS_STORE, runDirect, setupOwner, siteRow, testEnv, TEXT_CHANGE } from "./helpers";
 
 // D9 ②(設計書 §6.3・§9.3、plan ② の K15・Task 11): Publish が compiled config に results を出し、収集の状態の変化を記録する
 
@@ -21,11 +21,12 @@ async function resultsSite(store = true, existing?: Awaited<ReturnType<typeof se
   return { owner, sid };
 }
 
-/** 変更 1 件付きのテストを作る(kind は既定の test) */
+/** 変更 1 件付きのテストを作る(kind は既定の test)。テストは判定に使う目標を選んでおく(結果を記録する開始の検査。D9 ③ Task 5) */
 async function testExperiment(token: string, sid: string, id: string, overrides: Record<string, unknown> = {}) {
   await createExperiment(token, sid, { id, ...overrides });
   const variant = overrides.kind === "single" ? "a" : "b";
   await call("PUT", `/sites/${sid}/experiments/${id}/variants/${variant}/changes`, { token, body: [TEXT_CHANGE()] });
+  if (overrides.kind !== "single") await choosePrimaryGoal(token, sid, id);
 }
 
 /** /status で遷移する(開始で run_id を振るには計測用 D1 が要る。遷移は自動で公開する) */

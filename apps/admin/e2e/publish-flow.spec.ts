@@ -21,6 +21,7 @@ import {
   WORKSPACE_NAME,
   appAlert,
   changeStatus,
+  confirmRunningTestSave,
   createExperiment,
   createSite,
   login,
@@ -429,6 +430,8 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await attribute.locator('input[maxlength="500"]').fill("a.cta");
     await attribute.locator('input[list="attr-allow"]').fill("onclick");
     await page.getByRole("button", { name: "保存(下書き)" }).click();
+    // D9 ③(設計書 §5.5): 実行中のテストの変更を保存するときは 1 回確認する
+    await confirmRunningTestSave(page);
     // 封筒の message は control が出す日本語(機械可読コードをそのまま画面に出さない。spec §13.5)
     await expect(appAlert(page)).toContainText("属性 onclick は ATTRIBUTE では設定できません");
     await expect(page.getByRole("button", { name: "HTML タイプに切り替える" })).toBeVisible();

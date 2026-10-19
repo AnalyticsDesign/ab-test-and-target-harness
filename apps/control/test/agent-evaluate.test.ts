@@ -67,7 +67,8 @@ describe("POST /sites/:sid/evaluate (spec §13.10 / 決定 39 (2) (7))", () => {
     expect(["a", "b"]).toContain(of(withId.items, "exp_lp").variantId);
 
     // traffic 1% → 除外理由(除外される visitorId を総当たりで探す)
-    await call("PATCH", `/sites/${sid}/experiments/exp_lp`, { token: owner.token, body: { trafficPercentage: 1 } });
+    // 実行中のテストは配信率を下げられない(D9 ③ の K10)ので、評価の入力を作るために直接書く
+    await env.DB.prepare("update experiments set traffic_percentage = 1, updated_at = ? where site_id = ? and id = 'exp_lp'").bind(Date.now(), sid).run();
     await publishRes(owner.token, sid);
     const excluded = [] as string[];
     for (const v of ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"]) {

@@ -232,6 +232,11 @@ SELECT
   }
   // 決定 51(設計書 §3.4): パーソナライズはパターン 1 つで振り分けないので、パターンどうしの比較も割り振りの偏りの確認も成り立たない
   if (experiment.kind === "single") notes.push("パーソナライズなので、比較と SRM の確認は意味を持ちません");
+  // 決定 51(設計書 §12): 管理画面の結果(GET …/results)はこのツールが記録した参加と CV を数えるので、ここのクエリの数字とは一致しない
+  else
+    notes.push(
+      "管理画面の結果のタブ(GET …/results)とは数字が一致しない: 管理画面の参加者はテストの対象の要素が表示された人(変更の適用に失敗した人を含む)を訪問者 ID ごとに数え、評価時点で記録を止める。ここのクエリは ab_exposure(変更を適用できた人)を GA4 の ID(user_pseudo_id / セッション)ごとに数える",
+    );
 
   return {
     experiment: { id: experiment.id, name: experiment.name, startedAt: experiment.started_at, stoppedAt: experiment.stopped_at },

@@ -27,6 +27,8 @@ export type SiteRow = {
   static_seq: number; static_stale: number; static_epoch: number; static_served_version: number | null; static_prev_served_version: number | null; static_served_at: number | null; static_removing: string | null;
   /** migrations/0014_results_collection.sql(D9 ②、設計書 §6.6)。結果を記録するか(0 / 1)と個票の保持期間(日、7〜365) */
   results_enabled: number; results_retention_days: number;
+  /** migrations/0016_results_reports.sql(D9 ③ K11): 収集の締め切りを KV に書き直す必要がある(0 / 1。書き込みに失敗したとき Cron が拾う) */
+  collect_until_dirty: number;
 };
 export type SiteHostRow = { host: string; site_id: string };
 /** migrations/0007_audiences.sql。definition_json = 保存する形の配信条件(core の Targeting) */
@@ -85,6 +87,32 @@ export type ResultsCollectionLogRow = { id: Generated<number>; site_id: string; 
 /** 同上。Cron のジョブの実行の記録(last_run_day = UTC の YYYY-MM-DD) */
 export type CronJobRunRow = { job: string; last_run_day: string | null; last_success_at: number | null };
 
+/**
+ * migrations/0016_results_reports.sql(D9 ③、設計書 §9.1)。時刻は epoch ミリ秒、JSON 列は _json 接尾辞。
+ * id が Generated<number> の表は SQLite の rowid(足すときは省く)
+ */
+export type EvaluationPlanRow = {
+  site_id: string; experiment_id: string; plan_json: string; version: number; update_token: string | null;
+  fixed_at: number | null; reached_at: number | null; reached_recorded_at: number | null; reach_checked_day: string | null;
+  updated_by: string | null; updated_at: number;
+};
+export type EvaluationPlanChangeRow = { id: Generated<number>; site_id: string; experiment_id: string; at: number; by: string | null; before_json: string; after_json: string; reason: string | null };
+export type ResultSnapshotRow = { site_id: string; experiment_id: string; kind: "evaluation" | "stop"; run_id: string; cutoff_at: number; computed_at: number; stats_version: string; result_json: string };
+export type AdoptionRow = { site_id: string; experiment_id: string; variant_id: string | null; note: string; decided_by: string | null; decided_at: number };
+export type ExperimentDeliveredDefinitionRow = {
+  id: Generated<number>; site_id: string; experiment_id: string; run_id: string; publish_version: number; static_generation: string | null;
+  definition_json: string; definition_hash: string; delivered_from: number | null; delivered_until: number | null; settled: "delivered" | "overtaken" | "unknown" | null;
+};
+/** 配信ファイルの出し直しの依頼ごとの「世代 → その出し直しで焼いた版」(requestStaticDeploy が書く) */
+export type StaticDeployRequestRow = { site_id: string; epoch: number; seq: number; version: number; requested_at: number };
+export type ExperimentDeliveryChangeRow = { id: Generated<number>; site_id: string; experiment_id: string; run_id: string; publish_version: number; at: number; by: string | null; parts_json: string };
+/** 計測用 D1 の行の削除待ち。外部キーなし(Site・エクスペリエンスが消えた後も残す) */
+export type PurgeReason = "experiment_deleted" | "site_deleted" | "workspace_deleted";
+export type ResultsPurgeQueueRow = { site_id: string; run_id: string; reason: PurgeReason; enqueued_at: number };
+export type ResultsInterimCacheRow = { site_id: string; experiment_id: string; computed_at: number; rows_read: number; result_json: string };
+export type ResultsStoreStatusRow = { id: number; size_bytes: number; measured_at: number };
+export type CronCursorRow = { job: string; day: string; cursor: string | null };
+
 export interface Tables {
   user: UserRow;
   verification: VerificationRow;
@@ -109,6 +137,17 @@ export interface Tables {
   retired_experiment_ids: RetiredExperimentIdRow;
   results_collection_log: ResultsCollectionLogRow;
   cron_job_runs: CronJobRunRow;
+  evaluation_plans: EvaluationPlanRow;
+  evaluation_plan_changes: EvaluationPlanChangeRow;
+  result_snapshots: ResultSnapshotRow;
+  adoptions: AdoptionRow;
+  experiment_delivered_definitions: ExperimentDeliveredDefinitionRow;
+  static_deploy_requests: StaticDeployRequestRow;
+  experiment_delivery_changes: ExperimentDeliveryChangeRow;
+  results_purge_queue: ResultsPurgeQueueRow;
+  results_interim_cache: ResultsInterimCacheRow;
+  results_store_status: ResultsStoreStatusRow;
+  cron_cursors: CronCursorRow;
 }
 export type Db = Kysely<Tables>;
 

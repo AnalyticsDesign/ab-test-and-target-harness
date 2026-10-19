@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronFrozen, runCron, type CronContext, type CronJob } from "../src/cron/runner";
 import { CRON_JOBS } from "../src/cron/jobs";
 import { resultsAccountGuard } from "../src/cron/account-guard";
+import { resultsCapacityJob, resultsCollectUntilJob, resultsDailyJob, resultsDeliveryJob, resultsPurgeJob } from "../src/cron/results-jobs";
 import { getDb } from "../src/db";
 import type { Env, ResultsBudgetRpc } from "../src/env";
 import { writeInstanceSettings } from "../src/instance-settings";
@@ -159,7 +160,15 @@ describe("cron runner (D9 ② K5・K6)", () => {
   });
 
   it("registers the account guard in CRON_JOBS", () => {
-    expect(CRON_JOBS).toEqual([resultsAccountGuard]);
+    // D9 ③(K17): 結果のジョブ 5 本を results-account-guard の後に、この順で(どれも wtt-control に書く)
+    expect(CRON_JOBS).toEqual([resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob]);
+    expect(CRON_JOBS.slice(1).map((j) => [j.name, j.cadence, j.writesControl])).toEqual([
+      ["results-delivery", { every: "tick" }, true],
+      ["results-collect-until", { every: "tick" }, true],
+      ["results-daily", { daily: { afterUtcHour: 0 } }, true],
+      ["results-capacity", { every: "tick" }, true],
+      ["results-purge", { daily: { afterUtcHour: 23 } }, true],
+    ]);
     expect(resultsAccountGuard).toMatchObject({ name: "results-account-guard", cadence: { every: "tick" }, writesControl: false });
   });
 });
@@ -205,7 +214,7 @@ describe("results account guard (D9 ② K12)", () => {
   it("account guard stops collection at 80 percent on free", async () => {
     const budget = fakeBudget();
     mockGraphql(workers(80_000));
-    expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), NOW, CRON_JOBS)).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
+    expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), NOW, [resultsAccountGuard])).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
     expect(budget.stop).toHaveBeenCalledExactlyOnceWith("account_usage", NEXT_MIDNIGHT, NOW);
     expect(budget.names).toEqual(["global"]);
 
@@ -214,14 +223,14 @@ describe("results account guard (D9 ② K12)", () => {
     vi.restoreAllMocks();
     const below = fakeBudget();
     mockGraphql(workers(79_999));
-    await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: below.ns }), NOW, CRON_JOBS);
+    await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: below.ns }), NOW, [resultsAccountGuard]);
     expect(below.stop).not.toHaveBeenCalled();
   });
 
   it("account guard uses d1_rows_written too", async () => {
     const budget = fakeBudget();
     mockGraphql({ ...workers(10), ...d1Written(80_000) });
-    await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), NOW, CRON_JOBS);
+    await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), NOW, [resultsAccountGuard]);
     expect(budget.stop).toHaveBeenCalledExactlyOnceWith("account_usage", NEXT_MIDNIGHT, NOW);
   });
 
@@ -230,7 +239,7 @@ describe("results account guard (D9 ② K12)", () => {
     // 使用量の設定が無い: ログだけ(失敗にしない。設定していない導入で 15 分ごとに失敗を出さない)
     const unconfigured = fakeBudget();
     const fetchSpy = mockGraphql(workers(100_000));
-    expect(await runCron(envWith({ RESULTS_BUDGET: unconfigured.ns }), NOW, CRON_JOBS)).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
+    expect(await runCron(envWith({ RESULTS_BUDGET: unconfigured.ns }), NOW, [resultsAccountGuard])).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
     expect(unconfigured.stop).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(log.mock.calls.flat().join(" ")).toContain("results-account-guard");
@@ -238,20 +247,20 @@ describe("results account guard (D9 ② K12)", () => {
     // Paid: 日次の上限が無いので判定しない
     await writeInstanceSettings(getDb(env), { cloudflarePlan: "paid" }, null);
     const paid = fakeBudget();
-    expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: paid.ns }), NOW, CRON_JOBS)).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
+    expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: paid.ns }), NOW, [resultsAccountGuard])).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
     expect(paid.stop).not.toHaveBeenCalled();
 
     // 予算の DO の binding が無い(vitest の既定 = 今の control): 何もしない
     await writeInstanceSettings(getDb(env), { cloudflarePlan: "free" }, null);
     resetUsageCache();
-    expect(await runCron(envWith({ ...CONFIGURED }), NOW, CRON_JOBS)).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
+    expect(await runCron(envWith({ ...CONFIGURED }), NOW, [resultsAccountGuard])).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
   });
 
   it("account guard logs and does nothing when the usage query fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const budget = fakeBudget();
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("bad gateway", { status: 502 }));
-    expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), NOW, CRON_JOBS)).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
+    expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), NOW, [resultsAccountGuard])).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
     expect(budget.stop).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalled();
   });
@@ -261,7 +270,7 @@ describe("results account guard (D9 ② K12)", () => {
     const budget = fakeBudget();
     budget.stop.mockRejectedValueOnce(new Error("unreachable"));
     mockGraphql(workers(90_000));
-    expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), NOW, CRON_JOBS)).toEqual([{ job: "results-account-guard", outcome: "failed" }]);
+    expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), NOW, [resultsAccountGuard])).toEqual([{ job: "results-account-guard", outcome: "failed" }]);
     expect(error).toHaveBeenCalled();
   });
 
@@ -269,7 +278,7 @@ describe("results account guard (D9 ② K12)", () => {
     await freeze();
     const budget = fakeBudget();
     mockGraphql(workers(80_000));
-    expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), NOW, CRON_JOBS)).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
+    expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), NOW, [resultsAccountGuard])).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
     expect(budget.stop).toHaveBeenCalledExactlyOnceWith("account_usage", NEXT_MIDNIGHT, NOW);
     expect(await jobRuns()).toEqual([]); // wtt-control に書かない(成功の記録も書かない)
   });

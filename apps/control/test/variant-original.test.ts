@@ -140,6 +140,10 @@ describe("メモ(B77 K9)", () => {
     expect(await json(vRunning)).toMatchObject({ id: "b", name: "B", weight: 50, original: false, description: "配信中のメモ", analytics: null });
     const afterRunningMemo = await detail(token, sid, eid);
     expect([afterRunningMemo.updatedAt, afterRunningMemo.unpublished]).toEqual([running.updatedAt, running.unpublished]);
+    // ほかのキーと一緒なら今までどおり updated_at を進める(D9 ③ の K10 で終了したテストには保存できなくなったので、配信中に確かめる)
+    await tick();
+    expect((await call("PATCH", `/sites/${sid}/experiments/${eid}`, { token, body: { description: "経緯 0", name: "Hero 2" } })).status).toBe(200);
+    expect((await detail(token, sid, eid)).updatedAt).toBeGreaterThan(running.updatedAt);
     // 終了後: エクスペリエンスのメモとパターンのメモ
     const archived = await json(await call("POST", `/sites/${sid}/experiments/${eid}/status`, { token, body: { status: "archived" } }));
     expect(archived.publish.ok).toBe(true);
@@ -152,10 +156,11 @@ describe("メモ(B77 K9)", () => {
     const after = await detail(token, sid, eid);
     expect([after.description, after.variants[1].description]).toEqual(["経緯", "終了後のメモ"]);
     expect([after.updatedAt, after.updatedBy, after.unpublished]).toEqual([before.updatedAt, before.updatedBy, before.unpublished]);
-    // ほかのキーと一緒なら今までどおり updated_at を進める
-    await tick();
-    expect((await call("PATCH", `/sites/${sid}/experiments/${eid}`, { token, body: { description: "経緯 2", name: "Hero 2" } })).status).toBe(200);
-    expect((await detail(token, sid, eid)).updatedAt).toBeGreaterThan(before.updatedAt);
+    // 終了したテストへのほかのキーと一緒の PATCH は 409(D9 ③ の K10)。メモも書かない
+    const mixed = await call("PATCH", `/sites/${sid}/experiments/${eid}`, { token, body: { description: "経緯 2", name: "Hero 3" } });
+    expect(mixed.status).toBe(409);
+    expect((await json(mixed)).error).toBe("experiment_archived_readonly");
+    expect(await detail(token, sid, eid)).toMatchObject({ description: "経緯", name: "Hero 2", updatedAt: before.updatedAt });
   });
 
   it("description_too_long", async () => {

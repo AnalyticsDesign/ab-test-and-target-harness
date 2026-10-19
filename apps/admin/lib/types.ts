@@ -44,6 +44,8 @@ export type Site = {
   activeVersion: number | null; activeKvStale: boolean; staticStale: boolean; staticRemoving: boolean; lastActivatedAt: number | null; contentUpdatedAt: number; createdAt: number; updatedAt: number;
   /** `GET /sites/:sid` だけが返す(spec §13.9 の badge / banner 用) */
   hasUnpublishedChanges?: boolean;
+  /** `GET /sites/:sid` だけが返す: 計測用のデータベースの使用量(D9 ③。測る前・計測用のデータベースが無い導入では無い) */
+  resultsCapacity?: ResultsCapacity | null;
 };
 export type Status = "draft" | "running" | "paused" | "archived";
 export type ChangeType = "TEXT" | "IMAGE" | "HIDE" | "ATTRIBUTE" | "HTML" | "CSS" | "CUSTOM_JS";
@@ -64,9 +66,34 @@ export type Experiment = {
   runId: string | null;
   /** `GET /sites/:sid/experiments/:eid` だけが返す */
   variants?: Variant[];
+  /** `GET /sites/:sid/experiments`(一覧)だけが返す: 採用の要約(D9 ③。記録していなければ null) */
+  adoption?: ListAdoption | null;
 };
+/**
+ * 一覧の採用の要約(D9 ③)。summary は正の判定の記録(評価時点の記録、評価時点の前に終了したときは終了の記録)から取った値。
+ * 基準を採用したときは summary の値がすべて null(重み 0 のパターンでも null になるので、基準かは baseline で見る)。採用なし・記録が無いときは summary = null
+ */
+export type ListAdoption = {
+  variantId: string | null;
+  /** 採用したパターンの今の名前(無くなっていれば記録に写した名前)。採用なし・分からなければ null */
+  variantName: string | null;
+  /** 基準のパターンを採用したか(正の判定の記録の基準と同じ。記録が無ければ false) */
+  baseline: boolean;
+  decidedAt: number;
+  summary: { diffPoints: number | null; relative: number | null; probBeat: number | null; verdict: "blocked_quality" | "adopt" | "worse" | "equivalent" | "insufficient" | null } | null;
+};
+/** 計測用のデータベースの使用量(D9 ③。`GET /sites/:sid` が返す。まだ測っていない導入では無い) */
+export type ResultsCapacity = { sizeBytes: number; measuredAt: number; level: "ok" | "warning" | "stopped" };
 export type AnalyticsWarning = { path: string; message: string };
 export type PublishResult = { ok: true; version: number; needsProfile: boolean; superseded: boolean; staticDeploy: "deployed" | "pending" | "skipped"; warnings: AnalyticsWarning[] } | { ok: false; version: number | null; error: string; message: string; hint?: string };
+/** `POST …/experiments/:eid/status` の応答。warnings = 遷移は成功したが知らせたいこと(結果を記録しない開始・容量の見込み。D9 ②③) */
+export type StatusResult = {
+  experiment: Experiment;
+  publish: PublishResult;
+  warnings?: AnalyticsWarning[];
+  /** テストを終了したときだけ: 結果の記録と採用の記録ができたか(false = 結果は自動で記録し直し、採用は記録し直しが要る。D9 ③) */
+  results?: { recorded: boolean };
+};
 export type PublishRow = { version: number; status: "reserved" | "failed" | "active" | "superseded"; createdAt: number; activatedAt: number | null; needsProfile: boolean | null; error: string | null; publishedBy: { id: string; name: string } };
 export type PublishPreview = {
   lastActivatedAt: number | null;
@@ -84,7 +111,15 @@ export type PublishPreview = {
   overlaps: Array<{ path: string; message: string; experimentIds: string[] }>;
 };
 /** analytics = 目標の外部計測(B77。goalName を指定しなければ ab_goal_name は目標 ID。無ければ null) */
-export type Goal = { id: string; name: string; type: "PAGEVIEW" | "CLICK" | "CUSTOM"; config: Record<string, unknown>; analytics: { overrides?: { goalName?: string } } | null; createdAt: number; updatedAt: number };
+/**
+ * runningTests = この目標を配信条件(使っているオーディエンスを含む)か評価計画(判定に使う目標)で参照している、実行中・一時停止中のテスト
+ * (D9 ③。保存の確認に件数を添える。古い control の応答では欠ける = 0 件)
+ */
+export type Goal = {
+  id: string; name: string; type: "PAGEVIEW" | "CLICK" | "CUSTOM"; config: Record<string, unknown>; analytics: { overrides?: { goalName?: string } } | null;
+  runningTests?: Array<{ id: string; name: string }>;
+  createdAt: number; updatedAt: number;
+};
 /** backlog D13: 書き込みの凍結の状態。reason = null は「凍結の設定が読めない」(凍結中として扱う) */
 export type WriteFreezeState = { reason: string | null; until: string | null; since: number | null };
 /** `GET /capabilities`。この導入で使える機能(control の env から決まる) */

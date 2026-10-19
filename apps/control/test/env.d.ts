@@ -8,7 +8,7 @@ declare global {
     interface Env extends ControlEnv {
       /** vitest.config.ts の miniflare.bindings で渡す(test/apply-migrations.ts が適用する) */
       TEST_MIGRATIONS: D1Migration[];
-      /** D9 ②: 計測用 D1 のマイグレーション(edge の results-migrations/)。RESULTS_DB に当てるテストが applyD1Migrations で使う */
+      /** D9 ②・③(K5): 計測用 D1 のマイグレーション(wrangler.jsonc の RESULTS_DB の migrations_dir = edge の results-migrations/)。test/apply-migrations.ts が毎テストの前に RESULTS_DB に当てる */
       TEST_RESULTS_MIGRATIONS: D1Migration[];
       TEST_REPAIR_SQL: string;
       /** backlog B35: control / core の src の中身(キー = control/… / core/…)。glossary.test.ts が読む */

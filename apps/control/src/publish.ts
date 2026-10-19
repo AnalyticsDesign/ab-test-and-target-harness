@@ -16,12 +16,14 @@ import {
 } from "@wtt/core";
 import { RUNTIME_HASH, RUNTIME_SOURCE } from "@wtt/runtime/source";
 import { edgeOrigin } from "./capabilities";
-import type { Db, ExperimentRow, SiteRow, Tables } from "./db";
+import { toStatement, type Db, type ExperimentRow, type SiteRow, type Tables } from "./db";
 import type { Env } from "./env";
 import { orderForCompile, overlapWarnings } from "./experiment-order";
 import { newId } from "./ids";
 import { siteToSettings } from "./site-settings";
-import { requestStaticDeploy, type StaticDeployState } from "./static-delivery";
+import { confirmDeliveries, deliveredDefinitionInsert, deliveredDefinitionsFor, plansForDelivery, prepareDeliveredDefinitions, setDeliveredGeneration, type PreparedDelivery } from "./results/delivered";
+import { apiGuard } from "./results/guard";
+import { requestStaticDeploy, type StaticDeployOutcome, type StaticDeployState } from "./static-delivery";
 
 export const KEEP_RECENT = 5; // spec §9.4: 直近 5 版
 export const RECENT_ACTIVE_MS = 5 * 60_000; // spec §9.4: 5 分以内に active だった版
@@ -117,14 +119,22 @@ export async function buildCompileInput(
  * `runs` = 結果を記録する Site の、running / paused のテストで run_id があるもの(paused は experiments[] に載らないので別に集める)。
  * 出すのは runs が空でないとき、または run_id があって個票を消していない(results_purged_at が無い)エクスペリエンスが残っているとき
  * (結果の記録を無効にした後・すべて終了した後も、個票が残っている間は forget のために出す)。
+ * D9 ③(K6 (1)): pendingPurge = Site の results_purge_queue に行がある(削除したエクスペリエンスの個票がまだ残っている)。
+ * その間も forget のために出す(run_id を持つエクスペリエンスを削除した後に forget が止まらない)。
  * compile の入力に足すのは publishSite だけ(buildCompileInput は足さない: エージェントの what-if・下書きの bootstrap・公開前の差分に入れない)
  */
-export function resultsForCompile(site: SiteRow, all: ExperimentRow[]): ResultsConfig | undefined {
+export function resultsForCompile(site: SiteRow, all: ExperimentRow[], pendingPurge: boolean): ResultsConfig | undefined {
   const runs: Record<string, string> = {};
   if (site.results_enabled === 1)
     for (const e of all) if (e.kind === "test" && (e.status === "running" || e.status === "paused") && e.run_id !== null) runs[e.id] = e.run_id;
-  const rowsMayRemain = all.some((e) => e.run_id !== null && e.results_purged_at === null);
+  const rowsMayRemain = pendingPurge || all.some((e) => e.run_id !== null && e.results_purged_at === null);
   return Object.keys(runs).length > 0 || rowsMayRemain ? { forget: true, runs } : undefined;
+}
+
+/** D9 ③(K6 (1)): Site の個票の削除待ち(results_purge_queue の行)があるか */
+export async function hasPendingPurge(db: Db, siteId: string): Promise<boolean> {
+  const row = await db.selectFrom("results_purge_queue").select("run_id").where("site_id", "=", siteId).limit(1).executeTakeFirst();
+  return row !== undefined;
 }
 
 /**
@@ -274,13 +284,16 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, userId: strin
   // status を live で再読みすると、その間に別の status 変更が割り込んで「配信中の config には無い状態」を
   // published_status に書いてしまう(review r1 Task 7 の指摘。site-delete guard が published_status を見るので実害がある)
   let statusSnapshot: Array<Pick<ExperimentRow, "id" | "status">>;
+  // D9 ③(K14): 届く定義は compile に渡したのと同じ入力・同じ行から作り、activation の CAS と同じ batch で記録する
+  let deliveries: PreparedDelivery[];
   try {
     // 写しと compile 入力は**同じ 1 回の SELECT** から取る(別々に読むと間に割り込んだ status 変更で食い違う。rulings §4 CX-High-3)
     const experiments = await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute();
     statusSnapshot = experiments.map((e) => ({ id: e.id, status: e.status }));
     const input = await buildCompileInput(db, site, version, experiments);
-    // D9 ②(K15): results は Publish の経路だけで足す(写しと同じ SELECT の行から作る)
-    const results = resultsForCompile(site, experiments);
+    deliveries = await prepareDeliveredDefinitions(deliveredDefinitionsFor(input, experiments, await plansForDelivery(db, site.id)), experiments);
+    // D9 ②(K15): results は Publish の経路だけで足す(写しと同じ SELECT の行から作る)。③ K6: 削除待ちの個票があれば forget を出し続ける
+    const results = resultsForCompile(site, experiments, await hasPendingPurge(db, site.id));
     config = compile(results ? { ...input, results } : input);
     // §10.9: compile は警告に留める。拒否は保存 API(`assertName`)側
     warnings = analyticsWarnings(config);
@@ -344,15 +357,18 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, userId: strin
     prev = cur.active_version;
     prevActivatedAt = cur.last_activated_at;
     if (prev !== null && prev >= version) break; // 自分より新しい version が先に active になった
-    const upd = await db
+    const cas = db
       .updateTable("sites")
       // 決定 52 / plan K4: 配信ファイルの印は activation と同じ文で立てる。出し直しの依頼の前に処理が止まっても印が残り、
       // GET の自己修復が拾う。activation で seq を進めるので、それより前の依頼の結果が印を下ろさない
       .set({ active_version: version, last_activated_at: nowMs, static_seq: sql<number>`static_seq + 1`, static_stale: 1 })
       .where("id", "=", site.id)
-      .where((eb) => (prev === null ? eb("active_version", "is", null) : eb("active_version", "=", prev)))
-      .executeTakeFirst();
-    activated = Number(upd.numUpdatedRows) > 0;
+      .where((eb) => (prev === null ? eb("active_version", "is", null) : eb("active_version", "=", prev)));
+    // D9 ③(K14): 届く定義の行は CAS と同じ batch(1 トランザクション)で、「この版が active」を条件に足す。
+    // 行がある ⇔ この版を activation した(記録の取りこぼし・並行する Publish との順の入れ替わり・出し直しの待ちの間の確認で前の行に当たる、が起きない)。
+    // 世代は出し直しの後に入れる(それまでは NULL)
+    const [upd] = await env.DB.batch([toStatement(env, cas), ...deliveries.map((d) => toStatement(env, deliveredDefinitionInsert(db, site.id, version, null, d, true)))]);
+    activated = (upd?.meta.changes ?? 0) > 0;
   }
   if (!activated) {
     // 追い越された(または CAS が競り負け続けた)。KV は触らず履歴だけ残す(次の Publish が最新を活性化する)
@@ -404,6 +420,11 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, userId: strin
     select ${site.id}, ${nowMs}, ${collecting}, ${version}
     where exists (select 1 from sites where id = ${site.id} and active_version = ${version})
       and coalesce((select enabled from results_collection_log where site_id = ${site.id} order by id desc limit 1), 0) <> ${collecting}`.execute(db);
+  // D9 ③(plan ③ の K13、設計書 §7.1): 公開で配信の定義・収集の状態が変わるので、保存した速報を消す(次の結果の読みで計算し直す)。
+  // 同じ fence の中で消す(追い越された Publish は消さない)。速報を書く側は active_version が読んだ値のままのときだけ書く
+  await sql`
+    delete from results_interim_cache
+    where site_id = ${site.id} and exists (select 1 from sites where id = ${site.id} and active_version = ${version})`.execute(db);
 
   // 削除してはいけないのは「いま配信されている版」。自分が KV に書いた版(`written`)を渡し、
   // cleanup 側はそれに加えて KV の `active` レコードそのものも読んで守る(自分の版は activated_at = nowMs で 5 分ルールが守る)。
@@ -420,7 +441,24 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, userId: strin
   // 出し直しは最新の D1 から入力を作るので、activation の後により新しい Publish が activation していると、その世代には別の版が焼かれる。
   // 自分の版を焼いた世代のときだけ返し、違えば null(より新しい Publish に追い越された。D9 はこの行を配信済みにしない)
   const staticGeneration = outcome.version === version ? outcome.generation : null;
+  await recordDelivery(env, db, site.id, version, staticGeneration, outcome);
   return { ok: true, version, needsProfile: config.needsProfile, superseded: false, staticDeploy: outcome.state, staticGeneration, warnings };
+}
+
+/**
+ * D9 ③(設計書 §5.5、plan ③ の K14): activation の batch で足した届く定義の行に、この版を焼いた出し直しの世代を入れ、
+ * その世代そのものを配り終えていれば、その 1 点で配信を確かめる(partial: ほかの行は確定しない)。
+ * activation は済んでいるので、失敗しても Publish は成功のまま(行は残る。世代が NULL のままでも、その版を焼いた世代は依頼の記録から引ける)
+ */
+async function recordDelivery(env: Env, db: Db, siteId: string, version: number, generation: StaticGeneration | null, outcome: StaticDeployOutcome): Promise<void> {
+  if (generation === null) return;
+  try {
+    await setDeliveredGeneration(db, siteId, version, generation);
+    if (outcome.state === "deployed" && outcome.deployedAt !== null)
+      await confirmDeliveries(db, siteId, { history: [{ generation, deployedAt: outcome.deployedAt }], historyFrom: null, partial: true }, Date.now(), apiGuard(env));
+  } catch (e) {
+    console.error("delivered definition update failed (best-effort, confirmed later by cron)", e);
+  }
 }
 
 /** 応答に出さない内部用の値(staticGeneration)を外す。OpenAPI の PublishResultSchema には載せない */

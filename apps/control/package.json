@@ -19,6 +19,7 @@
     "@types/json-schema": "^7.0.15",
     "@wtt/core": "workspace:*",
     "@wtt/runtime": "workspace:*",
+    "@wtt/stats": "workspace:*",
     "better-auth": "1.4.21",
     "hono": "^4.13.5",
     "hono-openapi": "^1",

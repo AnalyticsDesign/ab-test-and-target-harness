@@ -1,0 +1,263 @@
+{
+  "phase": "interim",
+  "stoppedEarly": false,
+  "quality": "ok",
+  "records": "available",
+  "collection": "enabled",
+  "persisted": true,
+  "computedAt": 1791385200000,
+  "cutoff": 1791385200000,
+  "plan": {
+    "primaryGoalId": "g_purchase",
+    "baselineVariantId": "a",
+    "minDays": 14,
+    "maxWeeks": 8,
+    "targetPerVariant": null,
+    "delta": 0,
+    "rope": null,
+    "threshold": 95,
+    "definition": {
+      "version": 1,
+      "observationWindow": {
+        "kind": "until_end"
+      },
+      "denominator": "displayed",
+      "mixed": "keep_first",
+      "model": {
+        "name": "beta-binomial",
+        "prior": [
+          1,
+          1
+        ],
+        "version": 1
+      }
+    }
+  },
+  "evaluation": {
+    "minEnd": 1791990000000,
+    "maxEnd": 1795618800000,
+    "evaluationAt": 1791990000000,
+    "reachedAt": null
+  },
+  "variants": [
+    {
+      "id": "a",
+      "name": "A(現行)",
+      "original": true,
+      "weight": 50,
+      "n": 4980,
+      "y": 241,
+      "cvr": 0.048394,
+      "cvrCi95": [
+        0.042433,
+        0.054354
+      ],
+      "diff": null,
+      "state": null,
+      "probBest": null,
+      "applyFailed": 0,
+      "applyRecovered": 0,
+      "minCountMet": null
+    },
+    {
+      "id": "b",
+      "name": "B(CTA 文言)",
+      "original": false,
+      "weight": 50,
+      "n": 5020,
+      "y": 276,
+      "cvr": 0.05498,
+      "cvrCi95": [
+        0.048674,
+        0.061286
+      ],
+      "diff": {
+        "mean": 0.6587,
+        "ci95": [
+          -0.209,
+          1.5263
+        ],
+        "relMean": 13.61,
+        "relCi95": [
+          -4.319,
+          31.54
+        ],
+        "pAboveDelta": 0.923,
+        "pBelowZero": 0.077,
+        "pWithinRope": null,
+        "expectedLossPer10k": 0.31
+      },
+      "state": null,
+      "probBest": null,
+      "applyFailed": 0,
+      "applyRecovered": 0,
+      "minCountMet": true
+    }
+  ],
+  "qualityDetail": {
+    "srmP": 0.62,
+    "mixedRate": 0.002,
+    "stopRatio": 0,
+    "stopLimit": 0.05,
+    "stopPeriods": [],
+    "failedSends": 0,
+    "failureRatio": 0
+  },
+  "byDevice": [
+    {
+      "variantId": "a",
+      "device": "desktop",
+      "n": 2241,
+      "y": 125,
+      "cvr": 0.055779,
+      "diff": null
+    },
+    {
+      "variantId": "a",
+      "device": "mobile",
+      "n": 2241,
+      "y": 92,
+      "cvr": 0.041053,
+      "diff": null
+    },
+    {
+      "variantId": "a",
+      "device": "tablet",
+      "n": 498,
+      "y": 24,
+      "cvr": 0.048193,
+      "diff": null
+    },
+    {
+      "variantId": "b",
+      "device": "desktop",
+      "n": 2259,
+      "y": 143,
+      "cvr": 0.063302,
+      "diff": {
+        "mean": 0.765,
+        "ci95": [
+          -0.1,
+          1.1
+        ]
+      }
+    },
+    {
+      "variantId": "b",
+      "device": "mobile",
+      "n": 2259,
+      "y": 106,
+      "cvr": 0.046923,
+      "diff": {
+        "mean": 0.5789,
+        "ci95": [
+          -0.1,
+          1.1
+        ]
+      }
+    },
+    {
+      "variantId": "b",
+      "device": "tablet",
+      "n": 502,
+      "y": 28,
+      "cvr": 0.055777,
+      "diff": {
+        "mean": 0.7383,
+        "ci95": [
+          -0.1,
+          1.1
+        ]
+      }
+    }
+  ],
+  "otherGoals": [
+    {
+      "goalId": "g_cart",
+      "name": "カート追加",
+      "variants": [
+        {
+          "variantId": "a",
+          "n": 4980,
+          "y": 603,
+          "cvr": 0.121,
+          "diff": null
+        },
+        {
+          "variantId": "b",
+          "n": 5020,
+          "y": 648,
+          "cvr": 0.129,
+          "diff": {
+            "mean": 0.8,
+            "ci95": [
+              -0.1,
+              1.7
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "goalId": "g_signup",
+      "name": "会員登録",
+      "variants": [
+        {
+          "variantId": "a",
+          "n": 4980,
+          "y": 100,
+          "cvr": 0.02,
+          "diff": null
+        },
+        {
+          "variantId": "b",
+          "n": 5020,
+          "y": 100,
+          "cvr": 0.02,
+          "diff": {
+            "mean": 0.05,
+            "ci95": [
+              -0.35,
+              0.45
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "planChanges": 0,
+  "deliveryChanges": [],
+  "adoption": null,
+  "snapshots": {
+    "evaluation": false,
+    "stop": false
+  },
+  "notes": [
+    {
+      "key": "interim",
+      "params": {
+        "evaluationAt": 1791990000000
+      }
+    }
+  ],
+  "statsVersion": "1",
+  "helpKeys": [
+    "verdicts",
+    "probability",
+    "difference",
+    "cvr",
+    "expected-loss",
+    "quality",
+    "srm",
+    "mixed",
+    "apply-failures",
+    "collection-failures",
+    "collection-stops",
+    "segments",
+    "data-integrity"
+  ],
+  "deliveredChanges": {
+    "a": false,
+    "b": true
+  }
+}

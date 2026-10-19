@@ -8,6 +8,8 @@ import { bearerHeaders, ROLES } from "../auth";
 import { PASSWORD_LOGIN_DISABLED_HINT, passwordLoginOpen } from "../break-glass";
 import { ApiError, ROLE_JA, notFound, parseJson, validationFailed } from "../errors";
 import { createWorkspace, isInstanceAdmin } from "../instance-admins";
+import { toStatement } from "../db";
+import { enqueuePurgeQuery, kickOffPurgeForSites } from "../results/purge";
 import { errorResponses } from "../openapi";
 import { invalidateResetLinks, issueResetUrl } from "../reset-link";
 import { assertCanResetMember, assertCanTouchInstanceAdmin, assertCanTouchOwner, atLeast, capRole, isRole, requireInstanceAdmin, requireWorkspaceRole, scopeIncludes } from "../roles";
@@ -251,9 +253,16 @@ workspaceRoutes.delete(
     // 7i plan K23: 配下の全 Site の static_removing が自分の token のときだけ消す(削除の途中で「配信ファイルを作り直す」が
     // 印を消した Site があれば取りやめる)。件数の条件(最後の 1 つ)と同じ 1 文に入れる。
     // member・invitation・sites / site_hosts / publishes は organization の FK CASCADE で落ちる
-    const del = await sql`delete from organization where id = ${wid} and (select count(*) from organization) > 1
-      and not exists (select 1 from sites where workspace_id = ${wid} and (static_removing is null or static_removing <> ${token}))`.execute(db);
-    if (Number(del.numAffectedRows ?? 0) === 0) {
+    // D9 ③(K6 (1)): 同じ batch で、削除の DELETE の前に配下の Site の run を計測用 D1 の削除待ちに積む(条件は削除の文と同じ)
+    const now = Date.now();
+    const [, del] = await c.env.DB.batch([
+      toStatement(c.env, enqueuePurgeQuery(db, { kind: "workspace", workspaceId: wid, token }, now)),
+      c.env.DB.prepare(
+        `delete from organization where id = ?1 and (select count(*) from organization) > 1
+          and not exists (select 1 from sites where workspace_id = ?1 and (static_removing is null or static_removing <> ?2))`,
+      ).bind(wid, token),
+    ]);
+    if ((del?.meta.changes ?? 0) === 0) {
       // どちらの条件で 0 行になったかを、件数で返し分ける
       const n = await sql<{ n: number }>`select count(*) as n from organization`.execute(db);
       throw Number(n.rows[0]?.n ?? 0) <= 1 ? lastWorkspace() : staticRemoveConflict();
@@ -264,6 +273,8 @@ workspaceRoutes.delete(
       await deleteSiteRecords(c.env, site, versionsBySite.get(site.id) ?? []);
       await deleteSiteAssets(c.env, site.id);
     }
+    // K6・K12: 応答の後に 1 回だけ個票を消し始める(残りは Cron が queue から消す)
+    if (c.env.RESULTS_DB && c.env.RESULTS_BUDGET) c.executionCtx.waitUntil(kickOffPurgeForSites(c.env, db, sites.map((s) => s.id), now));
     return c.body(null, 204);
   },
 );

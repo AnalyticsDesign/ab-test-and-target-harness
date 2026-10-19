@@ -140,6 +140,10 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
       await openExperiment("exp_e2e_dbl");
       const done = page.waitForResponse((r) => r.url().includes("/experiments/exp_e2e_dbl/status") && r.request().method() === "POST");
       await page.getByRole("button", { name: "開始(公開して配信を始める)" }).dblclick();
+      // D9 ③: 下書きのテストの開始は必ず確認を出す(このサイトは結果を記録しないので「開始しますか?」)。
+      // 確認の「開始する」も二度押しして、状態の要求が 1 回だけであることを確かめる
+      const dialog = page.getByRole("alertdialog", { name: "開始しますか?" });
+      await dialog.getByRole("button", { name: "開始する", exact: true }).dblclick();
       expect((await done).status()).toBe(200);
       await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "running");
       await expect(page.locator("main").getByRole("alert")).toContainText("を反映しました");
@@ -151,7 +155,8 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
   });
 
   test("start_proceeds_when_publish_preview_fails", async () => {
-    // 重なりの取得に失敗しても、確認なしで開始する(警告は開始を止めない。K7)
+    // 重なりの取得に失敗しても開始できる(警告は開始を止めない。K7)。D9 ③: 下書きのテストの開始は必ず確認を出すので、
+    // 確認は重なりの一覧なしで出る(結果を記録しないサイトなので、記録しない文)。開始の応答の警告(記録しない)も画面に出る
     expect(await control(page, "POST", `/sites/${SITE_KIND.id}/experiments`, { id: "exp_e2e_ov3", name: "exp_e2e_ov3", urlMatch: { op: "contains", value: "/" } })).toBe(201);
     const preview = "**/api/control/sites/*/publish-preview*";
     await page.route(preview, (route) => route.fulfill({ status: 500, body: "{}" }));
@@ -159,8 +164,13 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
       await openExperiment("exp_e2e_ov3");
       const done = page.waitForResponse((r) => r.url().includes("/experiments/exp_e2e_ov3/status") && r.request().method() === "POST");
       await page.getByRole("button", { name: "開始(公開して配信を始める)" }).click();
+      const dialog = page.getByRole("alertdialog", { name: "開始しますか?" });
+      await expect(dialog).toContainText("結果はツール上に残りません");
+      await expect(dialog.getByRole("listitem")).toHaveCount(0); // 重なりの一覧は出ない
+      await dialog.getByRole("button", { name: "開始する", exact: true }).click();
       expect((await done).status()).toBe(200);
       await expect(page.getByRole("alertdialog")).toHaveCount(0);
+      await expect(page.getByTestId("start-warning")).toContainText("結果はツール上に残りません。後から結果の記録を有効にしても、このテストの結果は記録されません");
     } finally {
       await page.unroute(preview);
     }

@@ -244,6 +244,15 @@ describe("GET …/analytics-recipe (spec §13.10 / 決定 39 (5))", () => {
     expect((await get(owner.token, sid, single)).notes).toContain(NOTE);
   });
 
+  it("adds a note on how the numbers differ from the admin results tab, for tests only (決定 51、設計書 §12)", async () => {
+    const { owner, sid, eid } = await recipeSite();
+    const isDiffNote = (n: string) => n.includes("管理画面の結果のタブ") && n.includes("訪問者 ID") && n.includes("user_pseudo_id");
+    expect((await get(owner.token, sid, eid)).notes.some(isDiffNote)).toBe(true);
+    const { id: single } = await createExperiment(owner.token, sid, { id: "exp_single", name: "LP personalize", kind: "single" });
+    await setPeriod(sid, single, Date.UTC(2026, 0, 2), Date.UTC(2026, 0, 5));
+    expect((await get(owner.token, sid, single)).notes.some(isDiffNote)).toBe(false);
+  });
+
   it("VIEWER で読め、未知の Experiment は 404", async () => {
     const { owner, sid, eid } = await recipeSite();
     expect((await call("GET", `/sites/${sid}/experiments/${eid}/analytics-recipe`, { token: owner.token })).status).toBe(200);

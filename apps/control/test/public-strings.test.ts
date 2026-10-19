@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { call, createExperiment, createSite, json, setupOwner } from "./helpers";
+import { call, choosePrimaryGoal, createExperiment, createSite, fakeResultsBudget, json, RESULTS_STORE, setupOwner } from "./helpers";
 
 /**
  * 利用者(エージェント・運用者)に見える文字列に、非公開の開発記録への参照を出さない。
@@ -87,6 +87,78 @@ describe("public strings carry no private design references", () => {
     const storeBody = await json(store);
     expect(storeBody.error).toBe("results_store_missing");
     noPrivateRef("results_store_missing", JSON.stringify(storeBody));
+    // D9 ③(K25): 評価計画のエラー。結果を記録するサイトで、判定に使う目標が無い・基準の重みが 0 の開始
+    const recorded = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+    const { id: rec } = await json<{ id: string }>(recorded);
+    const { id: planExp } = await createExperiment(token, rec);
+    const start = () => call("POST", `/sites/${rec}/experiments/${planExp}/status`, { token, body: { status: "running" }, envOverride: RESULTS_STORE });
+    // 下書きのテストの結果
+    const notStarted = await json(await call("GET", `/sites/${rec}/experiments/${planExp}/results`, { token, envOverride: RESULTS_STORE }));
+    expect(notStarted.error).toBe("results_not_started");
+    noPrivateRef("results_not_started", JSON.stringify(notStarted));
+    const noGoal = await start();
+    expect((await json(noGoal.clone())).error).toBe("evaluation_plan_incomplete");
+    noPrivateRef("evaluation_plan_incomplete (goal)", JSON.stringify(await json(noGoal)));
+    await choosePrimaryGoal(token, rec, planExp);
+    await call("PUT", `/sites/${rec}/experiments/${planExp}/variants`, { token, body: [{ id: "a", name: "A", weight: 0 }, { id: "b", name: "B", weight: 100 }] });
+    const zero = await json(await start());
+    expect(zero.error).toBe("evaluation_plan_incomplete");
+    noPrivateRef("evaluation_plan_incomplete (baseline)", JSON.stringify(zero));
+    const planPath = `/sites/${rec}/experiments/${planExp}/evaluation-plan`;
+    expect((await call("PUT", planPath, { token, body: { plan: { baselineVariantId: "b" } } })).status).toBe(200);
+    expect((await start()).status).toBe(200);
+    // 開始後に縮める・評価時点の後・終了したテスト・結果を記録しない開始のテスト・パーソナライズ
+    const locked = await json(await call("PUT", planPath, { token, body: { plan: { minDays: 7 } } }));
+    expect(locked.error).toBe("evaluation_plan_locked");
+    noPrivateRef("evaluation_plan_locked", JSON.stringify(locked));
+    await env.DB.prepare("update experiments set started_at = ? where site_id = ? and id = ?").bind(Date.now() - 15 * 24 * 60 * 60 * 1000, rec, planExp).run();
+    const fixed = await json(await call("PUT", planPath, { token, body: { plan: { minDays: 21 } } }));
+    expect(fixed.error).toBe("evaluation_already_fixed");
+    noPrivateRef("evaluation_already_fixed", JSON.stringify(fixed));
+    // 目標参加者数のある計画を延ばすとき、到達を確かめる読み取りの予約が断られた(503)
+    const { id: reachExp } = await createExperiment(token, rec, { id: "exp_reach" });
+    await choosePrimaryGoal(token, rec, reachExp);
+    const reachPlan = `/sites/${rec}/experiments/${reachExp}/evaluation-plan`;
+    expect((await call("PUT", reachPlan, { token, body: { plan: { targetPerVariant: 1000 } } })).status).toBe(200);
+    expect((await call("POST", `/sites/${rec}/experiments/${reachExp}/status`, { token, body: { status: "running" }, envOverride: RESULTS_STORE })).status).toBe(200);
+    const unavailable = await json(
+      await call("PUT", reachPlan, { token, body: { plan: { minDays: 21 } }, envOverride: { ...RESULTS_STORE, RESULTS_BUDGET: fakeResultsBudget({ readBudget: 0 }).ns } }),
+    );
+    expect(unavailable.error).toBe("results_read_unavailable");
+    noPrivateRef("results_read_unavailable", JSON.stringify(unavailable));
+    // 開始後のテストで配信率を下げる・割当の固定を変える
+    const lockedTraffic = await json(await call("PATCH", `/sites/${rec}/experiments/${planExp}`, { token, body: { trafficPercentage: 10 } }));
+    expect(lockedTraffic.error).toBe("test_setting_locked");
+    noPrivateRef("test_setting_locked (traffic)", JSON.stringify(lockedTraffic));
+    const lockedPersist = await json(await call("PATCH", `/sites/${rec}/experiments/${planExp}`, { token, body: { persistAssignment: true } }));
+    expect(lockedPersist.error).toBe("test_setting_locked");
+    noPrivateRef("test_setting_locked (persist)", JSON.stringify(lockedPersist));
+    // 採用: 実行中のテストへの PUT(409)・パターンに無い ID(422)・終了以外の遷移に付けた採用(422)
+    const adoptRunning = await json(await call("PUT", `/sites/${rec}/experiments/${planExp}/adoption`, { token, body: { variantId: "b" } }));
+    expect(adoptRunning.error).toBe("adoption_not_allowed");
+    noPrivateRef("adoption_not_allowed (409)", JSON.stringify(adoptRunning));
+    const adoptPause = await json(await call("POST", `/sites/${rec}/experiments/${planExp}/status`, { token, body: { status: "paused", adoption: { variantId: "b" } } }));
+    expect(adoptPause.error).toBe("adoption_not_allowed");
+    noPrivateRef("adoption_not_allowed (422)", JSON.stringify(adoptPause));
+    const adoptUnknown = await json(await call("POST", `/sites/${rec}/experiments/${planExp}/status`, { token, body: { status: "archived", adoption: { variantId: "zz" } } }));
+    expect(adoptUnknown.error).toBe("unknown_variant");
+    noPrivateRef("unknown_variant", JSON.stringify(adoptUnknown));
+    expect((await call("POST", `/sites/${rec}/experiments/${planExp}/status`, { token, body: { status: "archived" } })).status).toBe(200);
+    const readonlyPatch = await json(await call("PATCH", `/sites/${rec}/experiments/${planExp}`, { token, body: { name: "終了後" } }));
+    expect(readonlyPatch.error).toBe("experiment_archived_readonly");
+    noPrivateRef("experiment_archived_readonly (patch)", JSON.stringify(readonlyPatch));
+    const readonly = await json(await call("PUT", planPath, { token, body: { plan: { minDays: 21 } } }));
+    expect(readonly.error).toBe("experiment_archived_readonly");
+    noPrivateRef("experiment_archived_readonly", JSON.stringify(readonly));
+    const { id: unfixed } = await createExperiment(token, sid);
+    expect((await call("POST", `/sites/${sid}/experiments/${unfixed}/status`, { token, body: { status: "running" } })).status).toBe(200);
+    const unfixedBody = await json(await call("PUT", `/sites/${sid}/experiments/${unfixed}/evaluation-plan`, { token, body: { plan: { minDays: 21 } } }));
+    expect(unfixedBody.error).toBe("evaluation_plan_locked");
+    noPrivateRef("evaluation_plan_locked (not fixed)", JSON.stringify(unfixedBody));
+    const { id: single } = await createExperiment(token, sid, { kind: "single" });
+    const na = await json(await call("GET", `/sites/${sid}/experiments/${single}/evaluation-plan`, { token }));
+    expect(na.error).toBe("results_not_applicable");
+    noPrivateRef("results_not_applicable", JSON.stringify(na));
     // backlog D13: 凍結中の 503 の封筒(4 通りの hint のうち、未来の見込みと読めない値)
     await env.DB.prepare("insert into instance_settings (key, value, updated_at) values ('writeFreeze', '{\"reason\":\"r\",\"until\":\"2099-01-01T00:00:00+09:00\"}', 1)").run();
     noPrivateRef("write_frozen", JSON.stringify(await json(await call("PATCH", `/sites/${sid}`, { token, body: {} }))));

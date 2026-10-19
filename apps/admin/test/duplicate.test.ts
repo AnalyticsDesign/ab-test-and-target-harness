@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { ResultsResponse } from "@/lib/results-view";
 import { duplicateBody, duplicateNotes, duplicateVariantModeIssue, duplicateVariantOptions, initialDuplicateState, withMode, withName, withVariant } from "@/lib/duplicate";
 import type { Experiment } from "@/lib/types";
 
@@ -69,6 +72,86 @@ describe("duplicate dialog state (決定 51、設計書 §4.2)", () => {
     expect(duplicateBody(withMode(single, s, "variant"))).toEqual({ mode: "same", name: "購入ボタンの文言テスト のコピー" });
   });
 
+});
+
+/** D9 ③ Task 16(設計書 §4.2・決定 61): 結果があるときの初期値と、判定・速報・品質・編集の注意 */
+describe("duplicate dialog with results (D9 ③)", () => {
+  const load = (name: string): ResultsResponse => JSON.parse(readFileSync(path.join(import.meta.dirname, "fixtures/results", `${name}.json`), "utf8")) as ResultsResponse;
+  const THREE = {
+    ...EXP,
+    trafficPercentage: 100,
+    variants: [
+      { id: "a", name: "A(現行)", weight: 33, original: true, description: "", analytics: null, changes: [] },
+      { id: "b", name: "B(CTA 文言)", weight: 34, original: false, description: "", analytics: null, changes: [TEXT] },
+      { id: "c", name: "C(CTA 文言 + 色)", weight: 33, original: false, description: "", analytics: null, changes: [TEXT] },
+    ],
+  } as unknown as Experiment;
+  const TWO = { ...THREE, variants: THREE.variants!.slice(0, 2) } as Experiment;
+
+  it("initial: the adopted pattern with the 'only the chosen pattern' mode", () => {
+    expect(initialDuplicateState(TWO, load("adopted"))).toEqual({ mode: "variant", variantId: "b", name: "購入ボタンの文言テスト(B(CTA 文言) だけを表示)", nameEdited: false });
+  });
+
+  it("initial: without an adoption, the non-baseline pattern with the highest probability of beating the baseline (same mode)", () => {
+    expect(initialDuplicateState(THREE, load("three"))).toMatchObject({ mode: "same", variantId: "c" });
+    // 採用なしを記録したときも同じ内容で開く
+    const none = { ...load("three"), adoption: { variantId: null, note: "", decidedAt: 1, decidedBy: null } };
+    expect(initialDuplicateState(THREE, none)).toMatchObject({ mode: "same", variantId: "c" });
+  });
+
+  it("initial: originals and zero-weight patterns are never picked (決定 61)", () => {
+    const r = load("three");
+    // c の重みを 0 に → b
+    const zero = { ...r, variants: r.variants.map((v) => (v.id === "c" ? { ...v, weight: 0 } : v)) };
+    expect(initialDuplicateState(THREE, zero).variantId).toBe("b");
+    // 確率の最も高いのがオリジナルでも選ばない
+    const orig = { ...THREE, variants: THREE.variants!.map((v) => (v.id === "c" ? { ...v, original: true, changes: [] } : v)) } as Experiment;
+    expect(initialDuplicateState(orig, r).variantId).toBe("b");
+    // 結果が無ければオリジナルでない先頭
+    expect(initialDuplicateState(THREE, null).variantId).toBe("b");
+  });
+
+  it("options carry the verdict and probability", () => {
+    expect(duplicateVariantOptions(THREE, load("three"))).toEqual([
+      { value: "a", label: "A(現行)", hint: "オリジナルは複製できません", disabled: true },
+      { value: "b", label: "B(CTA 文言)", hint: "判断材料が不足・上回る確率 96.2%" },
+      { value: "c", label: "C(CTA 文言 + 色)", hint: "採用候補・上回る確率 99.8%" },
+    ]);
+  });
+
+  it("notes: verdict other than adopt, interim, stopped early, quality", () => {
+    const v = (e: Experiment, id: string) => withVariant(e, withMode(e, initialDuplicateState(e), "variant"), id);
+    expect(duplicateNotes(THREE, v(THREE, "b"), load("three"))).toEqual(["判定: 判断材料が不足。効果は確かめられていません"]);
+    expect(duplicateNotes(THREE, v(THREE, "c"), load("three"))).toEqual([]);
+    const worse = { ...load("three"), variants: load("three").variants.map((x) => (x.id === "b" ? { ...x, state: "worse" as const } : x)) };
+    expect(duplicateNotes(THREE, v(THREE, "b"), worse)).toEqual(["判定: 悪化の可能性が高い。基準より悪い可能性が高いパターンです"]);
+    expect(duplicateNotes(TWO, v(TWO, "b"), load("interim"))).toEqual(["評価時点の前です。いまの確率は参考値です"]);
+    // 評価時点の後に返った前の速報(記録がまだ無い)は「評価時点の前」と言わない。前かは今の時刻で決める
+    const at = load("interim").evaluation!.evaluationAt;
+    expect(duplicateNotes(TWO, v(TWO, "b"), load("interim"), at - 1)).toEqual(["評価時点の前です。いまの確率は参考値です"]);
+    expect(duplicateNotes(TWO, v(TWO, "b"), load("interim"), at + 1)).toEqual(["評価時点を過ぎましたが、判定をまだ記録できていません。表示している確率は前に計算した参考値です"]);
+    expect(duplicateNotes(TWO, v(TWO, "b"), load("early"))).toEqual(["評価時点の前に終了したため、確率は参考値です"]);
+    expect(duplicateNotes(TWO, v(TWO, "b"), { ...load("adopt"), quality: "blocked" })).toEqual(["データ品質に問題があり、判定できていません。効果は確かめられていません"]);
+    // 採用を記録したパターンには判定の注意を出さない
+    expect(duplicateNotes(TWO, v(TWO, "b"), { ...load("adopted"), variants: load("adopted").variants.map((x) => (x.id === "b" ? { ...x, state: "insufficient" as const } : x)) })).toEqual([]);
+    // 「同じ内容」には注意を出さない
+    expect(duplicateNotes(THREE, initialDuplicateState(THREE, load("three")), load("three"))).toEqual([]);
+  });
+
+  it("notes: no changes in the delivered definition, traffic, edited after the evaluation point, unpublished edits", () => {
+    const r = { ...load("three"), deliveredChanges: { a: false, b: false, c: true }, notes: [{ key: "edited_after_evaluation", params: { variantId: "c" } }, { key: "unpublished_changes", params: { variantId: "c" } }] } as ResultsResponse;
+    const half = { ...THREE, trafficPercentage: 50 } as Experiment;
+    const pick = (id: string) => withVariant(half, withMode(half, initialDuplicateState(half), "variant"), id);
+    expect(duplicateNotes(half, pick("b"), r)).toEqual(["判定: 判断材料が不足。効果は確かめられていません", "B(CTA 文言) には変更が無いため、表示しても今のページと同じです", "配信率は 100% で作ります(元は 50%)"]);
+    expect(duplicateNotes(half, pick("c"), r)).toEqual([
+      "配信率は 100% で作ります(元は 50%)",
+      "評価時点の後に C(CTA 文言 + 色) の変更が編集されています",
+      "C(CTA 文言 + 色) に未公開の編集があります。テストで配信したのは編集の前の中身です。「C(CTA 文言 + 色) だけを表示」の複製は配信した中身で作ります",
+    ]);
+  });
+});
+
+describe("duplicate request body", () => {
   it("builds the request body", () => {
     expect(duplicateBody(initialDuplicateState(EXP))).toEqual({ mode: "same", name: "購入ボタンの文言テスト のコピー" });
     expect(duplicateBody(withMode(EXP, initialDuplicateState(EXP), "variant"))).toEqual({ mode: "variant", variantId: "b", name: "購入ボタンの文言テスト(B だけを表示)" });

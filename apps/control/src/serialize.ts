@@ -55,8 +55,9 @@ export const SiteJsonSchema = z.object({
   updatedAt: z.number().int().describe("epoch ミリ秒"),
 });
 
-export function goalJson(row: GoalRow) {
-  return { id: row.id, name: row.name, type: row.type, config: JSON.parse(row.config_json), analytics: row.analytics_json ? JSON.parse(row.analytics_json) : null, createdAt: row.created_at, updatedAt: row.updated_at };
+/** D9 ③(K10): `runningTests` = この目標を参照している実行中・一時停止中のテスト(routes/goals.ts の goalRunningTests) */
+export function goalJson(row: GoalRow, runningTests: Array<{ id: string; name: string }>) {
+  return { id: row.id, name: row.name, type: row.type, config: JSON.parse(row.config_json), analytics: row.analytics_json ? JSON.parse(row.analytics_json) : null, runningTests, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 export function experimentJson(row: ExperimentRow, extra: { unpublished: boolean }) {

@@ -3,11 +3,14 @@ import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
 import { resultsStore } from "../capabilities";
-import type { SiteRow } from "../db";
+import { toStatement, type SiteRow } from "../db";
 import { ApiError, validationFailed } from "../errors";
 import { newId, randomToken } from "../ids";
 import { errorResponses } from "../openapi";
 import { reconcileActive } from "../publish";
+import { capacityLevel } from "../evaluation-plan";
+import { collectUntilMap } from "../results/collect-until";
+import { enqueuePurgeQuery, kickOffPurgeForSites } from "../results/purge";
 import { retentionConflicts, retentionShrinkError } from "../retention";
 import { loadSite, requireWorkspaceRole } from "../roles";
 import { siteJson, SiteJsonSchema } from "../serialize";
@@ -31,6 +34,14 @@ export const siteRoutes = new Hono<AppEnv>();
 /** spec §13.9: `GET /sites/:sid` は siteJson に badge/banner 用の 1 フラグを足して返す */
 const SiteGetSchema = SiteJsonSchema.extend({
   hasUnpublishedChanges: z.boolean().describe("エクスペリエンスのいずれかが unpublished、または目標 / パターン / タイムゾーン / 結果の記録の切り替えが前回 activation より後"),
+  resultsCapacity: z
+    .object({
+      sizeBytes: z.number().int().describe("計測用のデータベースの大きさ(バイト)"),
+      measuredAt: z.number().int().describe("測った時刻(epoch ミリ秒)"),
+      level: z.enum(["ok", "warning", "stopped"]).describe("ok = 上限の 80% 未満、warning = 80% 以上、stopped = 95% 以上(参加と CV の記録を止めている)"),
+    })
+    .nullable()
+    .describe("計測用のデータベースの使用量(導入全体。15 分ごとに測る)。まだ測っていなければ null"),
 });
 
 siteRoutes.get(
@@ -88,6 +99,8 @@ siteRoutes.post(
       static_seq: 0, static_stale: 0, static_epoch: 0, static_served_version: null, static_prev_served_version: null, static_served_at: null, static_removing: null,
       // D9 ②(設計書 §6.6): 新しい Site は、計測用 D1 がある導入なら結果を記録する(無ければ 0。後から有効にできる)
       results_enabled: resultsStore(c.env) ? 1 : 0, results_retention_days: 90,
+      // D9 ③(K11): 列の既定と同じ値
+      collect_until_dirty: 0,
     };
     const { next, error } = applySitePatch(base, {
       mode: body.mode, hosts: body.mode === "B" ? [body.domain] : [],
@@ -104,7 +117,7 @@ siteRoutes.post(
     }
     // Plan 2 繰越の順序契約: settings record(+ host)を先に書き、config は Publish で書く
     try {
-      await writeSiteRecords(c.env, next, []);
+      await writeSiteRecords(c.env, next, [], {}); // 新しい Site には run が無い(収集の締め切りの表は空)
     } catch (e) {
       await db.deleteFrom("sites").where("id", "=", next.id).execute(); // site_hosts は CASCADE
       // settings の put だけ成功して host の put で落ちた場合、KV に孤児の settings record が残る。
@@ -150,11 +163,14 @@ siteRoutes.get(
     // 前回 activation より後 なら badge/banner を立てる。Experiment 側は 1 件でも該当すれば十分なので limit(1)
     const since = site.last_activated_at ?? 0;
     const dirty = await db.selectFrom("experiments").select("id").where("site_id", "=", site.id).where("updated_at", ">", since).limit(1).executeTakeFirst();
+    // D9 ③(plan ③ の K18): 計測用 D1 の使用量(results-capacity が測った最後の値)
+    const store = await db.selectFrom("results_store_status").select(["size_bytes", "measured_at"]).where("id", "=", 1).executeTakeFirst();
     return c.json({
       ...siteJson(site),
       activeKvStale: reconciled ? false : site.active_kv_stale === 1,
       staticStale,
       hasUnpublishedChanges: dirty !== undefined || site.content_updated_at > since,
+      resultsCapacity: store ? { sizeBytes: store.size_bytes, measuredAt: store.measured_at, level: capacityLevel(store.size_bytes) } : null,
     });
   },
 );
@@ -200,12 +216,14 @@ siteRoutes.patch(
      * 次の PATCH が旧行から再導出して「配信中の Cookie 名」を旧名リストにも載せずに捨ててしまう。**
      * ベストエフォート(ここで失敗しても元のエラーを返す。その Site の次の PATCH が自己修復する)
      */
-    const restoreKv = () => writeSiteRecords(c.env, site, nextHosts).catch(() => {});
+    // D9 ③(K11): 収集の締め切りの表は前進・戻しの両方に同じものを付ける(どちらで書いても締め切りを消さない)
+    const collectUntil = await collectUntilMap(db, site.id);
+    const restoreKv = () => writeSiteRecords(c.env, site, nextHosts, collectUntil).catch(() => {});
     // (1) 衝突検査(D1)。(2) KV。(3) site_hosts の入れ替えと sites の更新を 1 batch。
     // activation = KV put なので KV が先。失敗すれば D1 は旧値のまま(= 503 で再試行できる)
     await assertHostsFree(db, next.id, nextHosts);
     try {
-      await writeSiteRecords(c.env, next, JSON.parse(site.hosts_json));
+      await writeSiteRecords(c.env, next, JSON.parse(site.hosts_json), collectUntil);
     } catch (e) {
       await restoreKv(); // settings は書けたが host の put で落ちた、など途中まで進んだ場合
       throw e;
@@ -275,8 +293,15 @@ siteRoutes.delete(
     const versions = (await db.selectFrom("publishes").select("version").where("site_id", "=", site.id).execute()).map((r) => r.version);
     // 7i plan K23: D1 の削除は、Site の行の static_removing がまだ自分の token のときだけ。削除の途中で「配信ファイルを作り直す」が
     // 印を消していたら(配信を戻した)削除を取りやめる。子のテーブルは sites の FK CASCADE で消える
-    const del = await db.deleteFrom("sites").where("id", "=", site.id).where("static_removing", "=", token).executeTakeFirst();
-    if (Number(del.numDeletedRows) === 0) throw staticRemoveConflict();
+    // D9 ③(K6 (1)): 同じ batch で、削除の DELETE の前に run_id を持つエクスペリエンスを計測用 D1 の削除待ちに積む(条件は削除と同じ token)
+    const now = Date.now();
+    const [, del] = await c.env.DB.batch([
+      toStatement(c.env, enqueuePurgeQuery(db, { kind: "site", siteId: site.id, token }, now)),
+      toStatement(c.env, db.deleteFrom("sites").where("id", "=", site.id).where("static_removing", "=", token)),
+    ]);
+    if ((del?.meta.changes ?? 0) === 0) throw staticRemoveConflict();
+    // K6・K12: 応答の後に 1 回だけ個票を消し始める(残りは Cron が queue から消す)
+    if (c.env.RESULTS_DB && c.env.RESULTS_BUDGET) c.executionCtx.waitUntil(kickOffPurgeForSites(c.env, db, [site.id], now));
     // D1 の外の後片づけ(KV・R2)は D1 の削除が成功した後
     await deleteSiteRecords(c.env, site, versions);
     await deleteSiteAssets(c.env, site.id); // R2 の画像(ベストエフォート)

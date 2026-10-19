@@ -8,6 +8,7 @@ import { ApiError, notFound } from "../errors";
 import { SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
 import { loadSite } from "../roles";
+import { archivedTestsHint } from "../test-locks";
 import { assertTargetingRefs, normalizedTargeting, targetingValidationFailed, touchSite } from "../validation";
 
 /**
@@ -47,13 +48,13 @@ const AudienceJsonSchema = z.object({
   updatedAt: z.number().int().describe("epoch ミリ秒"),
 });
 
-export type AudienceUsage = Map<string, Array<{ id: string; name: string; status: ExperimentRow["status"] }>>;
+export type AudienceUsage = Map<string, Array<{ id: string; name: string; status: ExperimentRow["status"]; kind: ExperimentRow["kind"] }>>;
 
 /** オーディエンス id → それを配信条件で参照しているエクスペリエンス(状態を問わずすべて。作成順)。古い書式の行でも落ちない */
 export async function audienceUsage(db: Db, siteId: string): Promise<AudienceUsage> {
   const rows = await db
     .selectFrom("experiments")
-    .select(["id", "name", "status", "targeting_json"])
+    .select(["id", "name", "status", "kind", "targeting_json"])
     .where("site_id", "=", siteId)
     .where("targeting_json", "is not", null)
     .orderBy("created_at")
@@ -62,7 +63,7 @@ export async function audienceUsage(db: Db, siteId: string): Promise<AudienceUsa
   for (const r of rows) {
     for (const a of targetingReferences(JSON.parse(r.targeting_json!)).audiences) {
       const list = out.get(a) ?? [];
-      list.push({ id: r.id, name: r.name, status: r.status });
+      list.push({ id: r.id, name: r.name, status: r.status, kind: r.kind });
       out.set(a, list);
     }
   }
@@ -75,7 +76,7 @@ function audienceJson(row: AudienceRow, usage: AudienceUsage) {
     name: row.name,
     description: row.description,
     definition: JSON.parse(row.definition_json),
-    usedBy: usage.get(row.id) ?? [],
+    usedBy: (usage.get(row.id) ?? []).map((u) => ({ id: u.id, name: u.name, status: u.status })),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -208,12 +209,22 @@ audienceRoutes.delete(
     const db = c.get("db");
     const row = await loadAudience(db, site.id, c.req.param("aid"));
     const users = (await audienceUsage(db, site.id)).get(row.id) ?? [];
-    if (users.length > 0)
+    if (users.length > 0) {
+      // D9 ③(K10): 終了したテストは読み取り専用で配信条件を外せないので、外せるものと分けて案内する(行き止まりの案内にしない)。
+      // 終了したテストの参照も数えるのは、複製や下書きの組み立てが終了したテストの配信条件をそのまま使うため
+      const archived = users.filter((u) => u.kind === "test" && u.status === "archived");
+      const editable = users.filter((u) => !(u.kind === "test" && u.status === "archived"));
+      const hints = [
+        ...(editable.length > 0 ? [`参照しているエクスペリエンス: ${editable.map((u) => u.name).join("、")}。配信条件から外してから削除してください`] : []),
+        ...(archived.length > 0 ? [archivedTestsHint(archived.map((u) => u.name))] : []),
+      ];
       throw new ApiError(409, "audience_in_use", {
         experiments: users.map((u) => u.id),
+        ...(archived.length > 0 ? { archivedTests: archived.map((u) => u.id) } : {}),
         message: "このオーディエンスはエクスペリエンスから参照されています",
-        hint: `参照しているエクスペリエンス: ${users.map((u) => u.name).join("、")}。配信条件から外してから削除してください`,
+        hint: hints.join("。"),
       });
+    }
     await db.deleteFrom("audiences").where("site_id", "=", site.id).where("id", "=", row.id).execute();
     await touchSite(db, site.id, Date.now());
     return c.body(null, 204);

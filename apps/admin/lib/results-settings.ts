@@ -1,4 +1,4 @@
-import type { Experiment } from "./types";
+import type { Experiment, ResultsCapacity } from "./types";
 
 /**
  * Site の設定「結果を記録する」まわりの純関数(D9 ②)。画面の文言はここに集める(テストで固定する)
@@ -14,7 +14,7 @@ export function resultsToggleNotice(input: { enabling: boolean; runningTests: nu
     return input.runningTests > 0 ? `実行中の ${input.runningTests} 件のテストは対象になりません。結果を見たいテストは、複製して開始し直してください` : null;
   }
   return input.runningRecordedTests > 0
-    ? `記録中の ${input.runningRecordedTests} 件のテストの記録が止まります。止めた時間が評価時点までの期間の 5% を超えると、判定できなくなります`
+    ? `記録中の ${input.runningRecordedTests} 件のテストの記録が止まります。止めた時間が上限(評価時点までの期間の 5%。CV の多いテストほど短い)を超えると、判定できなくなります`
     : null;
 }
 
@@ -61,5 +61,24 @@ export function countExperimentsForResults(list: Experiment[]): { runningTests: 
     // 有効にしても記録されない実行中のテスト(開始のときに run が振られていない)。runId を返さない古い応答も含める
     runningTests: tests.filter((e) => e.status === "running" && e.runId == null).length,
     runningRecordedTests: tests.filter((e) => e.runId != null && (e.status === "running" || e.status === "paused")).length,
+  };
+}
+
+/** 計測用のデータベース(wtt-results)の上限(D1 の 1 つのデータベースの上限。Free) */
+const RESULTS_STORE_LIMIT_MB = 500;
+
+/**
+ * Site の設定の容量の警告(D9 ③、plan ③ K18)。control の Cron が測った値の level で決める: warning = 80% 以上、
+ * stopped = 95% 以上(参加と CV の記録を止めている)。測る前(値が無い)と ok は null(何も出さない)。
+ * 測った時刻は画面がサイトのタイムゾーンで添える
+ */
+export function capacityWarning(cap: ResultsCapacity | null | undefined): { level: "warning" | "stopped"; text: string } | null {
+  if (!cap || cap.level === "ok") return null;
+  const size = `約 ${Math.floor(cap.sizeBytes / 1e6)} MB / ${RESULTS_STORE_LIMIT_MB} MB`;
+  const fix = "保持期間を短くするか、不要になったテストを削除してください";
+  if (cap.level === "warning") return { level: "warning", text: `計測用のデータベースの使用量が上限の 80% 以上になりました(${size})。${fix}` };
+  return {
+    level: "stopped",
+    text: `計測用のデータベースの使用量が上限の 95% 以上になったため、参加と CV の記録を止めています(${size})。${fix}。期限を過ぎた記録の削除は毎日 UTC 23 時台に行い、空きができれば記録を再開します`,
   };
 }

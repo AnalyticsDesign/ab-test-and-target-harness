@@ -7,6 +7,7 @@ import type { AnalyticsSettings, Goal } from "@/lib/types";
 import { analyticsValueErrors } from "@/lib/analytics-values";
 import { conversionPreview } from "@/lib/datalayer-preview";
 import { goalAnalyticsBody, goalNameOf } from "@/lib/goal-analytics";
+import { goalSaveNotice } from "@/lib/test-locks";
 import { Field } from "./Field";
 import { PageMatchField } from "./PageMatchField";
 import { DEFAULT_PAGE_MATCH, describePageMatch, type PageMatchValue } from "@/lib/page-match";
@@ -256,6 +257,9 @@ export function GoalsPanel({ siteId, goals, canEdit, names }: { siteId: string; 
                           onCancel={() => setOpenId(null)}
                           onSave={async (body) => {
                             setFields({});
+                            // D9 ③(設計書 §5.5、B77 の K14): 実行中・一時停止中のテストが使っている目標は、件数を添えて確認する(目標名の変更も対象)
+                            const notice = goalSaveNotice(g.runningTests ?? []);
+                            if (notice && !(await ask({ title: `目標「${g.name}」を保存しますか?`, body: notice, confirmLabel: "保存する", tone: "primary" }))) return;
                             // 名前と外部計測を 1 回の PATCH で送る。成功したらパネルを閉じ、失敗なら開いたまま欄にエラーを出す
                             if (await run(() => api("PATCH", `/sites/${siteId}/goals/${g.id}`, body))) setOpenId(null);
                           }}

@@ -1,22 +1,44 @@
 "use client";
 import { useState } from "react";
 import { api, describeError } from "@/lib/client";
-import { duplicateBody, duplicateNotes, duplicateVariantModeIssue, duplicateVariantOptions, initialDuplicateState, withMode, withName, withVariant } from "@/lib/duplicate";
+import { duplicateBody, duplicateNotes, duplicateVariantModeIssue, duplicateVariantOptions, initialDuplicateState, withMode, withName, withVariant, type DuplicateState } from "@/lib/duplicate";
+import type { ResultsResponse } from "@/lib/results-view";
 import type { Experiment } from "@/lib/types";
+import { useNow } from "../LocalTime";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Picker } from "../ui/Picker";
 import { ErrorBox } from "../ErrorBox";
 
 /**
  * 決定 51(設計書 §4.2、モックの複製の画面): 見出しの「複製」から開く。元は変わらず、下書きを作って新しいエクスペリエンスの概要へ移る。
- * 入力欄を持つので外のクリックでは閉じない(Esc と「戻る」で閉じる)
+ * 入力欄を持つので外のクリックでは閉じない(Esc と「戻る」で閉じる)。
+ * initial = 最初の状態(結果のタブの「<採用> だけを表示する下書きを作成」は、採用したパターンを選んだ状態で開く。D9 ③ Task 15)。
+ * report = テストの結果(あれば初期値・プルダウンの判定と上回る確率・選んだパターンへの注意に使う。D9 ③ Task 16)
  */
-export function DuplicateDialog({ wid, siteId, experiment, open, onClose }: { wid: string; siteId: string; experiment: Experiment; open: boolean; onClose: () => void }) {
-  const [s, setS] = useState(() => initialDuplicateState(experiment));
+export function DuplicateDialog({
+  wid,
+  siteId,
+  experiment,
+  open,
+  onClose,
+  initial,
+  report,
+}: {
+  wid: string;
+  siteId: string;
+  experiment: Experiment;
+  open: boolean;
+  onClose: () => void;
+  initial?: DuplicateState;
+  report?: ResultsResponse | null;
+}) {
+  const [s, setS] = useState(() => initial ?? initialDuplicateState(experiment, report));
+  // 評価時点の前かは今の時刻で決める(評価時点の後でも前の速報が返ることがあるため)
+  const now = useNow();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const single = experiment.kind === "single";
-  const notes = duplicateNotes(experiment, s);
+  const notes = duplicateNotes(experiment, s, report, now);
   // B77: 変更のあるパターンが無い(オリジナルだけの)テストは「選んだパターンだけを表示」を選べない。理由を選択肢の下に出す
   const variantModeIssue = duplicateVariantModeIssue(experiment);
   return (
@@ -72,7 +94,7 @@ export function DuplicateDialog({ wid, siteId, experiment, open, onClose }: { wi
             {/* Picker は自分でラベルを描かない(aria-label だけ)ので見出しを前に置く。listbox を持つので label で包まない */}
             <div className="field">
               <span className="field-label">表示するパターン</span>
-              <Picker label="表示するパターン" value={s.variantId} options={duplicateVariantOptions(experiment)} disabled={s.mode !== "variant" || variantModeIssue !== null} onChange={(v) => setS(withVariant(experiment, s, v))} />
+              <Picker label="表示するパターン" value={s.variantId} options={duplicateVariantOptions(experiment, report)} disabled={s.mode !== "variant" || variantModeIssue !== null} onChange={(v) => setS(withVariant(experiment, s, v))} />
             </div>
             {notes.map((n) => (
               <p key={n} className="banner-warn" style={{ display: "block" }}>

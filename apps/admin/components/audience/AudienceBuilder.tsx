@@ -5,6 +5,7 @@ import { DndContext, type DragEndEvent } from "@dnd-kit/core";
 import { api as call, describeError } from "@/lib/client";
 import { useDragAlternatives } from "@/lib/a11y";
 import { audienceIdCandidate, audienceIdProblem } from "@/lib/audience-id";
+import { audienceSaveNotice } from "@/lib/test-locks";
 import { COND_META, PAGE_TYPES, VISITOR_TYPES, defaultCond, groupText, makeNames, summarizeDsl, treeProblem } from "@/lib/conditions";
 import {
   AUDIENCE_NEST_MAX, audienceTreeFromDsl, cloneFresh, definitionBody, edit, findNode, findParent, insertNode, levelOf, moveNode, nestLevels, newId, toDsl,
@@ -99,7 +100,8 @@ export function AudienceBuilder({ wid, siteId, audience, audiences, goals, site,
     else if (a.startsWith("node:")) update((c) => moveNode(c, a.slice(5), place!.group, place!.index));
   };
 
-  const usedRunning = (audience?.usedBy ?? []).filter((u) => u.status === "running");
+  // D9 ③(設計書 §5.5): 実行中・一時停止中のエクスペリエンスが使っていれば、件数を添えて確認する(テストでは結果に記録される)
+  const saveNotice = audienceSaveNotice(audience?.usedBy ?? []);
   async function save(confirmed = false) {
     setError(null);
     const definition = raw ? undefined : toDsl(root);
@@ -109,8 +111,8 @@ export function AudienceBuilder({ wid, siteId, audience, audiences, goals, site,
     if (!raw && definition === null) return setError("条件を 1 つ以上入れてください");
     const problem = raw ? null : treeProblem(root.children, site.retentionDays);
     if (problem) return setError(problem);
-    // 実行中のエクスペリエンスが参照しているときは確認を挟む(設計書 §5.3)
-    if (audience && usedRunning.length > 0 && !confirmed) return setConfirm(true);
+    // 実行中・一時停止中のエクスペリエンスが参照しているときは確認を挟む(設計書 §5.3、D9 ③ の §5.5)
+    if (audience && saveNotice !== null && !confirmed) return setConfirm(true);
     setConfirm(false);
     setBusy(true);
     try {
@@ -245,7 +247,7 @@ export function AudienceBuilder({ wid, siteId, audience, audiences, goals, site,
             {canEdit ? (
               confirm ? (
                 <div className={styles.confirm} role="alert">
-                  <span>次の公開で、実行中のエクスペリエンス {usedRunning.length} 件の配信対象が変わります。保存しますか?</span>
+                  <span>{saveNotice}</span>
                   <span className="row">
                     <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save(true)}>
                       保存する

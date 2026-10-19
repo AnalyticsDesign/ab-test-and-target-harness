@@ -31,8 +31,7 @@ function readJsonc(file: string): Record<string, unknown> {
  * 同じ理由で、別の script(wtt-edge)の Durable Object を指す binding(`script_name` 付き。D9 ② の Task 12)も除く。
  * 写しは .wrangler/ に置くので、相対パス(main / migrations_dir)は絶対パスにする
  */
-function wranglerConfigForTests(): string {
-  const cfg = readJsonc(path.join(import.meta.dirname, "wrangler.jsonc"));
+function wranglerConfigForTests(cfg: Record<string, unknown>): string {
   delete cfg.services;
   const dos = cfg.durable_objects as { bindings?: Array<Record<string, string>> } | undefined;
   if (dos?.bindings) dos.bindings = dos.bindings.filter((b) => b.script_name === undefined);
@@ -48,11 +47,17 @@ function wranglerConfigForTests(): string {
 // D1 は migrations を適用してから使う(公式 fixture vitest-plugin-examples/d1 と同じ構成)。
 // readD1Migrations は @cloudflare/vitest-plugin の直下 export(installed の dist/pool/index.d.mts で確認)
 export default defineConfig(async () => {
-  const migrations = await readD1Migrations(path.join(import.meta.dirname, "migrations"));
-  // D9 ② (K4・K21): 計測用 D1(wtt-results)の表の形の正は edge の results-migrations/。control は同じファイルを当てる。
-  // 本番の control には ③ まで RESULTS_DB の binding を入れない(wrangler.jsonc に書かない)ので、テストの binding は下の miniflare で渡す。
-  // 適用は表を使うテストが applyD1Migrations で行う
-  const resultsMigrations = await readD1Migrations(path.join(import.meta.dirname, "../edge/results-migrations"));
+  const cfg = readJsonc(path.join(import.meta.dirname, "wrangler.jsonc"));
+  // D1 の binding とマイグレーションの置き場所は wrangler.jsonc が正(テストの RESULTS_DB も wrangler.jsonc の binding だけから作る。D9 ③ K5)
+  const migrationsDir = (binding: string): string => {
+    const d = (cfg.d1_databases as Array<Record<string, string>>).find((x) => x.binding === binding);
+    if (!d?.migrations_dir) throw new Error(`wrangler.jsonc: d1 binding ${binding} with migrations_dir is missing`);
+    return path.join(import.meta.dirname, d.migrations_dir);
+  };
+  const migrations = await readD1Migrations(migrationsDir("DB"));
+  // D9 ② (K4)・③ (K5): 計測用 D1(wtt-results)の表の形の正は edge の results-migrations/。control は同じファイルを当てる
+  // (test/apply-migrations.ts が毎テストの前に env.RESULTS_DB に当てる)
+  const resultsMigrations = await readD1Migrations(migrationsDir("RESULTS_DB"));
   // backlog B35: 利用者向けの文言の検査(test/glossary.test.ts)。テストは workerd の中で走りファイルを読めないので、ここで読んで渡す。
   // 生成物(src/generated/ = agent-guide の埋め込み)は公開文書の検査(docs:check)が見るので除く
   const readSources = (prefix: string, dir: string): Record<string, string> =>
@@ -68,10 +73,10 @@ export default defineConfig(async () => {
   return {
     plugins: [
       cloudflareTest({
-        wrangler: { configPath: wranglerConfigForTests() },
+        // 計測用 D1(RESULTS_DB)は wrangler.jsonc の binding のまま(miniflare で上書きしない)。test/helpers.ts の testEnv は既定で外す
+        // (計測用 D1 の無い導入と同じ「無い」状態)。有りにするテストは RESULTS_STORE を envOverride で渡すか testEnvWith({ resultsStore: true })
+        wrangler: { configPath: wranglerConfigForTests(cfg) },
         miniflare: {
-          // 計測用 D1。test/helpers.ts の testEnv は既定で外す(本番の ② の control と同じ「無い」状態)。有りにするテストは RESULTS_STORE を envOverride で渡す
-          d1Databases: { RESULTS_DB: "wtt-results-test" },
           bindings: {
             TEST_MIGRATIONS: migrations,
             TEST_RESULTS_MIGRATIONS: resultsMigrations,

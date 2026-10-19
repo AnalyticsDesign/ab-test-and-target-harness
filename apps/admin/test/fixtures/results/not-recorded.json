@@ -1,0 +1,53 @@
+{
+  "phase": "interim",
+  "stoppedEarly": false,
+  "quality": "ok",
+  "records": "available",
+  "collection": "enabled",
+  "persisted": false,
+  "computedAt": null,
+  "cutoff": null,
+  "plan": null,
+  "evaluation": null,
+  "variants": [],
+  "qualityDetail": {
+    "srmP": null,
+    "mixedRate": 0,
+    "stopRatio": 0,
+    "stopLimit": 0.05,
+    "stopPeriods": [],
+    "failedSends": 0,
+    "failureRatio": 0
+  },
+  "byDevice": [],
+  "otherGoals": [],
+  "planChanges": 0,
+  "deliveryChanges": [],
+  "adoption": null,
+  "snapshots": {
+    "evaluation": false,
+    "stop": false
+  },
+  "notes": [
+    {
+      "key": "not_recorded"
+    }
+  ],
+  "statsVersion": "1",
+  "helpKeys": [
+    "verdicts",
+    "probability",
+    "difference",
+    "cvr",
+    "expected-loss",
+    "quality",
+    "srm",
+    "mixed",
+    "apply-failures",
+    "collection-failures",
+    "collection-stops",
+    "segments",
+    "data-integrity"
+  ],
+  "deliveredChanges": null
+}

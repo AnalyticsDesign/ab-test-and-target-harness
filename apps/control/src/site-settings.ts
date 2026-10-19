@@ -222,11 +222,35 @@ function settingsInput(row: SiteRow): unknown {
   };
 }
 
-/** spec §5.4「設定の配送」: settings record と host キーを KV に書く(activation = KV put)。削除された host のキーは消す */
-export async function writeSiteRecords(env: Env, row: SiteRow, previousHosts: string[]): Promise<void> {
+/**
+ * KV の Site の設定の記録(kvKeys.settings)を書く唯一の口。siteToSettings(row) に収集の締め切りの表を足す(空なら項目を出さない)。
+ * writeSiteRecords と、締め切りだけの書き直し(results/collect-until.ts の rewriteCollectUntil。host キーは変えない)が使う。
+ * 例外はそのまま投げる。戻り値は siteToSettings(row)
+ */
+export async function putSettingsRecord(env: Env, row: SiteRow, collectUntil: Record<string, number>): Promise<SiteSettings> {
+  const { settings, record } = settingsRecord(row, collectUntil);
+  await env.CONFIG_KV.put(kvKeys.settings(row.id), JSON.stringify(record));
+  return settings;
+}
+
+/**
+ * KV の Site の設定の記録の中身(書かない)。settings = siteToSettings(row)、record = それに締め切りの表を足したもの(空なら項目を出さない)。
+ * putSettingsRecord と、KV の記録を D1 と比べる Cron(results-collect-until)が使う
+ */
+export function settingsRecord(row: SiteRow, collectUntil: Record<string, number>): { settings: SiteSettings; record: SiteSettings } {
+  const settings = siteToSettings(row);
+  return { settings, record: Object.keys(collectUntil).length > 0 ? { ...settings, resultsCollectUntil: collectUntil } : settings };
+}
+
+/**
+ * spec §5.4「設定の配送」: settings record と host キーを KV に書く(activation = KV put)。削除された host のキーは消す。
+ * D9 ③(K11): run ごとの収集の締め切り(`collectUntilMap(db, siteId)` の表)を settings に足して書く(空なら項目を出さない)。
+ * siteToSettings(row) には足さない(bootstrap の焼き込み・デプロイ専用の Worker への入力・焼き直しの判定でも使うため)。
+ * KV の settings を書くのはこの関数と putSettingsRecord だけなので、呼び出し元は必ず今の表を渡す(渡し忘れると Site の保存で締め切りが消える)
+ */
+export async function writeSiteRecords(env: Env, row: SiteRow, previousHosts: string[], collectUntil: Record<string, number>): Promise<void> {
   try {
-    const settings = siteToSettings(row);
-    await env.CONFIG_KV.put(kvKeys.settings(row.id), JSON.stringify(settings));
+    const settings = await putSettingsRecord(env, row, collectUntil);
     for (const h of settings.hosts) await env.CONFIG_KV.put(kvKeys.host(h), row.id);
     // 消すのは「自 Site を指している」host キーだけ(他 Site の mapping を巻き込まない)。
     // KV に CAS が無いため get → delete には TOCTOU が残る(get と delete の間に別 Site が

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
 import { RUN_ID_RE } from "@wtt/core";
-import { call, createExperiment, createSite, expectEnvelope, experimentRow, inviteAndJoin, json, RESULTS_STORE, setupOwner, TEXT_CHANGE } from "./helpers";
+import { sql } from "kysely";
+import { getDb } from "../src/db";
+import type { Env } from "../src/env";
+import { recordDeliveredDefinitions, type DeliveredDefinition } from "../src/results/delivered";
+import { call, choosePrimaryGoal, createExperiment, createSite, expectEnvelope, experimentRow, fakeDeployer, inviteAndJoin, json, RESULTS_STORE, setupOwner, TEXT_CHANGE } from "./helpers";
 
 async function sourceTest() {
   const owner = await setupOwner();
@@ -40,6 +44,7 @@ describe("POST …/duplicate (決定 51、設計書 §4.1)", () => {
     const { id: sid } = await json<{ id: string }>(created);
     await createExperiment(owner.token, sid, { id: "exp_src" });
     await call("PUT", `/sites/${sid}/experiments/exp_src/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
+    await choosePrimaryGoal(owner.token, sid, "exp_src"); // 結果を記録する開始は判定に使う目標が要る(D9 ③ Task 5)
     expect((await call("POST", `/sites/${sid}/experiments/exp_src/status`, { token: owner.token, body: { status: "running" }, envOverride: RESULTS_STORE })).status).toBe(200);
     const src = await experimentRow(sid, "exp_src");
     expect(src.run_id).toMatch(RUN_ID_RE);
@@ -51,7 +56,8 @@ describe("POST …/duplicate (決定 51、設計書 §4.1)", () => {
       expect(row.run_id).toBeNull();
       expect(row.results_purged_at).toBeNull();
     }
-    // 複製を開始すると、元とは別の run_id が振られる(variant の複製はパーソナライズなので振らない)
+    // 複製を開始すると、元とは別の run_id が振られる(variant の複製はパーソナライズなので振らない)。
+    // same の複製は評価計画(判定に使う目標を含む)を写す(D9 ③ Task 12)ので、目標を選び直さずに開始できる
     expect((await call("POST", `/sites/${sid}/experiments/exp_same/status`, { token: owner.token, body: { status: "running" }, envOverride: RESULTS_STORE })).status).toBe(200);
     const copied = (await experimentRow(sid, "exp_same")).run_id;
     expect(copied).toMatch(RUN_ID_RE);
@@ -190,5 +196,190 @@ describe("POST …/duplicate (決定 51、設計書 §4.1)", () => {
     const viewer = await inviteAndJoin(token, workspaceId, "viewer");
     const res = await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token: viewer.token, body: { mode: "same" } });
     expect(res.status).toBe(403);
+  });
+});
+
+// D9 ③(設計書 §4.1、plan ③ の Task 12): variant の複製は配信した中身、same の複製は保存済みの中身と評価計画
+describe("複製の中身と評価計画(D9 ③)", () => {
+  const db = () => getDb(env as unknown as Env);
+  /** 計測用 D1 がある導入の Site(結果を記録する) */
+  async function resultsSite() {
+    const owner = await setupOwner();
+    const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+    expect(res.status).toBe(201);
+    const { id: sid } = await json<{ id: string }>(res);
+    return { ...owner, sid };
+  }
+  /** b に TEXT_CHANGE("Hello")を持ち、判定に使う目標を選んだテスト */
+  async function testExperiment(token: string, sid: string, id: string) {
+    await createExperiment(token, sid, { id });
+    expect((await call("PUT", `/sites/${sid}/experiments/${id}/variants/b/changes`, { token, body: [TEXT_CHANGE()] })).status).toBe(200);
+    await choosePrimaryGoal(token, sid, id);
+  }
+  async function transition(token: string, sid: string, eid: string, status: string, envOverride: Partial<Env> = {}) {
+    const res = await call("POST", `/sites/${sid}/experiments/${eid}/status`, { token, body: { status }, envOverride: { ...RESULTS_STORE, ...envOverride } });
+    expect(res.status).toBe(200);
+  }
+  const setText = (token: string, sid: string, eid: string, text: string) =>
+    call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token, body: [{ ...TEXT_CHANGE(), payload: { text } }] });
+  const duplicate = (token: string, sid: string, eid: string, body: Record<string, unknown>) => call("POST", `/sites/${sid}/experiments/${eid}/duplicate`, { token, body });
+  const savedChanges = (sid: string, eid: string) =>
+    db()
+      .selectFrom("changes")
+      .select(["variant_id", "id", "type", "selector", "payload_json", "position", "created_by"])
+      .where("site_id", "=", sid)
+      .where("experiment_id", "=", eid)
+      .orderBy("variant_id")
+      .orderBy("position")
+      .execute();
+  const def = (text: string): DeliveredDefinition => ({
+    variants: [
+      { id: "a", changes: [] },
+      { id: "b", changes: [{ id: "c_text", type: "TEXT", selector: ".hero-title", payload: { text } }, { id: "c_hide", type: "HIDE", selector: ".old", payload: {} }] },
+    ],
+    urlMatch: { op: "contains", value: "/" },
+    targeting: null,
+    primaryGoal: { id: "g_primary", config: {} },
+  });
+
+  it("variant_duplicate_uses_delivered_definition", async () => {
+    // 開始後に B の変更を保存だけして未公開 → variant の複製は配信した中身(開始の Publish で配った "Hello")
+    const { token, userId, sid } = await resultsSite();
+    await testExperiment(token, sid, "exp_t");
+    await transition(token, sid, "exp_t", "running", { DEPLOYER: fakeDeployer() });
+    const [row] = await db().selectFrom("experiment_delivered_definitions").selectAll().where("site_id", "=", sid).execute();
+    expect(row!.delivered_from).not.toBeNull(); // 配信を確かめた行がある
+    expect((await setText(token, sid, "exp_t", "saved, not published")).status).toBe(200);
+    const res = await duplicate(token, sid, "exp_t", { mode: "variant", variantId: "b", id: "exp_b_only" });
+    expect(res.status).toBe(201);
+    expect(await json(res)).toMatchObject({ id: "exp_b_only", kind: "single", status: "draft", trafficPercentage: 100, persistAssignment: false });
+    const copied = await savedChanges(sid, "exp_b_only");
+    expect(copied.map(({ payload_json, ...c }) => ({ ...c, payload: JSON.parse(payload_json) }))).toEqual([
+      { variant_id: "b", id: "c_text", type: "TEXT", selector: ".hero-title", payload: { text: "Hello" }, position: 0, created_by: userId },
+    ]);
+    // same の複製は保存済みの中身(配信の記録があっても)
+    expect((await duplicate(token, sid, "exp_t", { mode: "same", id: "exp_same" })).status).toBe(201);
+    const same = await savedChanges(sid, "exp_same");
+    expect(same.map((c) => [c.variant_id, c.id, JSON.parse(c.payload_json)])).toEqual([["b", "c_text", { text: "saved, not published" }]]);
+    // 元は保存済みの中身のまま(元には何も書かない)
+    expect((await savedChanges(sid, "exp_t")).map((c) => JSON.parse(c.payload_json))).toEqual([{ text: "saved, not published" }]);
+  });
+
+  it("variant の複製: 終了したテストは終了の直前に配信していた中身", async () => {
+    // 行は直接入れる(終了の後に確かめた行は API では作れない)。v1 = "Before"(1000〜2000)、v2 = "After"(2000〜)
+    const { token, sid } = await resultsSite();
+    await testExperiment(token, sid, "exp_t");
+    expect((await setText(token, sid, "exp_t", "Saved")).status).toBe(200);
+    await sql`update experiments set status = 'running', run_id = 'run_dup_archived' where site_id = ${sid} and id = 'exp_t'`.execute(db());
+    const rows = [await experimentRow(sid, "exp_t")];
+    await recordDeliveredDefinitions(db(), sid, 1, null, new Map([["exp_t", def("Before")]]), rows);
+    await recordDeliveredDefinitions(db(), sid, 2, null, new Map([["exp_t", def("After")]]), rows);
+    await sql`update experiment_delivered_definitions set delivered_from = 1000, delivered_until = 2000, settled = 'delivered' where site_id = ${sid} and publish_version = 1`.execute(db());
+    await sql`update experiment_delivered_definitions set delivered_from = 2000, settled = 'delivered' where site_id = ${sid} and publish_version = 2`.execute(db());
+    await sql`update experiments set status = 'archived', started_at = 500, stopped_at = 1500 where site_id = ${sid} and id = 'exp_t'`.execute(db());
+    expect((await duplicate(token, sid, "exp_t", { mode: "variant", variantId: "b", id: "exp_archived" })).status).toBe(201);
+    const copied = await savedChanges(sid, "exp_archived");
+    expect(copied.map((c) => [c.id, c.type, c.selector, JSON.parse(c.payload_json), c.position])).toEqual([
+      ["c_text", "TEXT", ".hero-title", { text: "Before" }, 0],
+      ["c_hide", "HIDE", ".old", {}, 1],
+    ]);
+    // 終了の後に配信が確かめられた行は使わない。終了の時刻が v2 の配信の後なら v2
+    await sql`update experiments set stopped_at = 2500 where site_id = ${sid} and id = 'exp_t'`.execute(db());
+    expect((await duplicate(token, sid, "exp_t", { mode: "variant", variantId: "b", id: "exp_archived_late" })).status).toBe(201);
+    expect((await savedChanges(sid, "exp_archived_late")).map((c) => JSON.parse(c.payload_json))).toEqual([{ text: "After" }, {}]);
+  });
+
+  it("variant の複製: 配信の記録が無いテストは保存済みの中身", async () => {
+    // 配信を確かめていない(出し直しが pending のまま)行しか無いテスト・配信の記録が無いテストは、variant の複製でも保存済みの中身
+    const { token, workspaceId, sid } = await resultsSite();
+    await testExperiment(token, sid, "exp_pending");
+    await transition(token, sid, "exp_pending", "running", { DEPLOYER: fakeDeployer("pending") });
+    const pending = await db().selectFrom("experiment_delivered_definitions").selectAll().where("site_id", "=", sid).execute();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.delivered_from).toBeNull();
+    expect((await setText(token, sid, "exp_pending", "Saved pending")).status).toBe(200);
+    expect((await duplicate(token, sid, "exp_pending", { mode: "variant", variantId: "b", id: "exp_p1" })).status).toBe(201);
+    expect((await savedChanges(sid, "exp_p1")).map((c) => JSON.parse(c.payload_json))).toEqual([{ text: "Saved pending" }]);
+    // 結果を記録しない Site のテスト(run_id も届く定義の行も無い)
+    const plain = { token, workspaceId };
+    const { id: sid2 } = await createSite(plain.token, plain.workspaceId);
+    await createExperiment(plain.token, sid2, { id: "exp_plain" });
+    expect((await setText(plain.token, sid2, "exp_plain", "Plain saved")).status).toBe(200);
+    expect((await call("POST", `/sites/${sid2}/experiments/exp_plain/status`, { token: plain.token, body: { status: "running" } })).status).toBe(200);
+    expect((await setText(plain.token, sid2, "exp_plain", "Plain saved later")).status).toBe(200);
+    expect((await duplicate(plain.token, sid2, "exp_plain", { mode: "variant", variantId: "b", id: "exp_p2" })).status).toBe(201);
+    expect((await savedChanges(sid2, "exp_p2")).map((c) => JSON.parse(c.payload_json))).toEqual([{ text: "Plain saved later" }]);
+  });
+
+  it("same の複製は評価計画を写し、固定と到達は写さない", async () => {
+    const { token, sid } = await resultsSite();
+    await testExperiment(token, sid, "exp_t");
+    const planBody = { primaryGoalId: "g_primary", baselineVariantId: "b", minDays: 21, maxWeeks: 10, targetPerVariant: 500, delta: 1, rope: 0.5, threshold: 97 };
+    expect((await call("PUT", `/sites/${sid}/experiments/exp_t/evaluation-plan`, { token, body: { plan: planBody } })).status).toBe(200);
+    await transition(token, sid, "exp_t", "running");
+    // 開始後の変更(履歴に残る)と、到達の記録
+    expect((await call("PUT", `/sites/${sid}/experiments/exp_t/evaluation-plan`, { token, body: { plan: { minDays: 28 }, reason: "延長" } })).status).toBe(200);
+    await sql`update evaluation_plans set reached_at = 111, reached_recorded_at = 222, reach_checked_day = '2026-10-19' where site_id = ${sid} and experiment_id = 'exp_t'`.execute(db());
+    const src = await db().selectFrom("evaluation_plans").selectAll().where("site_id", "=", sid).where("experiment_id", "=", "exp_t").executeTakeFirstOrThrow();
+    expect(src.fixed_at).not.toBeNull();
+
+    expect((await duplicate(token, sid, "exp_t", { mode: "same", id: "exp_same" })).status).toBe(201);
+    const copy = await db().selectFrom("evaluation_plans").selectAll().where("site_id", "=", sid).where("experiment_id", "=", "exp_same").executeTakeFirstOrThrow();
+    expect(copy).toMatchObject({ plan_json: src.plan_json, version: 1, fixed_at: null, reached_at: null, reached_recorded_at: null, reach_checked_day: null });
+    // 評価計画の変更の履歴は写さない
+    const history = await db().selectFrom("evaluation_plan_changes").select("id").where("site_id", "=", sid).where("experiment_id", "=", "exp_same").execute();
+    expect(history).toHaveLength(0);
+    // API では下書きの計画として見える(固定されていない・元の値)
+    const view = await json(await call("GET", `/sites/${sid}/experiments/exp_same/evaluation-plan`, { token }));
+    expect(view).toMatchObject({ fixed: false, fixedAt: null, changes: [], plan: { ...planBody, minDays: 28 } });
+    // 下書きの間は変えられ、そのまま開始できる(判定に使う目標を選び直さない)
+    expect((await call("PUT", `/sites/${sid}/experiments/exp_same/evaluation-plan`, { token, body: { plan: { minDays: 14 } } })).status).toBe(200);
+    await transition(token, sid, "exp_same", "running");
+    expect((await db().selectFrom("evaluation_plans").select("fixed_at").where("site_id", "=", sid).where("experiment_id", "=", "exp_same").executeTakeFirstOrThrow()).fixed_at).not.toBeNull();
+
+    // variant の複製(パーソナライズ)と、計画の行が無いテストの same の複製は、計画の行を作らない
+    expect((await duplicate(token, sid, "exp_t", { mode: "variant", variantId: "b", id: "exp_variant" })).status).toBe(201);
+    await createExperiment(token, sid, { id: "exp_noplan" });
+    expect((await duplicate(token, sid, "exp_noplan", { mode: "same", id: "exp_noplan_copy" })).status).toBe(201);
+    for (const id of ["exp_variant", "exp_noplan_copy"]) {
+      const r = await db().selectFrom("evaluation_plans").select("experiment_id").where("site_id", "=", sid).where("experiment_id", "=", id).executeTakeFirst();
+      expect(r, id).toBeUndefined();
+    }
+  });
+
+  it("複製の応答に元の判定・採用の要約を出さない(元に何も書かない)", async () => {
+    const { token, sid } = await resultsSite();
+    await testExperiment(token, sid, "exp_t");
+    await transition(token, sid, "exp_t", "running", { DEPLOYER: fakeDeployer() });
+    await transition(token, sid, "exp_t", "archived", { DEPLOYER: fakeDeployer() });
+    const runId = (await experimentRow(sid, "exp_t")).run_id!;
+    // 元の結果の記録と採用
+    await sql`insert into result_snapshots (site_id, experiment_id, kind, run_id, cutoff_at, computed_at, stats_version, result_json) values (${sid}, 'exp_t', 'stop', ${runId}, 1, 2, 'v1', '{"verdict":"winner"}')`.execute(db());
+    await sql`insert into adoptions (site_id, experiment_id, variant_id, note, decided_by, decided_at) values (${sid}, 'exp_t', 'b', 'B を採用', null, 3)`.execute(db());
+    const snapshotOf = async () => {
+      const out: Record<string, unknown> = {};
+      for (const table of ["experiments", "variants", "changes", "evaluation_plans", "evaluation_plan_changes", "result_snapshots", "adoptions", "experiment_delivered_definitions", "experiment_delivery_changes"]) {
+        const col = table === "experiments" ? "id" : "experiment_id";
+        out[table] = (await env.DB.prepare(`select * from ${table} where site_id = ? and ${col} = 'exp_t' order by rowid`).bind(sid).all()).results;
+      }
+      return out;
+    };
+    const before = await snapshotOf();
+    for (const [mode, id] of [["same", "exp_c_same"], ["variant", "exp_c_variant"]] as const) {
+      const res = await duplicate(token, sid, "exp_t", { mode, id, ...(mode === "variant" ? { variantId: "b" } : {}) });
+      expect(res.status).toBe(201);
+      const body = await json(res);
+      // 応答はエクスペリエンスの形だけ(判定・採用・結果の要約のキーを持たない)
+      expect(Object.keys(body).sort()).toEqual(
+        ["id", "siteId", "name", "description", "kind", "status", "publishedStatus", "urlMatch", "targeting", "trafficPercentage", "persistAssignment", "analytics", "runId", "createdBy", "updatedBy", "createdAt", "updatedAt", "unpublished"].sort(),
+      );
+      expect(JSON.stringify(body)).not.toMatch(/verdict|winner|adopt|B を採用/);
+      // 複製には結果の記録・採用・届く定義を写さない
+      for (const table of ["result_snapshots", "adoptions", "experiment_delivered_definitions", "experiment_delivery_changes", "evaluation_plan_changes"]) {
+        const n = await env.DB.prepare(`select count(*) as n from ${table} where site_id = ? and experiment_id = ?`).bind(sid, id).first<{ n: number }>();
+        expect(n!.n, `${mode} ${table}`).toBe(0);
+      }
+    }
+    expect(await snapshotOf()).toEqual(before); // 元には何も書かない
   });
 });

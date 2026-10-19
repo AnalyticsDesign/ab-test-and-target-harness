@@ -45,7 +45,7 @@ const RULES: Array<{ re: RegExp; use: string; allow: Allow[] }> = [
     re: /\b(?:formatLocalTime|formatDeadline|expiryLabel)\(/,
     use: "<LocalTime> / <ExpiryLabel>",
     allow: [
-      { file: "components/LocalTime.tsx", line: /formatLocalTime\(at, kind\)|expiryLabel\((?:null, 0|expiresAt, now)\)/, why: "時刻の描画を引き受ける部品そのもの" },
+      { file: "components/LocalTime.tsx", line: /formatLocalTime\(at, kind(?:, timeZone)?\)|expiryLabel\((?:null, 0|expiresAt, now)\)/, why: "時刻の描画を引き受ける部品そのもの" },
       { file: "components/MembersPanel.tsx", line: /const deadline = /, why: "招待の期限の書式。呼ぶのはマウント後(now !== null)と発行の後だけ" },
       { file: "components/MembersPanel.tsx", line: /now === null \? null : .*expiryLabel\(i\.expiresAt, now\)/, why: "now(useNow)が入った後だけ描く" },
       { file: "components/api-keys/IssueKeyForm.tsx", line: /formatDeadline\(deadline\)/, why: "deadline は期限を選んだ後(= マウントの後)にだけ値を持つ" },

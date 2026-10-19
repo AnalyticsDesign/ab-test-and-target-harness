@@ -27,9 +27,18 @@ export type Draft = {
 
 export type TabProps = { draft: Draft; set: <K extends keyof Draft>(key: K, value: Draft[K]) => void; ro: boolean };
 
-/** タブの内部の ID(表示は「基本設定」/「パターン」)。B77 K16: 外部計測のタブは基本設定の下部のカードに移した。古い ?tab=analytics は readParam の既定で overview に落ちる */
-export const EDITOR_TABS = ["overview", "variants"] as const;
+/**
+ * タブの内部の ID(表示は「基本設定」/「パターン」/「評価計画」/「結果」)。B77 K16: 外部計測のタブは基本設定の下部のカードに移した。古い ?tab=analytics は readParam の既定で overview に落ちる。
+ * plan(評価計画)と results(結果)はテストだけ(D9 ③ Task 14・15。パーソナライズでは呼び出し側が overview に落とす = tabsFor)。
+ * 結果は下書きでは押せない(「開始後に表示されます」。設計書 §10)
+ */
+export const EDITOR_TABS = ["overview", "variants", "plan", "results"] as const;
 export type EditorTab = (typeof EDITOR_TABS)[number];
+
+/** 種別ごとに出すタブ(評価計画と結果はテストだけ。設計書 §10) */
+export function tabsFor(kind: Experiment["kind"]): readonly EditorTab[] {
+  return kind === "test" ? EDITOR_TABS : EDITOR_TABS.filter((t) => t !== "plan" && t !== "results");
+}
 
 export function draftOf(e: Experiment): Draft {
   return {

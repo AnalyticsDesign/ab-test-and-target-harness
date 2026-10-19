@@ -1,0 +1,106 @@
+/* 説明(ヘルプ)の「?」・吹き出し・右のパネル(D9 plan ③ K22。見た目の正はモック test_report_mock_v1.html) */
+
+.tip {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--muted);
+  font: 600 11px/1 var(--font-sans);
+  cursor: pointer;
+  vertical-align: 1px;
+  flex-shrink: 0;
+}
+.tip:hover,
+.tip[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.tip:focus-visible,
+.tipLink:focus-visible,
+.link:focus-visible,
+.close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 文字を付けた「?」(見出しの役割をする説明: 「評価計画とは」など) */
+.tipLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tipLink:hover .label { text-decoration: underline; }
+.tipLink .tip { pointer-events: none; }
+.tipLink[aria-expanded="true"] .tip { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+.link { font: inherit; font-size: 12.5px; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; white-space: nowrap; }
+.link:hover { text-decoration: underline; }
+.close { font: inherit; font-size: 16px; line-height: 1; color: var(--muted); background: none; border: 0; padding: 4px 6px; border-radius: var(--radius); cursor: pointer; }
+.close:hover { color: var(--text); background: var(--sunken); }
+
+.pop {
+  position: fixed;
+  z-index: 45;
+  width: min(340px, calc(100vw - 32px));
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: left;
+  white-space: normal;
+}
+.pop h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.pop p { margin: 0; }
+.popFoot { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+
+.panel {
+  position: fixed;
+  z-index: 48;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 100vw);
+  background: var(--surface);
+  color: var(--text);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+}
+.panelHead { display: flex; align-items: center; gap: 8px; padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 12px; border-bottom: 1px solid var(--border); }
+.panelHead h2 { margin: 0; font-size: 15px; font-weight: 600; flex: 1; }
+.panelBody { overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 18px; font-size: 14px; line-height: 1.75; }
+.item { display: flex; flex-direction: column; gap: 6px; scroll-margin-top: 12px; border-radius: var(--radius); }
+.item h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.item p { margin: 0; }
+.hit { background: var(--accent-soft); margin: -8px; padding: 8px; }
+.summary { font-weight: 500; }
+.panelFoot { padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+
+/* 原稿から変換した本文(段落・箇条書き・表・強調・インラインコード・外部リンク) */
+.html { display: flex; flex-direction: column; gap: 6px; }
+.html :global(ul),
+.html :global(ol) { margin: 0; padding-left: 1.4em; }
+.html :global(li) + :global(li) { margin-top: 2px; }
+.html :global(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--code-bg); padding: 0 4px; border-radius: 4px; overflow-wrap: anywhere; }
+.html :global(table) { border-collapse: collapse; font-size: 13px; width: 100%; display: block; overflow-x: auto; }
+.html :global(th),
+.html :global(td) { border: 1px solid var(--border); padding: 4px 6px; text-align: left; vertical-align: top; }
+.html :global(th) { background: var(--sunken); font-weight: 600; }
+.html :global(h5),
+.html :global(h6) { margin: 6px 0 0; font-size: 14px; }
+.html :global(a) { color: var(--accent); }

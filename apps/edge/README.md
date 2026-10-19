@@ -27,6 +27,8 @@
 
 - 書き込みは 1 要求 = 1 回の `batch`。参加は 1 batch で最大 3 行、目標の達成は run 1 つあたり最大 3 行を枠の見込みにする(`@wtt/core` の `RESULTS_ROWS`。インデックスの書き込みを含む実測の最大 + 1)
 - 撤回(Mode A の `forget`・Mode B の consent の revoke)で消す行は少ないので、予算の枠を使わない
+- control は同じ `wtt-results` を binding `RESULTS_DB` で読み(結果の集計)、保持期限・エクスペリエンスやサイトの削除・孤児の個票を消す(edge は消さない。撤回だけ)。control は `ResultsBudget` を script 間の binding で呼び、Cron の停止(`stop`)・削除の書き込みの枠(`lease`)・集計の読み取りの予約(`reserveRead` / `settleRead`)・予算と停止の状態(`status` / `stopPeriods`)を使い、`ResultsHealth` の `read` で失敗の数を読む。そのため edge を control より先にデプロイする
+- 収集の締め切り(settings の `resultsCollectUntil`)は control が評価時点から計算して KV の Site の設定に書く。edge は受信時刻が締め切り以降の参加・CV を書かずに `ignored`(`retry: false`)を返す
 
 ## ローカルでの動作確認
 

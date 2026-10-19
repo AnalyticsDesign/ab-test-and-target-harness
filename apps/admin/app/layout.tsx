@@ -9,6 +9,7 @@ import { THEME_INIT_SCRIPT } from "@/lib/theme";
 import { HydrationMark } from "@/components/HydrationMark";
 import { ThemeResync } from "@/components/ThemeResync";
 import { ConfirmProvider } from "@/components/ConfirmProvider";
+import { HelpProvider } from "@/components/help/HelpProvider";
 
 export const metadata = { title: "AB Test and Target Harness" };
 
@@ -25,7 +26,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
       <body>
-        <ConfirmProvider>{children}</ConfirmProvider>
+        <ConfirmProvider>
+          <HelpProvider>{children}</HelpProvider>
+        </ConfirmProvider>
         <ThemeResync />
         <HydrationMark />
       </body>

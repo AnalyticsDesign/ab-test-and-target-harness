@@ -2,10 +2,10 @@ import { env } from "cloudflare:workers";
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { sql } from "kysely";
 import { expect, vi } from "vitest";
-import { kvKeys, SITE_REMOVED_SEQ, type StaticDeployer, type StaticDeployRequest, type StaticDeployResult, type StaticGeneration, type StaticRemoveRequest, type StaticSiteStatus } from "@wtt/core";
+import { kvKeys, nextUtcMidnight, SITE_REMOVED_SEQ, utcDay, type StaticDeployer, type StaticDeployRequest, type StaticDeployResult, type StaticGeneration, type StaticRemoveRequest, type StaticSiteStatus } from "@wtt/core";
 import { app } from "../src/index";
 import { getDb, type ExperimentRow, type SiteRow } from "../src/db";
-import type { Env } from "../src/env";
+import type { BudgetStatus, Env, LeaseResult, ReadReservation, ResultsBudgetRpc, ResultsHealthRpc, StopPeriod, StopReason } from "../src/env";
 import { ErrorEnvelopeSchema } from "../src/openapi";
 
 export const SETUP_TOKEN = "test-setup-token"; // vitest.config.ts の miniflare.bindings と一致
@@ -36,8 +36,172 @@ export function testEnvWith(opts: { resultsStore?: boolean } = {}): Env {
 }
 export const testEnv = testEnvWith();
 
-/** D9 ②: 計測用 D1 がある導入にする envOverride(`call(…, { envOverride: RESULTS_STORE })`) */
+/**
+ * D9 ②: 計測用 D1 がある導入にする envOverride(`call(…, { envOverride: RESULTS_STORE })`)。
+ * D9 ③(K5): 出どころは wrangler.jsonc の RESULTS_DB の binding だけ(vitest.config.ts は上書きしない。test/apply-migrations.ts が表を当てる)
+ */
 export const RESULTS_STORE: Partial<Env> = { RESULTS_DB: env.RESULTS_DB };
+
+/**
+ * D9 ③(K5・K12・K13): 偽の予算の DO(edge の apps/edge/src/results-budget.ts の意味を写す。日付は 1 日分だけ持つ)。
+ * - lease: 停止中なら ok: false。残りが求めた行数より少なければ残りだけ。残りをすべて配ったら write_budget の停止を次の UTC 0 時まで立てる。
+ *   `grantAtMost` は 1 回に配る上限(status を読んだ後に edge が枠を使った、のような部分の枠を作る)
+ * - reserveRead: 解けていない予約(60 秒以内・未精算)があれば busy、残りが足りなければ budget。予約した時点で見込みを使ったものとして数える
+ * - settleRead: 実際の行数で精算(同じ token の 2 回目・知らない token は何もしない)
+ * - status / stopPeriods: 今の状態。`stopPeriods` で決まった期間を足せる
+ * calls = 呼ばれた順の記録。log を渡すと同じ記録を `<method>:<args>` の文字列でも足す(D1 の呼び出しと順を比べるテスト用)
+ */
+export type FakeBudgetOpts = {
+  writeBudget?: number; writeUsed?: number; readBudget?: number; readUsed?: number; leaseRows?: number;
+  stoppedUntil?: number | null; stopPeriods?: StopPeriod[]; grantAtMost?: number; log?: string[];
+};
+export type FakeBudgetCall = { method: "lease" | "reserveRead" | "settleRead" | "status" | "stopPeriods" | "stop"; args: unknown[]; result?: unknown };
+export function fakeResultsBudget(opts: FakeBudgetOpts = {}) {
+  const state = {
+    writeBudget: opts.writeBudget ?? 70_000,
+    writeUsed: opts.writeUsed ?? 0,
+    readBudget: opts.readBudget ?? 3_000_000,
+    readUsed: opts.readUsed ?? 0,
+    leaseRows: opts.leaseRows ?? 200,
+    stoppedUntil: opts.stoppedUntil ?? null,
+    stops: [...(opts.stopPeriods ?? [])] as StopPeriod[],
+  };
+  const reservations = new Map<string, { day: string; rows: number; expiresAt: number; settled: boolean }>();
+  const calls: FakeBudgetCall[] = [];
+  const names: string[] = [];
+  let tokenSeq = 0;
+  const record = <T>(method: FakeBudgetCall["method"], args: unknown[], result: T): T => {
+    calls.push({ method, args, result });
+    opts.log?.push(`${method}:${JSON.stringify(args)}->${JSON.stringify(result)}`);
+    return result;
+  };
+  const activeStop = (now: number): number | null => (state.stoppedUntil !== null && state.stoppedUntil > now ? state.stoppedUntil : null);
+  const openStop = (reason: StopReason, until: number, now: number) => {
+    const end = Math.min(until, nextUtcMidnight(now));
+    if (end <= now) return;
+    state.stops.push({ reason, from: now, to: end });
+    state.stoppedUntil = Math.max(state.stoppedUntil ?? 0, end);
+  };
+  const stub: Pick<ResultsBudgetRpc, "stop" | "lease" | "reserveRead" | "settleRead" | "status" | "stopPeriods"> = {
+    async stop(reason, until, now) {
+      openStop(reason, until, now);
+      record("stop", [reason, until, now], undefined);
+    },
+    async lease(day, rows, now): Promise<LeaseResult> {
+      if (!Number.isSafeInteger(rows) || rows < 1) throw new TypeError(`invalid rows: ${rows}`);
+      const stopped = activeStop(now);
+      if (stopped !== null) return record("lease", [day, rows, now], { ok: false, stoppedUntil: stopped });
+      const remaining = state.writeBudget - state.writeUsed;
+      if (remaining <= 0) {
+        openStop("write_budget", nextUtcMidnight(now), now);
+        return record("lease", [day, rows, now], { ok: false, stoppedUntil: activeStop(now) ?? nextUtcMidnight(now) });
+      }
+      const given = Math.min(rows, remaining, opts.grantAtMost ?? Infinity);
+      state.writeUsed += given;
+      if (given === remaining) openStop("write_budget", nextUtcMidnight(now), now);
+      return record("lease", [day, rows, now], { ok: true, day, rows: given });
+    },
+    async reserveRead(day, rows, now): Promise<ReadReservation> {
+      if (!Number.isSafeInteger(rows) || rows < 1) throw new TypeError(`invalid rows: ${rows}`);
+      const busy = [...reservations.values()].some((r) => !r.settled && r.expiresAt > now);
+      if (busy) return record("reserveRead", [day, rows, now], { ok: false, reason: "busy" });
+      if (state.readBudget - state.readUsed < rows) return record("reserveRead", [day, rows, now], { ok: false, reason: "budget" });
+      const token = `tok_${++tokenSeq}`;
+      const expiresAt = now + 60_000;
+      state.readUsed += rows;
+      reservations.set(token, { day, rows, expiresAt, settled: false });
+      return record("reserveRead", [day, rows, now], { ok: true, token, expiresAt });
+    },
+    async settleRead(token, actualRows) {
+      if (!Number.isSafeInteger(actualRows) || actualRows < 0) throw new TypeError(`invalid rows: ${actualRows}`);
+      const r = reservations.get(token);
+      if (r && !r.settled) {
+        r.settled = true;
+        state.readUsed = Math.max(0, state.readUsed + actualRows - r.rows);
+      }
+      record("settleRead", [token, actualRows], undefined);
+    },
+    async status(now): Promise<BudgetStatus> {
+      const open = [...reservations.values()].filter((r) => !r.settled && r.expiresAt > now).sort((a, b) => b.expiresAt - a.expiresAt)[0];
+      return record("status", [now], {
+        day: utcDay(now),
+        writeBudget: state.writeBudget,
+        writeUsed: state.writeUsed,
+        readBudget: state.readBudget,
+        readUsed: state.readUsed,
+        leaseRows: state.leaseRows,
+        stoppedUntil: activeStop(now),
+        readReservation: open ? { day: open.day, rows: open.rows, expiresAt: open.expiresAt } : null,
+      });
+    },
+    async stopPeriods(from, to): Promise<StopPeriod[]> {
+      const periods = state.stops.filter((s) => s.to > from && s.from < to).sort((a, b) => a.from - b.from);
+      return record("stopPeriods", [from, to], periods);
+    },
+  };
+  const ns = {
+    idFromName: (name: string) => {
+      names.push(name);
+      return { name } as unknown as DurableObjectId;
+    },
+    get: () => stub,
+  } as unknown as DurableObjectNamespace<ResultsBudgetRpc>;
+  return { ns, calls, names, state, stub };
+}
+
+/** D9 ③(K5): 偽の収集の失敗の記録の DO。failed = run ごとの [{ hour, failed }]。read は edge と同じく半開区間 [fromHour, toHour) の時の昇順 */
+export function fakeResultsHealth(failed: Record<string, Array<{ hour: number; failed: number }>> = {}) {
+  const calls: Array<{ siteId: string; runId: string; fromHour: number; toHour: number }> = [];
+  let lastName = "";
+  const ns = {
+    idFromName: (name: string) => {
+      lastName = name;
+      return { name } as unknown as DurableObjectId;
+    },
+    get: (id: { name: string }) => {
+      const siteId = id?.name ?? lastName;
+      const stub = {
+        async read(runId: string, fromHour: number, toHour: number) {
+          calls.push({ siteId, runId, fromHour, toHour });
+          return (failed[runId] ?? []).filter((r) => r.hour >= fromHour && r.hour < toHour).sort((a, b) => a.hour - b.hour);
+        },
+      };
+      return stub as unknown as ResultsHealthRpc;
+    },
+  } as unknown as DurableObjectNamespace<ResultsHealthRpc>;
+  return { ns, calls };
+}
+
+/** 計測用 D1 の visitor_key(16 バイト)。数を渡すと決まった値を作る */
+export function visitorKey(n: number): Uint8Array {
+  const b = new Uint8Array(16);
+  const v = new DataView(b.buffer);
+  v.setUint32(0, n >>> 0);
+  v.setUint32(12, Math.imul(n, 2654435761) >>> 0);
+  return b;
+}
+export type SeedParticipant = {
+  runId: string; siteId: string; visitor: number | Uint8Array; variantId?: string; exposedAt?: number; device?: "desktop" | "mobile" | "tablet";
+  applied?: "ok" | "failed" | "recovered"; mixed?: 0 | 1; mixedAt?: number | null; recoveredAt?: number | null; failedAt?: number | null;
+};
+export type SeedConversion = { runId: string; goalId: string; visitor: number | Uint8Array; convertedAt?: number };
+/** D9 ③(K5): 計測用 D1(env.RESULTS_DB)に個票を入れる。列は edge の results-migrations/ の形。500 文ずつの batch */
+export async function seedResults(rows: { participants?: SeedParticipant[]; conversions?: SeedConversion[] }): Promise<void> {
+  const db = env.RESULTS_DB!;
+  const key = (v: number | Uint8Array) => (typeof v === "number" ? visitorKey(v) : v);
+  const stmts: D1PreparedStatement[] = [];
+  for (const p of rows.participants ?? [])
+    stmts.push(
+      db
+        .prepare(
+          "INSERT INTO participants (run_id, visitor_key, site_id, variant_id, exposed_at, device, applied, mixed, mixed_at, recovered_at, failed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(p.runId, key(p.visitor), p.siteId, p.variantId ?? "a", p.exposedAt ?? 1, p.device ?? "desktop", p.applied ?? "ok", p.mixed ?? 0, p.mixedAt ?? null, p.recoveredAt ?? null, p.failedAt ?? null),
+    );
+  for (const c of rows.conversions ?? [])
+    stmts.push(db.prepare("INSERT INTO conversions (run_id, goal_id, visitor_key, converted_at) VALUES (?, ?, ?, ?)").bind(c.runId, c.goalId, key(c.visitor), c.convertedAt ?? 2));
+  for (let i = 0; i < stmts.length; i += 500) await db.batch(stmts.slice(i, i + 500));
+}
 
 export type CallOpts = { token?: string; body?: unknown; headers?: Record<string, string>; envOverride?: Partial<Env>; raw?: BodyInit };
 
@@ -274,6 +438,17 @@ export async function createExperiment(token: string, siteId: string, overrides:
 }
 function randomSuffix(): string {
   return Math.random().toString(36).slice(2, 8);
+}
+
+/**
+ * D9 ③ Task 5(K8): 結果を記録するサイトでテストを開始する前に、目標を作り(同じサイトに既にあれば使い回す)、
+ * 評価計画の判定に使う目標に選ぶ。結果を記録する開始は、判定に使う目標が無いと 422 evaluation_plan_incomplete になる
+ */
+export async function choosePrimaryGoal(token: string, siteId: string, eid: string, goalId = "g_primary"): Promise<void> {
+  const goal = await call("POST", `/sites/${siteId}/goals`, { token, body: { id: goalId, name: "判定に使う目標", type: "CUSTOM", config: {} } });
+  expect([201, 409]).toContain(goal.status); // 409 = 同じサイトの別のテストで作成済み(id_taken)
+  const plan = await call("PUT", `/sites/${siteId}/experiments/${eid}/evaluation-plan`, { token, body: { plan: { primaryGoalId: goalId } } });
+  expect(plan.status).toBe(200);
 }
 
 /** 最小の正常系 Change(core の ChangeSchema の形) */

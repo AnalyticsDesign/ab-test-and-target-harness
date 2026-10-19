@@ -1,0 +1,382 @@
+{
+  "phase": "fixed",
+  "stoppedEarly": false,
+  "quality": "ok",
+  "records": "available",
+  "collection": "enabled",
+  "persisted": true,
+  "computedAt": 1791993600000,
+  "cutoff": 1791990000000,
+  "plan": {
+    "primaryGoalId": "g_purchase",
+    "baselineVariantId": "a",
+    "minDays": 14,
+    "maxWeeks": 8,
+    "targetPerVariant": null,
+    "delta": 0,
+    "rope": null,
+    "threshold": 95,
+    "definition": {
+      "version": 1,
+      "observationWindow": {
+        "kind": "until_end"
+      },
+      "denominator": "displayed",
+      "mixed": "keep_first",
+      "model": {
+        "name": "beta-binomial",
+        "prior": [
+          1,
+          1
+        ],
+        "version": 1
+      }
+    }
+  },
+  "evaluation": {
+    "minEnd": 1791990000000,
+    "maxEnd": 1795618800000,
+    "evaluationAt": 1791990000000,
+    "reachedAt": null
+  },
+  "variants": [
+    {
+      "id": "a",
+      "name": "A(現行)",
+      "original": true,
+      "weight": 33,
+      "n": 10000,
+      "y": 500,
+      "cvr": 0.05,
+      "cvrCi95": [
+        0.045728,
+        0.054272
+      ],
+      "diff": null,
+      "state": null,
+      "probBest": 0.001,
+      "applyFailed": 0,
+      "applyRecovered": 0,
+      "minCountMet": null
+    },
+    {
+      "id": "b",
+      "name": "B(CTA 文言)",
+      "original": false,
+      "weight": 34,
+      "n": 10010,
+      "y": 548,
+      "cvr": 0.054745,
+      "cvrCi95": [
+        0.050289,
+        0.059202
+      ],
+      "diff": {
+        "mean": 0.4745,
+        "ci95": [
+          -0.1428,
+          1.0918
+        ],
+        "relMean": 9.491,
+        "relCi95": [
+          -2.856,
+          21.837
+        ],
+        "pAboveDelta": 0.962,
+        "pBelowZero": 0.038,
+        "pWithinRope": null,
+        "expectedLossPer10k": 0.2
+      },
+      "state": "insufficient",
+      "probBest": 0.065,
+      "applyFailed": 0,
+      "applyRecovered": 0,
+      "minCountMet": true
+    },
+    {
+      "id": "c",
+      "name": "C(CTA 文言 + 色)",
+      "original": false,
+      "weight": 33,
+      "n": 9990,
+      "y": 589,
+      "cvr": 0.058959,
+      "cvrCi95": [
+        0.05434,
+        0.063578
+      ],
+      "diff": {
+        "mean": 0.8959,
+        "ci95": [
+          0.2667,
+          1.525
+        ],
+        "relMean": 17.918,
+        "relCi95": [
+          5.335,
+          30.501
+        ],
+        "pAboveDelta": 0.9975,
+        "pBelowZero": 0.0025,
+        "pWithinRope": null,
+        "expectedLossPer10k": 0.02
+      },
+      "state": "adopt",
+      "probBest": 0.934,
+      "applyFailed": 0,
+      "applyRecovered": 0,
+      "minCountMet": true
+    }
+  ],
+  "qualityDetail": {
+    "srmP": 0.62,
+    "mixedRate": 0.002,
+    "stopRatio": 0,
+    "stopLimit": 0.05,
+    "stopPeriods": [],
+    "failedSends": 0,
+    "failureRatio": 0
+  },
+  "byDevice": [
+    {
+      "variantId": "a",
+      "device": "desktop",
+      "n": 4500,
+      "y": 259,
+      "cvr": 0.057556,
+      "diff": null
+    },
+    {
+      "variantId": "a",
+      "device": "mobile",
+      "n": 4500,
+      "y": 191,
+      "cvr": 0.042444,
+      "diff": null
+    },
+    {
+      "variantId": "a",
+      "device": "tablet",
+      "n": 1000,
+      "y": 50,
+      "cvr": 0.05,
+      "diff": null
+    },
+    {
+      "variantId": "b",
+      "device": "desktop",
+      "n": 4505,
+      "y": 284,
+      "cvr": 0.063041,
+      "diff": {
+        "mean": 0.5541,
+        "ci95": [
+          -0.1,
+          1.1
+        ]
+      }
+    },
+    {
+      "variantId": "b",
+      "device": "mobile",
+      "n": 4505,
+      "y": 210,
+      "cvr": 0.046615,
+      "diff": {
+        "mean": 0.4115,
+        "ci95": [
+          -0.1,
+          1.1
+        ]
+      }
+    },
+    {
+      "variantId": "b",
+      "device": "tablet",
+      "n": 1001,
+      "y": 55,
+      "cvr": 0.054945,
+      "diff": {
+        "mean": 0.4945,
+        "ci95": [
+          -0.1,
+          1.1
+        ]
+      }
+    },
+    {
+      "variantId": "c",
+      "device": "desktop",
+      "n": 4496,
+      "y": 305,
+      "cvr": 0.067838,
+      "diff": {
+        "mean": 1.0338,
+        "ci95": [
+          -0.1,
+          1.1
+        ]
+      }
+    },
+    {
+      "variantId": "c",
+      "device": "mobile",
+      "n": 4496,
+      "y": 225,
+      "cvr": 0.050044,
+      "diff": {
+        "mean": 0.7544,
+        "ci95": [
+          -0.1,
+          1.1
+        ]
+      }
+    },
+    {
+      "variantId": "c",
+      "device": "tablet",
+      "n": 999,
+      "y": 59,
+      "cvr": 0.059059,
+      "diff": {
+        "mean": 0.9059,
+        "ci95": [
+          -0.1,
+          1.1
+        ]
+      }
+    }
+  ],
+  "otherGoals": [
+    {
+      "goalId": "g_cart",
+      "name": "カート追加",
+      "variants": [
+        {
+          "variantId": "a",
+          "n": 10000,
+          "y": 1210,
+          "cvr": 0.121,
+          "diff": null
+        },
+        {
+          "variantId": "b",
+          "n": 10010,
+          "y": 1291,
+          "cvr": 0.129,
+          "diff": {
+            "mean": 0.8,
+            "ci95": [
+              -0.1,
+              1.7
+            ]
+          }
+        },
+        {
+          "variantId": "c",
+          "n": 9990,
+          "y": 1369,
+          "cvr": 0.137,
+          "diff": {
+            "mean": 1.6,
+            "ci95": [
+              0.7,
+              2.5
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "goalId": "g_signup",
+      "name": "会員登録",
+      "variants": [
+        {
+          "variantId": "a",
+          "n": 10000,
+          "y": 200,
+          "cvr": 0.02,
+          "diff": null
+        },
+        {
+          "variantId": "b",
+          "n": 10010,
+          "y": 200,
+          "cvr": 0.02,
+          "diff": {
+            "mean": 0.05,
+            "ci95": [
+              -0.35,
+              0.45
+            ]
+          }
+        },
+        {
+          "variantId": "c",
+          "n": 9990,
+          "y": 200,
+          "cvr": 0.02,
+          "diff": {
+            "mean": 0.05,
+            "ci95": [
+              -0.35,
+              0.45
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "planChanges": 0,
+  "deliveryChanges": [],
+  "adoption": null,
+  "snapshots": {
+    "evaluation": true,
+    "stop": false
+  },
+  "notes": [],
+  "statsVersion": "1",
+  "helpKeys": [
+    "verdicts",
+    "probability",
+    "difference",
+    "cvr",
+    "expected-loss",
+    "quality",
+    "srm",
+    "mixed",
+    "apply-failures",
+    "collection-failures",
+    "collection-stops",
+    "segments",
+    "data-integrity"
+  ],
+  "deliveredChanges": {
+    "a": false,
+    "b": true,
+    "c": true
+  },
+  "definition": null,
+  "names": {
+    "experiment": "購入ボタンの文言テスト",
+    "variants": {
+      "a": {
+        "name": "A(現行)",
+        "original": true
+      },
+      "b": {
+        "name": "B(CTA 文言)",
+        "original": false
+      },
+      "c": {
+        "name": "C(CTA 文言 + 色)",
+        "original": false
+      }
+    },
+    "goals": {
+      "g_purchase": "購入完了",
+      "g_cart": "カート追加",
+      "g_signup": "会員登録"
+    }
+  }
+}

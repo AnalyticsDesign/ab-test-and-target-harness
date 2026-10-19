@@ -229,6 +229,8 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   // = 画面はまだ押せる状態のまま、押した時点でサーバーが 409 を返す。BFF から直接作って開始する(ログインは増やさない)
   const ctl = (path: string, data: unknown) => page.request.post(`${ADMIN_URL}/api/control${path}`, { data });
   expect((await ctl(`/workspaces/${tempId}/sites`, { name: "E2E Temp Site", domain: "temp.e2e.example", id: "site_e2e_temp" })).status()).toBe(201);
+  // D9 ③: 計測用のデータベースがある導入の新しい Site は結果を記録する(開始に評価計画の目標が要る)ので、記録しない設定にしてから開始する(fixtures.ts の createSite と同じ)
+  expect((await page.request.patch(`${ADMIN_URL}/api/control/sites/site_e2e_temp`, { data: { resultsEnabled: false } })).status()).toBe(200);
   expect((await ctl("/sites/site_e2e_temp/experiments", { id: "exp_e2e_temp", name: "E2E temp", urlMatch: { op: "contains", value: "/" } })).status()).toBe(201);
   expect((await ctl("/sites/site_e2e_temp/experiments/exp_e2e_temp/status", { status: "running" })).status()).toBe(200);
   await confirmBox.getByRole("button", { name: "削除する" }).click();

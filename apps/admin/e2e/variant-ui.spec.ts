@@ -187,7 +187,8 @@ test.describe.serial("pattern UI (B77)", () => {
 
   test("memo_on_archived_keeps_published_state", async () => {
     await openExperiment(EXP_MAIN.id);
-    // 0% のパターンが無く、重なる配信中のエクスペリエンスも無いので、確認なしで開始する
+    // 0% のパターンが無く、重なる配信中のエクスペリエンスも無い。D9 ③: 下書きのテストの開始は必ず確認を出す(このサイトは結果を記録しないので
+    // 「開始しますか?」と記録しない文だけ。changeStatus が確認を通す)
     expect((await changeStatus(page, SITE_VARIANT.id, EXP_MAIN.id, "開始(公開して配信を始める)")).publish).toMatchObject({ ok: true });
     await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "running");
     const unpublishedBadge = page.locator("main").getByText("未公開の編集あり");
@@ -208,10 +209,12 @@ test.describe.serial("pattern UI (B77)", () => {
     await expect(unpublishedBadge).toHaveCount(0); // メモの保存では「未公開の編集あり」にならない
     await expect(page.getByTestId("variant-b").getByLabel(memoLabel)).toHaveValue("配信中に書いたメモ");
 
-    // 終了する(終了も公開を伴う)
-    await page.getByRole("button", { name: "終了(元に戻せません)" }).click();
+    // 終了する(終了も公開を伴う)。D9 ③: テストの終了は終了のモーダル(採用の記録)で行う。このサイトは結果を記録しないので採用なしのまま終了する
+    await page.getByRole("button", { name: "終了して結果を記録", exact: true }).click();
+    const stopDialog = page.getByRole("alertdialog", { name: "終了して結果を記録します" });
+    await expect(stopDialog.getByRole("radio", { name: /^採用なし/ })).toBeChecked();
     const done = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP_MAIN.id}/status`) && r.request().method() === "POST");
-    await page.getByRole("alertdialog", { name: "エクスペリエンスを終了しますか?" }).getByRole("button", { name: "終了する" }).click();
+    await stopDialog.getByRole("button", { name: "終了して記録" }).click();
     expect((await done).status()).toBe(200);
     await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "archived");
     await page.reload();

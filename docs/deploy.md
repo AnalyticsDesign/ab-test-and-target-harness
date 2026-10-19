@@ -151,7 +151,7 @@ pnpm -C apps/control exec wrangler kv namespace create wtt-config </dev/null   #
 pnpm -C apps/edge exec wrangler d1 create wtt-results </dev/null   # KV と同じく、設定ファイルへの追記は非対話なので行わない(database_id は下の手順で書く)
 ```
 
-出力の `database_id` を `apps/edge/wrangler.jsonc` の `d1_databases[0].database_id` に書く(雛形の値は仮の ID `00000000-0000-0000-0000-000000000000`)。追記の問いには No と答える。書いたら、表を作り、訪問者 ID を変換する鍵を登録する:
+出力の `database_id` を、`apps/edge/wrangler.jsonc` の `d1_databases[0].database_id` と、`apps/control/wrangler.jsonc` の `RESULTS_DB` の行(`d1_databases[1].database_id`)の両方に書く(雛形の値は仮の ID `00000000-0000-0000-0000-000000000000`)。追記の問いには No と答える。書いたら、表を作り、訪問者 ID を変換する鍵を登録する:
 
 ```bash
 pnpm -C apps/edge results:migrate:remote   # 表を作る。期待: 0001_results.sql が適用される(適用済みなら No migrations to apply)
@@ -833,11 +833,11 @@ admin のリクエストの数え方:
 |---|---|---|
 | ゾーン 1 つ(カスタムドメイン) | edge を訪問者と同一オリジンで公開する。Cache Rule と WAF もこのゾーンに置く。ドメインなし構成(`edge_address: workers-dev`)では不要 | edge |
 | Workers KV(`wtt-config`) | 配信中の config とサイト設定を配信用に複製したもの(元データは D1)。control が書き、edge が読む | 両方(同じ namespace) |
-| D1(`wtt-control`) | ユーザー・ワークスペース・サイト・エクスペリエンス・公開履歴 | control |
-| D1(`wtt-results`。計測用のデータベース) | テストの結果の記録(参加者と目標の達成。訪問者 ID はそのまま置かず、鍵付きのハッシュにする)。結果を記録するサイトの分だけ増える | edge が書き、control が読む |
+| D1(`wtt-control`) | ユーザー・ワークスペース・サイト・エクスペリエンス・公開履歴・テストの評価計画と固定した結果・採用の記録 | control |
+| D1(`wtt-results`。計測用のデータベース) | テストの結果の記録(参加者と目標の達成。訪問者 ID はそのまま置かず、鍵付きのハッシュにする)。結果を記録するサイトの分だけ増え、保持期間を過ぎた記録は control が消す | edge が書き、control が読んで集計する |
 | R2(`wtt-assets`) | IMAGE の変更のアップロード先。R2 なし構成(`asset_public_base: none`)では不要 | control |
 | Durable Objects(`VisitorProfile`) | 履歴条件・`persistAssignment`・目標の訪問者状態 | edge |
-| Durable Objects(`ResultsBudget`・`ResultsHealth`) | 結果の記録の 1 日の予算(導入全体で 1 つ)と、収集できなかった送信の数(サイトごと) | edge(`ResultsBudget` は control の Cron も使う) |
+| Durable Objects(`ResultsBudget`・`ResultsHealth`) | 結果の記録の 1 日の予算(導入全体で 1 つ)と、収集できなかった送信の数(サイトごと) | edge。control も使う(記録の停止・削除の枠・集計の読み取りの予約と、失敗の数の読み取り) |
 | Durable Objects(`DeployQueue`) | 設置タグのファイルの作り直しを 1 本ずつ流し、失敗したら再試行する | デプロイ専用の Worker |
 | Rate Limiting binding | 無認証入口の補助的な絞り(実効は限定的。[運用ガイド 7 節](operations.md#7-レート制限の実効)) | 両方 |
 
@@ -904,13 +904,15 @@ pnpm -C apps/control exec wrangler kv namespace list | jq -r '.[] | select(.titl
 
 期待と違うとき: `wrangler kv namespace create` が `already exists` を含むエラーを返す → 前回の作業で作った namespace が残っている。`kv namespace list` で id を引いて同じように書く。
 
-**計測用のデータベース(D1 の `wtt-results`)**: テストの結果(参加者と目標の達成)を記録する D1。設定用の `wtt-control`(3.1)とは分けてある(書き込みの量と保持期間が違い、`wtt-control` の控えと Time Travel を個票で大きくしないため)。edge の設定がこのデータベースを参照するので、どの構成でも作る。順は、作成 → `database_id` を書く → 表を作る(マイグレーション)→ 鍵の登録 → 2.4 の edge のデプロイ。
+**計測用のデータベース(D1 の `wtt-results`)**: テストの結果(参加者と目標の達成)を記録する D1。設定用の `wtt-control`(3.1)とは分けてある(書き込みの量と保持期間が違い、`wtt-control` の控えと Time Travel を個票で大きくしないため)。edge が書き、control が結果の集計のために読み、保持期限を過ぎた記録を消す。edge と control の設定がこのデータベースを参照するので、どの構成でも作る。順は、作成 → `database_id` を書く → 表を作る(マイグレーション)→ 鍵の登録 → 2.4 の edge のデプロイ。
 
 ```bash
 pnpm -C apps/edge exec wrangler d1 create wtt-results </dev/null   # KV と同じく、設定ファイルへの追記は非対話なので行わない(database_id は下の手順で書く)
 ```
 
-出力の `database_id` を `apps/edge/wrangler.jsonc` の `d1_databases[0].database_id` に書く。リポジトリの値は仮の ID(`00000000-0000-0000-0000-000000000000`)で、KV の id と同じく導入ごとに自分の ID に書き換える。仮の ID のまま edge をデプロイしない。
+出力の `database_id` を、**`apps/edge/wrangler.jsonc` の `d1_databases[0].database_id` と、`apps/control/wrangler.jsonc` の `RESULTS_DB` の行(`d1_databases[1].database_id`)の両方**に書く。リポジトリの値は仮の ID(`00000000-0000-0000-0000-000000000000`)で、KV の id と同じく導入ごとに自分の ID に書き換える。仮の ID のまま edge と control をデプロイしない。
+
+- control の `RESULTS_DB` の行の `migrations_dir`(`../edge/results-migrations`)は、手元の開発とテストのためのもの。本番の `wtt-results` の表を作る・更新するのは、下の `pnpm -C apps/edge results:migrate:remote` だけ。control の `d1:migrate:remote` は `wtt-control` だけに当たる
 
 表を作る。`database_id` を書いた後に行う(wrangler は設定ファイルの ID でデータベースを探す):
 
@@ -932,8 +934,10 @@ openssl rand -base64 32 | pnpm -C apps/edge exec wrangler secret put RESULTS_VIS
 確認:
 
 ```bash
-grep -c '"binding": "RESULTS_DB"' apps/edge/wrangler.jsonc   # 期待: 1(RESULTS_DB の binding が 1 つ)
-grep -c 00000000-0000-0000-0000-000000000000 apps/edge/wrangler.jsonc || true   # 期待: 0(仮の ID が残っていない)
+RDB=<作成した database_id>
+grep -c '"binding": "RESULTS_DB"' apps/edge/wrangler.jsonc apps/control/wrangler.jsonc   # 期待: 各 1(RESULTS_DB の binding が 1 つ)
+grep -c "\"database_id\": \"$RDB\"" apps/edge/wrangler.jsonc apps/control/wrangler.jsonc   # 期待: 各 1(両方に同じ ID)
+grep -c 00000000-0000-0000-0000-000000000000 apps/edge/wrangler.jsonc || true   # 期待: 0(仮の ID が残っていない。control の wtt-control の仮の ID は 3.1 で書く)
 pnpm -C apps/edge exec wrangler d1 list --json | jq -r '.[] | select(.name == "wtt-results") | .uuid'   # 期待: apps/edge/wrangler.jsonc に書いた database_id
 pnpm -C apps/edge exec wrangler secret list | jq -r '.[].name'   # 期待: RESULTS_VISITOR_KEY
 ```
@@ -941,7 +945,8 @@ pnpm -C apps/edge exec wrangler secret list | jq -r '.[].name'   # 期待: RESUL
 期待と違うとき:
 
 - `wrangler d1 create` が `already exists` を含むエラーを返す → 前回の作業で作ったデータベースが残っている。`d1 list --json` の uuid を書く
-- `results:migrate:remote` がデータベースが見つからない旨のエラーで止まる → `database_id` を書いていないか、違う ID を書いている。上の確認の 3 行目と見比べる
+- `results:migrate:remote` がデータベースが見つからない旨のエラーで止まる → `database_id` を書いていないか、違う ID を書いている。上の確認の `d1 list` の行と見比べる
+- 2 行目か 3 行目で control が 0 → control の `RESULTS_DB` の行に書き忘れている。edge と同じ ID を書く(違う ID のままだと、control が結果を読めない)
 - `secret list` に `RESULTS_VISITOR_KEY` が無い → 鍵の登録をやり直す。登録の前に結果の送信を受けても、edge は書かずに数えるだけで、配信は止まらない
 
 **結果の記録の 1 日の予算(`apps/edge/wrangler.jsonc` の `vars`)**: 既定のままでよい。Cloudflare の Free の日次上限(D1 の書き込み 10 万行・読み取り 500 万行)はアカウント全体で `wtt-control` と分け合うので、結果の記録に使う量に上限を設けてある。守る順は「配信 > 管理操作(公開・終了など)> 結果の記録」で、予算を使い切った日は、次の UTC 0 時まで結果を記録しない(エクスペリエンスの配信は続く)。
@@ -1312,7 +1317,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置タグのホスト>/s/
 
 ## 3. control のデプロイ
 
-**control のデプロイより前に 2.4 と 2.9 を済ませる**(control は `wtt-deployer` への binding と、edge の Durable Object `ResultsBudget` への binding を持つ。`wtt-deployer` と、`ResultsBudget` を含む edge が無いとデプロイできない)。
+**control のデプロイより前に 2.4 と 2.9 を済ませる**(control は `wtt-deployer` への binding と、edge の Durable Object `ResultsBudget`・`ResultsHealth` への binding を持つ。`wtt-deployer` と、この 2 つを含む edge が無いとデプロイできない)。
 
 ### 3.1 D1
 
@@ -1322,12 +1327,13 @@ pnpm -C apps/control exec wrangler d1 create wtt-control </dev/null   # 2.2 と�
 
 出力される `database_id` を `apps/control/wrangler.jsonc` の `d1_databases[0].database_id` に反映する(ローカル / vitest は wrangler のローカル D1 を使うので値は問われない)。設定ファイルへの追記の問いは 2.2 と同じく **No**。
 
-ここで作るのは設定用の `wtt-control` だけ。計測用のデータベース `wtt-results` は 2.2 で作ってある。
+ここで作るのは設定用の `wtt-control` だけ。計測用のデータベース `wtt-results` は 2.2 で作り、`d1_databases[1]`(`RESULTS_DB`)に書いてある。
 
 確認:
 
 ```bash
-grep -n '"database_id"' apps/control/wrangler.jsonc   # 期待: 値の行が 1 行(出力の database_id が作成したものと一致)
+grep -n '"database_id"' apps/control/wrangler.jsonc   # 期待: 2 行(wtt-control の行がここで作成したもの、wtt-results の行が 2.2 で作成したもの)
+grep -c 00000000-0000-0000-0000-000000000000 apps/control/wrangler.jsonc || true   # 期待: 0(仮の ID が残っていない)
 pnpm -C apps/control exec wrangler d1 list --json | jq -r '.[] | select(.name == "wtt-control") | .uuid'
 ```
 
@@ -1469,7 +1475,9 @@ Cron と edge への binding:
 
 - control は 15 分ごとの Cron Trigger(`*/15 * * * *`。`apps/control/wrangler.jsonc` の `triggers`)を 1 本持つ。Cron Trigger の数にはアカウントごとの上限がある(Free は 5 本)。この製品が使うのは、デプロイ専用の Worker の毎時の 1 本(2.9)と合わせて 2 本。deploy の出力の triggers に `schedule: */15 * * * *` が出る
 - この Cron は、使用状況の表示と同じ値(3.3 の `CF_USAGE_TOKEN`・3.4 の `CF_ACCOUNT_ID`)でアカウント全体の使用量を見る。Free で Workers のリクエストか D1 の書き込みの行数が日次上限の 8 割に届いたら、結果の記録を次の UTC 0 時まで止める(配信と管理操作に残りを残すため)。使用状況の設定が無いとき・取得に失敗したときは何もしない。Paid では判定しない
-- control は edge の Durable Object `ResultsBudget` を参照する(Worker をまたぐ binding)。そのため edge(2.4)を先にデプロイする。control だけを先にデプロイすると失敗する。更新(6.3)でも edge を先にデプロイする
+- 同じ Cron が、テストの結果の記録の作業も行う: 15 分ごとに、公開した設定が訪問者に配られたことの確認・記録の締め切り(評価時点)の書き直し・計測用のデータベースの容量の測定(95% 以上なら記録を止める)。UTC 0 時を過ぎた後に 1 日 1 回、目標参加者数に届いたことの確認と、評価時点の結果の記録の作成。UTC 23 時台に 1 回、保持期間を過ぎた参加者ごとの記録と、エクスペリエンス・サイトの削除で残った記録の削除(その日の書き込みの予算の残りの範囲で。大きなテストは数日かかる)。1 回の実行で使うデータベースの問い合わせの数に上限があり、終わらなかった分は次の実行で続ける
+- control は edge の Durable Object `ResultsBudget`(結果の記録の予算)と `ResultsHealth`(収集できなかった送信の数)を参照する(Worker をまたぐ binding)。そのため edge(2.4)を先にデプロイする。control だけを先にデプロイすると失敗する。更新(6.3)でも edge を先にデプロイする
+- control は計測用のデータベース(`RESULTS_DB`。2.2 で `database_id` を書いた)を、結果の集計の読み取りと、保持期限・エクスペリエンスやサイトの削除に伴う記録の削除にだけ使う。表を作るのは edge の `results:migrate:remote` で、control の `d1:migrate:remote` は `wtt-control` だけに当たる
 
 deploy の出力の URL が、0.5 で確定した control の URL(= Google に登録したリダイレクト URI の元)と一致することを確認する。違っていれば(0.5 でサブドメインが取れなかった場合を含む)**【人に依頼】** `<AB_CONTROL_URL>/auth/callback/google` を承認済みのリダイレクト URI に登録し直してもらう。後で control の URL を変えたときも同じ。
 
@@ -1484,7 +1492,7 @@ curl -sS "<control URL>/llms.txt" -o /dev/null -w '%{http_code}\n'   # 期待: 2
 
 - deploy の直後(特に、0.5 で作ったばかりのサブドメインへの初回 deploy)に 404 や本文 `error code: 1042` が返る → 公開の反映待ち(数十秒)。**30 秒待ってから同じ確認をやり直す**。2 回目も同じなら、deploy の出力に `https://wtt-control.<サブドメイン>.workers.dev` の行があるかを確かめる(無ければ 0.5 のサブドメインの作成と、`wrangler.jsonc` に `workers_dev: false` が入っていないかを見る)
 - `d1:migrate:remote` が `✅ No migrations to apply` 以外の失敗で止まる → 3.1 の `database_id` を疑う
-- `wrangler deploy` が `wtt-edge` か `ResultsBudget` を含むエラーで失敗する → edge がまだデプロイされていないか、`ResultsBudget` を含まない古い edge のまま。2.4(更新では 6.3 の手順 1)で edge をデプロイしてからやり直す
+- `wrangler deploy` が `wtt-edge`・`ResultsBudget`・`ResultsHealth` のどれかを含むエラーで失敗する → edge がまだデプロイされていないか、この 2 つを含まない古い edge のまま。2.4(更新では 6.3 の手順 1)で edge をデプロイしてからやり直す
 
 ### 3.6 公開アドレス
 
@@ -1715,7 +1723,7 @@ curl -sS "$AB_CONTROL_URL/me" -H "Authorization: Bearer $AB_API_KEY" | jq '{emai
 
 更新は `git pull` ではなく **tag から tag へ** 行う。流れ: 6.1 現在と目標の確認 → 6.2 取得 → 6.3 凍結を入れてデプロイ → 6.4 確認して凍結を外す。戻すときは 6.5。
 
-**edge → deployer → control → admin の順にデプロイする。** 理由: core の共有スキーマ(`SiteSettingsSchema` / `CompiledConfigSchema`)は `z.strictObject` で未知フィールドを拒否するため、逆順にすると古い edge が新しい形式の record を parse できず、当該サイトの decision / event が 404(fail-closed)になる。deployer も同じスキーマで検証してから設置タグのファイルを作るので、control より先に更新する。control は edge の Durable Object(`ResultsBudget`)を参照するので、この点でも edge が先になる。
+**edge → deployer → control → admin の順にデプロイする。** 理由: core の共有スキーマ(`SiteSettingsSchema` / `CompiledConfigSchema`)は `z.strictObject` で未知フィールドを拒否するため、逆順にすると古い edge が新しい形式の record を parse できず、当該サイトの decision / event が 404(fail-closed)になる。deployer も同じスキーマで検証してから設置タグのファイルを作るので、control より先に更新する。control は edge の Durable Object(`ResultsBudget`・`ResultsHealth`)を参照するので、この点でも edge が先になる。
 
 ### 6.1 現在と目標の確認
 
@@ -1764,7 +1772,7 @@ pnpm install
 期待と違うとき:
 
 - 差分なし(初回導入で `wrangler.jsonc` を編集していない = 通常あり得ない)→ stash を作らずに進む
-- apply で衝突 → 両方の変更を見て id・routes・vars・`ratelimits` の `limit` を残し、`git stash drop "$S"` を手で行う。解消後は `grep -n '<<<<<<<' apps/*/wrangler.jsonc` が空であることを確認し、`git restore --staged apps/edge/wrangler.jsonc apps/control/wrangler.jsonc apps/admin/wrangler.jsonc apps/deployer/wrangler.jsonc`(存在するものだけを並べる)で index を戻す(`git status --short` が ` M` の行だけになる)
+- apply で衝突 → 両方の変更を見て id・routes・vars・`ratelimits` の `limit` を残し、`git stash drop "$S"` を手で行う。解消後は `grep -n '<<<<<<<' apps/*/wrangler.jsonc` が空であることを確認し、`git restore --staged apps/edge/wrangler.jsonc apps/control/wrangler.jsonc apps/admin/wrangler.jsonc apps/deployer/wrangler.jsonc`(存在するものだけを並べる)で index を戻す(`git status --short` が ` M` の行だけになる)。計測用のデータベースを足すリリースでは `apps/control/wrangler.jsonc` の `d1_databases` で衝突することがある(解き方は 6.3 の該当の節の手順 3)
   - レート制限の既定値が変わる版(CHANGELOG の目印)への更新では、`apps/edge/wrangler.jsonc` の KV の id の行から `ratelimits` の行までの 3 行が 1 回衝突する。KV の id は手元の値にし、その下のコメントと `ratelimits` の行は新しい版の形にして、`limit` は 2.3 の規則で書く。Route などほかの行は自動で戻る
   - ゾーンの WAF があるかは、`deploy-answers.yaml` の `edge_address`・`edge_waf_rate_limit` で見る。ファイルが無ければ 2.7 の GET で確かめる。見るのはルールの有無ではなく、式に `/v1/sites/` を含むルールがあるか(既存の別のルールがあるだけでは WAF があるとは言えない。別のルールがあるために「作らない」を選んだ導入があるため)。そのためのトークンも無ければ人に聞く。更新は別の会話で始まるので、導入時の答えが手元に残っていないことがある
 - `git stash list` に `wtt-deploy-config` が残っている → 前回の更新の取りこぼし。中身を確認して drop
@@ -1780,27 +1788,40 @@ pnpm install
 - 代わりに、手順 0 の前に管理画面の利用者とエージェントに書き込みを止めてもらい、進行中の操作が終わってから手順 0 に進む
 - 6.4 の読み取りの確認が成功し、admin の deploy を終えるまで止めてもらったままにする。その後に書き込みを再開してもらう。6.4 の「外す」の手順は飛ばす
 
-**計測用のデータベースを足すリリースの更新**(CHANGELOG の目印「計測用のデータベースを足す」。この 1 回だけ): 新しい版の edge は計測用のデータベース `wtt-results` と鍵 `RESULTS_VISITOR_KEY` を使う。下の手順 0(控え)の後、`pnpm runtime:build` と手順 1(edge)の前に、2.2 の「計測用のデータベース」を上から行う。順は次のとおりで、新規の導入(2.2 → 2.4)と同じ:
+**計測用のデータベースを足すリリースの更新**(CHANGELOG の目印「計測用のデータベースを足す」。この 1 回だけ): 新しい版の edge は計測用のデータベース `wtt-results` と鍵 `RESULTS_VISITOR_KEY` を使い、新しい版の control は同じデータベースを結果の集計のために読む。下の手順 0(控え)の後、`pnpm runtime:build` と手順 1(edge)の前に、2.2 の「計測用のデータベース」を上から行う。全体の順は次のとおり:
 
-1. `wrangler d1 create wtt-results` で作り、`apps/edge/wrangler.jsonc` の `database_id` を書き換える(6.2 で戻した設定ファイルには、新しい版の仮の ID が入っている)
-2. `pnpm -C apps/edge results:migrate:remote` で表を作る
-3. `RESULTS_VISITOR_KEY` を登録する
-4. 2.2 の確認のブロックを流す
-5. 下のコマンドの `pnpm runtime:build` から続ける(`pnpm -C apps/edge results:migrate:remote`(2 で済んでいるので "No migrations to apply")→ edge → deployer → `pnpm -C apps/control d1:migrate:remote` → control → admin)
+1. 6.6 の凍結を入れ、1 分待って有効になったことを確かめる(この節の先頭)
+2. 下の手順 0 のブロックで控えを取る。控えが取れなかったら、ここで止まる(2 つ目のブロックは控えのファイルが無いと動かない)
+3. `wrangler d1 create wtt-results` で作り、`database_id` を **`apps/edge/wrangler.jsonc` と `apps/control/wrangler.jsonc` の `RESULTS_DB` の行の両方**に書く(6.2 で戻した設定ファイルには、新しい版の仮の ID が入っている。control の行は新しい版で足した行で、退避した設定には無い)。新しい版で `apps/control/wrangler.jsonc` の `d1_databases` を 1 行から複数行に変えたので、更新前に `wtt-control` の `database_id` を書いた行と重なり、6.2 の stash の apply がこの部分で衝突することがある。衝突したら、`wtt-control` の行には退避した `database_id` を、`RESULTS_DB` の行にはここで作った `database_id` を書いて解消する(6.2 の「apply で衝突」)
+4. `pnpm -C apps/edge results:migrate:remote` で表を作る
+5. `RESULTS_VISITOR_KEY` を登録する
+6. 2.2 の確認のブロックを流す
+7. 同じシェルで、下の 2 つ目のブロック(`pnpm runtime:build` から)を流す(`pnpm -C apps/edge results:migrate:remote`(4 で済んでいるので "No migrations to apply")→ edge → deployer → `pnpm -C apps/control d1:migrate:remote`(`wtt-control` に結果の記録・評価計画・採用の表を足す)→ control → admin)
+8. 6.4 で確かめてから凍結を外す
 
 - 3.4 の `AB_USAGE_RESOURCES` の `d1` にも `wtt-results` を足しておく(control のデプロイの前)
-- control は計測用のデータベースが無くても動く。サイトの設定の「結果を記録する」を有効にできない(`409 results_store_missing`)だけで、ほかの機能は壊れない。更新しても、既存のサイトの「結果を記録する」は無効のまま
-- control だけを先にデプロイすると失敗する(edge の `ResultsBudget` を参照するため。3.5)
+- control の `RESULTS_DB` の行に仮の ID が残ったまま control をデプロイしない。3 の後に `grep -c 00000000-0000-0000-0000-000000000000 apps/control/wrangler.jsonc || true` が 0 であることを確かめる
+- 更新しても、既存のサイトの「結果を記録する」は無効のまま。記録を始めるには、管理者がサイトの設定で有効にしてから、テストを開始する(有効にする前に開始したテストは記録されない)
+- control だけを先にデプロイすると失敗する(edge の `ResultsBudget`・`ResultsHealth` を参照するため。3.5)
+
+手順 0 の控えと、手順 1〜3 は別のブロックにしてある。どちらも**リポジトリ直下で**流す(控えのファイルは `$PWD/deploy-backups/` に絶対パスで書く。`pnpm -C apps/control` で動く wrangler に相対パスを渡すと、`apps/control` の下に書かれるため)。2 つ目のブロックは、同じシェルで 1 つ目のブロックが作った控えのファイル(`$BACKUP`)が空でないときだけ動く。控えが取れなかったとき(1 つ目のブロックが `$BACKUP` を消す)・別のシェルで始めたとき(`$BACKUP` が無い)は、何もせずに「控えがありません」と出して止まる。2 つ目のブロックの中は `&&` でつないであり、途中の手順が失敗するとそこで止まる(止まった手順の出力を読んで直し、2 つ目のブロックを流し直す。どの手順も何度流しても結果は同じ)。
 
 ```bash
-pnpm -C apps/control exec wrangler d1 export wtt-control --remote --output "deploy-backups/wtt-control-$(date -u +%Y%m%dT%H%M%SZ).sql"   # 0. 更新前の控え(必須。10.1。mkdir -p deploy-backups を先に)
-pnpm runtime:build                                   # (c) が無くても実行してよい(冪等)
-pnpm -C apps/edge results:migrate:remote             # 0.5 計測用のデータベースの (a) があれば。無ければ "No migrations to apply"(冪等)
-pnpm -C apps/edge exec wrangler deploy               # 1. edge
-pnpm -C apps/deployer exec wrangler deploy           # 1.5 デプロイ専用の Worker(更新のたびに `wrangler deploy` する。secret と `wtt-static` の作成は 2.9 で 1 回済ませてあるので繰り返さない。配信ファイルの作り直しは自動で、次の公開か 1 時間以内)
-pnpm -C apps/control d1:migrate:remote               # 2. (a) があれば。無ければ "No migrations to apply"
-pnpm -C apps/control guide:build                     # エージェント向けガイド本文の再生成(冪等)
-pnpm -C apps/control exec wrangler deploy            # 3. control
+# 0. 更新前の控え(必須。10.1)。成功すると「控え: <ファイル名>」と出る
+BACKUP="$PWD/deploy-backups/wtt-control-$(date -u +%Y%m%dT%H%M%SZ).sql" && mkdir -p "$PWD/deploy-backups" && pnpm -C apps/control exec wrangler d1 export wtt-control --remote --output "$BACKUP" && test -s "$BACKUP" && echo "控え: $BACKUP" || unset BACKUP
+```
+
+```bash
+# 1〜3。0 の控えのファイルが空でないときだけ動き、途中の手順が失敗したらそこで止まる
+if test -s "${BACKUP:-}"; then
+pnpm runtime:build &&                                   # (c) が無くても実行してよい(冪等)
+pnpm -C apps/edge results:migrate:remote &&             # 0.5 計測用のデータベースの (a) があれば。無ければ "No migrations to apply"(冪等)
+pnpm -C apps/edge exec wrangler deploy &&               # 1. edge
+pnpm -C apps/deployer exec wrangler deploy &&           # 1.5 デプロイ専用の Worker(更新のたびに `wrangler deploy` する。secret と `wtt-static` の作成は 2.9 で 1 回済ませてあるので繰り返さない。配信ファイルの作り直しは自動で、次の公開か 1 時間以内)
+pnpm -C apps/control d1:migrate:remote &&               # 2. (a) があれば。無ければ "No migrations to apply"
+pnpm -C apps/control guide:build &&                     # エージェント向けガイド本文の再生成(冪等)
+pnpm -C apps/control exec wrangler deploy               # 3. control
+else echo "控えがありません。手順 0 をやり直してください(マイグレーションとデプロイには進まない)"; fi
 ```
 
 runtime を作り直したら control と deployer も必ず再デプロイする。control は下書きプレビュー用に同じ runtime 文字列を配るので、古い runtime を検証に配らないようにする。deployer は設置タグのファイルに runtime を書き込むので、更新しないと古い runtime を配り続ける。`wtt-static` には `wrangler deploy` を使わない(2.9)。
@@ -1887,7 +1908,7 @@ curl -sS -X POST "<control URL>/workspaces" | jq -r '.error'   # 期待: "unauth
 
 - 理由: 新しい版の edge は Durable Object の `ResultsBudget` と `ResultsHealth` を足している。前の版の edge はこの 2 つを持たない。Cloudflare は、使われている Durable Object を消す版のデプロイを、消すためのマイグレーションの指定が無いと受け付けないことがある(実機では確かめていない)
 - 新しい版の edge は、前の版の control・前の版の設置タグ・結果の設定が無い配る設定と組み合わせても動く。結果の送信が無ければ、計測用のデータベースに何も書かない
-- 新しい版の control も edge の `ResultsBudget` を参照している。control を新しい版のまま残すときも、edge は新しい版でなければならない
+- 新しい版の control も edge の `ResultsBudget`・`ResultsHealth` を参照している。control を新しい版のまま残すときも、edge は新しい版でなければならない
 
 ### 6.6 書き込みの凍結(メンテナンス中)
 
@@ -2173,11 +2194,13 @@ GA4 の DebugView で `ab_exposure` イベントが届くことを確認する�
 
 D1 の中身を 1 つの `.sql` ファイル(スキーマ + データ)として手元に落とす。**6.3 の更新前に必ず 1 回取り**、ほかに定期(週 1 を目安)と、サイト削除やメンバー整理のような取り消せない操作の前に取る。
 
+次のコマンドは**リポジトリ直下で**流す。控えのファイルは 6.3 と同じく `$PWD/deploy-backups/` に絶対パスで書く(`pnpm -C apps/control` で動く wrangler に相対パスを渡すと、`apps/control` の下に書かれ、リポジトリ直下の `ls` や `grep` から見えないため)。
+
 ```bash
-mkdir -p deploy-backups
-pnpm -C apps/control exec wrangler d1 export wtt-control --remote --output "deploy-backups/wtt-control-$(date -u +%Y%m%dT%H%M%SZ).sql"
-ls -la deploy-backups/ | tail -3           # 期待: 今の日時のファイルがあり、サイズが 0 でない
-grep -c 'CREATE TABLE' deploy-backups/wtt-control-*.sql | tail -1   # 期待: 1 以上(テーブル定義が入っている)
+mkdir -p "$PWD/deploy-backups"
+pnpm -C apps/control exec wrangler d1 export wtt-control --remote --output "$PWD/deploy-backups/wtt-control-$(date -u +%Y%m%dT%H%M%SZ).sql"
+ls -la "$PWD/deploy-backups/" | tail -3           # 期待: 今の日時のファイルがあり、サイズが 0 でない
+grep -c 'CREATE TABLE' "$PWD"/deploy-backups/wtt-control-*.sql | tail -1   # 期待: 1 以上(テーブル定義が入っている)
 ```
 
 - `deploy-backups/` は git に入らない(`.gitignore` 済み)。**ファイルにはメンバーのメールアドレス・パスワードと API キーのハッシュ・エクスペリエンスの内容が入る**ので、リポジトリや共有フォルダに置かず、暗号化されたディスクやアクセス制御のある置き場に移す
@@ -2230,6 +2253,7 @@ pnpm -C apps/control exec wrangler d1 time-travel restore wtt-control --bookmark
   - `pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select (select count(*) from publishes where created_at > <戻した時刻の ms>) as publishes, (select count(*) from experiments where updated_at > <戻した時刻の ms>) as experiments, (select count(*) from changes where updated_at > <戻した時刻の ms>) as changes"`
 - **セッションとログインは切れることがある**(session テーブルも戻るため)。全員がログインし直す。戻した時点より後に発行した招待・API キー・メンバー追加も消えているので、必要なら発行し直す
 - **R2 の画像は消えない**。戻した時点より後にアップロードした画像は R2 に残るが D1 の一覧からは消える(実害は無い。気になれば R2 のダッシュボードで消す)
+- **計測用のデータベース(`wtt-results`)の個票は、戻した時点より後に開始したテストの分が消される**。そのテストのエクスペリエンスの行は戻した `wtt-control` に無いので、個票は「対応するテストの無い記録」とみなされ、毎日 UTC 23 時台に動く Cron が、戻した後の最初の UTC 23 時台から順に消す(1 日に調べる件数に上限があるので、消し終わるまで数日かかることがある)。個票が要るときは、戻す前に `wtt-results` の export を取る(10.1 の `wtt-control` を `wtt-results` に読み替える)。消えたあとは、`wtt-results` の Time Travel の保持期間(10.1 のとおり)のうちなら 10.2 の手順で戻せるが、それを過ぎると取り戻せない。また、`wtt-results` を Time Travel で戻しても、`wtt-control` に対応する行が無ければ、また対応するテストの無い記録として消される。戻したら、次の UTC 23 時台より前に export を取る
 - 確認: `curl -sS -o /dev/null -w '%{http_code}\n' "<control URL>/llms.txt"` が 200、管理画面にログインしてサイト一覧が期待どおり
 
 ### 10.3 手元バックアップから読み戻す
@@ -2238,9 +2262,11 @@ Time Travel の保持期間より前に戻すとき、または D1 を消して�
 
 今のデータベースが残っているなら、読み戻しの前に 6.6 の凍結を入れておく(切り替えの前に入った書き込みは、新しいデータベースに入らない)。
 
+次のコマンドも 10.1 と同じく**リポジトリ直下で**流し、控えのファイルは絶対パス(`$PWD/deploy-backups/…`)で渡す。
+
 ```bash
 pnpm -C apps/control exec wrangler d1 create wtt-control-restore                              # 期待: database_id が出る
-pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --file deploy-backups/<戻したいファイル>.sql -y
+pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --file "$PWD/deploy-backups/<戻したいファイル>.sql" -y
 pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --command "select count(*) as sites from sites; select count(*) as users from user" --json   # 期待: 元の件数
 ```
 
@@ -2252,7 +2278,7 @@ pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --com
 2. `pnpm -C apps/control d1:migrate:remote`(export 時点より新しいマイグレーションがあれば当たる。無ければ `No migrations to apply`)
 3. **6.6 の「入れる」を `wtt-control-restore` に対して実行する**(コマンドの `wtt-control` を `wtt-control-restore` に読み替える)
 4. `pnpm -C apps/control exec wrangler deploy`
-5. 切り替えた後、確認が済んでから 6.6 の「外す」で外す(同じく `wtt-control-restore` に読み替える)。以後は 10.2 の手順 4 と同じ整合(公開し直し・ログインし直し)
+5. 切り替えた後、確認が済んでから 6.6 の「外す」で外す(同じく `wtt-control-restore` に読み替える)。以後は 10.2 の手順 4 と同じ整合(公開し直し・ログインし直し)。export を取った時点より後に開始したテストの個票は、10.2 の手順 4 のとおり `wtt-results` から消される(`wtt-results` は読み戻さないので、必要なら先に `wtt-results` の export を取る。`wtt-results` を Time Travel で戻しても、`wtt-control` に対応する行が無ければ、また対応するテストの無い記録として消される。戻したら、次の UTC 23 時台より前に export を取る)
 6. 元の DB は問題が無いと分かってから `wrangler d1 delete wtt-control` で消す
 
 ### 10.4 撤去(導入全体を消す)

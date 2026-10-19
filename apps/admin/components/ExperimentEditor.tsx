@@ -5,19 +5,35 @@ import { api, ApiClientError } from "@/lib/client";
 import { toChangeWire } from "@/lib/change-wire";
 import { saveErrorMessage } from "@/lib/experiment-save";
 import { draftOf, draftValueErrors, failedTab, isDirty, saveSteps, targetingBody, type Draft, type EditorTab } from "@/lib/experiment-draft";
+import { planDirty, planFormState, syncPlanState, type PlanForm, type PlanView } from "@/lib/evaluation-plan";
+import { archivedTestBanner, lockedFieldChanges, needsRunningTestConfirm, RUNNING_TEST_CONFIRM, trafficError } from "@/lib/test-locks";
 import { treeProblem } from "@/lib/conditions";
 import { emptyHtmlIndex, firstEmptyHtml } from "@/lib/change-issues";
 import { analyticsCardOpenInitially } from "@/lib/analytics-badges";
 import { replaceParam } from "@/lib/url-state";
 import { previewPageUrl } from "@/lib/page-match";
 import type { Audience, Experiment, Goal, Site } from "@/lib/types";
+import { useConfirm } from "./ConfirmProvider";
+import { useLeaveGuard, type LeaveAttempt } from "./api-keys/useLeaveGuard";
 import { ErrorBox } from "./ErrorBox";
 import { TabPanel, Tabs } from "./ui/Tabs";
 import { SaveBar } from "./ui/SaveBar";
 import { OverviewTab } from "./experiment/OverviewTab";
 import { VariantsTab } from "./experiment/VariantsTab";
+import { EvaluationPlanTab } from "./experiment/EvaluationPlanTab";
+import { ResultsTab } from "./experiment/ResultsTab";
+import { StopDialog, StopNotices } from "./experiment/StopDialog";
+import type { ResultsResponse } from "@/lib/results-view";
+import type { StopMessage } from "@/lib/stop-dialog";
 
-type Props = { site: Site; experiment: Experiment; goals: Goal[]; audiences: Audience[]; role: string; imageUpload: boolean; initialTab: EditorTab; initialVariant: string | null };
+/**
+ * initialPlan = テストの評価計画(D9 ③ Task 14。パーソナライズと読めなかったときは null)。
+ * recording = このサイトが結果を記録するか(Site の設定が有効で、導入に計測用のデータベースがある)。resultsStore = 導入に計測用のデータベースがあるか
+ */
+type Props = {
+  site: Site; experiment: Experiment; goals: Goal[]; audiences: Audience[]; role: string; imageUpload: boolean; initialTab: EditorTab; initialVariant: string | null;
+  wid: string; initialPlan: PlanView | null; recording: boolean; resultsStore: boolean;
+};
 /** 本体が使うのは initialTab / initialVariant を除いた分(開いているタブと Variant は外枠が持つ) */
 type BodyProps = Omit<Props, "initialTab" | "initialVariant">;
 
@@ -45,7 +61,61 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
   // まだ無いキーは、表示する側が最初の表示の規則(analyticsCardOpenInitially)で決めて書き込む
   const [cardOpen, setCardOpen] = useState<Record<string, boolean>>({});
   const onCardOpen = useCallback((key: string, open: boolean) => setCardOpen((c) => (c[key] === open ? c : { ...c, [key]: open })), []);
+  // 評価計画(テストだけ。D9 ③)の入力も外枠に置く: 計画の保存はエクスペリエンスの updated_at を進めないので、本体の作り直し
+  // (エクスペリエンスの保存・破棄・状態の変更)で未保存の入力を失わないため。ページが読み直した計画(initialPlan)が変わったら
+  // syncPlanState で置き換える(未保存の入力があれば入力は残し、比べる計画だけ新しくする)。描画中の state の調整(前の値を覚えて比べる)
+  const planKey = JSON.stringify(body.initialPlan);
+  const [plan, setPlan] = useState<{ view: PlanView | null; form: PlanForm | null }>(() => ({ view: body.initialPlan, form: body.initialPlan ? planFormState(body.initialPlan) : null }));
+  const [planSeen, setPlanSeen] = useState(planKey);
+  if (planSeen !== planKey) {
+    setPlanSeen(planKey);
+    setPlan((p) => syncPlanState(p, body.initialPlan));
+  }
+  const [planReason, setPlanReason] = useState("");
+  // 評価計画に未保存の入力があれば、画面の中の移動と再読み込み・タブを閉じるを確認する
+  const router = useRouter();
+  const ask = useConfirm();
+  // useLeaveGuard は渡した関数を ref に入れて最新のものを呼ぶので、毎回作ってよい
+  async function onLeave(a: LeaveAttempt) {
+    if (!(await ask({ title: "評価計画の変更を保存していません", body: "移動すると、評価計画のタブで入力した値は失われます", confirmLabel: "保存せずに移動", tone: "danger" }))) {
+      if (a.kind === "logout") a.form.closest("details")?.removeAttribute("open");
+      return;
+    }
+    bypass();
+    if (a.kind === "href") router.push(a.href);
+    else a.form.requestSubmit();
+  }
+  const { bypass } = useLeaveGuard(planDirty(plan.view, plan.form), (a) => void onLeave(a));
+  // 終了のモーダル(D9 ③ Task 16): 結果のタブの帯の「終了して採用を記録」「採用なしで終了」から開く。開始・終了は管理者以上(設計書 §10)。
+  // 外枠に置く: 終了は updated_at を進めて本体を作り直すので、知らせを本体に置くと読む前に消えるため
+  const canAdmin = body.role === "owner" || body.role === "admin";
+  const stoppable = body.experiment.kind === "test" && (body.experiment.status === "running" || body.experiment.status === "paused");
+  const [stop, setStop] = useState<{ variantId: string | null; report: ResultsResponse } | null>(null);
+  const [stopNotices, setStopNotices] = useState<{ messages: StopMessage[]; created: string | null } | null>(null);
   return (
+    <>
+    {stopNotices ? (
+      <div className="row" style={{ gap: 8, marginBottom: 8 }} data-testid="editor-stop-notices">
+        <StopNotices messages={stopNotices.messages} created={stopNotices.created} />
+      </div>
+    ) : null}
+    {stop ? (
+      <StopDialog
+        wid={body.wid}
+        siteId={body.site.id}
+        experiment={body.experiment}
+        timeZone={body.site.timezone}
+        mode="stop"
+        report={stop.report}
+        initialVariantId={stop.variantId}
+        onClose={() => setStop(null)}
+        onDone={(messages, created) => {
+          setStop(null);
+          setStopNotices({ messages, created });
+          router.refresh();
+        }}
+      />
+    ) : null}
     <ExperimentEditorBody
       key={bodyKey}
       {...body}
@@ -65,15 +135,33 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
       onDiscard={() => setGeneration((g) => g + 1)}
       cardOpen={cardOpen}
       onCardOpen={onCardOpen}
+      plan={plan}
+      onPlan={setPlan}
+      planReason={planReason}
+      onPlanReason={setPlanReason}
+      onStop={canAdmin && stoppable ? (variantId, report) => {
+        setStopNotices(null);
+        setStop({ variantId, report });
+      } : undefined}
     />
+    </>
   );
 }
 
 function ExperimentEditorBody({
-  site, experiment, goals, audiences, role, imageUpload, tab, onTab, variant, onVariant, onDiscard, animate, cardOpen, onCardOpen,
-}: BodyProps & { tab: EditorTab; onTab: (t: EditorTab) => void; variant: string | null; onVariant: (id: string | null) => void; onDiscard: () => void; animate: boolean; cardOpen: Record<string, boolean>; onCardOpen: (key: string, open: boolean) => void }) {
+  site, experiment, goals, audiences, role, imageUpload, tab, onTab, variant, onVariant, onDiscard, animate, cardOpen, onCardOpen, wid, recording, resultsStore,
+  plan, onPlan, planReason, onPlanReason, onStop,
+}: BodyProps & {
+  tab: EditorTab; onTab: (t: EditorTab) => void; variant: string | null; onVariant: (id: string | null) => void; onDiscard: () => void; animate: boolean; cardOpen: Record<string, boolean>; onCardOpen: (key: string, open: boolean) => void;
+  /** 評価計画の状態(外枠が持つ) */
+  plan: { view: PlanView | null; form: PlanForm | null }; onPlan: (p: { view: PlanView | null; form: PlanForm | null }) => void; planReason: string; onPlanReason: (r: string) => void;
+  /** 結果のタブの帯から終了のモーダルを開く(管理者以上・実行中か一時停止中のテストだけ。外枠が渡す) */
+  onStop?: (variantId: string | null, report: ResultsResponse) => void;
+}) {
   const router = useRouter();
+  const ask = useConfirm();
   const canEdit = role !== "viewer";
+  const isTest = experiment.kind === "test";
   const initial = useMemo(() => draftOf(experiment), [experiment]);
   const [draft, setDraft] = useState<Draft>(initial);
   const [busy, setBusy] = useState(false);
@@ -113,6 +201,13 @@ function ExperimentEditorBody({
    * 配信条件はエクスペリエンスの欄を送るときだけ見る(メモだけの保存を、保存済みの配信条件で止めない)
    */
   function blockedBeforeSave(): boolean {
+    // D9 ③(設計書 §5.5): 実行中・一時停止中のテストは配信率を下げられない(control の 409 test_setting_locked を先に示す)
+    const traffic = steps.patchExperiment ? trafficError(experiment, draft.traffic) : null;
+    if (traffic) {
+      setErrorTab("overview");
+      setError(traffic);
+      return true;
+    }
     const problem = steps.patchExperiment && draft.targeting.kind === "form" ? treeProblem(draft.targeting.form.rows, site.retentionDays) : null;
     if (problem) {
       setErrorTab("overview");
@@ -155,7 +250,16 @@ function ExperimentEditorBody({
       onDiscard();
       return;
     }
+    // D9 ③(設計書 §5.5): 実行中・一時停止中のテストの Change・対象 URL・配信条件を保存するときは 1 回確認する。
+    // 確認を待つ間も保存を押せないよう、先に busy を立てる(キャンセルなら戻す)
     setBusy(true);
+    if (
+      needsRunningTestConfirm(experiment, lockedFieldChanges(initial, draft)) &&
+      !(await ask({ title: "実行中のテストを変更しますか?", body: RUNNING_TEST_CONFIRM, confirmLabel: "保存する", tone: "primary" }))
+    ) {
+      setBusy(false);
+      return;
+    }
     // 外枠は `key={updatedAt…}` でこの本体を再マウントする(成功時の router.refresh() が
     // 本当に「最新の表示」にするため)。だが部分適用の失敗時にここで router.refresh() を呼ぶと、再マウントで
     // エラーバナーや「HTML タイプに切り替える」導線ごと消える(422 が返っているのに画面には何も出ない)。
@@ -237,8 +341,14 @@ function ExperimentEditorBody({
   const ro = !canEdit || busy || experiment.status === "archived";
   const memoRo = !canEdit || busy;
   const tabProps = { draft, set, ro };
+  const archivedBanner = archivedTestBanner(experiment);
   return (
     <div>
+      {archivedBanner ? (
+        <p className="banner-warn" role="note" data-testid="archived-test-banner">
+          {archivedBanner}
+        </p>
+      ) : null}
       <ErrorBox message={error} />
       {attrHint ? (
         <p className="banner-warn">
@@ -261,6 +371,13 @@ function ExperimentEditorBody({
         tabs={[
           { id: "overview", label: "基本設定", marked: errorTab === "overview" && tab !== "overview" },
           { id: "variants", label: "パターン", marked: (errorTab === "variants" || weightSum !== 100) && tab !== "variants" },
+          // 評価計画と結果はテストだけ。結果は下書きでは押せない(「開始後に表示されます」。設計書 §10)
+          ...(isTest
+            ? [
+                { id: "plan", label: "評価計画" },
+                { id: "results", label: "結果", disabled: experiment.status === "draft", hint: experiment.status === "draft" ? "開始後に表示されます" : undefined },
+              ]
+            : []),
         ]}
       />
       {tab === "overview" ? (
@@ -276,6 +393,47 @@ function ExperimentEditorBody({
             saveTried={saveTried}
             analyticsOpen={experimentCardOpen}
             onAnalyticsOpen={(open) => onCardOpen("experiment", open)}
+            lock={experiment}
+          />
+        </TabPanel>
+      ) : null}
+      {tab === "plan" && isTest ? (
+        <TabPanel id="plan" animate={animate}>
+          <EvaluationPlanTab
+            wid={wid}
+            siteId={site.id}
+            experimentId={experiment.id}
+            status={experiment.status}
+            canEdit={canEdit}
+            view={plan.view}
+            form={plan.form}
+            onForm={(f) => onPlan({ view: plan.view, form: f })}
+            reason={planReason}
+            onReason={onPlanReason}
+            onSaved={(v) => {
+              onPlan({ view: v, form: planFormState(v) });
+              onPlanReason("");
+            }}
+            goals={goals}
+            variants={experiment.variants ?? []}
+            recording={recording}
+            resultsStore={resultsStore}
+            timeZone={site.timezone}
+          />
+        </TabPanel>
+      ) : null}
+      {tab === "results" && isTest ? (
+        <TabPanel id="results" animate={animate}>
+          {/* 終了のモーダル(採用の選択)は見出しの終了と同じもの(外枠が開く)。採用の記録し直しは管理者以上・終了したテストだけ */}
+          <ResultsTab
+            wid={wid}
+            siteId={site.id}
+            experiment={experiment}
+            timeZone={site.timezone}
+            goals={goals}
+            canDuplicate={canEdit}
+            onStop={onStop}
+            canAdopt={(role === "owner" || role === "admin") && experiment.status === "archived"}
           />
         </TabPanel>
       ) : null}
@@ -306,6 +464,7 @@ function ExperimentEditorBody({
       {canEdit && (experiment.status !== "archived" || memoChanged) ? (
         <SaveBar dirty={dirty}>
           {weightSum !== 100 ? <span className="field-error">重みの合計が 100 ではありません({weightSum})</span> : null}
+          {planDirty(plan.view, plan.form) ? <span className="muted" data-testid="plan-unsaved">評価計画に未保存の変更があります(評価計画のタブの「評価計画を保存」で保存します)</span> : null}
           <button type="button" className="btn" disabled={busy || !dirty} onClick={onDiscard}>
             破棄
           </button>

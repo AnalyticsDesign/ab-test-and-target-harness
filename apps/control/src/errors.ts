@@ -35,6 +35,17 @@ export const DEFAULT_MESSAGES: Record<string, string> = {
   last_workspace: "最後のワークスペースは削除できません",
   workspace_has_running_experiments: "配信中のエクスペリエンスがあります",
   write_frozen: "メンテナンス中のため、変更を保存できません",
+  // D9 ③(plan ③ の K25): 評価計画と結果
+  evaluation_plan_incomplete: "評価計画が足りないため、テストを開始できません",
+  evaluation_plan_locked: "開始後の評価計画は、評価時点の前に期間と人数を延ばす変更だけができます",
+  evaluation_already_fixed: "評価時点を過ぎたため、評価計画は変えられません",
+  test_setting_locked: "開始後のテストでは、この設定を変えられません",
+  experiment_archived_readonly: "終了したテストは編集できません",
+  results_not_started: "開始していないテストには結果がありません",
+  results_not_applicable: "パーソナライズには評価計画と結果がありません",
+  results_read_unavailable: "今は結果を読み取れません",
+  adoption_not_allowed: "このエクスペリエンスには、いま採用を記録できません",
+  unknown_variant: "指定したパターンがこのエクスペリエンスにありません",
 };
 
 /**

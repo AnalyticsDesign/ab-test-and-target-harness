@@ -29,11 +29,23 @@ function useMounted(): boolean {
   return mounted;
 }
 
-/** 時刻 1 つ。kind = datetime(既定、2026/10/6 12:04:05)/ date(2026/10/6)/ deadline(10/6 12:04) */
-export function LocalTime({ at, kind = "datetime" }: { at: number; kind?: LocalTimeKind }) {
+/**
+ * 時刻 1 つ。kind = datetime(既定、2026/10/6 12:04:05)/ date(2026/10/6)/ deadline(10/6 12:04)。
+ * timeZone = 表示のタイムゾーン(省略 = 見ている人のタイムゾーン)。評価計画・結果の日付はサイトのタイムゾーンで出す(D9 ③)
+ */
+export function LocalTime({ at, kind = "datetime", timeZone }: { at: number; kind?: LocalTimeKind; timeZone?: string }) {
   const mounted = useMounted();
   if (!Number.isFinite(at)) return <>-</>; // toISOString は不正な時刻で投げる(画面全体を落とさない)
-  return <time dateTime={new Date(at).toISOString()}>{mounted ? formatLocalTime(at, kind) : ""}</time>;
+  return <time dateTime={new Date(at).toISOString()}>{mounted ? safeFormat(at, kind, timeZone) : ""}</time>;
+}
+
+/** 不正なタイムゾーン名(古いデータ)で RangeError を投げて画面を落とさないよう、見ている人のタイムゾーンに落とす */
+function safeFormat(at: number, kind: LocalTimeKind, timeZone: string | undefined): string {
+  try {
+    return formatLocalTime(at, kind, timeZone);
+  } catch {
+    return formatLocalTime(at, kind);
+  }
 }
 
 /** API キーの期限の列(期限なし / 10/12 22:05 / 期限切れ(10/12 22:05))。期限切れかは今の時刻で決まるのでマウント後に描く */

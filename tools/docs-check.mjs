@@ -3,6 +3,7 @@
 // 使い方: リポジトリのルートで `pnpm docs:check`(引数にファイルを渡すとそれだけを検査)
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
+import { parseHelp } from "../apps/admin/scripts/help-lib.mjs";
 
 const root = process.cwd();
 const defaultFiles = [
@@ -26,7 +27,7 @@ const PATH_EXCLUDE = /(^|\/)(\.env[^/]*|\.dev\.vars[^/]*|\.kv\/|\.static(\/|$)|n
 // 必須文書(ルート README から辿る公開文書 6 本 + CONTEXT.md)。既定モードでは 1 本でも欠けると missing-file で不合格。明示引数の不在も不合格
 const REQUIRED = ["README.md", "CONTEXT.md", "docs/README.md", "docs/deploy.md", "docs/site-install.md", "docs/operations.md", "docs/analytics.md", "docs/agent-guide.md"];
 // 用語表(B35)の検査の対象 = 公開文書。operations.md 1 節の対応表が正
-const GLOSSARY_FILES = new Set(["README.md", "CONTEXT.md", "CHANGELOG.md", "docs/README.md", "docs/install-patterns.md", "docs/install-questions.md", "docs/deploy.md", "docs/site-install.md", "docs/operations.md", "docs/analytics.md", "docs/agent-guide.md"]);
+const GLOSSARY_FILES = new Set(["README.md", "CONTEXT.md", "CHANGELOG.md", "docs/README.md", "docs/install-patterns.md", "docs/install-questions.md", "docs/deploy.md", "docs/site-install.md", "docs/operations.md", "docs/analytics.md", "docs/agent-guide.md", "docs/experiment-results.md"]);
 const GLOSSARY_BANNED = [
   { re: /未公開の変更あり/, use: "未公開の編集あり" },
   { re: /権限の上限/, use: "権限(API の roleCap)" },
@@ -187,7 +188,8 @@ if (files.includes(DEPLOY)) {
 
 // (6) 比喩的な動詞・内部の言い回し(deploy.md と README の地の文。見出しとコードブロックは対象外)。
 // 翻訳調の比喩や擬人化を避け、主体と対象を具体語で書く。対象の文書を広げるときは、その文書を先に直してから足す
-const PLAIN_FILES = new Set(["README.md", "docs/deploy.md"]);
+// docs/experiment-results.md は管理画面の説明(ヘルプ)の原稿でもある(画面に出る文なので、同じ規範で書く)
+const PLAIN_FILES = new Set(["README.md", "docs/deploy.md", "docs/experiment-results.md"]);
 const PLAIN_BANNED = [
   { re: /叩[くかきい]/, use: "呼び出す / 送る" },
   { re: /焼き込/, use: "書き込む" },
@@ -207,6 +209,15 @@ for (const rel of files.filter((f) => PLAIN_FILES.has(f))) {
     if (fence || /^#{1,6} /.test(line)) return;
     for (const g of PLAIN_BANNED) if (g.re.test(line)) problems.push(`${rel}:${i + 1} plain-japanese: 「${line.match(g.re)[0]}」→ ${g.use}`);
   });
+}
+
+// (8) 説明(ヘルプ)の原稿の印(D9 plan ③ K22)。管理画面の generated/help.ja.ts を作る embed-help と同じ規則(apps/admin/scripts/help-lib.mjs)で読む:
+// 印 `<!-- help: <key> -->` の key は [a-z0-9-]+ で重複しない、印の次の行(空行を挟まない)が ### の見出し、見出しの後の最初の段落(要点)が 1〜160 字
+const HELP_MANUSCRIPT = "docs/experiment-results.md";
+if (files.includes(HELP_MANUSCRIPT)) {
+  const { entries, problems: helpProblems } = parseHelp(readFileSync(join(root, HELP_MANUSCRIPT), "utf8"));
+  for (const p of helpProblems) problems.push(`${HELP_MANUSCRIPT}:${p.line} help-marker: ${p.message}`);
+  if (entries.length === 0) problems.push(`${HELP_MANUSCRIPT}:0 help-marker: 印(<!-- help: <key> -->)が 1 つも無い`);
 }
 
 if (problems.length) { console.error(problems.join("\n")); process.exit(1); }

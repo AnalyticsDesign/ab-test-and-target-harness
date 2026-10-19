@@ -94,6 +94,8 @@ describe("オーディエンスの API(決定 49、設計書 §5)", () => {
     expect(body.error).toBe("audience_in_use");
     expect(body.hint).toContain("料金表");
     expect(body.experiments).toEqual(["exp_ref"]);
+    expect(body.hint).toBe("参照しているエクスペリエンス: 料金表。配信条件から外してから削除してください"); // 終了したテストが無ければ今の案内のまま
+    expect(body).not.toHaveProperty("archivedTests");
     expect((await call("PATCH", `/sites/${sid}/experiments/exp_ref`, { token: owner.token, body: { targeting: null } })).status).toBe(200);
     expect((await call("DELETE", `/sites/${sid}/audiences/aud_pricing`, { token: owner.token })).status).toBe(204);
   });
@@ -151,12 +153,40 @@ describe("オーディエンスの API(決定 49、設計書 §5)", () => {
   it("archived のエクスペリエンスが参照するオーディエンスも削除できない(409 audience_in_use)。PATCH で参照を外せば削除できる", async () => {
     const { owner, sid } = await siteWithGoal();
     await createAudience(owner.token, sid, {});
-    const { id: eid } = await createExperiment(owner.token, sid, { targeting: { audience: "aud_pricing" } });
+    // パーソナライズは終了した後も PATCH で参照を外せる
+    const { id: eid } = await createExperiment(owner.token, sid, { kind: "single", targeting: { audience: "aud_pricing" } });
     await getDb(env).updateTable("experiments").set({ status: "archived" }).where("site_id", "=", sid).where("id", "=", eid).execute();
     const res = await call("DELETE", `/sites/${sid}/audiences/aud_pricing`, { token: owner.token });
     expect(res.status).toBe(409);
     expect(((await expectEnvelope(res)) as { error: string }).error).toBe("audience_in_use");
     expect((await call("PATCH", `/sites/${sid}/experiments/${eid}`, { token: owner.token, body: { targeting: null } })).status).toBe(200);
+    expect((await call("DELETE", `/sites/${sid}/audiences/aud_pricing`, { token: owner.token })).status).toBe(204);
+  });
+
+  it("終了したテストが参照するオーディエンスは、テストを削除するまで削除できない(D9 ③ の K10: 終了したテストは読み取り専用。hint は行き止まりにしない)", async () => {
+    const { owner, sid } = await siteWithGoal();
+    await createAudience(owner.token, sid, {});
+    const { id: eid } = await createExperiment(owner.token, sid, { name: "終了した料金表", targeting: { audience: "aud_pricing" } });
+    await getDb(env).updateTable("experiments").set({ status: "archived" }).where("site_id", "=", sid).where("id", "=", eid).execute();
+    // 終了したテストだけが参照: 「外して」とは案内せず、テストを削除すると消せると案内する
+    const only = (await expectEnvelope(await call("DELETE", `/sites/${sid}/audiences/aud_pricing`, { token: owner.token }))) as Record<string, unknown>;
+    expect(only).toMatchObject({ error: "audience_in_use", experiments: [eid], archivedTests: [eid] });
+    expect(only.hint).toBe("終了したテスト(終了した料金表)が参照している間は削除できません(終了したテストを削除すると削除できます)");
+    // 外せる参照(下書き)も並ぶとき: 外せるものには今の案内、終了したテストには削除の案内
+    await createExperiment(owner.token, sid, { id: "exp_draft_ref", name: "下書きの料金表", targeting: { audience: "aud_pricing" } });
+    const mixed = (await expectEnvelope(await call("DELETE", `/sites/${sid}/audiences/aud_pricing`, { token: owner.token }))) as Record<string, unknown>;
+    expect(mixed).toMatchObject({ experiments: [eid, "exp_draft_ref"], archivedTests: [eid] });
+    expect(mixed.hint).toBe(
+      "参照しているエクスペリエンス: 下書きの料金表。配信条件から外してから削除してください。終了したテスト(終了した料金表)が参照している間は削除できません(終了したテストを削除すると削除できます)",
+    );
+    expect((await call("PATCH", `/sites/${sid}/experiments/exp_draft_ref`, { token: owner.token, body: { targeting: null } })).status).toBe(200);
+    // 一覧の usedBy は今の形のまま(id / name / status)
+    const listed = await json<Array<{ id: string; usedBy: unknown[] }>>(await call("GET", `/sites/${sid}/audiences`, { token: owner.token }));
+    expect(listed.find((a) => a.id === "aud_pricing")!.usedBy).toEqual([{ id: eid, name: "終了した料金表", status: "archived" }]);
+    const patch = await call("PATCH", `/sites/${sid}/experiments/${eid}`, { token: owner.token, body: { targeting: null } });
+    expect(patch.status).toBe(409);
+    expect(((await expectEnvelope(patch)) as { error: string }).error).toBe("experiment_archived_readonly");
+    expect((await call("DELETE", `/sites/${sid}/experiments/${eid}`, { token: owner.token })).status).toBe(204);
     expect((await call("DELETE", `/sites/${sid}/audiences/aud_pricing`, { token: owner.token })).status).toBe(204);
   });
 

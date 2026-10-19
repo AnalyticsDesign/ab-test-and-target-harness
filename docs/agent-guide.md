@@ -100,10 +100,23 @@ curl -sS -X PUT "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/variants/b/c
   -H "Authorization: Bearer $AB_API_KEY" -H 'content-type: application/json' \
   -d '[{"id":"c_text","type":"TEXT","selector":"h1.hero","payload":{"text":"新しい見出し"}}]'
 
-# 4. 開始(管理者。成功するとサイトが自動で公開される)
+# 4. 評価計画を決める(テストだけ。判定に使う目標の g_lead は下の「目標名」の例で作る。ほかの項目は省けば既定値)
+curl -sS -X PUT "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/evaluation-plan" \
+  -H "Authorization: Bearer $AB_API_KEY" -H 'content-type: application/json' \
+  -d '{"plan":{"primaryGoalId":"g_lead","targetPerVariant":5000}}'
+
+# 5. 開始(管理者。成功するとサイトが自動で公開される)
 curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/status" \
   -H "Authorization: Bearer $AB_API_KEY" -H 'content-type: application/json' -d '{"status":"running"}'
 ```
+
+**評価計画と開始**(テストだけ。パーソナライズには評価計画も結果も無く、404 `results_not_applicable`):
+
+- 評価計画は、何を・いつまで集めて・どう判定するかの約束で、結果を記録するサイト(`GET /sites/:sid` の `resultsEnabled` が `true`)で開始した時点に固定されます。必須は判定に使う目標(`primaryGoalId`)だけです。目標が無い開始と、基準(`baselineVariantId`。既定はオリジナルの中で先頭のパターン、オリジナルが無ければ先頭のパターン)の重みが 0 の開始は 422 `evaluation_plan_incomplete` です
+- `GET …/evaluation-plan` は、保存していない項目を既定値で埋めた形(最低期間 14 日・最大期間 8 週・確率のしきい値 95 など)と `cautions`(最低期間が短い・しきい値が低い・目標参加者数が無い。開始は止めない)を返します。目標参加者数(`targetPerVariant`、パターンごと)が空だと、人数に関係なく最低期間の終わりに判定します
+- 開始後に受けるのは、評価時点の前に `minDays`・`maxWeeks` を増やす・`targetPerVariant` を増やす(新しく設ける)変更だけです(`reason` を添えると変更の履歴に残ります)。縮める変更、判定の基準(`delta`・`rope`・`threshold`)・判定に使う目標・基準の変更は 409 `evaluation_plan_locked`、評価時点の後は 409 `evaluation_already_fixed` です。早く終えるときは終了し、基準を変えるときは複製して新しいテストにします。目標参加者数のある計画を延ばすときに、到達を確かめる読み取りができなければ 503 `results_read_unavailable`(時間をおいてやり直す)
+- 結果を記録しないサイトでの開始は成功し、応答の `warnings` に `path: "results"` が出ます(結果はツールに残らず、後から記録を有効にしても、このテストは記録されません)。`path: "resultsCapacity"` は計測用のデータベースの空きが少なくなる見込みの警告です(開始は止めない)
+- 評価計画の保存は公開の対象になりません(「未公開の編集あり」になりません)
 
 対象 URL(`urlMatch`)は `{ "part": "url" | "path" | "host", "op": …, "value": … }` の形で書きます(`part` を省略すると URL 全体)。目標(`goal`)の `PAGEVIEW` も同じ形で、`config` は `{ "page": { "part": "path", "op": "equals", "value": "/thanks/" } }` です。目標の古い形 `{ "urlOp", "urlValue" }` は受け付けず 422 です。対象 URL の `part` を省略した `{ "op", "value" }` は URL 全体への一致として今までどおり使えますが、URL 全体の正規表現は使えません(下の「踏みやすい制約」)。
 
@@ -174,11 +187,72 @@ const report = await page.evaluate(() => window.AB.getPreviewReport());
 
 ### レシピ 3: 結果を読む
 
+結果は 2 通りで読めます。管理画面の結果のタブと同じ数字(このツールが記録した参加と CV。結果を記録するサイトのテストだけ)と、GA4 / BigQuery で集計するためのクエリです。
+
+**管理画面と同じ結果**(閲覧者以上):
+
+```bash
+curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/results" -H "Authorization: Bearer $AB_API_KEY"
+```
+
+- 状態は軸ごとに分かれています: `phase`(`interim` = 速報 / `fixed` = 評価時点の記録 / `stopped` = 評価時点前に終了したときの記録)・`quality`(`ok` / `warning` / `blocked`)・`records`(`available` / `purged` = 参加者ごとの記録は保持期間を過ぎて削除済み)・`collection`(`enabled` / `site_disabled` / `store_missing` / `not_recorded` = 結果を記録せずに開始したテスト)
+- **速報の数字で採用を決めないでください**。評価時点(`evaluation.evaluationAt`)の前は、各パターンの `state` が `null` で、判定を出しません。速報の確率は、見るたびに偶然高く出た値に当たる機会が増えます。差の無い 2 つのパターンでも、毎日判定して最初に勝ちと出た日に止めると約 27% が勝ちと出ます(評価時点を固定すると約 5%)
+- 評価時点を過ぎると、その時点の値で判定を 1 回だけ出して記録し、以後は同じ値を返します(参加者ごとの記録を消した後も)。誰も読まなくても、1 日 1 回の定期処理が記録を作ります
+- 判定 `variants[].state` は基準以外のパターンごとに、上から順に当てはめます: `blocked_quality`(データ品質の問題で判定不可。割り振りの偏り・混在・収集の停止)/ `adopt`(採用候補)/ `worse`(悪化の可能性が高い)/ `equivalent`(実務上ほぼ同等。同等とみなす幅を決めたときだけ)/ `insufficient`(判断材料が不足。「差が無い」ではなく「この人数では決着しなかった」)。判定に要る最低の件数を満たさない比較(`minCountMet: false`)は `insufficient` です。パターンが 3 つ以上のときは、比べる回数でしきい値を引き上げて使います
+- 注記は `notes: [{ key, params }]` の形で、文言を持ちません。各鍵の意味は下の「注記の鍵」の表にあり、数値の読み方は表の「説明の項目」(`docs/experiment-results.md` の見出し)にあります(`helpKeys` は、その応答に関係する説明の項目の鍵)。人に報告するときは、品質の注記(`quality_blocked_*`・`collection_failures`・`collection_stops`・`apply_failures`)と `stopped_early`(評価時点前に終了)も必ず伝えてください
+- 速報は 5 分間同じ値を返します。読み取りが混み合っているか今日の読み取りの上限に達したときは、前に計算した速報に注記 `interim_stale` を付けて返します(繰り返し読み直さないでください)
+- 下書きは 409 `results_not_started`、パーソナライズは 404 `results_not_applicable` です
+
+**注記の鍵**(`notes[].key`)。`params` の割合は 0〜1 の小数、時刻は epoch ミリ秒、時間は時間(h)です。「説明の項目」は `docs/experiment-results.md` の見出しです(`helpKeys` に入る鍵の項目)。
+
+| 鍵 | 出るとき | `params` | 説明の項目 |
+|---|---|---|---|
+| `interim` | 評価時点の前の速報。判定の状態は出ない | `evaluationAt`(判定が出る時刻) | 評価時点の決まり方 |
+| `interim_stale` | 読み取りが混み合っているか今日の読み取りの上限に達したので、前に計算した速報を返した(保存した速報も無ければ数値なし) | `reason`(`budget` = 今日の読み取りの上限 / `busy` = ほかの再計算の最中)、`computedAt`(返した速報の計算時刻。数値なしのときは付かない) | — |
+| `stopped_early` | 評価時点の前に終了した。判定は終了の時点の値 | `evaluationAt`(本来の評価時点)、`stoppedAt` | 評価時点の決まり方 |
+| `min_count_not_met` | そのパターンと基準の比較が、判定に要る最低の件数(各群で CV の見込みと CV しない人の見込みが 10 件以上)を満たさない。状態は `insufficient` | `variantId` | 判定の 5 つの状態 |
+| `zero_weight` | 重み 0 のパターン(配信していない)。判定・割り振りの偏りの検査・比べる回数から外す | `variantId` | パターンが 3 つ以上のとき |
+| `quality_blocked_srm` | 割り振りの偏り(p < 0.001)。判定不可 | `p` | 割り振りの偏り |
+| `quality_blocked_mixed` | 混在の割合が 1% を超えた。判定不可 | `rate` | 混在 |
+| `quality_blocked_stops` | 収集の停止の割合が上限を超えた。判定不可 | `ratio`、`limit`(上限 = min(5%, 0.5 ÷ √C)) | 収集の停止 |
+| `collection_stops` | 収集の停止があったが上限以下。警告(判定は出す) | `ratio`、`hours`(止まっていた時間)、`limit` | 収集の停止 |
+| `collection_failures` | 収集できなかった送信の割合(目安)が 1% 以上。警告。記録では記録を作った時点の値 | `ratio`、`failedSends` | 収集できなかった送信 |
+| `apply_failures` | そのパターンで、変更が効かず回復していない参加者の割合が 1% 以上。警告 | `variantId`、`rate` | 適用に失敗した人 |
+| `aa_test` | 基準と、ほかのどれかのパターンの両方に変更が無い(A/A テスト)。記録では記録に写した定義から、速報では今の定義から判断する | — | 基準のパターン |
+| `baseline_not_original` | 基準に変更がある(結果は「そのパターンとの比較」) | — | 基準のパターン |
+| `test_changes` | 開始後に配信中の中身を変えて公開し、配信を確かめた | `count` | テスト中の変更 |
+| `plan_changes` | 開始後に評価計画を延ばした | `count` | 計画を変えるとき |
+| `purged` | 参加者ごとの記録は保持期間を過ぎて削除済み(表示は固定した結果) | `days`(サイトの保持期間の日数) | データの保持 |
+| `not_recorded` | 結果を記録せずに開始したテスト(`collection: "not_recorded"`)。数値は無い | — | 結果を記録するには |
+| `store_missing` | 計測用のデータベースが導入されていない(`collection: "store_missing"`)。数値は無い | — | 結果を記録するには |
+| `definition_missing` | 結果の記録に、配信していた定義の写しが無い(数値と判定は記録のとおり) | — | — |
+| `unpublished_changes` | そのパターンの保存済みの変更が、配信していた定義(実行中は今、終了したテストは終了の直前)と違う。テストで配信したのは編集の前の中身 | `variantId` | 採用と複製 |
+| `edited_after_evaluation` | 評価時点の記録の後に、そのパターンの変更が編集された(記録に写した定義と保存済みの変更が違う) | `variantId` | 採用と複製 |
+
+**終了と採用**(管理者):
+
+```bash
+# 終了して、採用したパターンを記録する(variantId: null は採用なし。note は任意で 1,000 字まで)
+curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/status" -H "Authorization: Bearer $AB_API_KEY" \
+  -H 'content-type: application/json' -d '{"status":"archived","adoption":{"variantId":"b","note":"評価時点で採用候補"}}'
+# 終了したテストの採用を記録し直す(上書き)
+curl -sS -X PUT "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/adoption" -H "Authorization: Bearer $AB_API_KEY" \
+  -H 'content-type: application/json' -d '{"variantId":"b"}'
+```
+
+- 終了は、先に配信を止め(自動で公開)、その後で結果と採用を記録します。応答の `results.recorded` が `false` なら、終了と公開は済んでおり、結果の記録は自動で作り直されます。採用は `PUT …/adoption` で記録し直してください
+- 採用は判定と関係なく選べます(記録には判定も一緒に残ります)。変更の無い基準の ID は「採用なし」として記録します。基準を採用する意味があるのは、基準に変更があるときだけです
+- 終了していないテストへの `PUT …/adoption` は 409、パーソナライズへの採用は 422(どちらも `adoption_not_allowed`)、パターンに無い ID は 422 `unknown_variant` です
+- 採用したパターンをサイトに出し続けるには、レシピ 7 の `mode: "variant"` で下書きを作り、人が開始します
+- エクスペリエンスの一覧(`GET /sites/:sid/experiments`)の各項目に、採用の要約(`adoption`)が付きます
+
+**GA4 / BigQuery で集計するクエリ**:
+
 ```bash
 curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/analytics-recipe" -H "Authorization: Bearer $AB_API_KEY"
 ```
 
-返るのは**クエリ**であって数値ではありません(今の版は統計判定を持ちません。v1.0 で、管理画面にテストの結果のレポートを追加する予定です)。
+返るのは**クエリ**であって数値ではありません。上の結果とは、参加者の数え方(このツールは対象の要素が表示された人、GA4 の `ab_exposure` は変更を適用できた人)と ID(このツールは訪問者 ID、GA4 は GA4 の ID)が違うので、数字は一致しません(`notes` にも入ります)。
 
 - `ga4.exposureByVariant` / `ga4.conversionsByGoal`: `{ "method": "POST", "url": "…/v1beta/properties/<id>:runReport", "body": { … } }`。**`url` に `body` をそのまま POST**してください(property は URL に入っています。認証ヘッダだけ足します)
 - `bigquery.visitorCvrSql`(訪問者単位 = `user_pseudo_id`。既定)/ `bigquery.sessionCvrSql`(セッション単位)
@@ -190,7 +264,7 @@ curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/analytics-recipe" -
 - `runReport` が **400 `Field customEvent:… is not a valid dimension`** を返すときは、GA4 プロパティに `ab_experiment_id` / `ab_variant_id` / `ab_goal_id`(名札を変えていればその名前)が**イベントスコープのカスタムディメンション**として登録されていません。これはサイトの設置側(人間)の GA4 設定作業です — `docs/site-install.md` の「4. GA4 と GTM をつなぐ」を運用者に伝えてください。登録前のイベントは遡って次元にならないので、行が 0 でも契約の失敗ではありません
 
 **パターン別の CVR は GA4 だけでは出せません**。conversion イベントにはエクスペリエンス / パターンが付かない設計のため、パターン × 目標の CVR は BigQuery(GA4 export)で出します。
-GA4 単体で見る手段(v1alpha `runFunnelReport` のセグメントや GTM のユーザープロパティ)は alpha 依存 / 追加設定前提のため、統計判定と一緒に v1.0 以降で検討します。
+GA4 単体で見る手段(v1alpha `runFunnelReport` のセグメントや GTM のユーザープロパティ)は alpha 依存 / 追加設定前提のため、レシピには含めていません。
 GA4 側の 2 本は「配分どおりに露出しているか(SRM の確認)」と「目標ごとの発生数」を見るために使ってください。
 
 人間の運用者向けの手順(GA4 探索レポートと BigQuery)は `docs/analytics.md` にあります。
@@ -273,6 +347,10 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/duplicate" 
 
 応答は `201` で新しいエクスペリエンス(いつも下書き)。開始は人の管理者に任せる。パーソナライズの元は `mode: "same"` だけ(`variant` は 422 `duplicate_mode_not_allowed`)。
 
+- `mode: "variant"` が写す変更は、テストで**実際に配信していた中身**です(配信を確かめた定義。終了したテストは終了の直前のもの)。保存したが公開していない編集は入りません。配信を確かめた定義が無いとき(開始していない下書きなど)は、保存済みの変更を写します
+- `mode: "same"` は保存済みの中身をそのまま写し、評価計画も初期値として写します(下書きの間は変えられます)
+- どちらも、結果・採用の記録・履歴は写しません
+
 ---
 
 ## 3. 踏みやすい制約
@@ -281,6 +359,9 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/duplicate" 
 - **公開の反映**: 公開の結果の `staticDeploy` が `deployed` なら、訪問者のブラウザには 60 秒以内に届きます。`pending` なら配信ファイルの更新を再試行中です(`GET /sites/:sid` の `staticStale` が `true`。続くときは `POST /sites/:sid/static/redeploy` で作り直せます。管理者以上)。公開直後の検証は 1 分ほど待つか、キャッシュを迂回する URL で確認してください
 - **種別は作成後に変えられない**。パターンの数はテストが 2 つ以上、パーソナライズが 1 つ(違反は 422 `variant_count_invalid`)。変えたいときは複製する
 - **重なったときの優先**: 同じ要素の部分を複数のエクスペリエンスが変えると、パーソナライズ(作成の古い順)→ テスト(開始・再開の新しい順)の後ろが勝つ(テストどうしは先に配信に入ったもの。再開したテストは、その間に開始したテストより優先が低い)。保証するのは同じ要素の同じ部分までで、祖先と子孫にまたがる重なりは保証しない。公開の応答の `warnings`(`path` = `experiments.<優先の低い方>`)と `GET …/publish-preview` の `overlaps` に、対象 URL の条件とセレクタの文字列がどちらも完全に一致する組だけが出る。`?starting=<id>` を付けると、その下書きを開始したとき・一時停止中のテストを再開したときの組が分かる
+- **開始後のテストで変えられないもの**: パターンの追加・削除・重み、基準、判定に使う目標の選択(パターンの集合の `PUT …/variants` は下書きだけ。409 `experiment_active`)、配信率(`trafficPercentage`)を下げる・割当の固定(`persistAssignment`)を変える(409 `test_setting_locked`。絞るときは一時停止か終了)。配信率を上げる・変更・対象 URL・配信条件・目標の定義の変更はできますが、公開して配信を確かめた時点で「テスト中の変更」として結果に記録されます。大きく変えるなら複製して新しいテストにします。パーソナライズはどの状態でも編集できます
+- **終了したテストは読み取り専用**: エクスペリエンスの更新・パターン・変更・評価計画の保存は 409 `experiment_archived_readonly` です(変えるときは複製する)。メモ(`description` だけの `PATCH` と `PATCH …/variants/:vid`)・採用の記録・削除はできます
+- **一度開始したテストを削除すると**、結果の記録・採用・計画の変更の履歴もすぐに消え、参加者ごとの記録は削除の直後から順に消えます。ID はこのサイトでは使い直せません
 - **パターンの weight は合計 100**(テストは 2 つ以上のパターン、パーソナライズは 1 つで weight 100)。`trafficPercentage` は 1〜100(0% 配信は一時停止で表現します)
 - **正規表現は URL のパスとホストだけ**に使えます(`part` が `path` / `host`)。URL 全体(`part` が `url` または省略)の正規表現は 422 です。「ホストが一致」+「パスが正規表現に一致」で書き換えてください。クエリで絞るなら配信条件のクエリパラメータ(`query`)の `equals` / `contains` を使います
   - 使える書き方: ふつうの ASCII 文字、記号のエスケープ(`\.` `\/` `\-` `\?` `\*` `\+` `\(` `\)` `\[` `\]` `\{` `\}` `\|` `\^` `\$` `\\`)、`.`、`[...]` と `[^...]`、`\d` `\w` `\s`、`^` `$`、`( )` と `(?: )` と `|`、繰り返し `?` `*` `+` `{n}` `{n,m}`(m は 100 まで)。日本語のパスは `%E3%81%82` のようにエンコードした形で書きます

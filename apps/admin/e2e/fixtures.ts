@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 /**
@@ -20,6 +21,30 @@ export const SETUP_TOKEN = "e2e-setup-token";
 export const AUTH_SECRET = "e2e-secret-0123456789abcdef0123456789abcdef";
 /** control を「非常用のパスワードログインが開いた状態」で起動するためのテスト用トークン(16 文字以上) */
 export const BREAK_GLASS_TOKEN = "e2e-break-glass-token-0123456789";
+
+/**
+ * edge に `--var` で渡す訪問者の鍵(RESULTS_VISITOR_KEY。D9 ③ plan ③ の K26)。無いと edge は結果の参加・CV を書かない(fail-closed)。
+ * 32 バイトの ASCII("wtt-e2e-admin-results-key-000001")の base64。テスト専用で、本番の鍵ではない
+ */
+export const E2E_RESULTS_VISITOR_KEY = "d3R0LWUyZS1hZG1pbi1yZXN1bHRzLWtleS0wMDAwMDE=";
+
+/**
+ * E2E の状態ディレクトリ(control と edge が `--persist-to` で共有する。global-setup.ts が実行のたびに消して作り直す)
+ * と、その中に置く wrangler の dev registry・ログ(D9 ③ Task 17 の修正 1)。
+ *
+ * control の RESULTS_BUDGET / RESULTS_HEALTH は edge の Durable Object を dev registry 経由で呼ぶ(script_name: "wtt-edge")。
+ * 既定の registry はマシン全体で 1 つ(~/Library/Preferences/.wrangler/registry)で、ほかのセッション・worktree の wrangler dev や
+ * 強制終了で残った古い登録(wtt-edge など)と混ざる。この実行の wrangler だけが使う registry を状態ディレクトリに置く
+ */
+export const E2E_STATE_DIR = fileURLToPath(new URL("../../control/.e2e-state", import.meta.url));
+export const E2E_REGISTRY_DIR = `${E2E_STATE_DIR}/registry`;
+export const e2eLogDir = (name: "control" | "edge" | "admin"): string => `${E2E_STATE_DIR}/logs/${name}`;
+/** wrangler の webServer の環境変数(registry とログの置き場所) */
+export function e2eWranglerEnv(name: "control" | "edge" | "admin"): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
+  return { ...env, WRANGLER_REGISTRY_PATH: E2E_REGISTRY_DIR, WRANGLER_LOG_PATH: e2eLogDir(name) };
+}
 
 export const PASSWORD = "password123";
 export const OWNER_EMAIL = "owner@e2e.example";
@@ -60,7 +85,7 @@ export const HERO_TEXT = "E2E から書き換え";
  * admin BFF は接続元 IP を転送しないので(決定 35 (4))、この E2E のすべての無認証 POST は control からは
  * 同じ IP に見え、経路ごとに 1 枠を共有する(apps/control/src/app.ts)。
  *
- * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 24 回(publish-flow 10 / audience-flow 8 / invite-flow 1 / login-screen 1 / write-freeze 1 / experiment-kind-flow 1 / results-settings 1 / variant-ui 1、
+ * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 25 回(publish-flow 10 / audience-flow 8 / invite-flow 1 / login-screen 1 / write-freeze 1 / experiment-kind-flow 1 / results-settings 1 / variant-ui 1 / results-flow 1、
  * うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 / 招待受諾 1 回 /
  * `break-glass/reset-link` 1 回 / `reset-password` 1 回で、
  * 10 秒窓に入る sign-in は 30 回未満に収まっている。これ以上ログインを増やすなら、
@@ -107,8 +132,15 @@ export async function openWorkspace(page: Page): Promise<void> {
   await expect(page.getByRole("navigation", { name: "メインメニュー" })).toContainText(WORKSPACE_NAME);
 }
 
-/** ログイン後の Workspace 画面から Site を作る(名前 / ドメイン / Site ID を指定) */
-export async function createSite(page: Page, site: { id: string; name: string }): Promise<void> {
+/**
+ * ログイン後の Workspace 画面から Site を作る(名前 / ドメイン / Site ID を指定)。
+ *
+ * D9 ③: E2E の control には計測用のデータベース(RESULTS_DB)があるので、新しい Site は結果を記録する設定で作られる
+ * (= テストの開始に判定に使う目標が要る)。結果を扱わない spec の Site はこれまでどおり記録しない設定にそろえる
+ * (`results: false` が既定。作成の直後に BFF 経由で `resultsEnabled: false` を保存する)。
+ * 結果を扱う spec(results-flow / results-settings)は `results: true` で作る
+ */
+export async function createSite(page: Page, site: { id: string; name: string }, opts: { results?: boolean } = {}): Promise<void> {
   await openWorkspace(page);
   // 作成フォームは「新しいサイト」で開く(Site が 1 つも無いときは最初から開いている)
   const nameInput = page.locator('input[name="name"]');
@@ -119,6 +151,16 @@ export async function createSite(page: Page, site: { id: string; name: string })
   await page.click('button[type="submit"]');
   await expect(page).toHaveURL(new RegExp(`/sites/${site.id}$`));
   await expect(page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "設定" })).toBeVisible(); // SITE ナビが出ている = Site 一覧が更新された
+  if (opts.results !== true) {
+    const status = await page.evaluate(async (id) => {
+      const r = await fetch(`/api/control/sites/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ resultsEnabled: false }) });
+      return r.status;
+    }, site.id);
+    expect(status).toBe(200);
+    // 画面(Site の設定・開始の確認)が新しい値を読むように、読み直す
+    await page.reload();
+    await waitForHydration(page);
+  }
 }
 
 /** Workspace 画面から Site 画面へ */
@@ -149,11 +191,55 @@ export type StatusResponse = { publish: { ok: boolean; version: number | null; e
 
 export async function changeStatus(page: Page, siteId: string, experimentId: string, button: string | RegExp): Promise<StatusResponse> {
   const done = page.waitForResponse((r) => r.url().includes(`/api/control/sites/${siteId}/experiments/${experimentId}/status`) && r.request().method() === "POST");
+  // 押す前から出ている知らせ(前の操作の「公開 vN を反映しました」など)は、押した後の止めと区別するために控える
+  const before = new Set(await appAlert(page).allTextContents());
   // 文字列は完全一致: サイドバーの切替の枠の名前にサイト名が入る(例「E2E Pause Site」が「Pause」に部分一致する)
   await page.getByRole("button", typeof button === "string" ? { name: button, exact: true } : { name: button }).click();
+  // D9 ③: 下書きのテストの開始は必ず確認のモーダルを出す(結果を記録しない Site では「開始しますか?」と記録しない文)。
+  // パーソナライズの開始・一時停止・再開は重なりが無ければ確認を出さないので、要求とモーダルのどちらが先に来るかで分ける。
+  // 画面が要求を送らずに止めたとき(評価計画の目標が無い開始など。新しい role="alert" が出る)は、60 秒待たずに名前の付いたエラーで落とす
+  const dialog = page.getByRole("alertdialog", { name: /^(開始|再開)/ });
+  const first = await firstOf(page, done, dialog, before);
+  if (first.kind === "dialog") {
+    await dialog.getByRole("button", { name: /^(開始|再開)する$/ }).click();
+    const second = await firstOf(page, done, null, before);
+    if (second.kind === "alert") throw new Error(`changeStatus: the screen stopped after the confirmation without sending the status request: ${second.text}`);
+  } else if (first.kind === "alert") {
+    throw new Error(`changeStatus: the screen stopped without sending the status request: ${first.text}`);
+  }
   const res = await done;
   expect(res.status()).toBe(200);
   return (await res.json()) as StatusResponse;
+}
+
+/** 状態の要求・確認のモーダル・新しい知らせ(押す前に無かった role="alert")のうち、先に来たもの。どれも 15 秒来なければ要求を待つ */
+async function firstOf(
+  page: Page,
+  done: Promise<unknown>,
+  dialog: Locator | null,
+  before: ReadonlySet<string>,
+): Promise<{ kind: "sent" } | { kind: "dialog" } | { kind: "alert"; text: string } | { kind: "none" }> {
+  let settled = false;
+  const newAlert = (async () => {
+    const until = Date.now() + 15_000;
+    while (!settled && Date.now() < until) {
+      const text = (await appAlert(page).allTextContents().catch(() => [] as string[])).find((t) => t.trim() !== "" && !before.has(t));
+      if (text !== undefined) return { kind: "alert" as const, text };
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return { kind: "none" as const };
+  })();
+  const racers: Array<Promise<{ kind: "sent" } | { kind: "dialog" } | { kind: "alert"; text: string } | { kind: "none" }>> = [
+    done.then(() => ({ kind: "sent" as const })),
+    newAlert,
+  ];
+  if (dialog) racers.push(dialog.waitFor({ timeout: 15_000 }).then(() => ({ kind: "dialog" as const }), () => ({ kind: "none" as const })));
+  try {
+    // 要求が先に来たら(成功の知らせはその後に描かれる)知らせは見ない
+    return await Promise.race(racers);
+  } finally {
+    settled = true;
+  }
 }
 
 /**
@@ -179,4 +265,12 @@ export async function pick(scope: Page | Locator, label: string, option: string 
     await expect(choice).toBeVisible({ timeout: 1_000 });
   }).toPass({ timeout: 10_000 });
   await choice.click();
+}
+
+/**
+ * D9 ③(設計書 §5.5): 実行中・一時停止中のテストの変更(Change・対象 URL・配信条件)を保存するときの確認を通す。
+ * 「保存(下書き)」を押した直後に呼ぶ
+ */
+export async function confirmRunningTestSave(page: Page): Promise<void> {
+  await page.getByRole("alertdialog", { name: "実行中のテストを変更しますか?" }).getByRole("button", { name: "保存する", exact: true }).click();
 }

@@ -1,10 +1,13 @@
 import { sql } from "kysely";
-import { compareGeneration, SITE_REMOVED_SEQ, toRuntimeSettings, type StaticDeployResult, type StaticGeneration } from "@wtt/core";
+import { compareGeneration, SITE_REMOVED_SEQ, toRuntimeSettings, type StaticDeployResult, type StaticGeneration, type StaticSiteStatus } from "@wtt/core";
 import { edgeOrigin } from "./capabilities";
 import type { Db, SiteRow } from "./db";
 import type { Env } from "./env";
 import { ApiError } from "./errors";
+import { confirmDeliveries } from "./results/delivered";
+import { apiGuard } from "./results/guard";
 import { siteToSettings } from "./site-settings";
+import { isWriteFrozen } from "./write-freeze";
 
 /**
  * 決定 52: 配信ファイル(`/s/<siteId>.js`)の出し直しをデプロイ専用の Worker に頼む。
@@ -120,6 +123,18 @@ async function settle(db: Db, row: SiteRow, gen: StaticGeneration, servedVersion
   return "pending";
 }
 
+async function recordDeployRequest(db: Db, siteId: string, generation: StaticGeneration, version: number): Promise<void> {
+  try {
+    await db
+      .insertInto("static_deploy_requests")
+      .values({ site_id: siteId, epoch: generation.epoch, seq: generation.seq, version, requested_at: Date.now() })
+      .onConflict((oc) => oc.doNothing())
+      .execute();
+  } catch (e) {
+    console.error("static deploy request record failed", e);
+  }
+}
+
 /**
  * Site の配信ファイルを今の D1 の状態で出し直す。公開中の版が無ければ削除を頼む。例外は投げない(Publish の成功を覆さない)。
  * force = 前回と同じ中身でもデプロイさせる(管理画面の「配信ファイルを作り直す」)。
@@ -145,6 +160,9 @@ export async function requestStaticDeploy(env: Env, db: Db, siteId: string, opts
     }
     const config = await activeConfigJson(db, row);
     if (config === null) version = null;
+    // D9 ③(plan ③ の K14): 「世代 → この出し直しで焼いた版」を残す(配信の確認が、配り終えた世代から版を引く)。削除の依頼(版が無い)は残さない。
+    // 依頼の前に書く(待ち切れない・失敗した依頼の世代も、後で配られたら引けるように)。記録に失敗しても出し直しは止めない(その世代は配信の確認で飛ばされるだけ)
+    if (version !== null) await recordDeployRequest(db, siteId, generation, version);
     const call =
       config === null
         ? env.DEPLOYER.removeSite({ protocol: 1, siteId, generation })
@@ -222,6 +240,8 @@ export async function reconcileStatic(env: Env, db: Db, site: SiteRow, waitUntil
     }
     // 墓標を受け付けただけで、まだ配っていない(削除の途中か、デプロイの再試行中)。こちらも何もしない
     if (isTombstoneOver(st.accepted, mine)) return true;
+    // D9 ③(plan ③ の K14・K24): 配った世代の履歴の全体で届く定義の配信を確かめる。凍結中は書かない(確かめるのは解除後の自己修復か Cron)
+    await confirmFromStatus(env, db, site.id, st);
     if (st.deployed && compareGeneration(st.deployed, mine) >= 0) {
       // where の条件が同じ世代(Site・epoch・seq)なので、その世代で焼いた版は今の行の active_version と一致する
       return (await clearStaticStale(db, site, site.static_seq, site.active_version)) === 0;
@@ -231,6 +251,16 @@ export async function reconcileStatic(env: Env, db: Db, site: SiteRow, waitUntil
   } catch (e) {
     console.error("static status failed", e);
     return true;
+  }
+}
+
+/** 自己修復の中の配信の確認。失敗しても自己修復を止めない(Cron が確かめ直す) */
+async function confirmFromStatus(env: Env, db: Db, siteId: string, st: StaticSiteStatus): Promise<void> {
+  try {
+    if (await isWriteFrozen(db)) return;
+    await confirmDeliveries(db, siteId, { history: st.history, historyFrom: st.historyFrom }, Date.now(), apiGuard(env));
+  } catch (e) {
+    console.error("delivery confirmation failed", e);
   }
 }
 

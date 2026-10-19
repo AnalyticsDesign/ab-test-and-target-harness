@@ -15,7 +15,7 @@ describe("resultsToggleNotice", () => {
   });
   it("warns_with_the_count_when_disabling_with_recorded_tests", () => {
     expect(resultsToggleNotice({ enabling: false, runningTests: 5, runningRecordedTests: 1 })).toBe(
-      "記録中の 1 件のテストの記録が止まります。止めた時間が評価時点までの期間の 5% を超えると、判定できなくなります",
+      "記録中の 1 件のテストの記録が止まります。止めた時間が上限(評価時点までの期間の 5%。CV の多いテストほど短い)を超えると、判定できなくなります",
     );
   });
   it("returns_null_when_disabling_without_recorded_tests", () => {

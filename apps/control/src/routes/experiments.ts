@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
-import type { ExpressionBuilder } from "kysely";
+import { sql, type ExpressionBuilder } from "kysely";
 import { z } from "zod";
 import {
   ChangeSchema,
@@ -22,14 +22,25 @@ import {
 import { requireSession, type AppEnv } from "../app";
 import { resultsStore } from "../capabilities";
 import { toStatement, type Db, type ExperimentRow, type SiteRow, type Tables, type VariantRow } from "../db";
-import { copyChangesQuery, copyVariantsQuery, duplicateExperimentRow, insertExperimentQuery, retiredIds } from "../duplicate";
+import { copyChangesQuery, copyPlanQuery, copyVariantsQuery, duplicateExperimentRow, insertExperimentQuery, retiredIds } from "../duplicate";
 import { ApiError, notFound, validationFailed } from "../errors";
+import { assertStartable, capacityWarning, fixPlanStatement, loadPlan, type LoadedPlan } from "../evaluation-plan";
 import { SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
 import { publicPublishResult, publishSite, type PublishResult } from "../publish";
+import { rewriteCollectUntil } from "../results/collect-until";
+import { adoptionNotAllowed, AdoptionInputSchema, AdoptionJsonSchema, adoptionSummary, resolveAdoptedVariant } from "../results/adoption";
+import { deliveredAt } from "../results/delivered";
+import { apiGuard } from "../results/guard";
+import { readEstimate } from "../results/read-session";
+import type { ResultSnapshot } from "../results/report";
+import { liveFacts } from "../results/snapshot";
+import { recordStop } from "../results/stop";
+import { enqueuePurgeQuery, kickOffPurge } from "../results/purge";
 import { loadSite } from "../roles";
 import { PublishResultSchema } from "./publish";
 import { experimentJson } from "../serialize";
+import { assertNotArchivedTest, assertTestEditable, isMemoOnly, notArchivedTest, parentIsDraft, parentNotArchivedTest } from "../test-locks";
 import {
   ANALYTICS_REQUEST_DESCRIPTION,
   assertAnalyticsValues,
@@ -44,6 +55,16 @@ import {
 } from "../validation";
 
 export const experimentRoutes = new Hono<AppEnv>();
+
+const experimentActive = () =>
+  new ApiError(409, "experiment_active", { message: "配信中のエクスペリエンスは削除できません", hint: "終了(archived)してから削除してください" });
+
+/** パターンの集合の全置換は下書きだけ(終了したテストは別のコード experiment_archived_readonly。D9 ③ の K10) */
+const variantsLocked = () =>
+  new ApiError(409, "experiment_active", {
+    message: "このエクスペリエンスのパターンは変更できません",
+    hint: "配信中または終了済みのエクスペリエンスのパターンは変更できません。複製して新しいエクスペリエンスを作成してください",
+  });
 
 /** D9 ②(設計書 §6.3): 一度開始したエクスペリエンスの ID(削除済み)を指定した作成・複製 */
 const retiredIdTaken = (id: string) =>
@@ -174,6 +195,69 @@ const ExperimentDetailJsonSchema = ExperimentJsonSchema.extend({
   variants: z.array(VariantJsonSchema.extend({ changes: z.array(ChangeJsonSchema) })),
 });
 
+/** D9 ③(K16、設計書 §8.1): 一覧の項目 = エクスペリエンス + 採用の要約 */
+const ExperimentListItemSchema = ExperimentJsonSchema.extend({
+  adoption: z
+    .object({
+      variantId: z.string().nullable().describe("採用したパターンの ID。null = 採用なし"),
+      variantName: z
+        .string()
+        .nullable()
+        .describe("採用したパターンの今の名前(パターンが無くなっていれば結果の記録に写した名前)。採用なし・名前が分からないときは null"),
+      baseline: z.boolean().describe("基準のパターンを採用したか(正の判定の記録の評価計画の基準と同じ ID のとき true。記録が無いときは false)"),
+      decidedAt: z.number().int().describe("epoch ミリ秒"),
+      summary: z
+        .object({
+          diffPoints: z.number().nullable().describe("基準との差の平均(ポイント)"),
+          relative: z.number().nullable().describe("基準との差の平均 ÷ 基準の CVR(%)"),
+          probBeat: z.number().nullable().describe("基準を上回る確率(0〜1。最小改善幅を決めたときはそれを超えて上回る確率)"),
+          verdict: z.enum(["blocked_quality", "adopt", "worse", "equivalent", "insufficient"]).nullable().describe("判定の状態"),
+        })
+        .nullable()
+        .describe("正の判定の記録(評価時点の記録、評価時点の前に終了したときは終了の記録)から取った値。基準を採用したときは差・確率・判定が null。採用なし・記録が無いときは null"),
+    })
+    .nullable()
+    .describe("採用の記録。記録していなければ null"),
+});
+
+type ListAdoption = { variantId: string | null; variantName: string | null; baseline: boolean; decidedAt: number; summary: ReturnType<typeof adoptionSummary> };
+
+/**
+ * サイトのテストの採用の要約(エクスペリエンス ID → 要約)。要約は正の判定の記録から作る。
+ * baseline は記録の評価計画の基準と比べて決める(要約の値がすべて null になるのは基準のほかに、重み 0 のパターンもあるため、値からは推し量らない)。
+ * 名前は今のパターンの行から取り、行が無ければ記録に写した名前を使う
+ */
+async function listAdoptions(db: Db, siteId: string): Promise<Map<string, ListAdoption>> {
+  const adoptions = await db
+    .selectFrom("adoptions as a")
+    .leftJoin("variants as v", (j) => j.onRef("v.site_id", "=", "a.site_id").onRef("v.experiment_id", "=", "a.experiment_id").onRef("v.id", "=", "a.variant_id"))
+    .select(["a.experiment_id", "a.variant_id", "a.decided_at", "v.name as variant_name"])
+    .where("a.site_id", "=", siteId)
+    .execute();
+  const out = new Map<string, ListAdoption>();
+  if (adoptions.length === 0) return out;
+  // 採用したパターンがあるテストの記録だけを読む(IN の並びにしない = D1 の 1 文のバインドの数の上限に当たらない)
+  const snaps = await db
+    .selectFrom("result_snapshots as s")
+    .innerJoin("adoptions as a", (j) => j.onRef("a.site_id", "=", "s.site_id").onRef("a.experiment_id", "=", "s.experiment_id"))
+    .select(["s.experiment_id", "s.kind", "s.result_json"])
+    .where("s.site_id", "=", siteId)
+    .where("a.variant_id", "is not", null)
+    .execute();
+  const official = new Map<string, Pick<ResultSnapshot, "variants" | "plan">>();
+  // 評価時点の記録を優先する(評価時点の記録と終了の記録は同時にはできないが、読み方を正の判定の決まりに合わせる)
+  for (const kind of ["stop", "evaluation"] as const) {
+    for (const r of snaps) if (r.kind === kind) official.set(r.experiment_id, JSON.parse(r.result_json) as ResultSnapshot);
+  }
+  for (const a of adoptions) {
+    const snap = official.get(a.experiment_id) ?? null;
+    const variantName = a.variant_id === null ? null : (a.variant_name ?? snap?.variants.find((v) => v.id === a.variant_id)?.name ?? null);
+    const baseline = a.variant_id !== null && snap?.plan?.baselineVariantId === a.variant_id;
+    out.set(a.experiment_id, { variantId: a.variant_id, variantName, baseline, decidedAt: a.decided_at, summary: adoptionSummary(a.variant_id, snap) });
+  }
+  return out;
+}
+
 /** B77(K8): オリジナルのパターンへの変更の保存 */
 const variantOriginal = () =>
   new ApiError(422, "variant_original", {
@@ -190,19 +274,37 @@ const TRANSITIONS: Record<ExperimentRow["status"], Array<ExperimentRow["status"]
 };
 const DuplicateBody = z
   .strictObject({
-    mode: z.enum(["same", "variant"]).describe("same = 同じ内容(種別・すべてのパターンと設定)の下書き。variant = 選んだパターンだけを表示するパーソナライズの下書き(配信率 100%・割当の固定 off)"),
+    mode: z.enum(["same", "variant"]).describe(
+      "same = 同じ内容(種別・すべてのパターンと設定。テストは評価計画も初期値として写す)の下書き。variant = 選んだパターンだけを表示するパーソナライズの下書き(配信率 100%・割当の固定 off)。variant の変更は、テストで実際に配信していた中身(配信を確かめた定義。終了したテストは終了の直前のもの)を写し、保存したが公開していない編集は入れない。配信を確かめた定義が無ければ保存済みの変更を写す",
+    ),
     variantId: z.string().optional().describe("mode が variant のとき必須。表示するパターンの ID"),
     id: z.string().regex(SLUG_RE).optional().describe("新しいエクスペリエンス ID。省略時は <元の ID>-copy、-copy-2 … の空いているもの"),
     name: ExperimentName.optional().describe("省略時は「<元の名前> のコピー」または「<元の名前>(<パターン名> だけを表示)」"),
   })
   .refine((b) => b.mode !== "variant" || b.variantId !== undefined, { message: "variantId is required when mode is variant", path: ["variantId"] });
-const StatusBody = z.strictObject({ status: z.enum(["running", "paused", "archived"]) });
+const StatusBody = z.strictObject({
+  status: z.enum(["running", "paused", "archived"]),
+  adoption: AdoptionInputSchema.optional().describe("テストを終了する(archived)ときだけ: 採用の記録。パーソナライズと、終了以外の遷移には付けられない(422 adoption_not_allowed)"),
+});
 const StatusResponseSchema = z.object({
   experiment: ExperimentJsonSchema,
   publish: PublishResultSchema,
   warnings: z
     .array(z.object({ path: z.string(), message: z.string() }))
-    .describe("遷移は成功したが知らせたいこと(いつも配列。無ければ空)。結果を記録しないテストを開始したときは path = results"),
+    .describe(
+      "遷移は成功したが知らせたいこと(いつも配列。無ければ空)。結果を記録しないテストを開始したときは path = results、計測用のデータベースの容量の見込みが 80% を超えるときは path = resultsCapacity、テストの終了でパターンに未公開の編集があったときは path = variants.<パターン ID>.changes",
+    ),
+  results: z
+    .object({ recorded: z.boolean() })
+    .optional()
+    .describe(
+      "テストを終了したときだけ: 結果の記録と採用の記録ができたか。false のときは状態の変更と公開は済んでおり、結果の記録は自動で作り直す。採用は PUT …/adoption で記録し直す",
+    ),
+});
+/** D9 ③(K16、設計書 §8.2): 終了したテストのパターンに未公開の変更があった(配信していたのは変更の前の中身) */
+const unpublishedChangesWarning = (variantId: string, name: string) => ({
+  path: `variants.${variantId}.changes`,
+  message: `パターン「${name}」に未公開の編集があります。テストで配信したのは編集の前の中身です`,
 });
 /** D9 ②(設計書 §5.2): 結果を記録しないテストの開始で応答に足す警告。拒否はしない(画面は確認のモーダルで出す) */
 const RESULTS_NOT_RECORDED = { path: "results", message: "結果はツール上に残りません。後から結果の記録を有効にしても、このテストの結果は記録されません" };
@@ -270,15 +372,17 @@ experimentRoutes.get(
     summary: "サイトのエクスペリエンス一覧(閲覧者以上)",
     security: [{ bearer: [] }],
     responses: {
-      200: { description: "エクスペリエンス一覧", content: { "application/json": { schema: resolver(z.array(ExperimentJsonSchema)) } } },
+      200: { description: "エクスペリエンス一覧", content: { "application/json": { schema: resolver(z.array(ExperimentListItemSchema)) } } },
       ...errorResponses(401, 403, 404),
     },
   }),
   requireSession,
   async (c) => {
     const { site } = await loadSite(c, c.req.param("sid"), "viewer");
-    const rows = await c.get("db").selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute();
-    return c.json(rows.map((r) => experimentJson(r, { unpublished: isUnpublished(r, site) })));
+    const db = c.get("db");
+    const rows = await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute();
+    const adoptions = await listAdoptions(db, site.id);
+    return c.json(rows.map((r) => ({ ...experimentJson(r, { unpublished: isUnpublished(r, site) }), adoption: adoptions.get(r.id) ?? null })));
   },
 );
 
@@ -404,11 +508,12 @@ experimentRoutes.patch(
   "/sites/:sid/experiments/:eid",
   describeRoute({
     tags: ["experiments"],
-    summary: "エクスペリエンスを更新(編集者以上)。id は不変、status は変更できない(status は /status で変更する)。メモ(description)だけの更新は状態にかかわらず可で、公開の対象にならない",
+    summary:
+      "エクスペリエンスを更新(編集者以上)。id は不変、status は変更できない(status は /status で変更する)。メモ(description)だけの更新は状態にかかわらず可で、公開の対象にならない。テストの開始後は配信率を下げる・割当の固定を変えると 409 test_setting_locked、終了したテストはメモ以外 409 experiment_archived_readonly",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "更新後のエクスペリエンス", content: { "application/json": { schema: resolver(ExperimentJsonSchema) } } },
-      ...errorResponses(400, 401, 403, 404, 422),
+      ...errorResponses(400, 401, 403, 404, 409, 422),
     },
   }),
   requireSession,
@@ -420,11 +525,13 @@ experimentRoutes.patch(
     const db = c.get("db");
     const exp = await loadExperiment(db, site.id, c.req.param("eid"));
     const body = c.req.valid("json");
+    const keys = Object.keys(body);
+    // D9 ③(K10、設計書 §5.5): 開始後のテストは配信率を下げる・割当の固定を変えると 409、終了したテストはメモ以外 409
+    assertTestEditable(exp, { trafficPercentage: body.trafficPercentage, persistAssignment: body.persistAssignment, keys });
     if (body.description !== undefined) assertDescription(body.description, ["description"]);
     // B77(K9、設計書 Q26〜Q29): メモだけの更新は config に出ないので、updated_at / updated_by を進めない(未公開の印を付けない)。
     // 状態も問わない(終了したエクスペリエンスにも経緯を書ける)。外部計測の検査も、何も変わらないので通さない
-    const keys = Object.keys(body);
-    if (keys.length === 1 && keys[0] === "description") {
+    if (isMemoOnly(keys)) {
       await db.updateTable("experiments").set({ description: body.description }).where("site_id", "=", site.id).where("id", "=", exp.id).execute();
       const next: ExperimentRow = { ...exp, description: body.description! };
       return c.json(experimentJson(next, { unpublished: isUnpublished(next, site) }));
@@ -455,7 +562,32 @@ experimentRoutes.patch(
       { id: next.id, name: next.name, analytics: parseExperimentAnalytics(next) },
       variants.map((v) => ({ id: v.id, name: v.name, analytics: parseVariantAnalytics(v) })),
     );
-    await db.updateTable("experiments").set(set).where("site_id", "=", site.id).where("id", "=", exp.id).execute();
+    // D9 ③(K10): 読んだ後の状態の変化も書き込みの条件で弾く(読んだ状態のまま・終了したテストでない。テストは加えて
+    // 配信率は今の値以上・割当の固定は今の値のまま。下書きは下げても変えてもよい)。0 行なら読み直して該当の 409。
+    // パーソナライズは編集できる中身は今のまま(状態の割り込みだけ 409 conflict になる)。
+    // batch で書くのは、割り込みのテストが beforeD1Batch で差し込めるようにするため
+    const isTest = exp.kind === "test";
+    const update = db
+      .updateTable("experiments")
+      .set(set)
+      .where("site_id", "=", site.id)
+      .where("id", "=", exp.id)
+      .where("status", "=", exp.status)
+      .where(notArchivedTest)
+      .$if(isTest && body.trafficPercentage !== undefined, (q) =>
+        q.where((eb) => eb.or([eb("status", "=", "draft"), eb("traffic_percentage", "<=", body.trafficPercentage!)])),
+      )
+      .$if(isTest && body.persistAssignment !== undefined, (q) =>
+        q.where((eb) => eb.or([eb("status", "=", "draft"), eb("persist_assignment", "=", body.persistAssignment ? 1 : 0)])),
+      );
+    const [written] = await c.env.DB.batch([toStatement(c.env, update)]);
+    if ((written?.meta.changes ?? 0) === 0) {
+      const fresh = await loadExperiment(db, site.id, exp.id);
+      assertTestEditable(fresh, { trafficPercentage: body.trafficPercentage, persistAssignment: body.persistAssignment, keys });
+      // 状態が変わったが、今の状態でも受けられる編集だった(例: 下書きとして読んだ後に開始され、配信率を上げる編集)。
+      // 読み直した値で検査し直していないほかの欄があるので、書かずに読み直しを求める
+      throw new ApiError(409, "conflict", { hint: "別の操作と競合しました。画面を読み込み直してください" });
+    }
     return c.json(experimentJson(next, { unpublished: isUnpublished(next, site) }));
   },
 );
@@ -464,7 +596,8 @@ experimentRoutes.delete(
   "/sites/:sid/experiments/:eid",
   describeRoute({
     tags: ["experiments"],
-    summary: "エクスペリエンスを削除(編集者以上)。draft / archived のみ。一度開始したエクスペリエンスの ID は、削除した後もこのサイトでは作成・複製に使えない",
+    summary:
+      "エクスペリエンスを削除(編集者以上)。draft / archived のみ。一度開始したエクスペリエンスの ID は、削除した後もこのサイトでは作成・複製に使えない。テストの結果の記録・採用・評価計画の変更の履歴も消え、計測用のデータベースの参加者ごとの記録は削除の直後から順に消す(大きなテストは数日かかる)",
     security: [{ bearer: [] }],
     responses: { 204: { description: "削除した" }, ...errorResponses(401, 403, 404, 409) },
   }),
@@ -473,11 +606,14 @@ experimentRoutes.delete(
     const { site } = await loadSite(c, c.req.param("sid"), "editor");
     const db = c.get("db");
     const exp = await loadExperiment(db, site.id, c.req.param("eid"));
-    if (exp.status === "running" || exp.status === "paused")
-      throw new ApiError(409, "experiment_active", { message: "配信中のエクスペリエンスは削除できません", hint: "終了(archived)してから削除してください" });
+    if (exp.status === "running" || exp.status === "paused") throw experimentActive();
     // D9 ②(設計書 §6.3、K16): 一度開始した(started_at がある)ものは ID を退役させる。読んだ行ではなく D1 の中の行で判定し、
-    // 削除と同じ batch = 1 トランザクションで書く(退役の記録だけ・削除だけが残らない)
-    await c.env.DB.batch([
+    // 削除と同じ batch = 1 トランザクションで書く(退役の記録だけ・削除だけが残らない)。
+    // D9 ③(K6 (1)): 削除の DELETE の前に、run_id を持つものを計測用 D1 の削除待ち(results_purge_queue)に積む。
+    // 3 文とも「下書きか終了」を条件にする(読んだ後に開始されたら、退役・積む・削除のどれもしない = 配信中のテストを消さない)
+    const now = Date.now();
+    const deletable = ["draft", "archived"] as const;
+    const [, , , deleted] = await c.env.DB.batch([
       toStatement(
         c.env,
         db
@@ -486,15 +622,42 @@ experimentRoutes.delete(
           .expression((eb) =>
             eb
               .selectFrom("experiments")
-              .select((s) => ["site_id", "id", s.val(Date.now()).as("retired_at")])
+              .select((s) => ["site_id", "id", s.val(now).as("retired_at")])
               .where("site_id", "=", site.id)
               .where("id", "=", exp.id)
+              .where("status", "in", deletable)
               .where("started_at", "is not", null),
           )
           .onConflict((oc) => oc.doNothing()),
       ),
-      toStatement(c.env, db.deleteFrom("experiments").where("site_id", "=", site.id).where("id", "=", exp.id)), // variants / changes は CASCADE
+      toStatement(c.env, enqueuePurgeQuery(db, { kind: "experiment", siteId: site.id, experimentId: exp.id }, now)),
+      // D9 ③(K11・K17): run を持つものを消すと、KV の締め切りの表に残った項目を外す必要がある。results-collect-until が訪ねるよう印を立てる
+      // (Site にほかの run が無いと Cron の対象にならないため。消し始めの waitUntil が queue を消し終えても印は残る)
+      toStatement(
+        c.env,
+        db
+          .updateTable("sites")
+          .set({ collect_until_dirty: 1 })
+          .where("id", "=", site.id)
+          .where((w) =>
+            w.exists(
+              w.selectFrom("experiments").select("experiments.id").where("experiments.site_id", "=", site.id).where("experiments.id", "=", exp.id).where("experiments.status", "in", deletable).where("experiments.run_id", "is not", null),
+            ),
+          ),
+      ),
+      toStatement(c.env, db.deleteFrom("experiments").where("site_id", "=", site.id).where("id", "=", exp.id).where("status", "in", deletable)), // variants / changes は CASCADE
     ]);
+    if ((deleted?.meta.changes ?? 0) === 0) {
+      // 読んだ後に別の要求が開始した(または先に削除した)
+      const fresh = await db.selectFrom("experiments").select("status").where("site_id", "=", site.id).where("id", "=", exp.id).executeTakeFirst();
+      if (!fresh) throw notFound();
+      throw experimentActive();
+    }
+    // K6・K12: 応答の後に 1 回だけ個票を消し始める(残り・枠の無い日・停止中は Cron が queue から消す)
+    if (exp.run_id !== null) {
+      const purge = kickOffPurge(c.env, site.id, exp.run_id, now);
+      if (purge) c.executionCtx.waitUntil(purge);
+    }
     return c.body(null, 204);
   },
 );
@@ -519,18 +682,15 @@ experimentRoutes.put(
     const { site } = await loadSite(c, c.req.param("sid"), "editor");
     const db = c.get("db");
     const exp = await loadExperiment(db, site.id, c.req.param("eid"));
+    // D9 ③(K10): 終了したテストは読み取り専用(コードを分ける。ほかの下書き以外は下の experiment_active のまま)
+    assertNotArchivedTest(exp);
     // spec §7.2: Variant の id / 重みは割当ハッシュの入力。running / paused の間に全置換すると配信中の訪問者を
     // 無言で再バケットしてしまう。archived は復帰不可(TRANSITIONS.archived = [])なので「Stop してから編集」という
     // 案内は行き止まりになる — さらに archived な Experiment の variant id は過去の analytics イベントが参照している
     // 履歴データでもあるので、そこを書き換えるのは「配信中の再バケット」とは別の理由で危険。
     // どちらも draft でしか安全に編集できないので、許可するのは draft のときだけにする(レビュー指摘で running/paused
     // のみの guard から拡張。同じ 409 experiment_active を流用 — code の分割は最終レビューに持ち越し)
-    if (exp.status !== "draft") {
-      throw new ApiError(409, "experiment_active", {
-        message: "このエクスペリエンスのパターンは変更できません",
-        hint: "配信中または終了済みのエクスペリエンスのパターンは変更できません。複製して新しいエクスペリエンスを作成してください",
-      });
-    }
+    if (exp.status !== "draft") throw variantsLocked();
     const body = c.req.valid("json");
     const ids = new Set(body.map((v) => v.id));
     if (ids.size !== body.length) throw new ApiError(422, "duplicate_variant_id", { message: "パターン ID が重複しています" });
@@ -561,31 +721,46 @@ experimentRoutes.put(
     const analyticsJson = (v: (typeof body)[number]) => (v.analytics ? JSON.stringify(v.analytics) : null);
     // B77(K8): original / description は指定したときだけ doUpdateSet に入れる。省いたら既存の行の値を保ち(読んで埋めない。
     // 読んでから書くまでに PATCH …/variants/:vid が書いたメモを古い値で潰さない)、新しい行は列の既定値と同じ 0 / '' で入る。
-    // 1 文のバインドは最大 15(values 9 + doUpdateSet 6)で、D1 の上限 100 より十分小さい
+    // 1 文のバインドは最大 18(values 9 + 親の条件 3 + doUpdateSet 6)で、D1 の上限 100 より十分小さい
     const flags = (v: (typeof body)[number]) => ({
       ...(v.original !== undefined ? { original: v.original ? 1 : 0 } : {}),
       ...(v.description !== undefined ? { description: v.description } : {}),
     });
     // オリジナルにしたパターンの変更は同じ batch で消す(設計書 Q5)。対象はこのエクスペリエンスのパターンだけ
     const originalIds = body.filter((v) => v.original === true).map((v) => v.id);
-    await c.env.DB.batch([
-      toStatement(c.env, db.deleteFrom("variants").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).where("id", "not in", [...ids])),
-      ...body.map((v, i) =>
-        toStatement(
+    // D9 ③(K10): 各文に「親が下書きのまま」を条件に付ける(読んだ後に開始されたら、どの行も変えない)。
+    // upsert は INSERT … SELECT … WHERE EXISTS の形にする(条件が偽なら行が出ず、ON CONFLICT も起きない)
+    const isDraft = parentIsDraft(site.id, exp.id);
+    const variantCols = ["site_id", "experiment_id", "id", "name", "weight", "position", "analytics_json", "original", "description"] as const;
+    const results = await c.env.DB.batch([
+      toStatement(c.env, db.deleteFrom("variants").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).where("id", "not in", [...ids]).where(isDraft)),
+      ...body.map((v, i) => {
+        const row = { site_id: site.id, experiment_id: exp.id, id: v.id, name: v.name, weight: v.weight, position: i, analytics_json: analyticsJson(v), original: v.original ? 1 : 0, description: v.description ?? "" };
+        return toStatement(
           c.env,
           db
             .insertInto("variants")
-            .values({ site_id: site.id, experiment_id: exp.id, id: v.id, name: v.name, weight: v.weight, position: i, analytics_json: analyticsJson(v), original: v.original ? 1 : 0, description: v.description ?? "" })
+            .columns([...variantCols])
+            .expression(db.selectNoFrom((s) => variantCols.map((col) => s.val(row[col]).as(col))).where(isDraft))
             .onConflict((oc) =>
               oc.columns(["site_id", "experiment_id", "id"]).doUpdateSet({ name: v.name, weight: v.weight, position: i, analytics_json: analyticsJson(v), ...flags(v) }),
             ),
-        ),
-      ),
+        );
+      }),
       ...(originalIds.length > 0
-        ? [toStatement(c.env, db.deleteFrom("changes").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).where("variant_id", "in", originalIds))]
+        ? [toStatement(c.env, db.deleteFrom("changes").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).where("variant_id", "in", originalIds).where(isDraft))]
         : []),
-      toStatement(c.env, db.updateTable("experiments").set({ updated_at: now, updated_by: c.get("user").id }).where("site_id", "=", site.id).where("id", "=", exp.id)),
+      toStatement(
+        c.env,
+        db.updateTable("experiments").set({ updated_at: now, updated_by: c.get("user").id }).where("site_id", "=", site.id).where("id", "=", exp.id).where("status", "=", "draft"),
+      ),
     ]);
+    if ((results[results.length - 1]?.meta.changes ?? 0) === 0) {
+      // 読んだ後に開始された(または削除された)。子の行も変わっていない
+      const fresh = await loadExperiment(db, site.id, exp.id);
+      assertNotArchivedTest(fresh);
+      throw variantsLocked();
+    }
     return c.json({ ok: true });
   },
 );
@@ -595,11 +770,11 @@ experimentRoutes.put(
   describeRoute({
     tags: ["experiments"],
     summary:
-      "パターンの変更を全置換(編集者以上)。1 件でも保存時検証に落ちれば何も書かない。オリジナルのパターンには変更を保存できない(空配列は受けて何もしない)",
+      "パターンの変更を全置換(編集者以上)。1 件でも保存時検証に落ちれば何も書かない。オリジナルのパターンには変更を保存できない(空配列は受けて何もしない)。終了したテストには保存できない(空配列も 409 experiment_archived_readonly)",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "置換した", content: { "application/json": { schema: resolver(z.object({ ok: z.literal(true), count: z.number().int() })) } } },
-      ...errorResponses(400, 401, 403, 404, 422),
+      ...errorResponses(400, 401, 403, 404, 409, 422),
     },
   }),
   requireSession,
@@ -619,6 +794,9 @@ experimentRoutes.put(
     const { site } = await loadSite(c, c.req.param("sid"), "editor");
     const db = c.get("db");
     const exp = await loadExperiment(db, site.id, c.req.param("eid"));
+    // D9 ③(K10): 終了したテストは読み取り専用(実行中・一時停止中のテストは今のとおり保存できる。設計書 §5.5)。
+    // 下のオリジナルへの空配列を受ける規則(B77 の K8)より先に見るので、終了したテストへは空配列も 409
+    assertNotArchivedTest(exp);
     const vid = c.req.param("vid");
     const variant = await db
       .selectFrom("variants")
@@ -650,10 +828,8 @@ experimentRoutes.put(
       .where("variant_id", "=", vid)
       .execute();
     const prev = new Map(existing.map((e) => [e.id, e]));
+    // 行ごとに違う 7 列(残りの 5 列 site_id / experiment_id / variant_id / updated_by / updated_at は全行で同じなので、下の外側の SELECT で 1 回だけ渡す)
     const changeRows = changes.map((ch, i) => ({
-      site_id: site.id,
-      experiment_id: exp.id,
-      variant_id: vid,
       id: ch.id,
       type: ch.type,
       selector: "selector" in ch ? ch.selector : null,
@@ -661,19 +837,45 @@ experimentRoutes.put(
       position: i,
       created_by: prev.get(ch.id)?.created_by ?? user,
       created_at: prev.get(ch.id)?.created_at ?? now,
-      updated_by: user,
-      updated_at: now,
     }));
+    // D9 ③(K10): batch の各文に「親が終了したテストでない」を条件に付ける(読んだ後に終了されたら、変更の行も親の帳簿も変えない)。
+    // INSERT は INSERT … SELECT … FROM (VALUES …) WHERE EXISTS の形にする(条件は外側の WHERE に 1 回だけ置く)。
+    // UNION ALL で行を並べないのは、D1 が compound SELECT の項の数を小さく制限しているため(8 行で "too many terms in compound SELECT")。
+    // 複数行の VALUES はこの制限の外(SQLite の multi-row VALUES)。VALUES の列の名前は column1 … column7
+    const notArchived = parentNotArchivedTest(site.id, exp.id);
+    const rowCols = ["id", "type", "selector", "payload_json", "position", "created_by", "created_at"] as const;
+    const insertChunk = (rows: typeof changeRows) => {
+      const values = sql`(values ${sql.join(rows.map((r) => sql`(${sql.join(rowCols.map((col) => r[col]))})`))})`;
+      return db
+        .insertInto("changes")
+        .columns(["site_id", "experiment_id", "variant_id", ...rowCols, "updated_by", "updated_at"])
+        .expression(
+          db
+            .selectFrom(values.as("r"))
+            .select((s) => [
+              s.val(site.id).as("site_id"),
+              s.val(exp.id).as("experiment_id"),
+              s.val(vid).as("variant_id"),
+              ...rowCols.map((col, i) => sql.ref(`r.column${i + 1}`).as(col)),
+              s.val(user).as("updated_by"),
+              s.val(now).as("updated_at"),
+            ])
+            .where(notArchived),
+        );
+    };
     // D1 batch で 1 トランザクション(途中で失敗しても集合が壊れない)。
-    // 8 行(12 パラメータ/行 × 8 = 96)ずつに分けた複数の INSERT 文として積む(上のコメント参照)
-    const inserts = chunk(changeRows, 8).map((rows) => toStatement(c.env, db.insertInto("changes").values(rows)));
+    // 8 行ずつに分けた複数の INSERT 文として積む(上のコメント参照。1 文のバインドは 7 × 8 + 外側 5 + 親の条件 4 = 65)
+    const inserts = chunk(changeRows, 8).map((rows) => toStatement(c.env, insertChunk(rows)));
     const isOriginal = variantIsOriginal(site.id, exp.id, vid);
     const results = await c.env.DB.batch([
-      toStatement(c.env, db.deleteFrom("changes").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).where("variant_id", "=", vid)),
+      toStatement(c.env, db.deleteFrom("changes").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).where("variant_id", "=", vid).where(notArchived)),
       ...inserts,
       // B77(K8): 上の読みの後に同じパターンがオリジナルになっていたら(並行する PUT …/variants)、いま入れた変更を同じトランザクションで消す。
       // 最後はオリジナルに変更が残らない。消した行があれば 422 で返す(batch の後なのでロールバックにはならない)
-      toStatement(c.env, db.deleteFrom("changes").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).where("variant_id", "=", vid).where(isOriginal)),
+      toStatement(
+        c.env,
+        db.deleteFrom("changes").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).where("variant_id", "=", vid).where(isOriginal).where(notArchived),
+      ),
       // 拒否になる保存は親の帳簿(未公開の印と更新者)を変えない
       toStatement(
         c.env,
@@ -682,10 +884,16 @@ experimentRoutes.put(
           .set({ updated_at: now, updated_by: user })
           .where("site_id", "=", site.id)
           .where("id", "=", exp.id)
-          .where((eb) => eb.not(isOriginal(eb))),
+          .where((eb) => eb.not(isOriginal(eb)))
+          .where(notArchivedTest),
       ),
     ]);
     if ((results[1 + inserts.length]?.meta.changes ?? 0) > 0) throw variantOriginal();
+    if ((results[2 + inserts.length]?.meta.changes ?? 0) === 0) {
+      // 親の帳簿を書けなかった: 読んだ後に終了された(変更の行も変えていない)か、オリジナルになった(空配列の保存。今のとおり何もしない)
+      const fresh = await loadExperiment(db, site.id, exp.id);
+      assertNotArchivedTest(fresh);
+    }
     return c.json({ ok: true, count: changes.length });
   },
 );
@@ -737,7 +945,8 @@ experimentRoutes.post(
   "/sites/:sid/experiments/:eid/status",
   describeRoute({
     tags: ["experiments"],
-    summary: "エクスペリエンスの status を遷移する(管理者以上)。成功した遷移は必ずサイトを自動公開する。結果を記録しないテストを開始したときは warnings で知らせる",
+    summary:
+      "エクスペリエンスの status を遷移する(管理者以上)。成功した遷移は必ずサイトを自動公開する。結果を記録するサイトでテストの下書きを開始するときは、判定に使う目標が無い・基準の重みが 0 なら 422 evaluation_plan_incomplete で、通れば評価計画を固定する。結果を記録しないテストを開始したときは warnings で知らせる。テストの終了(archived)には採用(adoption)を付けられ、配信を止める公開の後に結果と採用を記録する(応答の results.recorded)",
     security: [{ bearer: [] }],
     responses: {
       200: {
@@ -757,7 +966,28 @@ experimentRoutes.post(
     const exp = await loadExperiment(db, site.id, c.req.param("eid"));
     const body = c.req.valid("json");
     if (!TRANSITIONS[exp.status].includes(body.status)) throw new ApiError(409, "invalid_transition", { from: exp.status, to: body.status });
+    // D9 ③(K16、設計書 §8.1): 採用はテストを終了するときだけ。検査は状態を変える前に行う
+    const stoppingTest = exp.kind === "test" && body.status === "archived";
+    if (body.adoption !== undefined && exp.kind !== "test") throw adoptionNotAllowed(422, "パーソナライズには採用を記録しません");
+    if (body.adoption !== undefined && !stoppingTest) throw adoptionNotAllowed(422, "採用はテストを終了するとき(status = archived)だけ記録できます");
     const now = Date.now();
+    let adoption: { variantId: string | null; note: string } | null = null;
+    let stopEstimate = 0;
+    if (stoppingTest) {
+      const stopVariants = await loadVariants(db, site.id, exp.id);
+      if (body.adoption !== undefined) {
+        // Change の無い基準は null で保存する。基準に Change があるかは終了の直前(= 今)に届いていた定義で決める
+        const stopPlan = await loadPlan(db, site.id, exp, stopVariants);
+        const variantId = await resolveAdoptedVariant(db, site.id, exp, stopVariants, stopPlan.plan.baselineVariantId, body.adoption.variantId, now);
+        adoption = { variantId, note: body.adoption.note ?? "" };
+      }
+      // 記録の読み取りの見込み(保存した速報は終了の Publish で消えるので、その前に読む)
+      if (exp.run_id !== null) {
+        const cache = await db.selectFrom("results_interim_cache").select(["rows_read", "result_json"]).where("site_id", "=", site.id).where("experiment_id", "=", exp.id).executeTakeFirst();
+        const goals = await db.selectFrom("goals").select("id").where("site_id", "=", site.id).execute();
+        stopEstimate = readEstimate(cache, Math.max(0, goals.length - 1));
+      }
+    }
     // 決定 34: analytics-recipe の期間に使う。started_at は最初の running のみ(Pause → Resume で動かさない)、stopped_at は archived
     // D9 ②(plan ② の K14、設計書 §5.2・§6.3): 開始(draft → running)のテストで、Site が結果を記録し計測用 D1 があるときだけ run_id を振る。
     // 再開(paused → running)では振らない(run_id の無いまま一時停止していたテストも再開はできる)。
@@ -765,26 +995,108 @@ experimentRoutes.post(
     const starting = exp.status === "draft" && body.status === "running";
     const isTest = exp.kind === "test";
     const issue = starting && isTest && exp.run_id === null && site.results_enabled === 1 && resultsStore(c.env);
-    const warnings = starting && isTest && !issue ? [RESULTS_NOT_RECORDED] : [];
+    // D9 ③(K6 (2)): 下書きに run_id が既にある(今は起きない)ときは、記録しない警告を出さない
+    const warnings: Array<{ path: string; message: string }> = starting && isTest && exp.run_id === null && !issue ? [RESULTS_NOT_RECORDED] : [];
+    // D9 ③(K6 (2)): テストの開始は、要求の最初に読んだ Site の results_enabled のままであることも条件にする
+    // (間に Site の設定が変わると、設定と合わない run_id の発行・警告になる。0 → 1 も 1 → 0 も外す)
+    const siteUnchanged = starting && isTest;
+    // D9 ③(K8、設計書 §5.2): 結果を記録する開始(run_id を振るとき)だけ、評価計画を検査して固定する。
+    // 結果を記録しない開始・再開・パーソナライズでは検査も固定もしない(今の警告だけ)
+    let plan: LoadedPlan | null = null;
+    if (issue) {
+      const variants = await loadVariants(db, site.id, exp.id);
+      plan = await loadPlan(db, site.id, exp, variants);
+      const goalIds = (await db.selectFrom("goals").select("id").where("site_id", "=", site.id).execute()).map((g) => g.id);
+      assertStartable(plan.plan, variants, goalIds);
+      // 容量の見込みの警告は拒否しない。CAS の前に出す(CAS の後に投げて 500 にしないため)。出せなければ警告しない
+      try {
+        const capacity = await capacityWarning(db, site.id, plan.plan, variants);
+        if (capacity) warnings.push(capacity);
+      } catch (e) {
+        console.error("capacity warning failed (start continues without it)", e);
+      }
+    }
+    const runId = issue ? newRunId() : null;
     const stamps = {
       ...(body.status === "running" && exp.started_at === null ? { started_at: now } : {}),
       // 決定 51(K5、2026-10-06 ユーザー決定): 配信に入った時刻。開始・再開のたびに更新し、テストどうしの優先の順に使う
       ...(body.status === "running" ? { last_started_at: now } : {}),
       ...(body.status === "archived" ? { stopped_at: now } : {}),
-      ...(issue ? { run_id: newRunId() } : {}),
+      ...(runId ? { run_id: runId } : {}),
     };
-    // 読んだ status のままであることを条件に更新する(並行 status 変更の stale read を弾く。負けた側は 409 で上書きしない)
-    const upd = await db
+    // 読んだ status のままであることを条件に更新する(並行 status 変更の stale read を弾く。負けた側は 409 で上書きしない)。
+    // D9 ③(K8): 結果を記録する開始は、検査した評価計画の version のままであることも条件にする(検査の後に下書きの保存が
+    // 割り込むと、検査していない計画を固定することになるため)。2 文目で同じ batch の中で計画を固定する(新しい run_id が入ったときだけ効く)
+    const fixedVersion = plan?.version ?? null;
+    const cas = db
       .updateTable("experiments")
       .set({ status: body.status, ...stamps, updated_at: now, updated_by: c.get("user").id })
       .where("site_id", "=", site.id)
       .where("id", "=", exp.id)
       .where("status", "=", exp.status)
-      .executeTakeFirst();
-    if (Number(upd.numUpdatedRows) === 0) {
+      .$if(siteUnchanged, (q) =>
+        q.where((eb) => eb(eb.selectFrom("sites").select("sites.results_enabled").where("sites.id", "=", site.id), "=", site.results_enabled)),
+      )
+      .$if(fixedVersion !== null, (q) =>
+        q.where((eb) =>
+          eb(
+            eb.selectFrom("evaluation_plans").select("evaluation_plans.version").where("evaluation_plans.site_id", "=", site.id).where("evaluation_plans.experiment_id", "=", exp.id),
+            "=",
+            fixedVersion!,
+          ),
+        ),
+      )
+      // D9 ③(K8): 固定する基準のパターンが、重みが 0 より大きいまま残っていることも条件にする(検査の後にパターンの保存が割り込み、
+      // 基準を消したり重みを 0 にしたりすると、判定できない計画を固定することになるため)
+      .$if(plan !== null, (q) =>
+        q.where((eb) =>
+          eb.exists(
+            eb
+              .selectFrom("variants as bv")
+              .select("bv.id")
+              .where("bv.site_id", "=", site.id)
+              .where("bv.experiment_id", "=", exp.id)
+              .where("bv.id", "=", plan!.plan.baselineVariantId!)
+              .where("bv.weight", ">", 0),
+          ),
+        ),
+      );
+    const stmts = [toStatement(c.env, cas)];
+    if (plan && runId) stmts.push(fixPlanStatement(c.env, { siteId: site.id, experimentId: exp.id, plan: plan.plan, runId, userId: c.get("user").id, now }));
+    const [casResult] = await c.env.DB.batch(stmts);
+    if ((casResult?.meta.changes ?? 0) === 0) {
       const fresh = await loadExperiment(db, site.id, exp.id);
-      throw new ApiError(409, "invalid_transition", { from: fresh.status, to: body.status, hint: "別の操作と競合しました。再読込してください" });
+      const planChanged =
+        fixedVersion !== null &&
+        fresh.status === exp.status &&
+        (await db.selectFrom("evaluation_plans").select("version").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).executeTakeFirst())?.version !== fixedVersion;
+      const baselineChanged =
+        plan !== null &&
+        fresh.status === exp.status &&
+        !(await db
+          .selectFrom("variants")
+          .select("id")
+          .where("site_id", "=", site.id)
+          .where("experiment_id", "=", exp.id)
+          .where("id", "=", plan.plan.baselineVariantId!)
+          .where("weight", ">", 0)
+          .executeTakeFirst());
+      throw new ApiError(409, "invalid_transition", {
+        from: fresh.status,
+        to: body.status,
+        hint: planChanged
+          ? "評価計画が変わりました。画面を読み込み直してください"
+          : baselineChanged
+            ? "パターンの設定が変わりました。画面を読み込み直してください"
+            : siteUnchanged
+              ? "状態かサイトの設定が変わりました。画面を読み込み直してください"
+              : "別の操作と競合しました。再読込してください",
+      });
     }
+    // D9 ③(K11、設計書 §5.3): 結果を記録する run の開始・終了は、収集の締め切りを KV の Site の設定の記録に書く
+    // (開始 = 目標なしは minEnd・ありは maxEnd、評価時点の前の終了 = 終了の時刻)。一時停止・再開は締め切りを変えないが、
+    // 書き直しても同じ値になるだけなので run を持つテストの遷移ではいつも書く。rewriteCollectUntil は投げない(失敗は印を立て Cron が直す)
+    if (runId !== null || exp.run_id !== null) await rewriteCollectUntil(c.env, db, site.id, apiGuard(c.env));
     // status の CAS は既に成功して D1 に着地している。ここから先(publishSite 自体、および応答を組み立てる 2 回の
     // 読み直し)のどこで D1 / KV がこけても、それを 500 として返してはいけない — status 変更そのものは成功しているので、
     // 再試行した operator は「もう一度 running にしようとして 409 invalid_transition(自分の変更と競合)」という
@@ -803,7 +1115,76 @@ experimentRoutes.post(
       fresh = { ...exp, status: body.status, ...stamps, updated_at: now, updated_by: c.get("user").id };
       freshSite = site; // この失敗パスでは activation まで届いていないので last_activated_at は進んでいない
     }
-    return c.json({ experiment: experimentJson(fresh, { unpublished: isUnpublished(fresh, freshSite) }), publish: publicPublishResult(publish), warnings });
+    // D9 ③(K16、設計書 §8.1 の (3)): 終了したテストの結果の記録と採用の記録(状態の変更と Publish の後。失敗しても 200 で recorded: false)。
+    // 終了の後は保存した速報を消す(Publish が消すが、Publish が失敗した場合にも残さない)
+    let results: { recorded: boolean } | undefined;
+    if (stoppingTest) {
+      const stopped: ExperimentRow = { ...exp, status: "archived", ...stamps, updated_at: now, updated_by: c.get("user").id };
+      results = { recorded: await recordStop(c.env, db, site, stopped, { adoption, userId: c.get("user").id, now, estimate: Math.max(1, stopEstimate), guard: apiGuard(c.env) }) };
+      try {
+        await db.deleteFrom("results_interim_cache").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).execute();
+      } catch (e) {
+        console.error("deleting the saved interim results after stop failed", e);
+      }
+      // 未公開の変更(保存済みの Change と、終了の直前に配信していた定義の食い違い)を知らせる
+      try {
+        const live = await liveFacts(db, site.id, stopped, null, now);
+        const names = new Map((await loadVariants(db, site.id, exp.id)).map((v) => [v.id, v.name]));
+        for (const n of live.notes) {
+          const vid = String(n.params?.variantId ?? "");
+          if (n.key === "unpublished_changes") warnings.push(unpublishedChangesWarning(vid, names.get(vid) ?? vid));
+        }
+      } catch (e) {
+        console.error("checking unpublished changes after stop failed", e);
+      }
+    }
+    return c.json({ experiment: experimentJson(fresh, { unpublished: isUnpublished(fresh, freshSite) }), publish: publicPublishResult(publish), warnings, ...(results ? { results } : {}) });
+  },
+);
+
+/**
+ * D9 ③(K16、設計書 §8.1): 採用の記録(管理者以上)。終了したテストだけ。上書きでき、最後に記録した人と時刻だけを残す。
+ * 終了のときに記録できなかった・採用を付けずに終了したときに使う。未公開の変更に数えない(エクスペリエンスの updated_at を進めない)
+ */
+experimentRoutes.put(
+  "/sites/:sid/experiments/:eid/adoption",
+  describeRoute({
+    tags: ["experiments"],
+    summary:
+      "終了したテストの採用を記録する(管理者以上)。上書きできる。variantId = null は採用なし。変更の無い基準を指定すると採用なしとして記録する。終了していないテストは 409、パーソナライズは 422(adoption_not_allowed)",
+    security: [{ bearer: [] }],
+    responses: {
+      200: { description: "記録した採用", content: { "application/json": { schema: resolver(AdoptionJsonSchema) } } },
+      ...errorResponses(400, 401, 403, 404, 409, 422),
+    },
+  }),
+  requireSession,
+  validator("json", AdoptionInputSchema, (r) => {
+    if (!r.success) throw validationFailed(r.error);
+  }),
+  async (c) => {
+    const { site } = await loadSite(c, c.req.param("sid"), "admin");
+    const db = c.get("db");
+    const exp = await loadExperiment(db, site.id, c.req.param("eid"));
+    const body = c.req.valid("json");
+    if (exp.kind !== "test") throw adoptionNotAllowed(422, "パーソナライズには採用を記録しません");
+    if (exp.status !== "archived") throw adoptionNotAllowed(409, "採用は終了したテストにだけ記録できます。テストを終了するときに記録してください");
+    const variants = await loadVariants(db, site.id, exp.id);
+    const plan = await loadPlan(db, site.id, exp, variants);
+    const variantId = await resolveAdoptedVariant(db, site.id, exp, variants, plan.plan.baselineVariantId, body.variantId, exp.stopped_at ?? Date.now());
+    const now = Date.now();
+    const by = c.get("user").id;
+    // 終了したままであることを条件にする(終了は戻らないが、エクスペリエンスの削除と競合したときに外部キーで落とさない)
+    const res = await c.env.DB.prepare(
+      `insert into adoptions (site_id, experiment_id, variant_id, note, decided_by, decided_at)
+       select ?1, ?2, ?3, ?4, ?5, ?6 where exists (select 1 from experiments where site_id = ?1 and id = ?2 and status = 'archived')
+       on conflict (site_id, experiment_id) do update set
+         variant_id = excluded.variant_id, note = excluded.note, decided_by = excluded.decided_by, decided_at = excluded.decided_at`,
+    )
+      .bind(site.id, exp.id, variantId, body.note ?? "", by, now)
+      .run();
+    if ((res.meta.changes ?? 0) === 0) throw notFound();
+    return c.json({ variantId, note: body.note ?? "", decidedAt: now, decidedBy: by });
   },
 );
 
@@ -863,9 +1244,19 @@ experimentRoutes.post(
     assertName(name, ["name"]);
     const user = c.get("user").id;
     const kept = body.mode === "variant" ? [picked!] : variants; // 外部計測の名前の検査に使う(写すのは batch の中の INSERT … SELECT)
+    // D9 ③(設計書 §4.1): variant の複製は配信していた中身を写す。配信を確かめた届く定義のうち、終了したテストは終了の時刻に
+    // 有効だった行(終了の直前に配っていた定義。終了の後に確かめた行は使わない)、それ以外は今有効な行(= 確かめた最新の行。
+    // 一時停止中は行を作らないので、一時停止の直前に配っていた定義)。行が無ければ(配信の記録が無いテスト)保存済みの中身を写す
+    const delivered =
+      body.mode === "variant"
+        ? ((await deliveredAt(db, site.id, src.id, src.status === "archived" && src.stopped_at !== null ? src.stopped_at : Date.now()))?.definition ?? null)
+        : null;
+    // same かつテストのときは評価計画も写す(batch の 4 文目)
+    const copyPlan = body.mode === "same" && src.kind === "test";
     const isUniqueViolation = (e: unknown) => /UNIQUE|PRIMARY KEY/i.test(String(e));
-    /** エクスペリエンス・パターン・変更を 1 batch = 1 トランザクションの 3 文で書く(片方だけ残らない。パターンと変更は元の行から INSERT … SELECT)。
-     *  3 文とも「元が読んだ版のまま」のときだけ書くので、読んだ設定・検査と写す中身はいつも同じ版になる */
+    /** エクスペリエンス・パターン・変更(テストの same は評価計画も)を 1 batch = 1 トランザクションの 3 文(4 文)で書く(片方だけ残らない。
+     *  パターン・変更・計画は元の行(variant の変更は配信した定義)から INSERT … SELECT)。
+     *  どの文も「元が読んだ版のまま」のときだけ書くので、読んだ設定・検査と写す中身はいつも同じ版になる */
     const write = async (id: string): Promise<ExperimentRow> => {
       const o = { siteId: site.id, sourceId: src.id, mode: body.mode, variantId: body.variantId, id, name, user, now: Date.now(), sourceUpdatedAt: src.updated_at };
       const row = duplicateExperimentRow(src, o);
@@ -876,7 +1267,8 @@ experimentRoutes.post(
       const results = await c.env.DB.batch([
         toStatement(c.env, insertExperimentQuery(db, row, o)),
         toStatement(c.env, copyVariantsQuery(db, o)),
-        toStatement(c.env, copyChangesQuery(db, o)),
+        toStatement(c.env, copyChangesQuery(db, o, delivered)),
+        ...(copyPlan ? [toStatement(c.env, copyPlanQuery(db, o))] : []),
       ]);
       // 読んだ後に元が編集・削除された(3 文とも 0 行で、何も残っていない)。版の混ざった下書きやパターン 0 個の下書きを作らない
       if ((results[0]?.meta.changes ?? 0) === 0)

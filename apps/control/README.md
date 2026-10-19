@@ -1,6 +1,9 @@
 # @wtt/control — control Worker
 
 コントロールプレーンの Worker。D1(`DB`)を正本に、KV(`CONFIG_KV`)と R2(`ASSETS`。任意 — binding が無い導入では画像機能を無効にする)へ書く。
+テストの結果は、計測用の D1(`RESULTS_DB` = `wtt-results`。edge が書く個票)を読み取りと削除にだけ使い、評価計画・結果の記録・採用は `DB` に持つ。
+計測用 D1 の表の形の正は edge の `results-migrations/`(`wrangler.jsonc` の `migrations_dir` はローカルの開発・vitest・E2E のため。本番への適用は edge の `results:migrate:remote` だけ)。
+`RESULTS_DB` の binding が無い導入では、結果の記録を有効にできず(409 `results_store_missing`)、結果の API は `collection: "store_missing"` を返す。
 edge(`apps/edge`)は KV を読むだけで、control とは直接つながらない。設置タグのファイル(`/s/<siteId>.js`)は edge ではなく、配信専用の Worker(`wtt-static`。静的アセット)が配る。control は公開・設定の保存のたびに、デプロイ専用の Worker(`apps/deployer`、`wtt-deployer`。Service Binding `DEPLOYER` の RPC)へ配信ファイルの作り直しを頼む。デプロイ用のトークンを持つのはデプロイ専用の Worker だけで、control は持たない。
 
 - 認証は Better Auth(Bearer。セッショントークンと API キー `wtt_…` が同じ入口)。人のログインは Google アカウントで、
@@ -21,8 +24,15 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 - Cron Trigger は 1 本だけ(`*/15 * * * *`。`wrangler.jsonc` の `triggers`)。ジョブは `src/cron/jobs.ts` の登録表に足し、Trigger は増やさない(Cron Trigger の数はアカウント単位の上限がある)。実行の枠は `src/cron/runner.ts`
 - ジョブの形 = `{ name, cadence: { every: "tick" } | { daily: { afterUtcHour } }, writesControl, run(ctx) }`。1 回の実行でジョブを登録の順に 1 本ずつ走らせ、1 本の例外はほかのジョブを止めない(どのジョブも冪等に作る)。`daily` は UTC のその時以降の最初の実行で 1 日 1 回動き、成功を `cron_job_runs` に記録する(失敗・凍結で見送った日は次の実行で取り直す)。`daily` は `writesControl: true` に限る
 - 書き込みの凍結: 実行の最初に 1 回凍結を読み、`writesControl: true` のジョブは凍結中なら丸ごと見送る。さらにジョブは `wtt-control` に書く区切りの直前に毎回 `ctx.assertNotFrozen()` を呼び、凍結中ならそこで止まる(残りは次の回)。`writesControl: false` のジョブは凍結中も動く
-- 今のジョブ: `results-account-guard`(毎回・`writesControl: false`)。使用状況(`getUsage`)で、Free のアカウント全体の Workers のリクエストか D1 の書き込みの行数が日次上限の 8 割以上なら、edge の `ResultsBudget`(binding `RESULTS_BUDGET`。`script_name: "wtt-edge"`)に `stop("account_usage", 次の UTC 0 時)` を立てる。使用量が取れない・Paid・binding が無いときは何もしない(ログだけ)
-- `RESULTS_BUDGET` は edge の Durable Object を参照するので、`ResultsBudget` を含む edge を先にデプロイしないと control をデプロイできない
+- 今のジョブ(登録の順):
+  - `results-account-guard`(毎回・`writesControl: false`)。使用状況(`getUsage`)で、Free のアカウント全体の Workers のリクエストか D1 の書き込みの行数が日次上限の 8 割以上なら、edge の `ResultsBudget`(binding `RESULTS_BUDGET`。`script_name: "wtt-edge"`)に `stop("account_usage", 次の UTC 0 時)` を立てる。使用量が取れない・Paid・binding が無いときは何もしない(ログだけ)
+  - `results-delivery`(毎回): 配信の確認を待つ届く定義の行がある Site について、デプロイ専用の Worker に配った世代を問い合わせ、配信を確かめた行に `delivered_from` を入れる(テスト中の変更もここで記録する)
+  - `results-collect-until`(毎回): 印(`sites.collect_until_dirty`)の付いた Site と、KV の締め切りの表が D1 から計算した値と違う Site の、KV の Site の設定の `resultsCollectUntil` を書き直す
+  - `results-daily`(UTC 0 時以降に 1 日 1 回): 目標参加者数の到達の確認 → 評価時点の記録 → 評価時点の前に終了したテストの終了の記録の補完
+  - `results-capacity`(毎回): 計測用 D1 の大きさを測って保存し、95% 以上なら `ResultsBudget` に `stop("capacity", …)` を立てる(UTC 23 時台の削除を終えるまでは立てない)
+  - `results-purge`(UTC 23 時以降に 1 日 1 回): 保持期間を過ぎた個票 → 削除待ち(`results_purge_queue`)の run → 対応する run の無い個票(孤児)の削除。書き込みの予算の残りの範囲で `ResultsBudget.lease` を受けてから消す
+- 1 回の実行の D1 の問い合わせは 40 まで(`QUERY_LIMIT`。Free の 1 回の起動あたり 50 から runner と予備を残した値)を、各ジョブの配分(`queryShare`)で分け合う。配分は `allotQueries`(`src/cron/runner.ts`。1 日 1 回のジョブがある実行では 15 分の枠ごとに優先を入れ替える)。配分を使い切ったジョブは `{ more: true }` を返し、同じ日の次の実行で続ける。各ジョブは処理した位置を `cron_cursors` に持つ
+- `RESULTS_BUDGET`・`RESULTS_HEALTH` は edge の Durable Object を参照するので、`ResultsBudget`・`ResultsHealth` を含む edge を先にデプロイしないと control をデプロイできない
 
 ## ルート
 
@@ -72,7 +82,7 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 |---|---|---|
 | `GET /workspaces/:wid/sites` | VIEWER | Workspace 配下の Site 一覧 |
 | `POST /workspaces/:wid/sites` | ADMIN | Site を作成(計測用 D1 の binding があれば「結果を記録する」を有効で作る) |
-| `GET /sites/:sid` | VIEWER | Site 1 件(+ `hasUnpublishedChanges` / `activeKvStale` / `staticStale` / `staticRemoving`) |
+| `GET /sites/:sid` | VIEWER | Site 1 件(+ `hasUnpublishedChanges` / `activeKvStale` / `staticStale` / `staticRemoving` / `resultsCapacity`(計測用 D1 の大きさと `ok` / `warning`(80% 以上)/ `stopped`(95% 以上))) |
 | `PATCH /sites/:sid` | ADMIN | Site 設定を更新(Identity / Analytics 命名は KV 即時反映で Publish 不要)。`resultsEnabled`(結果を記録する。切り替えは未公開の変更に数え、次の Publish で効く)と `resultsRetentionDays`(個票の保持期間 7〜365 日、既定 90)。計測用 D1 の binding が無い導入で無効 → 有効にすると 409 `results_store_missing` |
 | `DELETE /sites/:sid` | OWNER | Site を削除(KV の settings / host / active / config と R2 の画像(binding があるとき)も消す) |
 
@@ -97,12 +107,16 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 | `GET /sites/:sid/experiments` | VIEWER | Experiment 一覧 |
 | `POST /sites/:sid/experiments` | EDITOR | 作成(`kind` = test はパターン a / b を 50 / 50、single はパターン a を重み 100 で自動作成)。一度開始してから削除したエクスペリエンスの ID は 409 `id_taken` |
 | `GET /sites/:sid/experiments/:eid` | VIEWER | 1 件(Variant と Change を含む) |
-| `PATCH /sites/:sid/experiments/:eid` | EDITOR | 更新(id は不変、status は `/status` 経由) |
-| `DELETE /sites/:sid/experiments/:eid` | EDITOR | 削除(draft / archived のみ)。一度開始したエクスペリエンスの ID は、削除しても使い直せない(`retired_experiment_ids` に残し、同じ ID の作成・複製は 409 `id_taken`) |
-| `PUT /sites/:sid/experiments/:eid/variants` | EDITOR | Variant を全置換(test は 2 つ以上・single は 1 つ・weight 合計 100。draft のみ) |
-| `PUT /sites/:sid/experiments/:eid/variants/:vid/changes` | EDITOR | Change を全置換(1 件でも保存時検証に落ちれば何も書かない) |
-| `POST /sites/:sid/experiments/:eid/duplicate` | EDITOR | 複製(下書きを作る。mode = same / variant。`runId` は写さない)。退役した ID は 409 `id_taken` |
-| `POST /sites/:sid/experiments/:eid/status` | ADMIN | status 遷移(成功した遷移は必ず Site を自動 Publish)。テストの開始(`draft → running`)で、Site が結果を記録し計測用 D1 の binding があれば `runId`(結果の記録の ID)を振る。再開では振らない。結果を記録しないテストの開始は応答の `warnings` に `path: "results"` を足す |
+| `PATCH /sites/:sid/experiments/:eid` | EDITOR | 更新(id は不変、status は `/status` 経由)。開始後のテストで配信率を下げる・`persistAssignment` を変えると 409 `test_setting_locked`。終了したテストは `description` だけの更新以外 409 `experiment_archived_readonly` |
+| `DELETE /sites/:sid/experiments/:eid` | EDITOR | 削除(draft / archived のみ)。一度開始したエクスペリエンスの ID は、削除しても使い直せない(`retired_experiment_ids` に残し、同じ ID の作成・複製は 409 `id_taken`)。`run_id` を持つものは、削除と同じ batch で `results_purge_queue` に積み、応答の後に個票を消し始める(残りは Cron)。評価計画・結果の記録・採用は CASCADE で消える |
+| `PUT /sites/:sid/experiments/:eid/variants` | EDITOR | Variant を全置換(test は 2 つ以上・single は 1 つ・weight 合計 100。draft のみ。終了したテストは 409 `experiment_archived_readonly`) |
+| `PUT /sites/:sid/experiments/:eid/variants/:vid/changes` | EDITOR | Change を全置換(1 件でも保存時検証に落ちれば何も書かない。終了したテストは 409 `experiment_archived_readonly`) |
+| `POST /sites/:sid/experiments/:eid/duplicate` | EDITOR | 複製(下書きを作る。mode = same / variant。`runId` は写さない)。`same` のテストは評価計画も写す。`variant` は配信を確かめた届く定義の変更を写す(無ければ保存済みの変更)。退役した ID は 409 `id_taken` |
+| `POST /sites/:sid/experiments/:eid/status` | ADMIN | status 遷移(成功した遷移は必ず Site を自動 Publish)。テストの開始(`draft → running`)で、Site が結果を記録し計測用 D1 の binding があれば、評価計画を検査して(判定に使う目標が無い・基準の重みが 0 は 422 `evaluation_plan_incomplete`)固定し、`runId`(結果の記録の ID)を振る。再開では振らない。結果を記録しないテストの開始は応答の `warnings` に `path: "results"` を足す。テストの終了に `adoption` を付けられ、公開の後に終了の記録と採用を同じ batch で書く(失敗は 200 で `results.recorded: false`。Cron が記録を補う) |
+| `GET /sites/:sid/experiments/:eid/evaluation-plan` | VIEWER | 評価計画(既定値で埋めた形)・固定の有無・評価時点の見込み・注意・変更の履歴。パーソナライズは 404 `results_not_applicable` |
+| `PUT /sites/:sid/experiments/:eid/evaluation-plan` | EDITOR | 下書きは全体、開始後は評価時点の前に延ばす向きだけ(409 `evaluation_plan_locked` / `evaluation_already_fixed`、終了は 409 `experiment_archived_readonly`)。到達を確かめる読み取りが断られたら 503 `results_read_unavailable`。未公開の編集に数えない |
+| `GET /sites/:sid/experiments/:eid/results` | VIEWER | 結果(速報・評価時点の記録・評価時点前の終了の記録)。速報は読み取りを予算の DO に予約してから集計し、5 分は保存した値を返す。評価時点を過ぎたら記録を作って返す。下書きは 409 `results_not_started`、パーソナライズは 404 `results_not_applicable` |
+| `PUT /sites/:sid/experiments/:eid/adoption` | ADMIN | 終了したテストの採用を記録・上書き(終了していなければ 409、パーソナライズは 422。どちらも `adoption_not_allowed`) |
 
 ### Publish
 

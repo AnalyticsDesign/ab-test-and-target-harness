@@ -4,14 +4,34 @@ import styles from "./Tabs.module.css";
 
 /**
  * 同じ画面の中での表示の切替(設計書 4.4)。中身は呼び出し側が value を見て出し分ける。
- * marked = そのタブの中にエラーがある印(control の 422 が別のタブの欄を指しているとき)
+ * marked = そのタブの中にエラーがある印(control の 422 が別のタブの欄を指しているとき)。
+ * disabled = まだ押せないタブ(hint に理由を添えて見せる。例: 下書きの結果のタブ「開始後に表示されます」。D9 ③)
  */
-export function Tabs({ tabs, value, onChange }: { tabs: Array<{ id: string; label: string; marked?: boolean }>; value: string; onChange: (id: string) => void }) {
+export function Tabs({
+  tabs,
+  value,
+  onChange,
+}: {
+  tabs: Array<{ id: string; label: string; marked?: boolean; disabled?: boolean; hint?: string }>;
+  value: string;
+  onChange: (id: string) => void;
+}) {
   return (
     <div role="tablist" className={styles.list}>
       {tabs.map((t) => (
-        <button key={t.id} type="button" role="tab" id={`tab-${t.id}`} aria-controls={`tabpanel-${t.id}`} aria-selected={t.id === value} className={styles.tab} onClick={() => onChange(t.id)}>
+        <button
+          key={t.id}
+          type="button"
+          role="tab"
+          id={`tab-${t.id}`}
+          aria-controls={`tabpanel-${t.id}`}
+          aria-selected={t.id === value}
+          disabled={t.disabled}
+          className={styles.tab}
+          onClick={() => onChange(t.id)}
+        >
           {t.label}
+          {t.hint ? <span className={styles.hint}>{t.hint}</span> : null}
           {t.marked ? <span className={styles.mark} role="img" aria-label="このタブに入力エラーがあります" /> : null}
         </button>
       ))}

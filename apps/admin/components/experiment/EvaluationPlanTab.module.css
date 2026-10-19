@@ -1,0 +1,39 @@
+/* 評価計画のタブ(D9 ③ Task 14。モック (a) の form-grid・callout・calc・timeline) */
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.cardHead { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.cardHead h2 { margin: 0; }
+.spacer { flex: 1; }
+.grid { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 14px 18px; align-items: start; }
+.lbl { font-weight: 500; padding-top: 6px; display: flex; flex-direction: column; gap: 2px; }
+.lblLine { display: inline-flex; align-items: center; gap: 6px; }
+.req { color: var(--danger); font-size: 11.5px; font-weight: 600; }
+.opt { color: var(--muted); font-size: 11.5px; font-weight: 400; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field input[type="number"] { width: 140px; }
+.hint { color: var(--muted); font-size: 12px; max-width: 72ch; }
+.err { color: var(--danger); font-size: 12px; }
+.unit { color: var(--muted); font-size: 12.5px; }
+.fixedVal { padding-top: 6px; }
+.callout { border-radius: var(--radius); padding: 10px 12px; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
+.warn { border: 1px solid var(--warn); background: var(--warn-soft); }
+.info { border: 1px solid var(--border-strong); background: var(--sunken); }
+.ok { border: 1px solid var(--ok); background: var(--ok-soft); }
+.calc { border: 1px dashed var(--border-strong); background: var(--sunken); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.calcInputs { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.calcInputs label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.calcInputs input { width: 110px; }
+.calcOut { font-size: 13.5px; line-height: 1.7; }
+.timeline { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+.tl { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; background: var(--sunken); display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.tl b { font-variant-numeric: tabular-nums; }
+details.adv > summary { cursor: pointer; font-weight: 600; }
+details.adv[open] > summary { margin-bottom: 12px; }
+.foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.reason { display: flex; flex-direction: column; gap: 4px; width: 100%; max-width: 640px; }
+.reason textarea { font-family: inherit; min-height: 60px; resize: vertical; }
+
+@media (max-width: 720px) {
+  .grid { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .lbl { padding-top: 10px; }
+  .timeline { grid-template-columns: minmax(0, 1fr); }
+}

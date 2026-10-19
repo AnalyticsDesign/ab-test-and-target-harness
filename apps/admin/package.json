@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "next dev --port 3000",
-    "build": "vinext build",
+    "help:build": "node scripts/embed-help.mjs",
+    "build": "node scripts/embed-help.mjs && vinext build",
     "preview": "wrangler dev --config dist/server/wrangler.json --port 3000",
     "deploy:cf": "wrangler deploy --config dist/server/wrangler.json",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "vitest run",
+    "test": "node scripts/embed-help.mjs && vitest run",
     "e2e": "playwright test"
   },
   "dependencies": {
@@ -33,6 +34,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "@vitejs/plugin-rsc": "^0.5.35",
     "@wtt/core": "workspace:*",
+    "@wtt/stats": "workspace:*",
     "typescript": "^7.0.2",
     "vite": "^8.3.0",
     "vitest": "^4.1.11",

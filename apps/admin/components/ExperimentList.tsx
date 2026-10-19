@@ -6,6 +6,7 @@ import type { Experiment } from "@/lib/types";
 import { FILTER_JA, STATUS_FILTERS, STATUS_JA, STATUS_TONE, countByFilter, filterExperiments, type StatusFilter } from "@/lib/experiment-filter";
 import { KIND_JA } from "@/lib/experiment-kind";
 import { replaceParam } from "@/lib/url-state";
+import { adoptionListText } from "@/lib/stop-dialog";
 import { LocalTime } from "./LocalTime";
 import { StatusPill } from "./ui/StatusPill";
 
@@ -45,6 +46,7 @@ export function ExperimentList({ wid, sid, experiments, canPublish, initialFilte
               <th>本番</th>
               <th>URL</th>
               <th>配信率</th>
+              <th>採用</th>
               <th>更新</th>
             </tr>
           </thead>
@@ -77,13 +79,15 @@ export function ExperimentList({ wid, sid, experiments, canPublish, initialFilte
                     {describePageMatch(e.urlMatch)}
                   </td>
                   <td>{e.trafficPercentage}%</td>
+                  {/* D9 ③: 採用の要約(正の判定の記録から。パーソナライズと未記録は空) */}
+                  <td data-testid={`experiment-adoption-${e.id}`}>{adoptionListText(e)}</td>
                   <td className="muted"><LocalTime at={e.updatedAt} /></td>
                 </tr>
               );
             })}
             {shown.length === 0 ? (
               <tr>
-                <td colSpan={7} className="muted">
+                <td colSpan={8} className="muted">
                   この状態のエクスペリエンスはありません
                 </td>
               </tr>

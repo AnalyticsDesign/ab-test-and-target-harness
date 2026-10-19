@@ -1,0 +1,10 @@
+{
+  // packages/stats の判定の計算の CPU 時間を、Workers の実機で測るための使い捨ての Worker。
+  // 測り終えたら `wrangler delete -c bench/wrangler.jsonc` で消す(本番のコードには入らない)。
+  // 呼び出しごとの CPU 時間は Workers Logs(observability)で読む。Worker の中の時計は計算中に進まないので使えない。
+  "name": "wtt-stats-bench",
+  "main": "worker.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": true,
+  "observability": { "enabled": true }
+}

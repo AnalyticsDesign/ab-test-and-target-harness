@@ -163,6 +163,8 @@ describe("setup and sign-up gate", () => {
       "GET /sites/{sid}/experiments/{eid}",
       "GET /sites/{sid}/experiments/{eid}/analytics-recipe",
       "GET /sites/{sid}/experiments/{eid}/draft-bootstrap",
+      "GET /sites/{sid}/experiments/{eid}/evaluation-plan",
+      "GET /sites/{sid}/experiments/{eid}/results",
       "GET /sites/{sid}/goals",
       "GET /sites/{sid}/publish-preview",
       "GET /sites/{sid}/publishes",
@@ -201,6 +203,8 @@ describe("setup and sign-up gate", () => {
       "POST /workspaces/{wid}/invitations",
       "POST /workspaces/{wid}/members/{memberId}/reset-link",
       "POST /workspaces/{wid}/sites",
+      "PUT /sites/{sid}/experiments/{eid}/adoption",
+      "PUT /sites/{sid}/experiments/{eid}/evaluation-plan",
       "PUT /sites/{sid}/experiments/{eid}/variants",
       "PUT /sites/{sid}/experiments/{eid}/variants/{vid}/changes",
     ]);

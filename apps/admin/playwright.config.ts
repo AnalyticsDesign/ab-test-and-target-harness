@@ -1,5 +1,6 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
-import { ADMIN_URL, AUTH_SECRET, BREAK_GLASS_TOKEN, CONTROL_URL, SETUP_TOKEN } from "./e2e/fixtures";
+import { ADMIN_URL, AUTH_SECRET, BREAK_GLASS_TOKEN, CONTROL_URL, E2E_RESULTS_VISITOR_KEY, SETUP_TOKEN, e2eWranglerEnv } from "./e2e/fixtures";
 
 /**
  * admin の E2E。偽の Cloudflare API(8791)/ control + デプロイ専用の Worker(8799。1 プロセス)/ edge(8787)/ admin(3000)の 4 プロセスを起動して実際のブラウザで管理画面を操作し、
@@ -9,6 +10,23 @@ import { ADMIN_URL, AUTH_SECRET, BREAK_GLASS_TOKEN, CONTROL_URL, SETUP_TOKEN } f
  * その前段で走る — 理由は `e2e/global-setup.ts` のコメント参照。
  */
 const STATE = "../control/.e2e-state"; // control と edge で共有(KV を共有するため)。edge の package ディレクトリからの相対
+
+/**
+ * control と edge も admin(`pnpm preview`)と同じ wrangler で起動する(D9 ③ Task 17 の修正 1)。package.json の版は app ごとに
+ * 違う(edge 4.127.1 / control 4.128.0 / admin 4.133.0)が、dev registry で互いの Durable Object を呼ぶプロセスどうしの版をそろえる。
+ * package.json は変えず、E2E の起動だけ admin の wrangler を使う
+ */
+const WRANGLER = fileURLToPath(new URL("./node_modules/wrangler/bin/wrangler.js", import.meta.url));
+
+/**
+ * wrangler の webServer に共通の設定(D9 ③ Task 17 の修正 1)。
+ * - env: dev registry とログをこの実行の状態ディレクトリに閉じる(`e2eWranglerEnv`。理由は fixtures.ts)
+ * - gracefulShutdown: 終わるときに SIGTERM で止め、wrangler に registry の登録を消させる(既定の SIGKILL だと古い登録が残る)
+ */
+const wranglerServer = (name: "control" | "edge" | "admin") => ({
+  env: e2eWranglerEnv(name),
+  gracefulShutdown: { signal: "SIGTERM" as const, timeout: 5_000 },
+});
 
 export default defineConfig({
   testDir: "./e2e",
@@ -27,20 +45,25 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
-      // `--var` は `.dev.vars` より優先される(wrangler 4.128.0 で実測)。開発者のローカル `.dev.vars` があっても E2E 用の値で走る
+      // `--var` は `.dev.vars` より優先される(wrangler 4.128.0 で実測。4.133.0 でも E2E の値で走ることを確認)。開発者のローカル `.dev.vars` があっても E2E 用の値で走る
       // URL 系 3 つも上書きする(wrangler.jsonc の vars は本番値)。
       // 決定 46: E2E は Google を呼べないので、非常用のパスワードログインを開けた状態で起動する(fixtures.ts の login())
       // 決定 52: デプロイ専用の Worker は 2 つ目の -c で同じプロセスに載せる(control の DEPLOYER が確実に繋がる。別プロセス + dev registry だと
       // RPC が「Network connection lost」になる実行があった)。その Worker の vars(偽の API の向き先・偽の鍵)は e2e/deployer.wrangler.jsonc に書く(--var は効かない)
-      command: `pnpm -C ../control exec wrangler dev -c wrangler.jsonc -c ../admin/e2e/deployer.wrangler.jsonc --port 8799 --persist-to .e2e-state --var AB_SETUP_TOKEN:${SETUP_TOKEN} --var BETTER_AUTH_SECRET:${AUTH_SECRET} --var AB_ADMIN_URL:${ADMIN_URL} --var AB_CONTROL_URL:${CONTROL_URL} --var AB_ASSET_PUBLIC_BASE:${CONTROL_URL}/dev-assets --var AB_EDGE_ORIGIN:https://wtt-edge.example.workers.dev --var AB_GOOGLE_CLIENT_ID:e2e-google-client-id --var AB_GOOGLE_CLIENT_SECRET:e2e-google-client-secret --var AB_BREAK_GLASS_TOKEN:${BREAK_GLASS_TOKEN} --var CF_USAGE_TOKEN: --var CF_ACCOUNT_ID:`,
+      cwd: "../control",
+      command: `node ${WRANGLER} dev -c wrangler.jsonc -c ../admin/e2e/deployer.wrangler.jsonc --port 8799 --persist-to .e2e-state --var AB_SETUP_TOKEN:${SETUP_TOKEN} --var BETTER_AUTH_SECRET:${AUTH_SECRET} --var AB_ADMIN_URL:${ADMIN_URL} --var AB_CONTROL_URL:${CONTROL_URL} --var AB_ASSET_PUBLIC_BASE:${CONTROL_URL}/dev-assets --var AB_EDGE_ORIGIN:https://wtt-edge.example.workers.dev --var AB_GOOGLE_CLIENT_ID:e2e-google-client-id --var AB_GOOGLE_CLIENT_SECRET:e2e-google-client-secret --var AB_BREAK_GLASS_TOKEN:${BREAK_GLASS_TOKEN} --var CF_USAGE_TOKEN: --var CF_ACCOUNT_ID:`,
       url: "http://127.0.0.1:8799/",
+      ...wranglerServer("control"),
       reuseExistingServer: false,
       timeout: 90_000,
     },
     {
-      // control と同じディレクトリを指す(= 同じローカル KV を読む)
-      command: `pnpm -C ../edge exec wrangler dev --port 8787 --persist-to ${STATE}`,
+      // control と同じディレクトリを指す(= 同じローカル KV と計測用 D1(wtt-results)を読む)。
+      // D9 ③(plan ③ の K26): 結果の参加・CV を書くための訪問者の鍵を `--var` で渡す(edge のコードは変えない。無いと書かずに failed を返す)
+      cwd: "../edge",
+      command: `node ${WRANGLER} dev --port 8787 --persist-to ${STATE} --var RESULTS_VISITOR_KEY:${E2E_RESULTS_VISITOR_KEY}`,
       url: "http://127.0.0.1:8787/",
+      ...wranglerServer("edge"),
       reuseExistingServer: false,
       timeout: 90_000,
     },
@@ -51,6 +74,7 @@ export default defineConfig({
       // `package.json` の `preview` と同じコマンド(生成設定のパスは scripts にだけある)
       command: `pnpm preview --var AB_CONTROL_URL:${CONTROL_URL}`,
       url: `${ADMIN_URL}/login`,
+      ...wranglerServer("admin"),
       reuseExistingServer: false,
       timeout: 120_000,
     },
@@ -68,5 +92,7 @@ export default defineConfig({
     { name: "results-settings", testMatch: /results-settings\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // B77: パターン UI と目標名(専用のサイトを作るので publish-flow の状態には触らないが、owner の setup は publish-flow が行う)
     { name: "variant-ui", testMatch: /variant-ui\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    // D9 ③: 結果の記録の流れ(評価計画 → 開始 → edge への参加・CV → 結果のタブ → 終了と採用 → 複製の下書き)。専用のサイトを作る
+    { name: "results-flow", testMatch: /results-flow\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
   ],
 });

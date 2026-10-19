@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { api, describeError, fieldErrors } from "@/lib/client";
-import { cspNotice, resultsToggleNotice, splitCode } from "@/lib/results-settings";
+import { capacityWarning, cspNotice, resultsToggleNotice, splitCode } from "@/lib/results-settings";
 import type { AnalyticsSettings, Site } from "@/lib/types";
 import { replaceParam } from "@/lib/url-state";
 import { Field } from "../Field";
@@ -81,6 +81,8 @@ export function SiteSettingsForm({
   const [tz, setTz] = useState(site.timezone);
   // 無効のスイッチは disabled の入力として送られない(FormData に載らない)ので、値は state で持つ
   const [resultsOn, setResultsOn] = useState(site.resultsEnabled);
+  // D9 ③(plan ③ K18): 計測用のデータベースの使用量が 80% 以上なら警告、95% 以上なら記録を止めている知らせ(測る前は出さない)
+  const capacity = capacityWarning(site.resultsCapacity);
   const [idSourceKind, setIdSourceKind] = useState<"ab" | "cookie">(site.idSource === "ab" ? "ab" : "cookie");
   const lines = (v: string) => String(v).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   // Analytics のフィールド error は control 側の 422 コードによって key の形が違う(どちらも path は配列):
@@ -255,6 +257,16 @@ export function SiteSettingsForm({
                 <p className="banner-warn" style={{ display: "block" }} data-testid="results-csp-notice">
                   {/* 導入の形は保存前の選択(訪問者 ID の節)に合わせる。バッククォートの部分は <code> で出す */}
                   {splitCode(cspNotice({ mode, edgeOrigin, tagOrigin, siteDomain: site.domain })).map((p, i) => (p.code ? <code key={i}>{p.text}</code> : <span key={i}>{p.text}</span>))}
+                </p>
+              ) : null}
+              {capacity ? (
+                <p className={capacity.level === "stopped" ? "error-box" : "banner-warn"} style={{ display: "block" }} role="status" data-testid="results-capacity-warning" data-level={capacity.level}>
+                  {capacity.text}
+                  {site.resultsCapacity ? (
+                    <>
+                      (<LocalTime at={site.resultsCapacity.measuredAt} kind="deadline" timeZone={site.timezone} /> に測定)
+                    </>
+                  ) : null}
                 </p>
               ) : null}
               <Field label="参加者ごとの記録を残す日数(7〜365 日)" error={fields.resultsRetentionDays}>

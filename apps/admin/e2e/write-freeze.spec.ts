@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, expect, type Page } from "@playwright/test";
-import { EXPERIMENT, HERO_TEXT, SITE, appAlert, login, openSite, waitForHydration } from "./fixtures";
+import { EXPERIMENT, HERO_TEXT, SITE, appAlert, confirmRunningTestSave, login, openSite, waitForHydration } from "./fixtures";
 
 /**
  * backlog D13 / 決定 56: 凍結中の管理画面。スイッチは運用者と同じく wrangler d1 execute で入れる(--local・E2E の状態ディレクトリ)。
@@ -87,6 +87,7 @@ test("the banner follows freeze and thaw without a reload; a save shows the reas
   );
   const patched = page.waitForResponse(isPatch);
   await page.getByRole("button", { name: "保存(下書き)" }).click();
+  await confirmRunningTestSave(page); // D9 ③: 実行中のテストの変更の保存は 1 回確認する
   expect((await patched).status()).toBe(200); // 基本設定の PATCH は届いている(= 一部は保存された)
   await expect(appAlert(page)).toContainText("一部は保存されています。入力はそのまま残っています。メンテナンスが終わってからもう一度保存すると、残りも保存されます");
   await expect(appAlert(page)).not.toContainText("再読み込み");
@@ -95,6 +96,7 @@ test("the banner follows freeze and thaw without a reload; a save shows the reas
   await page.unroute(`**${base}/variants/b/changes`);
   const saved = page.waitForResponse(isBChanges);
   await page.getByRole("button", { name: "保存(下書き)" }).click();
+  await confirmRunningTestSave(page); // D9 ③: 実行中のテストの変更の保存は 1 回確認する
   expect((await saved).status()).toBe(200);
   await page.reload();
   await waitForHydration(page); // 次のタブの切替(React の onClick)の前に
@@ -109,6 +111,7 @@ test("the banner follows freeze and thaw without a reload; a save shows the reas
   const restoredPatch = page.waitForResponse(isPatch);
   const restored = page.waitForResponse(isBChanges);
   await page.getByRole("button", { name: "保存(下書き)" }).click();
+  await confirmRunningTestSave(page); // D9 ③: 実行中のテストの変更の保存は 1 回確認する
   expect((await restoredPatch).status()).toBe(200);
   expect((await restored).status()).toBe(200);
 });

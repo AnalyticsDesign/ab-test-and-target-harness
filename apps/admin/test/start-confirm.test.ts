@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { loadStartOverlaps, startConfirmFor } from "@/lib/start-confirm";
+import { DEFAULT_PLAN, type EvaluationPlan } from "@wtt/stats";
+import { loadStartOverlaps, startBlocker, startConfirmFor, startWarnings } from "@/lib/start-confirm";
 
 const OV = { path: "experiments.t2", message: "「T2」は「T1」と同じ要素(#cta)を変えます。「T1」(先に開始・再開)が優先され、「T2」の効果は薄まって見えます", experimentIds: ["t2", "t1"] };
 
@@ -26,5 +27,85 @@ describe("start confirmation for overlaps (決定 51、設計書 §3.3)", () => 
   it("starts without asking when the preview cannot be read", async () => {
     expect(await loadStartOverlaps(() => Promise.reject(new Error("network")))).toEqual([]);
     expect(await loadStartOverlaps(() => Promise.resolve({ overlaps: [OV] } as never))).toEqual([OV]);
+  });
+});
+
+const PLAN: EvaluationPlan = { ...DEFAULT_PLAN, primaryGoalId: "g_buy", baselineVariantId: "a" };
+const NOT_RECORDED = "結果はツール上に残りません。後から結果の記録を有効にしても、このテストの結果は記録されません";
+
+describe("start confirmation with the evaluation plan (D9 ③ Task 14、設計書 §5.2・§10)", () => {
+  it("結果を記録する開始: 固定する内容の一覧を出す", () => {
+    const c = startConfirmFor([], "開始", [], { recording: true, plan: PLAN, goalName: "購入完了", baselineName: "元のページ", comparisons: 1 });
+    expect(c).not.toBeNull();
+    expect(c!.title).toBe("開始して評価計画を固定しますか?");
+    expect(c!.lead).toBe("次の内容で評価計画を固定します。");
+    expect(c!.fixed).toEqual([
+      { label: "判定に使う目標", value: "購入完了" },
+      { label: "基準", value: "元のページ" },
+      { label: "期間", value: "最低 14 日・最大 8 週" },
+      { label: "目標参加者数", value: "なし(最低期間の終わりに判定)" },
+      { label: "判定の基準", value: "上回る確率 95% 以上" },
+    ]);
+    expect(c!.note).toBe("開始後も期間と人数を延ばす変更はできますが、変更は記録され、結果の画面に表示されます。");
+    expect(c!.notice).toBeUndefined();
+    expect(c!.confirmLabel).toBe("開始する");
+  });
+
+  it("固定する内容: 目標参加者数・最小改善幅・同等とみなす幅と、比較の回数で引き上げたしきい値", () => {
+    const c = startConfirmFor([], "開始", [], {
+      recording: true,
+      plan: { ...PLAN, targetPerVariant: 12000, delta: 0.5, rope: 0.2 },
+      goalName: "購入完了",
+      baselineName: "A",
+      comparisons: 2,
+    });
+    expect(c!.fixed).toContainEqual({ label: "目標参加者数", value: "12,000 人 / パターン" });
+    expect(c!.fixed).toContainEqual({ label: "判定の基準", value: "上回る確率 97.5% 以上・+0.5 ポイント超・同等とみなす幅 ±0.2 ポイント" });
+  });
+
+  it("結果を記録しない開始: 記録しない文を出し、一覧は出さない", () => {
+    const c = startConfirmFor([], "開始", [], { recording: false, plan: PLAN, goalName: null });
+    expect(c).not.toBeNull();
+    expect(c!.title).toBe("開始しますか?");
+    expect(c!.notice).toBe(NOT_RECORDED);
+    expect(c!.fixed).toBeUndefined();
+    expect(c!.lead).toBe(""); // 記録しない文(notice)と同じことを導入文で重ねない(fix r1)
+  });
+
+  it("重なりと重み 0% は、評価計画の一覧と同じ確認にまとめる", () => {
+    const c = startConfirmFor([OV], "開始", ["C"], { recording: true, plan: PLAN, goalName: "購入完了", baselineName: "A", comparisons: 1 });
+    expect(c!.lead).toBe("同じ要素を変える配信中のエクスペリエンスがあります。");
+    expect(c!.items.map((i) => i.message)).toEqual([OV.message, "C は重み 0% のため、誰にも表示されません"]);
+    expect(c!.fixed?.length).toBe(5);
+    const off = startConfirmFor([], "開始", ["C"], { recording: false, plan: null, goalName: null });
+    expect(off!.lead).toBe("重み 0% のパターンがあります。");
+    expect(off!.notice).toBe(NOT_RECORDED);
+  });
+
+  it("評価計画を読めなかったときは一覧を出さず、開始は control の検査に任せる", () => {
+    const c = startConfirmFor([], "開始", [], { recording: true, plan: null, goalName: null });
+    expect(c!.fixed).toBeUndefined();
+    expect(c!.lead).toBe("開始の時点で評価計画を固定します。");
+  });
+
+  it("startBlocker: 結果を記録する開始で判定に使う目標が無ければ、確認の前に止める", () => {
+    expect(startBlocker({ recording: true, plan: { ...PLAN, primaryGoalId: null }, goalName: null })).toBe("評価計画のタブで判定に使う目標を選んでください");
+    expect(startBlocker({ recording: true, plan: PLAN, goalName: "購入完了" })).toBeNull();
+    expect(startBlocker({ recording: false, plan: { ...PLAN, primaryGoalId: null }, goalName: null })).toBeNull();
+    expect(startBlocker({ recording: true, plan: null, goalName: null })).toBeNull();
+    // 基準の重みが 0(control の 422 と同じ案内。fix r1)
+    expect(startBlocker({ recording: true, plan: PLAN, goalName: "購入完了", baselineWeight: 0 })).toBe("基準のパターンの重みを 0 より大きくしてください");
+    expect(startBlocker({ recording: true, plan: PLAN, goalName: "購入完了", baselineWeight: 50 })).toBeNull();
+    expect(startBlocker({ recording: false, plan: PLAN, goalName: null, baselineWeight: 0 })).toBeNull();
+  });
+
+  it("startWarnings: 開始の応答の warnings(容量の見込みを含む)を文にする", () => {
+    expect(startWarnings(undefined)).toEqual([]);
+    expect(
+      startWarnings([
+        { path: "results", message: NOT_RECORDED },
+        { path: "resultsCapacity", message: "計測用のデータベースの空きが少なくなります(見込み 約 420 MB)。保持期間を短くするか、終了したテストの記録を整理してください" },
+      ]),
+    ).toEqual([NOT_RECORDED, "計測用のデータベースの空きが少なくなります(見込み 約 420 MB)。保持期間を短くするか、終了したテストの記録を整理してください"]);
   });
 });

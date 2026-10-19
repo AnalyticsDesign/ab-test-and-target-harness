@@ -5,7 +5,12 @@
   // Better Auth が AsyncLocalStorage を使う
   "compatibility_flags": ["nodejs_compat"],
   // database_id は `wrangler d1 create wtt-control` で作った値に置き換える。ローカル / vitest は wrangler のローカル D1 を使うため値は問われない
-  "d1_databases": [{ "binding": "DB", "database_name": "wtt-control", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }],
+  // RESULTS_DB は計測用 D1(wtt-results)。edge の wrangler.jsonc と同じ database_id にする。control は読み取りと削除だけで、
+  // 表の形の正は edge の results-migrations/(本番への適用は edge の results:migrate:remote だけ。docs/deploy.md)
+  "d1_databases": [
+    { "binding": "DB", "database_name": "wtt-control", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" },
+    { "binding": "RESULTS_DB", "database_name": "wtt-results", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "../edge/results-migrations" }
+  ],
   // edge と同じ KV(control が書き、edge が読む)。edge の wrangler.jsonc と同じ id にする
   "kv_namespaces": [{ "binding": "CONFIG_KV", "id": "00000000000000000000000000000000" }],
   "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "wtt-assets" }],
@@ -15,8 +20,14 @@
   "services": [{ "binding": "DEPLOYER", "service": "wtt-deployer", "entrypoint": "Deployer" }],
   // Cron Trigger は control に 1 本だけ。ジョブは src/cron/jobs.ts の登録表に足す(Trigger を増やさない)
   "triggers": { "crons": ["*/15 * * * *"] },
-  // edge の結果の記録の予算の Durable Object(先に wtt-edge をデプロイしておく)。control は使用量で記録を止める stop だけを呼ぶ
-  "durable_objects": { "bindings": [{ "name": "RESULTS_BUDGET", "class_name": "ResultsBudget", "script_name": "wtt-edge" }] },
+  // edge の結果の記録の予算と、記録の失敗の回数の Durable Object(先に wtt-edge をデプロイしておく)。
+  // control は予算で記録の停止・削除の枠・読み取りの予約を扱い、失敗の回数を読む
+  "durable_objects": {
+    "bindings": [
+      { "name": "RESULTS_BUDGET", "class_name": "ResultsBudget", "script_name": "wtt-edge" },
+      { "name": "RESULTS_HEALTH", "class_name": "ResultsHealth", "script_name": "wtt-edge" }
+    ]
+  },
   // vars はここが本番値(docs/deploy.md 3 節)。ローカル開発は `.dev.vars`(`.dev.vars.example` を写す)、
   // vitest は vitest.config.ts の miniflare.bindings、admin E2E は playwright.config.ts の `--var` で localhost 値に上書きする
   "vars": {

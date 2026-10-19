@@ -147,8 +147,31 @@ describe("experiments / variants", () => {
     const gBody = (await expectEnvelope(g)) as { error: string; message: string };
     expect(gBody.error).toBe("goal_in_use");
     expect(gBody.message).not.toBe("goal_in_use");
+    expect((gBody as Record<string, unknown>).hint).toBe("参照するエクスペリエンスの配信条件を外してください。参照を外してから削除してください"); // 終了したテストが無ければ今の案内のまま
+    expect(gBody).not.toHaveProperty("archivedTests");
     // 参照を外せば削除できる
     expect((await call("PATCH", `/sites/${sid}/experiments/exp_ref`, { token, body: { targeting: null } })).status).toBe(200);
+    expect((await call("DELETE", `/sites/${sid}/goals/g_buy`, { token })).status).toBe(204);
+  });
+
+  it("終了したテストの配信条件が参照する目標は、テストを削除するまで削除できない(D9 ③ の K10。hint は行き止まりにしない)", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    await call("POST", `/sites/${sid}/goals`, { token, body: { id: "g_buy", name: "購入", type: "CUSTOM", config: {} } });
+    await createExperiment(token, sid, { id: "exp_done", name: "終了した購入テスト", targeting: { hist: "converted", goal: "g_buy" } });
+    await env.DB.prepare("update experiments set status = 'archived' where site_id = ? and id = 'exp_done'").bind(sid).run();
+    const only = (await expectEnvelope(await call("DELETE", `/sites/${sid}/goals/g_buy`, { token }))) as Record<string, unknown>;
+    expect(only).toMatchObject({ error: "goal_in_use", archivedTests: ["exp_done"], message: "この目標はエクスペリエンスの配信条件から参照されています" });
+    expect(only.hint).toBe("終了したテスト(終了した購入テスト)が参照している間は削除できません(終了したテストを削除すると削除できます)");
+    // 外せる参照も並ぶとき
+    await createExperiment(token, sid, { id: "exp_draft", targeting: { hist: "converted", goal: "g_buy" } });
+    const mixed = (await expectEnvelope(await call("DELETE", `/sites/${sid}/goals/g_buy`, { token }))) as Record<string, unknown>;
+    expect(mixed.hint).toBe(
+      "参照するエクスペリエンスの配信条件を外してください。参照を外してから削除してください。終了したテスト(終了した購入テスト)が参照している間は削除できません(終了したテストを削除すると削除できます)",
+    );
+    expect((await call("PATCH", `/sites/${sid}/experiments/exp_draft`, { token, body: { targeting: null } })).status).toBe(200);
+    // 終了したテストを削除すれば目標も削除できる
+    expect((await call("DELETE", `/sites/${sid}/experiments/exp_done`, { token })).status).toBe(204);
     expect((await call("DELETE", `/sites/${sid}/goals/g_buy`, { token })).status).toBe(204);
   });
 
@@ -248,9 +271,10 @@ describe("experiments / variants", () => {
     const archivedRes = await call("PUT", `/sites/${sid}/experiments/${id}/variants`, { token, body });
     expect(archivedRes.status).toBe(409);
     const archivedBody = await json(archivedRes);
-    expect(archivedBody).toMatchObject({ error: "experiment_active", message: "このエクスペリエンスのパターンは変更できません" });
+    // D9 ③(K10): 終了したテストは読み取り専用の専用コード(実行中・一時停止中は experiment_active のまま)
+    expect(archivedBody).toMatchObject({ error: "experiment_archived_readonly", message: "終了したテストは編集できません" });
     // B65(A6)で外した複製の案内を、複製の機能(D9 ①)と一緒に戻す
-    expect(archivedBody.hint).toContain("複製して新しいエクスペリエンスを作成してください");
+    expect(archivedBody.hint).toContain("複製してください");
     // 3 回とも拒否されている = draft のときに置換した集合(a / c)のまま
     const exp = await json(await call("GET", `/sites/${sid}/experiments/${id}`, { token }));
     expect(exp.variants.map((v: any) => v.id)).toEqual(["a", "c"]);
