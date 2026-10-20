@@ -173,6 +173,9 @@ const rangeText = (ci: [number, number]): string => `${sgn(ci[0], 2)} 〜 ${sgn(
 const normalDiffText = (d: NormalDiff): string => `${sgn(d.mean, 2)} ポイント(${rangeText(d.ci95)})`;
 
 const STATE_TONE: Record<VerdictState, "win" | "bad" | "none"> = { blocked_quality: "none", adopt: "win", worse: "bad", equivalent: "none", insufficient: "none" };
+// 判定に要る最低の件数に届かない比較に添える。CVR の列は観測の値(y / n)、区間と差は事後分布(Beta(1, 1) の事前分布)から
+// 出すので、人数が少ないと 2 つが合わない(B109。例: 1 人中 0 人の CVR 0.00% に区間 1.26〜84.19%)
+const SMALL_N_MISMATCH = "人数が少ないうちは、区間と差が CVR の列から計算した値と合いません";
 const DEVICE_LABEL = { desktop: "デスクトップ", mobile: "モバイル", tablet: "タブレット" } as const;
 const DEVICE_ORDER = ["desktop", "mobile", "tablet"] as const;
 
@@ -245,7 +248,7 @@ export function resultsView(report: ResultsResponse, ctx: ResultsViewContext): R
     callouts.push({ tone: "warn", text: "サイトの設定で結果の記録を無効にしています。無効の間は参加と CV を記録しません(止めていた時間は収集の停止に数えます)", helpKey: "collection-stops" });
   }
   for (const n of notesOf("min_count_not_met")) {
-    callouts.push({ tone: "info", text: `${nameOf(str(n, "variantId"))}: CV の件数が少なすぎるため判定しません(目安: 比べる 2 つのパターンのそれぞれで、CV の見込みが 10 件以上)`, helpKey: "verdicts" });
+    callouts.push({ tone: "info", text: `${nameOf(str(n, "variantId"))}: CV の件数が少なすぎるため判定しません(目安: 比べる 2 つのパターンのそれぞれで、CV の見込みが 10 件以上)。${SMALL_N_MISMATCH}`, helpKey: "verdicts" });
   }
   if (noteOf("aa_test")) callouts.push({ tone: "info", text: "A/A テストです(基準とほかのパターンに変更がありません)。差が出ないことを確かめるためのテストとして読んでください" });
   if (noteOf("baseline_not_original")) callouts.push({ tone: "info", text: "基準はオリジナルではありません", helpKey: "baseline" });
@@ -439,7 +442,7 @@ export function resultsView(report: ResultsResponse, ctx: ResultsViewContext): R
     const top = bestBy(judged, (v) => v.diff.pAboveDelta);
     const parts: string[] = [];
     if (top) parts.push(`${top.name} が${delta > 0 ? ` +${delta} ポイントを超えて` : ""}上回る確率は ${probPct(top.diff.pAboveDelta)} で、${thr} に届きません。`);
-    if (short.length > 0) parts.push(`${top ? `${short.map((x) => x.name).join("・")}: ` : ""}CV の件数が少なすぎるため判定しません(目安: 比べる 2 つのパターンのそれぞれで、CV の見込みが 10 件以上)。数値は参考として出しています。`);
+    if (short.length > 0) parts.push(`${top ? `${short.map((x) => x.name).join("・")}: ` : ""}CV の件数が少なすぎるため判定しません(目安: 比べる 2 つのパターンのそれぞれで、CV の見込みが 10 件以上)。数値は参考として出しています。${SMALL_N_MISMATCH}。`);
     for (const w of worse) parts.push(`${w.name} は基準より悪い可能性が高い(下回る確率 ${probPct(w.diff.pBelowZero)})。`);
     parts.push(`「差が無い」という意味ではありません。${thresholdNote}${fixedText}`);
     return {
@@ -508,7 +511,7 @@ export function resultsView(report: ResultsResponse, ctx: ResultsViewContext): R
         loss: d ? `${d.expectedLossPer10k.toFixed(2)} 件` : null,
       };
     }),
-    footnote: `統計モデル Beta-Binomial・事前分布 Beta(1, 1)・計算の版 ${report.statsVersion}。CV は初めて表示された後から${stopped ? "終了" : "評価時点"}までを数えています。受け取れた送信の集計のため、GA4 とは数字が一致しません`,
+    footnote: `統計モデル Beta-Binomial・事前分布 Beta(1, 1)・計算の版 ${report.statsVersion}。CV は初めて表示された後から${stopped ? "終了" : "評価時点"}までを数えています。CVR は CV した人 ÷ 参加者で、区間・差・確率・期待損失は統計モデルから出すため、参加者が少ないと CVR の列と合わないことがあります。受け取れた送信の集計のため、GA4 とは数字が一致しません`,
   };
 
   // ---- 端末別・ほかの目標 ----

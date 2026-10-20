@@ -206,10 +206,11 @@ const ExperimentListItemSchema = ExperimentJsonSchema.extend({
         .describe("採用したパターンの今の名前(パターンが無くなっていれば結果の記録に写した名前)。採用なし・名前が分からないときは null"),
       baseline: z.boolean().describe("基準のパターンを採用したか(正の判定の記録の評価計画の基準と同じ ID のとき true。記録が無いときは false)"),
       decidedAt: z.number().int().describe("epoch ミリ秒"),
+      // 差は結果の diff と同じく事後分布(事前分布 Beta(1, 1))から出した値。結果の cvr(y / n)どうしの差とは、参加者が少ないと合わない(B109)
       summary: z
         .object({
-          diffPoints: z.number().nullable().describe("基準との差の平均(ポイント)"),
-          relative: z.number().nullable().describe("基準との差の平均 ÷ 基準の CVR(%)"),
+          diffPoints: z.number().nullable().describe("基準との差の事後分布の平均(ポイント)。結果の cvr どうしの差とは、参加者が少ないと合わない"),
+          relative: z.number().nullable().describe("基準との差の平均 ÷ 基準の CVR の事後分布の平均(%)"),
           probBeat: z.number().nullable().describe("基準を上回る確率(0〜1。最小改善幅を決めたときはそれを超えて上回る確率)"),
           verdict: z.enum(["blocked_quality", "adopt", "worse", "equivalent", "insufficient"]).nullable().describe("判定の状態"),
         })

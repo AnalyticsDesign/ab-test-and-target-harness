@@ -33,17 +33,18 @@ const NoteSchema = z.object({
   key: z.enum(NOTE_KEYS).describe("注記の鍵。文言は管理画面と説明の原稿が鍵から付ける"),
   params: z.record(z.string(), z.union([z.string(), z.number()])).optional().describe("注記の値。割合は 0〜1、時刻は epoch ミリ秒、時間は時間"),
 });
+// 差・区間・確率・期待損失は事後分布(事前分布 Beta(1, 1))から出す。cvr(観測の値 y / n)どうしの差とは、参加者が少ないと合わない(B109)
 const DiffSummarySchema = z.object({
-  mean: z.number().describe("基準との差の平均(ポイント)"),
+  mean: z.number().describe("基準との差の事後分布の平均(ポイント)。cvr どうしの差とは、参加者が少ないと合わない"),
   ci95: z.tuple([z.number(), z.number()]).describe("差の 95% 区間(ポイント)"),
-  relMean: z.number().nullable().describe("差の平均 ÷ 基準の CVR(%)。基準の CV が 0 件なら null"),
-  relCi95: z.tuple([z.number(), z.number()]).nullable().describe("差の 95% 区間 ÷ 基準の CVR(%)"),
+  relMean: z.number().nullable().describe("差の平均 ÷ 基準の CVR の事後分布の平均(%)。基準の CV が 0 件なら null"),
+  relCi95: z.tuple([z.number(), z.number()]).nullable().describe("差の 95% 区間 ÷ 基準の CVR の事後分布の平均(%)"),
   pAboveDelta: z.number().describe("基準を最小改善幅より大きく上回る確率(0〜1)"),
   pBelowZero: z.number().describe("基準より悪い確率(0〜1)"),
   pWithinRope: z.number().nullable().describe("差が同等とみなす幅に収まる確率(0〜1)。幅を決めていなければ null"),
   expectedLossPer10k: z.number().describe("採用して実は基準より悪かった場合に失う CV の見込み(1 万人あたり)"),
 });
-const NormalDiffSchema = z.object({ mean: z.number(), ci95: z.tuple([z.number(), z.number()]) }).describe("基準との差(ポイント。正規近似の参考値)");
+const NormalDiffSchema = z.object({ mean: z.number(), ci95: z.tuple([z.number(), z.number()]) }).describe("基準との差(ポイント)。事後分布を正規分布で近似した参考値で、cvr どうしの差とは、参加者が少ないと合わない");
 const StateSchema = z.enum(["blocked_quality", "adopt", "worse", "equivalent", "insufficient"]);
 
 export const ResultReportSchema = z.object({
@@ -75,8 +76,8 @@ export const ResultReportSchema = z.object({
         weight: z.number(),
         n: z.number().int().describe("参加者"),
         y: z.number().int().describe("判定に使う目標で CV した人"),
-        cvr: z.number().describe("CVR(0〜1)"),
-        cvrCi95: z.tuple([z.number(), z.number()]).describe("CVR の 95% 信用区間(0〜1)。事後分布の 2.5% 点と 97.5% 点"),
+        cvr: z.number().describe("CVR(0〜1)= y ÷ n(記録の数をそのまま割った観測の値)。参加者 0 人なら 0。cvrCi95 と diff は事後分布から出すので、参加者が少ないと合わない"),
+        cvrCi95: z.tuple([z.number(), z.number()]).describe("CVR の 95% 信用区間(0〜1)。事後分布(事前分布 Beta(1, 1))の 2.5% 点と 97.5% 点。CV が 0 件のパターンでは cvr がこの区間の外に出る"),
         diff: DiffSummarySchema.nullable().describe("基準との差。基準は null"),
         state: StateSchema.nullable().describe("判定の状態。速報・基準・重み 0 のパターン(配信していない)は null"),
         probBest: z.number().nullable().describe("最良である確率(配信中のパターンが 3 つ以上のとき)"),

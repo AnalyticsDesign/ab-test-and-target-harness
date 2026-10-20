@@ -173,6 +173,8 @@ describe("resultsView(D9 ③ Task 15)", () => {
     expect(v.banner?.state).toBe("判断材料が不足");
     expect(v.banner?.title).toBe("CV の件数が少なすぎるため判定しません");
     expect(v.banner?.body).toContain("目安: 比べる 2 つのパターンのそれぞれで、CV の見込みが 10 件以上");
+    // 人数が少ないと、事後分布から出す区間と差が CVR の列(観測の値)と合わない(B109)
+    expect(v.banner?.body).toContain("人数が少ないうちは、区間と差が CVR の列から計算した値と合いません。");
     expect(v.banner?.body).not.toContain("届きません");
     expect(v.banner?.key).toBeNull();
     expect(v.banner?.primary).toEqual({ kind: "stop", label: "採用なしで終了", variantId: null });
@@ -326,7 +328,7 @@ describe("resultsView(D9 ③ Task 15)", () => {
       { timeZone: TZ, status: "running", now: null },
     );
     const texts = v.callouts.map((c) => c.text);
-    expect(texts).toContain("B(CTA 文言): CV の件数が少なすぎるため判定しません(目安: 比べる 2 つのパターンのそれぞれで、CV の見込みが 10 件以上)");
+    expect(texts).toContain("B(CTA 文言): CV の件数が少なすぎるため判定しません(目安: 比べる 2 つのパターンのそれぞれで、CV の見込みが 10 件以上)。人数が少ないうちは、区間と差が CVR の列から計算した値と合いません");
     expect(texts.some((t) => t.startsWith("A/A テストです"))).toBe(true);
     expect(texts).toContain("基準はオリジナルではありません");
     expect(texts.some((t) => t.startsWith("B(CTA 文言) に未公開の編集があります"))).toBe(true);
@@ -337,6 +339,13 @@ describe("resultsView(D9 ③ Task 15)", () => {
   it("サイトで結果の記録を無効にしているときの知らせ", () => {
     const v = resultsView({ ...load("interim"), collection: "site_disabled" }, { timeZone: TZ, status: "running", now: null });
     expect(v.callouts.some((c) => c.helpKey === "collection-stops" && c.text.includes("無効"))).toBe(true);
+  });
+
+  it("詳しい数値の脚注: CVR は観測の値、区間・差・確率・期待損失は統計モデルから出すことをいつも書く(B109)", () => {
+    for (const name of ["adopt", "interim"]) {
+      const v = resultsView(load(name), { timeZone: TZ, status: "running", now: null });
+      expect(v.details.footnote).toContain("CVR は CV した人 ÷ 参加者で、区間・差・確率・期待損失は統計モデルから出すため、参加者が少ないと CVR の列と合わないことがあります");
+    }
   });
 
   it("端末別とほかの目標は参考の数値(差は区間付き)", () => {

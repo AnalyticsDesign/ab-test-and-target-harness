@@ -63,6 +63,13 @@ describe("説明の原稿と画面の鍵", () => {
     }
   });
 
+  test("本文は「この文書の N 節」を指さない(印の無い節は管理画面に入らず、相対リンクは文字になるため行き止まりになる)", () => {
+    // 印の無い節(6 節の計算の方法など)を指すときは、公開文書を名前で指す(B104 のレビュー CL-Medium-1)
+    for (const [key, h] of Object.entries(HELP)) {
+      expect(h.bodyHtml, key).not.toMatch(/この文書の\s*\d+\s*節/);
+    }
+  });
+
   test("版の表示: 開発では dev、公開物では版の文字列", () => {
     expect(RELEASE_VERSION).toMatch(/^(dev|v\d+\.\d+(\.\d+)?)$/);
   });
