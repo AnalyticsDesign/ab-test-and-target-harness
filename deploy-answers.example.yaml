@@ -9,7 +9,7 @@
 #      質問の意味と選択肢は docs/install-questions.md
 #   3. node tools/deploy-answers/cli.mjs を実行すると、答えから推奨構成と最軽量構成が出る。
 #      選んだら --accept recommended か --accept lightest を付けて実行すると、下段(構成)が書き込まれる
-#   4. 構成を自分で決めている人は、上段の代わりに下段の行の # を外して書く(owner_email だけは上段に書く)。了承は --accept manual
+#   4. 構成を自分で決めている人は、上段の代わりに下段の行の # を外して書く(owner_email と、route なら install_host、custom-domain なら edge_host は上段に書く)。了承は --accept manual
 # 秘密(API トークン・パスワード)はここに書かない。
 #
 # 人が用意するもの(このファイルには書かない。docs/deploy.md 0.5 でエージェントがまとめて依頼する):
@@ -25,11 +25,12 @@ existing_plan: <free / paid>                                     # E1b cloudflar
 site_on_cloudflare: <yes / no / no_site>                         # E2 タグを入れるサイトのドメインを、導入するアカウントで管理しているか
 install_host: <www.example.com>                                  # E2a site_on_cloudflare: yes のときだけ。タグを入れるページのホスト
 other_workers: <yes / no / unknown>                              # E2b existing・free でドメインなし(no / no_site)のときだけ。止まると困る Worker が同じアカウントにあるか
+edge_host: <ab.example.net / none>                               # E2c site_on_cloudflare: no のときだけ。導入に使う Cloudflare アカウントに追加済みか、これから追加できる別のドメインで、edge に使うホスト。ほかの Cloudflare アカウントで使っているドメインは選ばない。無ければ none
 owner_email: <you@example.com>                                   # E3 管理画面にログインする Google アカウントのメールアドレス
 
 # --- 下段: 構成(--accept が書き込む。自分で決めるときだけ # を外して書く) ---
-# edge_address: route              # route | workers-dev。route = 設置サイトのゾーンの Workers Route。workers-dev = *.workers.dev で公開(ゾーン不要。WAF・キャッシュ・Mode B(サーバー発行 Cookie)が使えず、Free アカウントかつ止まって困る Workers が同じアカウントに無いことが前提)
-# zone_name: example.com           # route のとき。install_host が属する Cloudflare のゾーン。auto = ログインの後に --resolve-zone で確定する
+# edge_address: route              # route | workers-dev | custom-domain。route = 設置サイトのゾーンの Workers Route。workers-dev = *.workers.dev で公開(ゾーン不要。WAF・キャッシュ・Mode B(サーバー発行 Cookie)が使えず、Free アカウントかつ止まって困る Workers が同じアカウントに無いことが前提)。custom-domain = Cloudflare に置いた別のドメインのホストで公開(edge_host と zone_name を使う。WAF・キャッシュは使えるが Mode B(サーバー発行 Cookie)は使えない)
+# zone_name: example.com           # route か custom-domain のとき。route のときは install_host、custom-domain のときは edge_host が属する Cloudflare のゾーン。auto = ログインの後に --resolve-zone で確定する
 # asset_public_base: none          # none(R2 を使わない。画像アップロードと IMAGE の変更が無効)/ dev-assets(control 経由)/ auto(https://wtt-assets.<zone_name>)/ https://<R2 のカスタムドメイン>
 # dlite_hosts: []                    # Mode B(サーバー発行 Cookie。旧称 D-lite)を使うページのホスト。書くと <host>/__ab/* の Route を足す
 # plan: free                       # free | paid。Workers のプラン。paid は導入の前にダッシュボードで切り替える

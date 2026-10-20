@@ -412,7 +412,8 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, userId: strin
   for (const row of statusSnapshot) {
     await db.updateTable("experiments").set({ published_status: row.status }).where("site_id", "=", site.id).where("id", "=", row.id).where(stillActive).execute();
   }
-  // D9 ②(設計書 §6.6・§9.3): 公開した収集の状態(結果を記録する Site か = results.runs を出すか)が前回の記録と違えば 1 行足す。
+  // D9 ②(設計書 §6.6・§9.3): 公開した収集の状態(結果を記録する Site か = results.runs にテストを載せる設定か。runs が空かどうかではない。
+  // B110: run を持つテストが無い公開でも 1。収集の停止の期間はテストの期間に切り詰めるので、その違いは結果に出ない)が前回の記録と違えば 1 行足す。
   // 行が無いときは有効のときだけ足す(最初から記録しない Site には行を作らない)。published_status と同じ fence の中で、
   // 比べるのと足すのを 1 文にする(追い越された Publish は書かない。収集の停止の期間はこの記録から出す)
   const collecting = site.results_enabled === 1 ? 1 : 0;

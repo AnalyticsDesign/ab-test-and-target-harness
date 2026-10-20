@@ -21,11 +21,16 @@ AB Test and Target Harness を運用者自身の Cloudflare アカウントへ�
 
 ## 手で導入する最短の手順
 
+この手順は、設置サイトのゾーンに edge を置く構成のもの。ほかの構成では、次の節の手順を本文で読み、最短の手順の該当する手順をそれに置き換える:
+
+- 別のドメインに置く構成(`edge_address: custom-domain`): 0.4 のログインの後の確認の 4(ゾーンが有効になっているか)、0.5 の 2(`CF_TOKEN` が要る。DNS Read を含む)、2.3・2.4・2.9 (3) の `custom-domain` のときの手順、3.4 の `AB_EDGE_ORIGIN`(`https://<edge のホスト>`)、5 節(`<設置タグのホスト>` = edge のホスト)と、1 節の制約 (3)
+- `*.workers.dev` の構成(`edge_address: workers-dev`): 2.3・2.4・2.9 (3)・3.4 の `workers-dev` のときの手順、5 節(`<設置タグのホスト>` = `wtt-static` の workers.dev のホスト)と、1 節の制約 (3)
+
 人が手で既定の構成(0.1 の表)を導入するための、いちばん短い手順。コマンドはすべて 0〜5 節にあるものと同じで、`pnpm docs:check` が一致を検査する。ここには確認を 1 行ずつと、期待と違ったときに読む先だけを添えた。AI エージェントに任せる場合、エージェントはここを使わず 0 節から読む(README のプロンプトのとおり)。
 
 ここで動かす構成と、外れるときに読む先:
 
-- 設置サイトのドメインが Cloudflare のゾーンにあり、DNS がプロキシ(オレンジの雲)になっている。edge と設置タグはそのゾーンの Workers Route で公開する(`<設置ホスト>/v1/*`・`/s/*`)。ドメインを用意せずに `*.workers.dev` で始めるなら、2.3・2.9・3.4 の `workers-dev` のときの手順と、1 節の制約 (3) を読む
+- 設置サイトのドメインが Cloudflare のゾーンにあり、DNS がプロキシ(オレンジの雲)になっている。edge と設置タグはそのゾーンの Workers Route で公開する(`<設置ホスト>/v1/*`・`/s/*`)。別のドメインに置く構成と `*.workers.dev` の構成で読む先は、上の 2 つの箇条
 - control と管理画面は `*.workers.dev` のアドレスで公開する。自分のドメインに置くなら 3.6・4.2
 - 画像のアップロードに R2 を使う。使わない構成も手順 12 で選べる
 - ゾーンの Cache Rule(2.6)と WAF Rate Limiting Rule(2.7)は推奨の保護設定で、動いた後に足せる。ここでは作らない。作るときは 0.5 の 2 のトークンが要る。Mode B(サーバー発行 Cookie)のサイトを置くなら 2.7 は必須。WAF を作らないので、edge の Rate Limiting binding の値は手順 8 で 200 にする(後から 2.7 で WAF を作ったら、2.3 の規則で書き直す)
@@ -105,7 +110,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/subdomain" 
 ```bash
 GOOGLE_CLIENT_ID=<クライアント ID>          # 秘密ではないが受け渡しをまとめるためここに書く。3.4 の vars に入る
 GOOGLE_CLIENT_SECRET=<クライアント シークレット>
-CF_TOKEN=<Cloudflare API トークン>          # route のとき
+CF_TOKEN=<Cloudflare API トークン>          # route・custom-domain のとき
 CF_DEPLOY_TOKEN=<配信ファイルのデプロイ用トークン>   # どの構成でも要る
 CF_USAGE_TOKEN=<使用状況の表示用トークン>   # どの構成でも要る
 ```
@@ -120,7 +125,7 @@ CF_USAGE_TOKEN=<使用状況の表示用トークン>   # どの構成でも要�
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 { [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ]; } && echo google=ok || echo google=missing   # missing なら人に記入を頼み直す(この先で空の値を登録しない)
-[ -n "$CF_TOKEN" ] && echo cf_token=present || echo cf_token=missing   # edge_address: route なら present が期待(workers-dev では missing でよい)
+[ -n "$CF_TOKEN" ] && echo cf_token=present || echo cf_token=missing   # edge_address が route か custom-domain なら present が期待(workers-dev では missing でよい)
 [ -z "$CF_TOKEN" ] || curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_TOKEN" | jq -r .result.status   # 期待: active
 [ -n "$CF_DEPLOY_TOKEN" ] && echo cf_deploy_token=present || echo cf_deploy_token=missing   # 期待: present(どの構成でも要る。missing なら人に頼み直す)
 [ -z "$CF_DEPLOY_TOKEN" ] || curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_DEPLOY_TOKEN" | jq -r .result.status   # 期待: active
@@ -338,7 +343,7 @@ curl -sS "<control URL>/login-options"   # 期待: {"google":true,"passwordLogin
 管理画面でサイトを作り、エクスペリエンスを作って開始する。サイトの項目は[サイト導入ガイド 2 節](site-install.md#2-サイトを作る)にある。サイト ID は後から変えられない。設置タグのファイルが配られていることを確かめる:
 
 ```bash
-curl -s https://<設置ホスト>/s/<siteId>.js | head -c 400
+curl -s https://<設置タグのホスト>/s/<siteId>.js | head -c 400
 ```
 
 先頭付近に config のバージョンとエクスペリエンス ID が含まれていれば、control → デプロイ専用の Worker → 配信専用の Worker の経路が動作している。404 なら 5 節の「期待と違うとき」。確かめたらエクスペリエンスを終了(元に戻せません)し、`rm deploy-secrets.env` を実行する。
@@ -371,14 +376,15 @@ curl -s https://<設置ホスト>/s/<siteId>.js | head -c 400
 | 人に頼む工程(【人に依頼】)| いつ |
 |---|---|
 | Google Cloud で OAuth クライアントを作り、ID とシークレットを伝える。リダイレクト URI もこのとき登録する | 初回のみ。0.5 で一度に |
-| ゾーンの設定用の Cloudflare API トークン(Cache Rules / WAF / Zone Read、期限 = 翌日、ゾーン限定)を発行して伝える | `edge_address: route` のとき。0.5 で一度に。失効は期限切れに任せる |
+| 別のドメインを導入に使うアカウントに追加する(そのドメインのネームサーバーを Cloudflare に切り替える) | `edge_address: custom-domain` で、まだ追加していないとき。0.4 のログインの後の確認で分かる |
+| ゾーンの設定用の Cloudflare API トークン(Cache Rules / WAF / Zone Read / DNS Read、期限 = 翌日、ゾーン限定)を発行して伝える | ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のとき。0.5 で一度に。失効は期限切れに任せる |
 | 配信ファイルのデプロイ用トークンと使用状況の表示用トークンを発行して伝える。権限は前者が Workers Scripts の Edit のみ、後者が Account Analytics の Read のみ。どちらもアカウント単位で、期限なし | 初回のみ(どの構成でも)。0.5 で一度に |
 | R2 の有効化 | 初回のみ。`code: 10042` が出たとき |
 | ダッシュボードで Workers Paid に切り替える | `plan: paid` で、アカウントがまだ Free のとき。0.5 で一度に |
 | ダッシュボードの Workers & Pages を一度開く | 0.5 でサブドメインを API で作れなかったときだけ |
 | 更新時の設定の再保存 | 6.4 で (b) があるとき |
 | ゾーンのレート制限ルールの式の書き換え・回数の変更(Free で 1 本のルールをほかの用途と分け合うとき) | 2.7 で既存のルールに OR で足すとき、7.2 で control のパスを足して 1 本にしたルールの回数を変えるとき |
-| 撤去時の R2 の中身の削除、OAuth クライアント・API トークン・Access の削除 | 10.4 |
+| 撤去時の R2 の中身の削除、OAuth クライアント・API トークン・Access の削除。別のドメインに置く構成では、DNS レコードが消えたことの確認と証明書の削除 | 10.4 |
 
 **ダッシュボードの画面名の書き方**(この文書と、エージェントが人に示す依頼文の両方):
 
@@ -431,8 +437,8 @@ AI エージェントに任せる場合、構成は 0.2 の質問と検査スク
 
 | 項目 | 既定 | 変える理由の例 | 詳細 |
 |---|---|---|---|
-| edge の公開 | 設置サイトのゾーンの Workers Route(`<設置ホスト>/v1/*`) | Custom Domain にしたい / ドメインを用意せずに *.workers.dev で公開したい(簡易的な導入) | 2.3 / 2.5 / 2.8 |
-| 設置タグの配信 | 配信専用の Worker `wtt-static` を `<設置ホスト>/s/*` に置く。訪問者のタグの読み込みは Worker のリクエストに数えられない | ドメインなし構成(`*.workers.dev`)では `wtt-static` の workers.dev のアドレスで配る | 2.9 |
+| edge の公開 | 設置サイトのゾーンの Workers Route(`<設置ホスト>/v1/*`) | 別のドメインに置きたい(サイトのドメインが Cloudflare に無い)/ ドメインを用意せずに *.workers.dev で公開したい(簡易的な導入) | 2.3 / 2.5 / 2.8 |
+| 設置タグの配信 | 配信専用の Worker `wtt-static` を `<設置ホスト>/s/*` に置く。訪問者のタグの読み込みは Worker のリクエストに数えられない | 別のドメインに置く構成では `<edge のホスト>/s/*` に置く。ドメインなし構成(`*.workers.dev`)では `wtt-static` の workers.dev のアドレスで配る | 2.9 |
 | control の公開アドレス | `https://wtt-control.<アカウントのサブドメイン>.workers.dev` | 自分のドメインに置いて WAF / Access を掛けたい | 3.6 / 7.1 |
 | control の無認証入口の防御 | (1) 何もしない(ログインは Google アカウントで、パスワードの経路は普段閉じている) | 複数人で使う、外部エージェントに API を呼び出させる | 7 節。(2)(3) は実機未検証 |
 | edge の WAF Rate Limiting Rule | 作る(200 回 / 10 秒) | 既に別のレート制限ルールで Free の 1 枠を使っている | 2.7 |
@@ -462,7 +468,7 @@ AI エージェントに任せる場合、構成は 0.2 の質問と検査スク
    - その部分を要約せずに人に見せて聞く。「推奨で」などの構成の了承は、この同意に数えない
    - 同意を得たときだけ `--accept` に `--confirm-account-change` を付けて実行する。付けずに実行すると終了コード 2 で止まり、同じ節を出す。付けて実行すると、上段の `cloudflare_account` が `separate` に書き換わり、元の答えは行末のコメントに残る
    - 同意しないなら E1 から聞き直す。進め方は 4 つ: ドメインを Cloudflare に追加して E2 = yes で答え直す / 新しいアカウントで進める同意を改めて取る / 導入をやめる / 構成を自分で決めるなら下段を手で書いて `--accept manual`
-5. 構成を自分で決めている人は、下段の行の `#` を外して書く(`owner_email` は上段)。スクリプトは書かれた構成の矛盾を検査して要約を出す。了承は `--accept manual`
+5. 構成を自分で決めている人は、下段の行の `#` を外して書く(`owner_email` と、`route` なら `install_host`、`custom-domain` なら `edge_host` は上段)。スクリプトは書かれた構成の矛盾を検査して要約を出す。了承は `--accept manual`
 
 後の手順との関係:
 
@@ -481,8 +487,9 @@ node tools/deploy-answers/cli.mjs; echo "exit=$?"   # 期待: exit=0、「## 指
 
 | 項目 | 使う手順 |
 |---|---|
-| `install_host` / `zone_name` | 2.3 Route、2.6 Cache Rule、2.7 WAF、5 節のスモーク |
-| `edge_address` | 2.3(`route` なら Route、`workers-dev` なら `workers_dev: true`)、2.4 の確認 URL、2.6 / 2.7(`workers-dev` では飛ばす)、3.4 `AB_EDGE_ORIGIN`、5 節のスモーク |
+| `install_host` / `zone_name` | 2.3 Route、2.6 Cache Rule、2.7 WAF、5 節のスモーク。`custom-domain` では `zone_name` は `edge_host` が属するゾーン |
+| `edge_host` | `custom-domain` のときだけ。0.4 のログインの後の確認(ゾーンの確定と有効になっているかの確認)、2.3 の Custom Domain(と、ホストが空いていることの確認)、2.6 Cache Rule、2.7 WAF、2.9 (3) の `wtt-static` の Route、3.4 `AB_EDGE_ORIGIN`、5 節のスモーク |
+| `edge_address` | 2.3(`route` なら Route、`custom-domain` なら Custom Domain、`workers-dev` なら `workers_dev: true`)、2.4 の確認 URL、2.6 / 2.7(`route` と `custom-domain` では行い、`workers-dev` では飛ばす)、3.4 `AB_EDGE_ORIGIN`(`custom-domain` なら `https://<edge_host>`)、5 節のスモーク |
 | `asset_public_base` / `asset_max_mb` | 3.2、3.4。`dev-assets` は 3.5 の初回 deploy で control の URL が分かった後に `<control URL>/dev-assets` に展開して `AB_ASSET_PUBLIC_BASE` に書く(literal のまま書かない)。none なら 3.2 の R2 の手順を飛ばし、3.4 の AB_ASSET_PUBLIC_BASE を書かない。`auto` は 0.4 のログインの後の確認で `https://wtt-assets.<zone_name>` に展開される |
 | `release_tag` | 0.3 |
 | `control_address` / `control_host` | 3.4 `AB_CONTROL_URL`、3.6、7.1 |
@@ -494,7 +501,7 @@ node tools/deploy-answers/cli.mjs; echo "exit=$?"   # 期待: exit=0、「## 指
 | `usage_visibility` | 5 節の初回セットアップ(`POST /setup` の `usageVisibility`)。使用状況を見られる人(`members` / `instance_admins`)。省略 = `members` |
 | `plan` | 0.5(`paid` で、アカウントがまだ Free なら切り替えを依頼)、5 節(管理画面の使用状況のプラン) |
 | `results_db_name` | 2.2(計測用のデータベースの名前)、3.4 `AB_USAGE_RESOURCES`。既定 `wtt-results` のまま使う。ほかのリソースの名前と同じく固定で、手順とスクリプト(`results:migrate:remote`)はこの名前で書いてある。入力ファイルに書かれていなくても作る |
-| 上段の答え(`features` など)・`accepted` | 検査スクリプトが読む。以下の手順が上段から読むのは `cloudflare_account`(0.4 のアカウントを作る・ログインの後の確認)と `install_host`・`owner_email` だけ |
+| 上段の答え(`features` など)・`accepted` | 検査スクリプトが読む。以下の手順が上段から読むのは `cloudflare_account`(0.4 のアカウントを作る・ログインの後の確認)と `install_host`・`edge_host`・`owner_email` だけ |
 
 ### 0.3 本体の取得とバージョン
 
@@ -594,7 +601,7 @@ export CLOUDFLARE_ACCOUNT_ID=<導入先の Account ID>   # エージェントは
 
 #### ログインの後の確認
 
-ログインの後に次を確かめる。各ブロックは先頭で同じ変数を設定するので、単独で実行できる。`HOST` には `deploy-answers.yaml` の `install_host` を入れる。
+ログインの後に次を確かめる。各ブロックは先頭で同じ変数を設定するので、単独で実行できる。`HOST` には `deploy-answers.yaml` の、`route` なら `install_host`、`custom-domain` なら `edge_host` を入れる。
 
 1. **この製品がまだ入っていないか**(どの構成でも)。1 つのアカウントに入れられるのは 1 つまで
 
@@ -614,7 +621,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/scripts" -H
   - 疑う原因: ブラウザに前のセッションが残っていて、元のアカウントで許可してしまった
   - 違えば 0.4 の「ログイン」からやり直す。必要なら先にダッシュボードからログアウトする
 
-2. **ゾーンを確定する**(`zone_name` か `asset_public_base` に `auto` が残っているとき。引用符付きの `"auto"` も同じ): `install_host` の末尾から候補のゾーン名を作り、導入先のアカウントのゾーンだけを名前で引く。こうすると件数の多いアカウントでも取りこぼさない。`zone_name` が既に書かれていれば、スクリプトはそれと同じゾーンのときだけ確定する。違えば終了コード 2 になるので、`zone_name` の行を直すか、E2 を聞き直す
+2. **ゾーンを確定する**(`zone_name` か `asset_public_base` に `auto` が残っているとき。引用符付きの `"auto"` も同じ): `HOST`(`install_host`。`custom-domain` では `edge_host`)の末尾から候補のゾーン名を作り、導入先のアカウントの有効なゾーンだけを名前で引く。こうすると件数の多いアカウントでも取りこぼさない。`zone_name` が既に書かれていれば、スクリプトはそれと同じゾーンのときだけ確定する。違えば終了コード 2 になるので、`zone_name` の行を直すか、E2(`custom-domain` では E2c)を聞き直す
 
 ```bash
 HOST=''
@@ -630,14 +637,18 @@ while [ -z "$ZONE" ] && [ -z "$ERR" ] && printf '%s' "$C" | grep -q '\.'; do
   fi
   C=${C#*.}
 done
-if [ -z "$HOST" ]; then echo "HOST is empty: set install_host from deploy-answers.yaml"; elif [ -n "$ERR" ]; then echo "zone: unknown (API error)"; else echo "zone: ${ZONE:-not found}"; fi
+if [ -z "$HOST" ]; then echo "HOST is empty: set install_host (route) or edge_host (custom-domain) from deploy-answers.yaml"; elif [ -n "$ERR" ]; then echo "zone: unknown (API error)"; else echo "zone: ${ZONE:-not found}"; fi
 [ -z "$ZONE" ] || node tools/deploy-answers/cli.mjs --resolve-zone "$ZONE"   # 期待: 「## 書き込んだ行」に zone_name(画像をアップロードする構成なら asset_public_base も)
 ```
 
 期待と違うとき:
 
-- `HOST is empty` → `HOST` に `install_host` を入れてやり直す。空のままでは `zone: not found` と区別できないため、ここで作業を中断する
-- `zone: not found` → そのドメインはこのアカウントで管理されていない。別のアカウントにあるか、まだ Cloudflare に追加していない。作業を中断して人に報告し、0.2 の E2 を聞き直す。ドメインを使わずに始めるなら、下段の構成の行と `accepted` を消して、0.2 の 2 からやり直す
+- `HOST is empty` → `HOST` に `install_host`(`custom-domain` では `edge_host`)を入れてやり直す。空のままでは `zone: not found` と区別できないため、ここで作業を中断する
+- `zone: not found` → そのドメインはこのアカウントで有効になっていない。別のアカウントにあるか、まだ Cloudflare に追加していないか、追加してもネームサーバーの切り替えが済んでいない。作業を中断して人に報告する。`route` では 0.2 の E2 を聞き直す。`custom-domain` では、次の順に進める。ドメインを使わずに始めるなら、下段の構成の行と `accepted` を消して、0.2 の 2 からやり直す
+  - 2 は有効なゾーンだけを引くので、ドメインを追加してネームサーバーの切り替えの反映を待っているゾーンも、ここでは `not found` になる。そこで、導入に使うアカウントに追加したドメインを人に聞く。`edge_host` が属するゾーンの名前で、例えば `ab.example.net` なら `example.net`。まだ追加していないと答えたら、下の 4 の (i) を示す
+  - 聞いたゾーンの名前を下の 4 のブロックの `ZONE` に入れて実行する。4 はゾーンの状態で絞らずに引くので、反映待ちとゾーンが無いことを見分けられる
+  - `zone status: pending` と `zone status: not found` → 4 の「期待と違うとき」のとおりに進める
+  - `zone status: active` → 2 の後に有効になった。2 からやり直してゾーンを確定する。やり直しても 2 が `zone: not found` なら、`edge_host` がそのゾーンに属していない。0.2 の E2c を聞き直す
 - `zone: unknown (API error)` → 確かめられなかったので先へ進まない(1. の「期待と違うとき」と同じ)
 
 3. **Cloudflare を経由しているか**(`edge_address: route` のとき)
@@ -649,6 +660,27 @@ HOST=''
 ```
 
 `HOST is empty` → `HOST` に `install_host` を入れてやり直す。`cloudflare` 以外 → DNS のレコードのプロキシ(オレンジの雲)が有効になっていない。Workers Route が動かないので、作業を中断して人に報告する。【人に依頼】 ダッシュボードの対象ゾーンの DNS → Records(レコード)で、そのホストのレコードの Proxy status(プロキシ ステータス)を DNS only(DNS のみ)からプロキシ(オレンジの雲)に切り替えてもらう。
+
+4. **別のドメインのゾーンがこのアカウントにあり、有効になっているか**(`edge_address: custom-domain` のとき)。edge の Custom Domain は、導入するアカウントの有効なゾーンにしか作れない。`zone_name` を 2 で確定した後(または初めから書いてあるとき)に行う。`ZONE` に `zone_name` を入れる。2 が `zone: not found` になって 2 から来たときは、人に聞いたゾーンの名前を入れる
+
+```bash
+ZONE=''
+T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
+AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+if [ -z "$ZONE" ]; then echo "ZONE is empty: set zone_name from deploy-answers.yaml"; else
+  curl -sS "https://api.cloudflare.com/client/v4/zones?name=$ZONE&account.id=$AID" -H "Authorization: Bearer $T" \
+    | jq -r --arg a "$AID" 'if .success == true then ([.result[]? | select(.account.id == $a) | .status][0] // "not found") | "zone status: " + . else "zone status: unknown (API error)" end'   # 期待: zone status: active
+fi
+```
+
+期待と違うとき:
+
+- `ZONE is empty` → `ZONE` に `zone_name`(2 から来たときは人に聞いたゾーンの名前)を入れてやり直す
+- `zone status: unknown (API error)` → 確かめられなかったので先へ進まない(1. の「期待と違うとき」と同じ)
+- `zone status: pending` → ドメインは追加してあるが、ネームサーバーの切り替えがまだ反映されていない。作業を中断して人に報告し、切り替えが済んだか(ドメインの登録事業者の画面で、Cloudflare が示したネームサーバーにしたか)を確かめてもらう。反映には時間がかかることがあるので、済んでいれば待ってからやり直す。`zone_name` が `auto` のままなら 2 から、`zone_name` が書いてあればこのブロックからやり直す
+- `zone status: not found`(または `active` と `pending` 以外)→ 作業を中断し、**【人に依頼】** 次の 2 通りを示して選んでもらう
+  - (i) そのドメインをまだ Cloudflare に追加していない: 導入に使うアカウントのダッシュボードでドメインを追加し(Add a domain。日本語の表示は未確認)、表示されたネームサーバーを、ドメインの登録事業者の画面で設定する。設定が済んだら、`zone_name` が `auto` のままなら 2 から、`zone_name` が書いてあればこのブロックからやり直す
+  - (ii) そのドメインをほかの Cloudflare アカウントで使っている: 移さない。ネームサーバーを切り替えると、そのドメインで動いているほかのサービスに影響するため。別のドメインを選ぶか、`*.workers.dev` の構成にする。どちらも 0.2 の E2c を答え直し(`*.workers.dev` にするなら `none`)、下段の構成の行と `accepted` を消して、0.2 の 2 から検査スクリプトをやり直す
 
 ### 0.5 人に用意してもらうもの(一度に集める)
 
@@ -757,15 +789,15 @@ fi
 - (a) シークレットを足して、古いものを消す: Clients(クライアント)の一覧でクライアントの名前を押して詳細を開く。Client secrets(クライアント シークレット)の Add secret(日本語の表示でも英語のまま)で新しいシークレットを作り、その行のコピーのアイコンで値をコピーして `deploy-secrets.env` に書く。画面を離れるとコピーできなくなる。次に、古いシークレットの行で Disable(無効にする)を押してから、ごみ箱のアイコンで削除する。無効にする前は削除できない。1 つのクライアントに置けるシークレットは 2 つまで
 - (b) クライアントを作り直す: Clients(クライアント)の一覧でそのクライアントにチェックを入れ、Delete(削除)を押す。表の Clients(クライアント)の行から作り直す(リダイレクト URI も登録し直す)。消したクライアントは、30 日以内なら Restore deleted OAuth clients(削除した OAuth クライアントを復元)で戻せる
 
-2. **ゾーンの設定用の Cloudflare API トークン**(`edge_address: route` のときだけ。`workers-dev` では不要)
+2. **ゾーンの設定用の Cloudflare API トークン**(ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のときだけ。`workers-dev` では不要)
    - 画面: My Profile(マイ プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)→ Custom token(カスタム トークン)の Get started(始める)
    - Token name(トークン名)= `wtt-setup-<識別子>`
-   - Permissions(権限)= Zone(ゾーン)→ Cache Rules → Edit(編集)、Zone(ゾーン)→ Zone WAF(ゾーン WAF)→ Edit(編集)、Zone(ゾーン)→ Zone(ゾーン)→ Read(読み取り)
-   - Zone Resources(ゾーン リソース)= 対象ゾーンに限定
+   - Permissions(権限)= Zone(ゾーン)→ Cache Rules → Edit(編集)、Zone(ゾーン)→ Zone WAF(ゾーン WAF)→ Edit(編集)、Zone(ゾーン)→ Zone(ゾーン)→ Read(読み取り)、Zone(ゾーン)→ DNS → Read(読み取り)。DNS の読み取りは、`custom-domain` の 2.3 でホストが空いていることを確かめるのに使う
+   - Zone Resources(ゾーン リソース)= 対象ゾーンに限定。設置サイトのゾーンに置く構成(`route`)では設置サイトのゾーン、別のドメインに置く構成(`custom-domain`)では `edge_host` のゾーン(`zone_name`)
    - 期限 = 翌日。TTL の Select time range(時間範囲を選択)の終了日で指定する。失効の手間をなくすため。導入が翌日までに終わらなければ発行し直す
    - Continue to summary(概要に進む)で内容を確かめて作成し、値を `CF_TOKEN=` に書く
 3. **配信ファイルのデプロイ用トークン**(どの構成でも要る)
-   - 画面: 2 と同じ。route 構成では 2 と同じ画面で続けて作る
+   - 画面: 2 と同じ。ゾーンのある構成(`route`・`custom-domain`)では 2 と同じ画面で続けて作る
    - Token name(トークン名)= `wtt-deploy-<識別子>`
    - Permissions(権限)= Account(アカウント)→ Workers Scripts(Workers スクリプト)→ Edit(編集)のみ
    - Account Resources(アカウント リソース)= 導入先のアカウントだけ
@@ -784,14 +816,14 @@ fi
 
 - ワークスペース = 管理画面でサイトとメンバーをまとめる単位。名前は管理画面のサイドバーに出る。後から変えられる。例: 会社名・チーム名・サイト名
 - 答えを `workspace_name` の行の `#` を外して書く(5 節の `POST /setup` で使う)
-- 決めないと答えたときだけ、既定の名前にする。ドメインありの構成(`edge_address: route`)ではゾーン名(`zone_name`。例 `example.com`)、ドメインなしの構成では `My Workspace`
+- 決めないと答えたときだけ、既定の名前にする。設置サイトのゾーンに置く構成(`edge_address: route`)ではゾーン名(`zone_name`。例 `example.com`)、別のドメインに置く構成(`custom-domain`)とドメインなしの構成(`workers-dev`)では `My Workspace`。別のドメインのゾーン名は、サイトの名前にならないため
 
 `deploy-secrets.env` の形(要る行だけ):
 
 ```bash
 GOOGLE_CLIENT_ID=<クライアント ID>          # 秘密ではないが受け渡しをまとめるためここに書く。3.4 の vars に入る
 GOOGLE_CLIENT_SECRET=<クライアント シークレット>
-CF_TOKEN=<Cloudflare API トークン>          # route のとき
+CF_TOKEN=<Cloudflare API トークン>          # route・custom-domain のとき
 CF_DEPLOY_TOKEN=<配信ファイルのデプロイ用トークン>   # どの構成でも要る
 CF_USAGE_TOKEN=<使用状況の表示用トークン>   # どの構成でも要る
 ```
@@ -801,7 +833,7 @@ CF_USAGE_TOKEN=<使用状況の表示用トークン>   # どの構成でも要�
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 { [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ]; } && echo google=ok || echo google=missing   # missing なら人に記入を頼み直す(この先で空の値を登録しない)
-[ -n "$CF_TOKEN" ] && echo cf_token=present || echo cf_token=missing   # edge_address: route なら present が期待(workers-dev では missing でよい)
+[ -n "$CF_TOKEN" ] && echo cf_token=present || echo cf_token=missing   # edge_address が route か custom-domain なら present が期待(workers-dev では missing でよい)
 [ -z "$CF_TOKEN" ] || curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_TOKEN" | jq -r .result.status   # 期待: active
 [ -n "$CF_DEPLOY_TOKEN" ] && echo cf_deploy_token=present || echo cf_deploy_token=missing   # 期待: present(どの構成でも要る。missing なら人に頼み直す)
 [ -z "$CF_DEPLOY_TOKEN" ] || curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_DEPLOY_TOKEN" | jq -r .result.status   # 期待: active
@@ -816,8 +848,8 @@ set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 
 | 要素 | 役割 | 置き場所 |
 |---|---|---|
-| edge(`apps/edge`) | データプレーン。decision・event を訪問者に返す。KV は読むだけ | Cloudflare Workers(設置サイトのゾーンに Route で配置する。2 節) |
-| 配信専用の Worker(`wtt-static`) | 設置タグのファイル(`/s/<siteId>.js`)を静的アセットとして配る。訪問者の読み込みは Worker を起動しない | Cloudflare Workers(設置サイトのゾーンに Route で配置する。2.9) |
+| edge(`apps/edge`) | データプレーン。decision・event を訪問者に返す。KV は読むだけ | Cloudflare Workers(設置サイトのゾーンに Route で配置する。別のドメインに置く構成では、そのドメインのホストに Custom Domain で配置する。2 節) |
+| 配信専用の Worker(`wtt-static`) | 設置タグのファイル(`/s/<siteId>.js`)を静的アセットとして配る。訪問者の読み込みは Worker を起動しない | Cloudflare Workers(設置サイトのゾーンに Route で配置する。別のドメインに置く構成では、edge と同じホストに Route で配置する。2.9) |
 | デプロイ専用の Worker(`apps/deployer`、`wtt-deployer`) | 公開・設定の保存のたびに、control の依頼で設置タグのファイルを作り直して `wtt-static` に入れる。デプロイ用トークンを持つのはこの Worker だけ | Cloudflare Workers(インターネットには出さない。2.9) |
 | control(`apps/control`) | コントロールプレーン。管理 API・認証・公開。D1 / R2 / KV に書く | Cloudflare Workers(3 節) |
 | admin(`apps/admin`) | 管理画面(Next.js)。control の API を BFF 経由で呼び出す | Cloudflare Workers(control とは別の Worker。4 節) |
@@ -832,7 +864,7 @@ admin のリクエストの数え方:
 
 | リソース | 用途 | 使う側 |
 |---|---|---|
-| ゾーン 1 つ(カスタムドメイン) | edge を訪問者と同一オリジンで公開する。Cache Rule と WAF もこのゾーンに置く。ドメインなし構成(`edge_address: workers-dev`)では不要 | edge |
+| ゾーン 1 つ(カスタムドメイン) | edge を訪問者と同一オリジンで公開する。Cache Rule と WAF もこのゾーンに置く。別のドメインに置く構成(`edge_address: custom-domain`)では、設置サイトではなく別のドメインのゾーンに edge と `wtt-static` を置き、Cache Rule と WAF もそのゾーンに置く(訪問者からは別オリジンになる)。ドメインなし構成(`edge_address: workers-dev`)では不要 | edge |
 | Workers KV(`wtt-config`) | 配信中の config とサイト設定を配信用に複製したもの(元データは D1)。control が書き、edge が読む | 両方(同じ namespace) |
 | D1(`wtt-control`) | ユーザー・ワークスペース・サイト・エクスペリエンス・公開履歴・テストの評価計画と固定した結果・採用の記録 | control |
 | D1(`wtt-results`。計測用のデータベース) | テストの結果の記録(参加者と目標の達成。訪問者 ID はそのまま置かず、鍵付きのハッシュにする)。結果を記録するサイトの分だけ増え、保持期間を過ぎた記録は control が消す | edge が書き、control が読んで集計する |
@@ -849,23 +881,30 @@ admin のリクエストの数え方:
 - 検証用と本番など複数を動かすときは Cloudflare アカウントを分ける。Free のアカウントを足しても費用はかからない
 - アカウントを分けると、無料枠の日次上限(アカウント単位)と、配信ファイルのデプロイ用トークン(アカウント全体に適用される)も分かれる
 
-**(2) 設置ホストの DNS レコードは Cloudflare のゾーンにあり、プロキシが有効(オレンジの雲)であること。** Workers Route はプロキシ経由のホストでしか発火しない。確認: `curl -sI https://<設置ホスト>/ | grep -i '^server:'` が `server: cloudflare`。違う場合は Route が動作しないので、先に運用者に伝える([導入構成の選び方 2 節](install-patterns.md#2-edge-の置き方問い-1))。
+**(2) 設置サイトのゾーンに置く構成(`route`)では、設置ホストの DNS レコードは Cloudflare のゾーンにあり、プロキシが有効(オレンジの雲)であること。** Workers Route はプロキシ経由のホストでしか発火しない。確認: `curl -sI https://<設置ホスト>/ | grep -i '^server:'` が `server: cloudflare`。違う場合は Route が動作しないので、先に運用者に伝える([導入構成の選び方 2 節](install-patterns.md#2-edge-の置き方問い-1))。
 
-**(3) edge の公開アドレスは、設置サイトのゾーンの Workers Route(既定)か、`*.workers.dev`(ドメインなし構成)。** `*.workers.dev` はドメインを用意せずに始められる簡易的な導入方法で、次の制約を承知の上で選ぶ。詳しい比較は[導入構成の選び方 2 節](install-patterns.md#2-edge-の置き方問い-1)にある。
+別のドメインに置く構成(`custom-domain`)では、設置サイトにこの条件は要らない。代わりに、別のドメインのゾーンが導入するアカウントにあり、有効であること(0.4 のログインの後の確認の 4)。edge のホストの DNS レコードは、2.4 の deploy で edge の Custom Domain が作る。既存のレコードを上書きしないよう、2.3 でそのホストが空いていることを確かめる。
 
-| | ゾーンの Route(既定) | `*.workers.dev` |
-|---|---|---|
-| ゾーンの WAF Rate Limiting Rule(2.7) | 作れる | 作れない。Worker の起動前に捨てる仕組みが無いので、無料枠の日次上限(10 万リクエスト)を 1 台の機械から数分で使い切られうる。使い切ると当日は edge も control も止まる。上限はアカウント単位 |
-| ゾーンの Cache Rule(2.6) | 作る。設置タグのファイルのブラウザキャッシュの設定が上書きされないようにする、念のための設定 | 作れない(ゾーンが無い)。設置タグのファイルのヘッダ(60 秒)は配信専用の Worker が付けるので、変更されずに適用される |
-| Mode B(サーバー発行 Cookie) | 使える | 使えない |
-| タグと設置サイト | 同一オリジン | 別オリジン。サイトが CSP を出していれば `script-src` に `wtt-static` のホスト、`connect-src` に edge のホストを足す |
+**(3) edge の公開アドレスは、設置サイトのゾーンの Workers Route(既定)か、別のドメインの Custom Domain か、`*.workers.dev`(ドメインなし構成)。** 別のドメインの Custom Domain は、サイトのドメインが Cloudflare に無いときに、Cloudflare に置ける別のドメインのホスト(例 `ab.example.net`)で edge と設置タグを公開する構成。`*.workers.dev` はドメインを用意せずに始められる簡易的な導入方法で、次の制約を承知の上で選ぶ。詳しい比較は[導入構成の選び方 2 節](install-patterns.md#2-edge-の置き方問い-1)にある。
+
+| | ゾーンの Route(既定) | 別のドメイン(Custom Domain) | `*.workers.dev` |
+|---|---|---|---|
+| ゾーンの WAF Rate Limiting Rule(2.7) | 作れる | 作れる(別のドメインのゾーンに作る) | 作れない。Worker の起動前に捨てる仕組みが無いので、無料枠の日次上限(10 万リクエスト)を 1 台の機械から数分で使い切られうる。使い切ると当日は edge も control も止まる。上限はアカウント単位 |
+| ゾーンの Cache Rule(2.6) | 作る。設置タグのファイルのブラウザキャッシュの設定が上書きされないようにする、念のための設定 | 作る(別のドメインのゾーンに、条件のホストを `<edge のホスト>` にして作る) | 作れない(ゾーンが無い)。設置タグのファイルのヘッダ(60 秒)は配信専用の Worker が付けるので、変更されずに適用される |
+| Mode B(サーバー発行 Cookie) | 使える | 使えない(ページのホストに `/__ab/*` を置けないため。Safari 対策は Mode A か Mode C) | 使えない |
+| タグと設置サイト | 同一オリジン | 別オリジン。サイトの `allowedOrigins` にページの origin が要る(サイトを作ると `https://<ドメイン>` が入る。ページのホストが複数なら足す)。サイトが CSP を出していれば `script-src` と `connect-src` に `<edge のホスト>` を足す(設置タグと edge が同じホストなので 1 つ) | 別オリジン。サイトが CSP を出していれば `script-src` に `wtt-static` のホスト、`connect-src` に edge のホストを足す |
+
+別のドメインに置く構成では、ほかに次の 2 つを承知しておく:
+
+- 設置タグをページと別のホストから読み込むので、ブラウザや拡張機能の追跡防止の機能に遮断されやすい
+- WAF の遮断(Cloudflare の 1015)は、別オリジンの構成では通知されない。WAF の応答には別のドメインのページから読むための許可のヘッダーが付かず、タグが通信の失敗として扱うので、`ab_error` を push しない。edge の binding の 429 は許可のヘッダーを付けているので通知される([運用ガイド 7 節](operations.md#429-が訪問者に与える影響))
 
 `*.workers.dev` の前提条件(2 つとも満たさないなら Route にする):
 
 - Cloudflare アカウントが Free であること。Paid だと、悪意のある人がプログラムで大量のアクセスを送ってきた場合に、そのアクセスの分もすべて請求に含まれる。タグのアドレスはサイトの HTML に書かれるので誰でも知ることができ、アクセスを制限する仕組み(WAF)を置けない。支出上限を設定する機能も無い
 - 止まると困る Workers が同じアカウントに無いこと
 
-満たしていても、Mode B を使いたい・悪意のある人の大量のアクセスで止まると困る・1 日のアクセスが無料枠に近いなら Route のほうがよい。後からドメインありへ移る手順は 2.8。control 側にはこの制約が無く、`*.workers.dev` のままでも動く(3 節)。
+満たしていても、Mode B を使いたい・悪意のある人の大量のアクセスで止まると困る・1 日のアクセスが無料枠に近いなら Route のほうがよい。後から設置サイトのゾーンの Route へ移る手順は 2.8(別のドメインに置く構成へ移る手順はまだ無い)。control 側にはこの制約が無く、`*.workers.dev` のままでも動く(3 節)。
 
 ## 2. edge のデプロイ
 
@@ -966,7 +1005,7 @@ pnpm -C apps/edge exec wrangler secret list | jq -r '.[].name'   # 期待: RESUL
 
 **先に、edge の Rate Limiting binding の値を書く**(どの構成でも)。`apps/edge/wrangler.jsonc` の `ratelimits[0].simple.limit` が、1 つの IP から 10 秒あたりに受ける回数の上限になる。値は構成で決まる:
 
-- **WAF がある構成**(`edge_address: route` で、`edge_waf_rate_limit` が `false` でない。既定): 1000 と、2.7 の WAF の 1 期間あたりの回数(`edge_waf_requests_per_10s`)の大きいほう。雛形の値は 1000 なので、WAF の回数が 1000 以下ならそのままでよい。2.7 で WAF の期間を 60 秒にしたときは、60 秒あたりの回数をそのまま 1000 と比べる
+- **WAF がある構成**(ゾーンのある構成(`edge_address` が `route` か `custom-domain`)で WAF を作るとき。`edge_waf_rate_limit` が `false` でない。既定): 1000 と、2.7 の WAF の 1 期間あたりの回数(`edge_waf_requests_per_10s`)の大きいほう。雛形の値は 1000 なので、WAF の回数が 1000 以下ならそのままでよい。2.7 で WAF の期間を 60 秒にしたときは、60 秒あたりの回数をそのまま 1000 と比べる
 - **WAF が無い構成**(`edge_address: workers-dev`、または `edge_waf_rate_limit: false`): `edge_waf_requests_per_10s`(既定 200)
 
 理由: binding は WAF の後ろにあり、IP ごとに数える。WAF より厳しい値にすると、WAF が通した訪問を後ろで止めてしまう。WAF がある構成では主に WAF で保護するので、binding は大きめの値にする。
@@ -988,6 +1027,41 @@ grep -n '"limit"' apps/edge/wrangler.jsonc   # 期待: 書いた値の行が 1 �
 ```
 
 このとき 2.6 と 2.7 は飛ばし、2.4 の確認は `https://wtt-edge.<アカウントのサブドメイン>.workers.dev/v1/sites/probe/decision` に読み替える(サブドメインは初回 `wrangler deploy` の出力に出る)。
+
+**`custom-domain` のとき**: 別のドメインのホスト(`<edge のホスト>` = `edge_host`)を edge の Custom Domain にする。設置タグを配る `wtt-static` も、2.9 で同じホストの `/s/*` に置く。
+
+先に、そのホストが空いていることを API で確かめる。非対話で実行した `wrangler deploy` は、Custom Domain を作るときに、同じ名前の既存の DNS レコードと、ほかの Worker への割り当てを確認なしに上書きするため。確かめるのは 2 つ: (1) ゾーンにそのホストと同じ名前の DNS レコードが無い(種類を問わない)(2) そのホストがほかの Worker の Custom Domain に使われていない。`*.<ゾーン>` のようなワイルドカードのレコードは上書きされないので見ない。
+
+```bash
+set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
+HOST=<edge のホスト>            # edge_host(例 ab.example.net)
+ZONE=<ゾーン名>                 # zone_name(例 example.net)
+T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
+AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+ZID=$(curl -sS "https://api.cloudflare.com/client/v4/zones?name=$ZONE" -H "Authorization: Bearer $CF_TOKEN" | jq -r '.result[0].id')
+
+# 1. 同じ名前の DNS レコードが無い(CF_TOKEN の DNS Read を使う)
+curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/dns_records?name=$HOST" -H "Authorization: Bearer $CF_TOKEN" | jq '{ok: .success, n: (.result | length)}'   # 期待: {"ok": true, "n": 0}
+# 2. ほかの Worker の Custom Domain に使われていない(wrangler login の資格情報を使う)
+curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hostname=$HOST" -H "Authorization: Bearer $T" | jq '{ok: .success, n: (.result | length)}'   # 期待: {"ok": true, "n": 0}
+```
+
+期待と違うとき:
+
+- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に Zone → DNS → Read が無いときに出る(0.5 の 2)
+- `n` が 1 以上 → そのホストは使われている。別のホストにする(0.2 の E2c を答え直す)か、使っていないことを人に確かめてから人に消してもらう。消した後に、このブロックをやり直す
+
+確かめたら、`apps/edge/wrangler.jsonc` の `routes` を次にする(`workers_dev` の行は書かない):
+
+```jsonc
+"routes": [
+  { "pattern": "<edge のホスト>", "custom_domain": true }
+],
+"dev": { "host": "localhost" }
+```
+
+- `/__ab/*` は書かない。Mode B(サーバー発行 Cookie)はページのホストの Route が前提で、この構成では使えない
+- 下の `route` のときの確認(そのパスに既存のコンテンツが無いことの `curl`)は要らない。新しいホストで、空いていることは上の API で確かめたため
 
 **`route`(既定)のとき**: `apps/edge/wrangler.jsonc` の `routes` に、設置サイトのホストで受けるパスを並べる(ダッシュボードでは張らない。設定ファイルが正)。
 
@@ -1029,7 +1103,7 @@ pnpm -C apps/edge exec wrangler deploy
 - 2.2 の計測用のデータベースの `database_id` が仮の ID のままならデプロイしない(2.2 の確認)
 - Rate Limiting binding は wrangler 4.36 以上が必要。`namespace_id` はアカウント内で一意な整数文字列
 
-確認: 出力の末尾に `Deployed wtt-edge triggers` と Route が 1 本(`/v1/*`。Mode B があればその分も)並べば OK。`workers-dev` では triggers に `https://wtt-edge.<アカウントのサブドメイン>.workers.dev` が 1 行出る。この URL が edge の公開 origin で、3.4 の `AB_EDGE_ORIGIN` に使う(設置タグの `src` のホストは 2.9 の `wtt-static` のアドレス)。
+確認: `route` では、出力の末尾に `Deployed wtt-edge triggers` と Route が 1 本(`/v1/*`。Mode B があればその分も)並べば OK。`workers-dev` では triggers に `https://wtt-edge.<アカウントのサブドメイン>.workers.dev` が 1 行出る。この URL が edge の公開 origin で、3.4 の `AB_EDGE_ORIGIN` に使う(設置タグの `src` のホストは 2.9 の `wtt-static` のアドレス)。
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "https://<設置ホスト>/v1/sites/probe/decision"   # 期待: 404 text/plain(Worker の応答。サイト本体の 404 ページ(text/html)ではない)
@@ -1037,9 +1111,19 @@ curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "https://<設置ホス
 
 期待と違うとき: `text/html` が返る → Route が適用されていない。`zone_name` / ホスト名 / `wrangler deploy` の出力の triggers を見比べる。
 
+`custom-domain` では、triggers に `<edge のホスト> (custom domain)` が出ること。確認の `curl` は edge のホストに送る:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "https://<edge のホスト>/v1/sites/probe/decision"   # 期待: 404 text/plain(Worker の応答)
+```
+
+期待と違うとき(`custom-domain`): Custom Domain の証明書の発行に数分かかることがある。`curl` が TLS(SSL)のエラーで失敗したら、1 分おいてやり直す。名前を引けない(`Could not resolve host`)ときも、DNS レコードの反映を待ってやり直す。続くときは、triggers に Custom Domain が出ているかと、0.4 のログインの後の確認の 4(ゾーンが有効になっているか)を見直す。
+
 ### 2.5 公開アドレスの選び方
 
-既存ゾーンの Workers Route(`<設置ホスト>/s/*` を `wtt-static` に、`<設置ホスト>/v1/*` を edge に)を推奨する。設置タグと decision / event が設置サイトと同一オリジンになるため CORS の設定も DNS レコード・証明書の追加も要らない。Custom Domain(`<edge ドメイン>`)でもよいが、その場合はサイトの `allowedOrigins` に設置サイトの origin を入れる必要がある。
+設置サイトのゾーンの Workers Route(`<設置ホスト>/s/*` を `wtt-static` に、`<設置ホスト>/v1/*` を edge に)を推奨する。設置タグと decision / event が設置サイトと同一オリジンになるため CORS の設定も DNS レコード・証明書の追加も要らない。
+
+サイトのドメインが Cloudflare に無いときは、Cloudflare に置ける別のドメインのホスト(`<edge のホスト>`。例 `ab.example.net`)に置く(`edge_address: custom-domain`)。1 つのホストに、edge を Custom Domain で、`wtt-static` を `<edge のホスト>/s/*` の Route で置く。設置タグと decision / event はページと別オリジンになるので、サイトの `allowedOrigins` にページの origin が要る(サイトを作ると `https://<ドメイン>` が入る)。代償は 1 節の制約 (3)。どちらも無いときは `*.workers.dev`(`edge_address: workers-dev`)。
 
 ### 2.6 ゾーン側の Cache Rule(念のため。推奨)
 
@@ -1053,14 +1137,14 @@ curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "https://<設置ホス
 
 **設定値**(API・ダッシュボード共通)
 
-- 条件: Hostname が `<設置ホスト>` かつ URI Path が `/s/` で始まる
+- 条件: Hostname が `<設置タグのホスト>` かつ URI Path が `/s/` で始まる。`<設置タグのホスト>` は、`route` なら設置ホスト(`install_host`)、`custom-domain` なら edge のホスト(`edge_host`)
 - Browser TTL: Respect origin TTL(`respect_origin`)
 - Edge TTL: 触らない
 - `/v1/*`(decision / event)は Worker が `no-store` を返すので対象にしなくてよい
 
 #### 既定: API で作る(エージェントはこちら)
 
-使うのは 0.5 で受け取った `CF_TOKEN`(Cache Rules Edit + Zone WAF Edit + Zone Read、ゾーン限定、期限 = 翌日)。
+使うのは 0.5 で受け取った `CF_TOKEN`(Cache Rules Edit + Zone WAF Edit + Zone Read + DNS Read、ゾーン限定、期限 = 翌日)。
 
 2.6 / 2.7 の bash ブロックは同じシェルで続けて実行する。別々に実行する場合は、各ブロックの前に `set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a` と `HOST=… ZONE=… H=… ZID=…` の定義を入れ直す。
 
@@ -1072,8 +1156,8 @@ curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorizati
 ```
 
 ```bash
-HOST=<設置ホスト>               # 例 www.example.com
-ZONE=<ゾーン名>                 # 例 example.com
+HOST=<設置タグのホスト>         # route なら設置ホスト(install_host。例 www.example.com)、custom-domain なら edge のホスト(edge_host。例 ab.example.net)
+ZONE=<ゾーン名>                 # zone_name(例 example.com。custom-domain なら edge_host が属するゾーン)
 H="Authorization: Bearer $CF_TOKEN"
 
 # 1. Zone ID
@@ -1118,7 +1202,7 @@ curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/http_r
 
 1. Cloudflare ダッシュボード → 対象ゾーン → Caching → Cache Rules → Create rule(ルールを作成)→ Cache Rules。Caching と Cache Rules は日本語の表示でも英語のまま
 2. Rule name(ルール名): `WTT bootstrap: respect Worker Cache-Control on /s/*`
-3. If incoming requests match…(受信リクエストが一致する場合…): Custom filter expression(カスタム フィルタ式)を選び、Edit expression(式を編集)で `(http.host eq "<設置ホスト>" and starts_with(http.request.uri.path, "/s/"))` を書く。式で書くと表示の言語に左右されない
+3. If incoming requests match…(受信リクエストが一致する場合…): Custom filter expression(カスタム フィルタ式)を選び、Edit expression(式を編集)で `(http.host eq "<設置タグのホスト>" and starts_with(http.request.uri.path, "/s/"))` を書く(`<設置タグのホスト>` は上の「設定値」の条件と同じ)。式で書くと表示の言語に左右されない
 4. Then...(実行内容...): Browser TTL(ブラウザ TTL)の Add setting(設定を追加)→ Respect origin TTL(オリジン TTL を尊重する)。他の項目は変えない
 5. Deploy(デプロイ)
 
@@ -1127,7 +1211,7 @@ curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/http_r
 この確認は、サイトを作って初回公開した後(5 節のスモーク)でないと 404 になる。ルールはここで作り、ヘッダ確認は 5 節のスモークの直後に行う。
 
 ```bash
-curl -sSI "https://<設置ホスト>/s/<siteId>.js" | grep -iE 'cache-control|cf-cache-status'
+curl -sSI "https://<設置タグのホスト>/s/<siteId>.js" | grep -iE 'cache-control|cf-cache-status'
 ```
 
 `cache-control: public, max-age=60` なら OK。`cf-cache-status: HIT` の応答でも 60 のまま。
@@ -1220,7 +1304,7 @@ IP with NAT support は Cloudflare の画面の名前で、日本語の表示は
 
 人数の目安の前提: `needsProfile` のサイトでは 1 PV で decision 1 回と event 約 1 回を送り、閲覧中の人は 30 秒に 1 PV 程度とした(1 人あたり 10 秒に約 0.7 回)。これは結果を記録しないサイトの値。結果を記録するサイトでは、テストの参加(参加したテストごとに 1 回)と目標の達成の送信が足される。送信済みの印をブラウザに保存できれば同じ訪問者 × テスト(目標)には 1 回だけで、続けて閲覧している間は増えないが、保存できない環境(`localStorage` が使えないなど)ではページごとに送り直す。1 テスト・1 目標のページを初めて開くと 1 PV で 4 回程度になり、テストや目標が多いページではさらに増える。多くの人が同時に初めて開く場面(朝礼で同じページを案内するなど)では目安より少ない人数で当たるので、表の人数をそのまま当てはめない。
 
-上限に触れてもブロックされるのは `/v1/*` だけで、ページ本体・GTM・bootstrap は無傷。ただし decision が 429 を受けた runtime は再試行せず元の表示に戻るため、エクスペリエンスは適用されず Exposure も出ない。目標の `ab_conversion` は `dataLayer` に push され GA4 に届くが、`needsProfile` のサイトの `/event` 転送(Profile の `converted` 履歴の更新)は失われる。その組織の露出だけが欠ける。429 を受けたページでは、タグが `dataLayer` に `ab_error`(`ab_error_type: "rate_limited"`)を 1 回 push するので、GA4 に送れば遮断の起きた回数を数えられる。ただし edge をページと別のドメインに置く構成では、WAF の遮断の応答をタグが読めず、通信の失敗として扱うので数えられない([運用ガイド 7 節](operations.md#429-が訪問者に与える影響))。
+上限に触れてもブロックされるのは `/v1/*` だけで、ページ本体・GTM・bootstrap は無傷。ただし decision が 429 を受けた runtime は再試行せず元の表示に戻るため、エクスペリエンスは適用されず Exposure も出ない。目標の `ab_conversion` は `dataLayer` に push され GA4 に届くが、`needsProfile` のサイトの `/event` 転送(Profile の `converted` 履歴の更新)は失われる。その組織の露出だけが欠ける。429 を受けたページでは、タグが `dataLayer` に `ab_error`(`ab_error_type: "rate_limited"`)を 1 回 push するので、GA4 に送れば遮断の起きた回数を数えられる。ただし edge をページと別のドメインに置く構成(`custom-domain`)では、WAF の遮断の応答をタグが読めず、通信の失敗として扱うので数えられない。edge の binding の 429 は数えられる([運用ガイド 7 節](operations.md#429-が訪問者に与える影響))。
 
 - 値は Free でも `requests_per_period` で変えられる。変えたら、binding の値が 2.3 の規則の値以上かを確かめる(下回っていれば 2.3 の規則の値に上げる)
 - 自社オフィスなど既知の送信元は、式に `and not ip.src in { <IP> }` を足して除外できる。公開の直後に社内から何度も開いて確かめるなど、自分たちの確認作業が遮断されないようにするために使う。レート制限ルールの式で送信元の IP を使えるのは、ゾーンが Business 以上のとき(Free の式で使えるのは URI Path など)。除外は WAF だけに適用され、edge の binding はその送信元も 1 つの IP からの合計で数える。除外した送信元からの合計が binding の上限(既定 1000 回 / 10 秒)を超えうるなら、binding をその合計まで上げる(2.3)
@@ -1247,6 +1331,8 @@ IP with NAT support は Cloudflare の画面の名前で、日本語の表示は
 ### 2.8 ドメインありへの移行(`workers-dev` → `route`)
 
 `*.workers.dev` で始めた導入を、設置サイトのゾーンの Route に移す手順。Worker・KV・Durable Objects・サイト設定・`allowedOrigins` は引き続き使える。変わるのは edge と設置タグの公開 origin(設置タグを配る `wtt-static` の置き場所を含む)だけ。
+
+`*.workers.dev` で始めた導入を、サイトとは別のドメイン(別のドメインに置く構成)に移す手順は、まだ用意していない。
 
 1. 設置ホストが Cloudflare のゾーンにありプロキシ有効であることを確認する(1 節)
 2. `apps/edge/wrangler.jsonc` に 2.3 の `routes` と `"dev": { "host": "localhost" }` を足す。`workers_dev` は**まだ消さない**(旧 URL のタグを読むページが残っている間は両方で受ける)。`pnpm -C apps/edge exec wrangler deploy`
@@ -1295,6 +1381,8 @@ pnpm -C apps/deployer setup-static -- --route "<設置ホスト>/s/*" --zone "<�
 
 `workers-dev` の構成(ゾーンを持たない): `pnpm -C apps/deployer setup-static -- --workers-dev on`(期待: `script: created` / `workers.dev: on`)。公開アドレスは `https://wtt-static.<アカウントのサブドメイン>.workers.dev` で、3.4 の `AB_STATIC_ORIGIN` に書く。設置タグの `src` もこのホストになる。
 
+`custom-domain` の構成(別のドメインに置く): **2.4 の edge の deploy の後に行う**。Route を張るホストの DNS レコードは、edge の Custom Domain が作るため。環境変数は上のブロックと同じで、コマンドは `pnpm -C apps/deployer setup-static -- --route "<edge のホスト>/s/*" --zone "<ゾーン名>" --workers-dev off`(期待: `script: created` / `route <edge のホスト>/s/*: created` / `workers.dev: off`)。設置タグと edge が同じホストなので、3.4 の `AB_STATIC_ORIGIN` は書かない。設置タグの `src` は `https://<edge のホスト>/s/<siteId>.js` になる。
+
 期待と違うとき:
 
 - `route … : moved from <名前>` が出たら、そのパターンのルートが別の Worker に向いていた。前の構成(設置タグを edge が配っていた導入)から移すときは期待どおり。そうでなければ人に確認する
@@ -1309,11 +1397,10 @@ curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置タグのホスト>/s/
 curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置タグのホスト>/s/nosuch.js"           # 期待: 404(存在しないサイト)
 ```
 
-`<設置タグのホスト>` は、`route` の構成では `<設置ホスト>`、`workers-dev` の構成では `wtt-static.<アカウントのサブドメイン>.workers.dev`。
+`<設置タグのホスト>` は、`route` の構成では `<設置ホスト>`、`custom-domain` の構成では `<edge のホスト>`、`workers-dev` の構成では `wtt-static.<アカウントのサブドメイン>.workers.dev`。
 
 補足:
 
-- **edge を Custom Domain で公開する構成**(0.1・2.5 の代替。実機では未検証): `wtt-static` にも別のホスト(Custom Domain)を付け、そのホストの origin(`https://<そのホスト>`)を 3.4 の `AB_STATIC_ORIGIN` に書く。設置タグの URL はそのホストになる。`wtt-static` への Custom Domain の追加は **【人に依頼】** ダッシュボードの Compute(コンピュート)→ Workers & Pages → `wtt-static` → Domains(ドメイン)タブで行う
 - **`wtt-deployer`(またはその Durable Object)を消して作り直したとき**: どのサイトの配信ファイルがあるかの記録が失われる。配信ファイルを作り直さずに公開すると、記録にあるサイトだけで配信ファイルが置き換わり、他のサイトのファイルが消える。作り直したあとは、公開中のすべてのサイトの配信ファイルを作り直す(管理画面で各サイトを開く、または `POST /sites/<siteId>/static/redeploy`)
 
 ## 3. control のデプロイ
@@ -1447,8 +1534,8 @@ edge の公開 origin(必ず書く):
 
 | キー | 内容 |
 |---|---|
-| `AB_EDGE_ORIGIN` | ← `edge_address`。decision / event を受ける edge の公開 origin。`route` なら `https://<設置ホスト>`、`workers-dev` なら 2.4 の出力の `https://wtt-edge.<アカウントのサブドメイン>.workers.dev`。管理画面がこの値で構成(workers.dev かどうか)を判定し、設置タグのファイルに API(decision / event)の宛先として書き込む。変えたら各サイトの配信ファイルを作り直す(2.8) |
-| `AB_STATIC_ORIGIN` | **`workers-dev`(ゾーンなし)のときだけ書く**。設置タグを配る配信専用の Worker の origin(`https://wtt-static.<アカウントのサブドメイン>.workers.dev`。2.9)。省略すると `AB_EDGE_ORIGIN` と同じホストとして扱う(`route` の構成はこれでよい。edge を Custom Domain で公開する構成では `wtt-static` の Custom Domain の origin)。管理画面の導入タグの `src` のホストになる |
+| `AB_EDGE_ORIGIN` | ← `edge_address`。decision / event を受ける edge の公開 origin。`route` なら `https://<設置ホスト>`、`custom-domain` なら `https://<edge のホスト>`(`edge_host`)、`workers-dev` なら 2.4 の出力の `https://wtt-edge.<アカウントのサブドメイン>.workers.dev`。管理画面がこの値で構成(workers.dev かどうか)を判定し、設置タグのファイルに API(decision / event)の宛先として書き込む。変えたら各サイトの配信ファイルを作り直す(2.8) |
+| `AB_STATIC_ORIGIN` | **`workers-dev`(ゾーンなし)のときだけ書く**。`route` と `custom-domain` では書かない(設置タグと edge が同じホスト)。設置タグを配る配信専用の Worker の origin(`https://wtt-static.<アカウントのサブドメイン>.workers.dev`。2.9)。省略すると `AB_EDGE_ORIGIN` と同じホストとして扱う。管理画面の導入タグの `src` のホストになる |
 
 使用状況の表示(3.3 の `CF_USAGE_TOKEN` と対。どちらかが欠けていれば使用状況は「未設定」と表示され、ほかの機能には影響しない):
 
@@ -1648,21 +1735,21 @@ curl -si -X POST "https://<dlite_hosts のホスト>/__ab/decision" -H 'content-
 
 **スモーク**(**【人が行う】** 管理画面の操作): サイトを作る → エクスペリエンスを作る → 開始(成功すると自動で公開される)→ 下の確認 → 終了。エージェントは確認コマンドを用意する。
 
-`workers-dev` では `<設置ホスト>` を `wtt-static.<アカウントのサブドメイン>.workers.dev`(2.9 の設置タグのホスト)に読み替える。Cache Rule の確認(`cf-cache-status`)は飛ばす。
+`<設置タグのホスト>` は 2.9 の (4) のとおり。`route` は設置ホスト、`custom-domain` は edge のホスト、`workers-dev` は `wtt-static.<アカウントのサブドメイン>.workers.dev`。`workers-dev` では Cache Rule の確認(`cf-cache-status`)は飛ばす。
 
 確認 1(配信の経路): 先頭付近に config のバージョンと作成したエクスペリエンス ID が含まれていれば、control → デプロイ専用の Worker → 配信専用の Worker の経路が動作している。
 
 ```bash
-curl -s https://<設置ホスト>/s/<siteId>.js | head -c 400
+curl -s https://<設置タグのホスト>/s/<siteId>.js | head -c 400
 ```
 
 確認 2(2.6 の Cache Rule。作った場合): `cache-control: public, max-age=60` なら OK。判定は 2.6 の「確認」を見る。
 
 ```bash
-curl -sSI "https://<設置ホスト>/s/<siteId>.js" | grep -iE 'cache-control|cf-cache-status'
+curl -sSI "https://<設置タグのホスト>/s/<siteId>.js" | grep -iE 'cache-control|cf-cache-status'
 ```
 
-確認 3(配信専用の Worker のヘッダ): 設置タグのファイルで 200 を得た後に `curl -sSI "https://<設置ホスト>/s/<siteId>.js" | grep -i x-content-type-options` が `nosniff` を返すこと。これが配信専用の Worker が付けたヘッダの証拠になる。
+確認 3(配信専用の Worker のヘッダ): 設置タグのファイルで 200 を得た後に `curl -sSI "https://<設置タグのホスト>/s/<siteId>.js" | grep -i x-content-type-options` が `nosniff` を返すこと。これが配信専用の Worker が付けたヘッダの証拠になる。
 
 確認 4(画像。`asset_public_base` が `none` 以外のときだけ): 管理画面から画像を 1 枚アップロードし、応答の URL を取得して 200 を確認する。`dev-assets` なら URL は `<control URL>/dev-assets/...`。
 
@@ -1885,11 +1972,11 @@ pnpm -C apps/admin build && pnpm -C apps/admin deploy:cf   # 4. admin
 
 ### 6.4 確認
 
-ここからの確認は凍結中に行う(読み取りだけなので凍結の影響を受けない)。
+ここからの確認は凍結中に行う(読み取りだけなので凍結の影響を受けない)。`<設置タグのホスト>` は 2.9 の (4) のとおり(`route` は設置ホスト、`custom-domain` は edge のホスト、`workers-dev` は `wtt-static` の workers.dev のホスト)。
 
 ```bash
-curl -sSI "https://<設置ホスト>/s/<siteId>.js" | grep -iE 'HTTP/|cache-control'   # 期待: 200 と max-age=60
-curl -sS "https://<設置ホスト>/s/<siteId>.js" | head -1                        # 先頭の注釈の `runtime <ハッシュ>` が下の値と同じ
+curl -sSI "https://<設置タグのホスト>/s/<siteId>.js" | grep -iE 'HTTP/|cache-control'   # 期待: 200 と max-age=60
+curl -sS "https://<設置タグのホスト>/s/<siteId>.js" | head -1                        # 先頭の注釈の `runtime <ハッシュ>` が下の値と同じ
 grep -o 'RUNTIME_HASH = "[0-9a-f]*"' packages/runtime/generated/source.ts
 curl -sS -o /dev/null -w '%{http_code}\n' "<control URL>/llms.txt"   # 期待: 200
 curl -sS -o /dev/null -w '%{http_code}\n' "<AB_ADMIN_URL>/login"   # 期待: 200
@@ -2189,10 +2276,10 @@ Zero Trust(Free で 50 ユーザーまで)の Access アプリケーション(Se
 ### (a) 設置タグのファイルの応答ヘッダ
 
 ```bash
-curl -sI https://<設置ホスト>/s/<siteId>.js | grep -i -e content-type -e cache-control -e nosniff
+curl -sI https://<設置タグのホスト>/s/<siteId>.js | grep -i -e content-type -e cache-control -e nosniff
 ```
 
-`content-type: text/javascript; charset=utf-8`、`cache-control: public, max-age=60`、`x-content-type-options: nosniff` の 3 つが返ること(配信専用の Worker の応答。ヘッダは `wtt-static` の `_headers` が付ける)。`max-age` が 60 でなければ 2.6 の Cache Rule を確認する。
+`content-type: text/javascript; charset=utf-8`、`cache-control: public, max-age=60`、`x-content-type-options: nosniff` の 3 つが返ること(配信専用の Worker の応答。ヘッダは `wtt-static` の `_headers` が付ける)。`<設置タグのホスト>` は 2.9 の (4) のとおり。`max-age` が 60 でなければ 2.6 の Cache Rule を確認する。
 
 ### (b) Workers の指標(GraphQL Analytics API)
 
@@ -2324,7 +2411,7 @@ pnpm -C apps/control exec wrangler d1 time-travel restore wtt-control --bookmark
   pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "update sites set static_epoch = CAST(strftime('%s','now') AS INTEGER) * 1000, static_stale = 1 where active_version is not null"
   ```
 
-  その後、凍結を外してから各サイトで「配信ファイルを作り直す」(または公開し直す)を行う。サイトの画面の警告(「配信ファイルが古い」)が消え、`curl -sS "https://<設置ホスト>/s/<siteId>.js" | head -c 200` に今の公開内容が出ることを確かめる
+  その後、凍結を外してから各サイトで「配信ファイルを作り直す」(または公開し直す)を行う。サイトの画面の警告(「配信ファイルが古い」)が消え、`curl -sS "https://<設置タグのホスト>/s/<siteId>.js" | head -c 200`(`<設置タグのホスト>` は 2.9 の (4))に今の公開内容が出ることを確かめる
 - **戻した後に書き込みが入っていないかの確認**(手順 3 の数秒の間・凍結の入れ直しに失敗した場合): 次がすべて 0 であること。0 でなければ、その行の内容を見て意図したものか確かめる
   - `pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select (select count(*) from publishes where created_at > <戻した時刻の ms>) as publishes, (select count(*) from experiments where updated_at > <戻した時刻の ms>) as experiments, (select count(*) from changes where updated_at > <戻した時刻の ms>) as changes"`
 - **セッションとログインは切れることがある**(session テーブルも戻るため)。全員がログインし直す。戻した時点より後に発行した招待・API キー・メンバー追加も消えているので、必要なら発行し直す
@@ -2374,6 +2461,8 @@ pnpm -C apps/deployer exec wrangler delete                    # wtt-deployer。s
 
 それぞれ `y` で確認する。期待: `Successfully deleted <name>`。DO を持つ edge で `--force` を求められたら、付けて再実行する(edge の Durable Object を参照する control は先に消してある)。
 
+`custom-domain` の構成では、edge の Custom Domain が作った DNS レコード(`<edge のホスト>`)も Custom Domain と一緒に消える。消えたことを DNS の一覧で確かめる。**【人に依頼】** ダッシュボードの対象ゾーンの DNS → Records(レコード)に `<edge のホスト>` の行が無いこと。残っていれば、そのレコードを消してもらう。
+
 3. データを消す:
 
 ```bash
@@ -2385,7 +2474,7 @@ pnpm -C apps/control exec wrangler r2 bucket delete wtt-assets                  
 
 期待と違うとき: `r2 bucket delete` が `bucket is not empty` で失敗する → 中身を先に消す。**【人に依頼】** ダッシュボードの Storage & databases(ストレージとデータベース)→ R2 Object Storage(R2 オブジェクトストレージ)→ `wtt-assets` → Settings(設定)タブの Danger Zone(危険ゾーン)→ Empty Bucket(バケットを空にする)。R2 のカスタムドメインを接続していた場合は、同じタブの Custom Domains(カスタム ドメイン)で接続を外す。
 
-4. ゾーンに置いたルールを消す(`edge_address: route` の構成のみ)。2.6 / 2.7 の `$H` / `$ZID` と同じ準備で:
+4. ゾーンに置いたルールを消す(ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のみ)。2.6 / 2.7 の `$H` / `$ZID` と同じ準備で:
 
 ```bash
 # Cache Rule: 2.6 の確認コマンドで id を引き、本ツールの式(/s/ と /v1/ を含む)のルールだけ消す
@@ -2394,6 +2483,8 @@ curl -sS -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RI
 ```
 
 期待: `"success": true`。ゾーンに他のルールがある場合、ruleset 自体は消さない(entrypoint を DELETE すると他のルールも消える)。ダッシュボードで消すなら、対象ゾーンの Caching → Cache Rules / Security(セキュリティ)→ Security rules(セキュリティ ルール)の該当行。
+
+`custom-domain` の構成で、別のドメインのゾーンとアカウントを残すときは、Custom Domain のために発行された証明書も片づける。この証明書は Custom Domain を消しても残る。**【人に依頼】** ダッシュボードの対象ゾーンの SSL/TLS → Edge Certificates(日本語の表示は未確認)で `<edge のホスト>` の証明書を探し、そのゾーンのほかのホストで使っていないことを確かめてから消してもらう。
 
 5. 外部の資格情報を片づける(**【人に依頼】**):
 
@@ -2410,7 +2501,9 @@ curl -sS -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RI
 ```bash
 pnpm -C apps/control exec wrangler d1 list --json | jq '[.[] | select(.name | startswith("wtt-"))] | length'   # 期待: 0
 pnpm -C apps/control exec wrangler kv namespace list | jq '[.[] | select(.title | endswith("wtt-config"))] | length'   # 期待: 0
-curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置ホスト>/s/<siteId>.js"   # 期待: 設置サイト自身の応答(404 など)。200 の JS が返るなら `wtt-static` の Route が残っている
+curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置タグのホスト>/s/<siteId>.js"   # 期待: route は設置サイト自身の応答(404 など)。custom-domain は名前を引けずに失敗する。200 の JS が返るなら `wtt-static` の Route が残っている
 ```
+
+`<設置タグのホスト>` は 2.9 の (4) のとおり。`custom-domain` では DNS レコードが無くなるので、最後の `curl` が名前を引けずに失敗する(`Could not resolve host`)のが期待。`workers-dev` では最後の `curl` を飛ばす(無効にした後の workers.dev の応答は Cloudflare が保証していない)。
 
 Free プランの料金はリソースを消した時点で止まる(Workers Paid にしていた場合、プランの解約はダッシュボードの Compute(コンピュート)→ Workers plans(Workers のプラン)から)。

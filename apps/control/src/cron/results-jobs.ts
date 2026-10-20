@@ -21,7 +21,7 @@ import { syncSettingsRecord } from "./sync-settings-record";
  * jobs.ts の登録表で results-account-guard の後に、この順で走る(どれも writesControl: true = 凍結中は丸ごと見送る)。
  *
  * - results-delivery(tick): 配信の確認がまだ要る届く定義の行を持つ Site に、デプロイ専用の Worker の状態を問い合わせて確かめる
- * - results-collect-until(tick): KV の Site の設定の記録を D1 から作った記録と比べ、違えば(印が立っていれば)書き直す
+ * - results-collect-until(tick): KV の Site の設定の記録を D1 から作った記録と比べ、違えば(印が立っていれば)書き直す。印の立った Site を先に回す(B94)
  * - results-daily(UTC 0 時以降): 到達の確認 → 評価時点の記録 → 終了の記録の補完
  * - results-capacity(tick): 計測用 D1 の大きさを測って保存し、95% 以上なら収集を止める
  * - results-purge(UTC 23 時台): 保持期限の削除 → queue → 孤児
@@ -245,44 +245,59 @@ export const resultsCollectUntilJob: CronJob = {
   name: "results-collect-until",
   cadence: { every: "tick" },
   writesControl: true,
-  queryShare: 8,
-  // 1 件の最低 = 位置 1 + 対象 1 + Site 1 件の見込み 3 + 位置の書き込み 1
-  queryFloor: 6,
+  // B94: 印の段の読み取り 1 を足したので 8 → 10(印の無い実行で、全体の段が前と同じ 2 Site を回せる)
+  queryShare: 10,
+  // 1 件の最低 = 位置 1 + 印の段の対象 1 + 全体の段の対象 1 + Site 1 件の見込み 3 + 位置の書き込み 1(B94 で 6 → 7)
+  queryFloor: 7,
   async run(ctx) {
     const cursors = await loadCursors(ctx, this.name, false);
     // plan12 K10: 比べる記録に予算が入るので、プランを使う(読むのは最初の Site を処理するときの 1 回。比べる対象が無い実行では読まない)。
     // プランを渡さずに書くと、予算の入った記録を予算なしに書き戻し、site-settings-refresh と 15 分ごとに書き合う
     let plan: CloudflarePlan | null = null;
+    /** この実行で処理した Site(印の段で処理した Site を、全体の段で二度処理しない) */
+    const done = new Set<string>();
+    // 対象 = 書き直しの印のある Site と、run を持つエクスペリエンスがある Site(締め切りの表を持ちうる)。削除の途中の Site は除く
+    // (KV を消している最中に書き戻さない)。エクスペリエンスの削除で表が空になる Site は、削除の queue を消し終えたときに印を立てる
+    const list = (after: string | null, dirtyOnly: boolean) =>
+      ctx.db
+        .selectFrom("sites as s")
+        .selectAll("s")
+        .where("s.static_removing", "is", null)
+        .$if(dirtyOnly, (q) => q.where("s.collect_until_dirty", "=", 1))
+        .$if(!dirtyOnly, (q) =>
+          q.where((w) =>
+            w.or([w("s.collect_until_dirty", "=", 1), w.exists(w.selectFrom("experiments as e").select("e.id").whereRef("e.site_id", "=", "s.id").where("e.run_id", "is not", null))]),
+          ),
+        )
+        .$if(after !== null, (q) => q.where("s.id", ">", after!))
+        .orderBy("s.id")
+        .limit(TICK_PAGE)
+        .execute();
+    const process = async (row: Awaited<ReturnType<typeof list>>[number]): Promise<ItemOutcome> => {
+      if (done.has(row.id)) return "next";
+      done.add(row.id);
+      const table = await collectUntilMap(ctx.db, row.id);
+      plan ??= await readCloudflarePlan(ctx.db);
+      // 記録の全体を D1 と比べて違えば書き直す(締め切りの表だけでなく、Site の PATCH と締め切りの書き直しが重なって古い設定が残った場合も直す)。
+      // 比べ方・書き方は site-settings-refresh と同じ関数(互いに上書きし合わない保証はこの共有に依る)
+      await syncSettingsRecord(ctx, row, { plan, collectUntil: table });
+      if (row.collect_until_dirty === 1) {
+        const r = await ctx.env.DB.prepare(`UPDATE sites SET collect_until_dirty = 0 WHERE id = ?1 AND collect_until_dirty = 1 AND ${NOT_FROZEN}`).bind(row.id).run();
+        await throwIfFrozen(ctx, r.meta.changes);
+      }
+      return "next";
+    };
+    // B94: 先に印の立った Site だけを回す(Site の多い導入でも、書き直しに失敗した Site を全体の一巡を待たずに直す)。
+    // 位置は別に持つ(書き直しに失敗し続ける Site が先頭に居座って、後ろの印の Site を止めないため)
+    const dirty = await runStage(ctx, cursors, `${this.name}:dirty`, { daily: false, list: (after) => list(after, true), key: (row) => row.id, cost: () => COLLECT_UNTIL_SITE_COST, process });
+    if (dirty === "more") return finish(cursors, [dirty]);
+    // 印の段で処理した Site は、全体の段では読まずに位置だけ進める(見込み 0)
     const out = await runStage(ctx, cursors, this.name, {
       daily: false,
-      // 対象 = 書き直しの印のある Site と、run を持つエクスペリエンスがある Site(締め切りの表を持ちうる)。削除の途中の Site は除く
-      // (KV を消している最中に書き戻さない)。エクスペリエンスの削除で表が空になる Site は、削除の queue を消し終えたときに印を立てる
-      list: (after) =>
-        ctx.db
-          .selectFrom("sites as s")
-          .selectAll("s")
-          .where("s.static_removing", "is", null)
-          .where((w) =>
-            w.or([w("s.collect_until_dirty", "=", 1), w.exists(w.selectFrom("experiments as e").select("e.id").whereRef("e.site_id", "=", "s.id").where("e.run_id", "is not", null))]),
-          )
-          .$if(after !== null, (q) => q.where("s.id", ">", after!))
-          .orderBy("s.id")
-          .limit(TICK_PAGE)
-          .execute(),
+      list: (after) => list(after, false),
       key: (row) => row.id,
-      cost: () => COLLECT_UNTIL_SITE_COST,
-      async process(row) {
-        const table = await collectUntilMap(ctx.db, row.id);
-        plan ??= await readCloudflarePlan(ctx.db);
-        // 記録の全体を D1 と比べて違えば書き直す(締め切りの表だけでなく、Site の PATCH と締め切りの書き直しが重なって古い設定が残った場合も直す)。
-        // 比べ方・書き方は site-settings-refresh と同じ関数(互いに上書きし合わない保証はこの共有に依る)
-        await syncSettingsRecord(ctx, row, { plan, collectUntil: table });
-        if (row.collect_until_dirty === 1) {
-          const r = await ctx.env.DB.prepare(`UPDATE sites SET collect_until_dirty = 0 WHERE id = ?1 AND collect_until_dirty = 1 AND ${NOT_FROZEN}`).bind(row.id).run();
-          await throwIfFrozen(ctx, r.meta.changes);
-        }
-        return "next";
-      },
+      cost: (row) => (done.has(row.id) ? 0 : COLLECT_UNTIL_SITE_COST),
+      process,
     });
     return finish(cursors, [out]);
   },
@@ -559,6 +574,11 @@ export const resultsPurgeJob: CronJob = {
   queryShare: 16,
   // 1 件の最低 = 位置 1 + 対象 1 + purgeRun の繰り返し 1 回(4 + 3)+ 位置の書き込み 1
   queryFloor: 10,
+  // B93(2026-10-21 ユーザー決定): Paid では配分 116 = 繰り返し 約 36 回 = 1 回の実行で 約 7.2 万行、23 時台の 4 回で 最大 約 29 万行 / 日。
+  // 設計の最大(1 群 7 万人 / 日の 2 群 + CV = 約 15 万行 / 日)を、4 回のうち 1 回が欠けても消せる量。D1 の 1 回の呼び出しの上限 1,000・
+  // Workers のサブリクエスト(Paid 10,000。繰り返し 1 回で D1 3 + 予算の DO 4)には遠い。時間は繰り返し 1 回 0.3〜1 秒の仮定で 11〜36 秒(未実測。
+  // deploy の後に tail の wall で確かめる)。実際に消す量は、書き込みの予算の残り(purgeAllowance)でも頭打ちになる
+  paidExtraShare: 100,
   async run(ctx) {
     const { env, db, now } = ctx;
     const ns = env.RESULTS_BUDGET;

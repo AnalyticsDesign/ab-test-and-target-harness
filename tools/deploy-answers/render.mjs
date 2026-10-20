@@ -1,5 +1,5 @@
 // 検査スクリプトの出力(Markdown)。見出しは固定(エージェントは見出しの順に、要約せずにそのまま見せる)
-import { summaryOf, placementOf, reasonsOf, cannotOf, tasksOf, billingOf, notesOf, sameConfig, answersFor, FLOOD, FLOOD_PAID, WHY_ANYONE } from "./judge.mjs";
+import { summaryOf, placementOf, reasonsOf, cannotOf, tasksOf, billingOf, notesOf, sameConfig, answersFor, hostOfConfig, FLOOD, FLOOD_PAID, WHY_ANYONE } from "./judge.mjs";
 
 const list = (xs) => (xs.length ? xs.map((x) => `- ${x}`).join("\n") : "- なし");
 
@@ -39,7 +39,6 @@ export function renderAccountChange(values, names) {
 /** 推奨構成と最軽量構成の提示 */
 export function renderProposals(values, rec, light) {
   const same = sameConfig(rec, light);
-  const host = values.install_host;
   // アカウントを入れ替える構成では、入れ替えた後の答え(cloudflare_account: separate)で文言を作る
   const vr = answersFor(values, rec);
   const vl = answersFor(values, light);
@@ -47,7 +46,7 @@ export function renderProposals(values, rec, light) {
     same ? [list(f(vr, rec)), ""] : ["### 推奨構成の場合", "", list(f(vr, rec)), "", "### 最軽量構成の場合", "", list(f(vl, light)), ""];
   const lines = [
     "## 推奨構成", "",
-    `**${summaryOf(rec, host)}**`, "",
+    `**${summaryOf(rec, hostOfConfig(values, rec))}**`, "",
     placementOf(rec), "",
     ...(vr.accountChange ? accountChangeNote(values) : []),
     list(reasonsOf(vr, rec)), "",
@@ -57,7 +56,7 @@ export function renderProposals(values, rec, light) {
     ...(same
       ? ["推奨構成と同じ。", ""]
       : [
-          `**${summaryOf(light, host)}**`, "",
+          `**${summaryOf(light, hostOfConfig(values, light))}**`, "",
           placementOf(light), "",
           ...(vl.accountChange ? accountChangeNote(values) : []),
           "ゾーンも支払い方法の登録も要らない、最も手軽な構成。", "",
@@ -85,7 +84,7 @@ export function renderConfigured(values, c) {
   const label = ACCEPTED_LABEL[values.accepted] ?? "手で指定した構成。未了承(了承は --accept manual)";
   const lines = [
     "## 指定された構成", "",
-    `**${summaryOf(c, values.install_host)}**(${label})`, "",
+    `**${summaryOf(c, hostOfConfig(values, c))}**(${label})`, "",
     placementOf(c), "",
     "### この構成でできないこと", "",
     list(cannotOf(values, c)), "",

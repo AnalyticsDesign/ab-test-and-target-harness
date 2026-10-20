@@ -1,5 +1,5 @@
 // 答えから推奨構成と最軽量構成を導く。理由・できないこと・人に頼む作業・課金と止まり方・注意の文言もここで決める
-import { featuresOf } from "./questions.mjs";
+import { featuresOf, hostProblem } from "./questions.mjs";
 
 /**
  * Free の上限に効く使い方と、Workers Paid を推奨する PV の区分(上限の 7 割を超えうる区分)。
@@ -56,22 +56,26 @@ export function answersFor(values, c) {
   return change ? { ...values, cloudflare_account: "separate", accountChange: change } : values;
 }
 
-/** @typedef {{ edge_address: "route"|"workers-dev", zone_name: string|null, asset_public_base: string, dlite_hosts: string[], plan: "free"|"paid" }} Config */
+/** @typedef {{ edge_address: "route"|"workers-dev"|"custom-domain", zone_name: string|null, asset_public_base: string, dlite_hosts: string[], plan: "free"|"paid" }} Config */
 
 /** @returns {Config} */
 export function recommend(values) {
   const f = featuresOf(values);
   const route = values.site_on_cloudflare === "yes";
+  // サイトのドメインが Cloudflare に無くても、Cloudflare に置ける別のドメインがあれば、そのホストで動かす(決定 64 (3))
+  const custom = values.site_on_cloudflare === "no" && !hostProblem(values.edge_host);
+  const zoned = route || custom;
   const c = {
-    edge_address: route ? "route" : "workers-dev",
-    zone_name: route ? "auto" : null,
-    asset_public_base: values.image_upload !== true ? "none" : route ? "auto" : "dev-assets",
+    edge_address: route ? "route" : custom ? "custom-domain" : "workers-dev",
+    zone_name: zoned ? "auto" : null,
+    asset_public_base: values.image_upload !== true ? "none" : zoned ? "auto" : "dev-assets",
+    // Mode B はサイトと同じホストで動くので、設置サイトのゾーンに載せる構成(route)でだけ使える
     dlite_hosts: route && f.has("itp") ? [values.install_host] : [],
     plan: "free",
   };
   // ドメインなしで Paid にすると、上限を掛けられないまま第三者に使われた分まで課金されるので、PV では Paid にしない。
   // 既存の Paid のアカウントでも、ドメインなしなら新しい Free のアカウントに入れる(answersFor)ので Paid にならない
-  if (accountIsPaid(answersFor(values, c)) || (route && exceedsFree(f, values.daily_pv, c))) c.plan = "paid";
+  if (accountIsPaid(answersFor(values, c)) || (zoned && exceedsFree(f, values.daily_pv, c))) c.plan = "paid";
   return c;
 }
 
@@ -89,12 +93,20 @@ export function configOf(values) {
   };
 }
 
+/** 構成の要約に出すホスト。route = 設置サイトのホスト、custom-domain = 別のドメインのホスト(決定 64 (3))、workers-dev = null */
+export const hostOfConfig = (values, c) =>
+  c.edge_address === "custom-domain" ? values.edge_host : c.edge_address === "route" ? values.install_host : null;
+
 export const sameConfig = (a, b) =>
   a.edge_address === b.edge_address && a.asset_public_base === b.asset_public_base && a.plan === b.plan && a.dlite_hosts.join(",") === b.dlite_hosts.join(",");
 
 export function summaryOf(c, host) {
   const parts = [
-    c.edge_address === "route" ? `ドメインあり(${host ?? "設置ホスト"})` : "ドメインなし(*.workers.dev)",
+    c.edge_address === "route"
+      ? `ドメインあり(${host ?? "設置ホスト"})`
+      : c.edge_address === "custom-domain"
+        ? `別のドメイン(${host ?? "edge のホスト"})`
+        : "ドメインなし(*.workers.dev)",
     c.plan === "paid" ? "Workers Paid" : "Free",
     c.asset_public_base === "none"
       ? "画像のアップロードなし"
@@ -106,9 +118,9 @@ export function summaryOf(c, host) {
   return parts.join(" × ");
 }
 
-/** 管理画面と control の置き場所(構成の要約には入らないので別の 1 行で出す。既定はどの構成でも *.workers.dev) */
+/** 管理画面と control の置き場所(構成の要約には入らないので別の 1 行で出す。既定はどの構成でも *.workers.dev)。ゾーンのある構成(route・custom-domain)は同じ文 */
 export const placementOf = (c) =>
-  c.edge_address === "route"
+  c.edge_address !== "workers-dev"
     ? "管理画面と control(管理用の Worker)は *.workers.dev に置く(自分のドメインに載せるのは任意。デプロイガイド 3.6・4.2)"
     : "管理画面と control(管理用の Worker)も *.workers.dev に置く";
 
@@ -119,7 +131,9 @@ export function reasonsOf(values, c) {
   const r = [
     c.edge_address === "route"
       ? "タグを入れるサイトのドメインを Cloudflare で管理しているので、サイトと同じホストで動かす(WAF・キャッシュ・Safari 対策が使える)"
-      : "タグを入れるサイトのドメインを Cloudflare で管理していないので、Cloudflare が用意するアドレス(*.workers.dev)で動かす(後からドメインに移せる)",
+      : c.edge_address === "custom-domain"
+        ? "タグを入れるサイトのドメインは Cloudflare に無いが、Cloudflare に置ける別のドメインがあるので、そのドメインで動かす(WAF・キャッシュが使える。Safari 対策の Mode B は使えない)"
+        : "タグを入れるサイトのドメインを Cloudflare で管理していないので、Cloudflare が用意するアドレス(*.workers.dev)で動かす(後からドメインに移せる)",
   ];
   // アカウントの入れ替えの理由は、提示の確認の段落(render.mjs の accountChangeNote)に書く
   if (accountIsPaid(values)) r.push("このアカウントは既に Workers Paid なので、Paid として扱う");
@@ -146,7 +160,7 @@ export function cannotOf(values, c) {
   const f = featuresOf(values);
   const out = [];
   if (f.has("itp") && c.dlite_hosts.length === 0)
-    out.push("Safari 対策(Mode B: サーバー発行 Cookie)が使えない。Safari では JavaScript で置いた Cookie が操作なしで 7 日で消え、同じ人が別の人として扱われうる(Mode B はドメインありの構成でだけ使える)");
+    out.push("Safari 対策(Mode B: サーバー発行 Cookie)が使えない。Safari では JavaScript で置いた Cookie が操作なしで 7 日で消え、同じ人が別の人として扱われうる(Mode B はタグを入れるサイトのドメインを Cloudflare で管理している構成でだけ使える)");
   if (c.plan === "free" && exceedsFree(f, values.daily_pv, c)) out.push("多い日は Free の上限に達しうる。達した日の残りは出し分けと計測が止まる(ページは元の表示のまま動く)");
   if (values.image_upload === true && c.asset_public_base === "none") out.push("管理画面から画像をアップロードできない(画像の URL を書き換える変更で差し替えられる)");
   if (c.edge_address === "workers-dev") {
@@ -169,9 +183,12 @@ export function tasksOf(values, c) {
     t.push("この製品用に Free の Cloudflare アカウントを新しく作る(最初に。今のアカウントには入れない。デプロイガイド 0.4 の「アカウントを作る」)");
   else if (values.cloudflare_account === "none" || values.cloudflare_account === "separate")
     t.push("Cloudflare のアカウントを作る(最初に。デプロイガイド 0.4 の「アカウントを作る」)");
+  // 既存のアカウントでも別のドメインが未追加のことがあるので、アカウントの答えによらず頼む(決定 64 (3))
+  if (c.edge_address === "custom-domain")
+    t.push("まだ追加していなければ、別のドメインを導入に使うアカウントに追加する(そのドメインのネームサーバーを Cloudflare に切り替える)");
   t.push("`wrangler login` でブラウザに出る Cloudflare の画面で「Allow」を押す");
   t.push("Google の OAuth クライアント(管理画面のログイン用)を作る(画面ごとにエージェントが案内する)");
-  t.push(`Cloudflare の API トークンを作る: 設置タグの配信ファイルのデプロイ用・使用状況の表示用(どちらも期限なし)${c.edge_address === "route" ? "・ゾーンの設定用(期限 = 翌日)" : ""}`);
+  t.push(`Cloudflare の API トークンを作る: 設置タグの配信ファイルのデプロイ用・使用状況の表示用(どちらも期限なし)${c.edge_address !== "workers-dev" ? "・ゾーンの設定用(期限 = 翌日)" : ""}`);
   if (c.asset_public_base !== "none") t.push("R2(画像の置き場)を有効にする(支払い方法の登録を求められることがある。無料枠の中なら請求は無い)");
   if (c.plan === "paid" && !accountIsPaid(values)) t.push("ダッシュボードで Workers Paid に切り替える");
   if (c.plan === "paid") t.push("導入の後、管理画面の「設定」→「使用状況」でプランを Workers Paid にする");
@@ -195,7 +212,7 @@ export function notesOf(values, c) {
   const n = [];
   if (values.daily_pv === "unknown" && c.plan === "free")
     n.push(
-      c.edge_address === "route"
+      c.edge_address !== "workers-dev"
         ? "PV が分からないので Free で始める。管理画面のホームと「設定」→「使用状況」で消費を見て、上限に近づいたら Workers Paid にする"
         : "PV が分からないので Free で始める。管理画面のホームと「設定」→「使用状況」で消費を見て、上限に近づいたら、ドメインを Cloudflare に追加してから Workers Paid にする(デプロイガイド 2.8 でドメインありの構成に移れる)",
     );

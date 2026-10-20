@@ -29,8 +29,12 @@ export function run(text, opts = {}) {
       return { code: 0, output: "auto の行が無い(まだ --accept していないか、既に確定済み)。書き込みなし\n" };
     if (!isBlank(values.zone_name) && values.zone_name !== "auto" && values.zone_name !== zone)
       return { code: 2, output: `zone_name は既に ${values.zone_name}。--resolve-zone には同じゾーンを指定する(違うなら zone_name の行を直す)\n` };
-    if (typeof values.install_host !== "string" || !hostInZone(values.install_host, zone))
-      return { code: 2, output: `install_host(${values.install_host ?? "未記入"})はゾーン ${zone} に属していない。ゾーンを選び直すか、E2 を聞き直す\n` };
+    // ゾーンに属するかを見るホスト: custom-domain は別のドメインのホスト(edge_host)、それ以外は今どおり install_host(決定 64 (3))。
+    // hostOfConfig は workers-dev で null を返すので使わない(workers-dev の行に auto があるときも install_host を見るため)
+    const [hostKey, askAgain] = values.edge_address === "custom-domain" ? ["edge_host", "E2c"] : ["install_host", "E2"];
+    const host = values[hostKey];
+    if (typeof host !== "string" || !hostInZone(host, zone))
+      return { code: 2, output: `${hostKey}(${host ?? "未記入"})はゾーン ${zone} に属していない。ゾーンを選び直すか、${askAgain} を聞き直す\n` };
     const r = resolveZone(text, zone);
     return { code: 0, output: renderWritten(r.written), text: r.text };
   }

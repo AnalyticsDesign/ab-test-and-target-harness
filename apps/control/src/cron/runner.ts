@@ -2,6 +2,7 @@
 import { utcDay } from "@wtt/core";
 import { getDb, type Db } from "../db";
 import type { Env } from "../env";
+import { readCloudflarePlan, type CloudflarePlan } from "../instance-settings";
 import { isWriteFrozen } from "../write-freeze";
 
 /**
@@ -34,7 +35,7 @@ export class CronFrozen extends Error {
  * - use(n) = 次の n 件を出してよいか(足りなければ false)。引くのは実際の呼び出しの数なので、use では引かない。
  *   ジョブは 1 件の処理の前に、その処理の見込みの件数で use を呼び、false なら `{ more: true }` を返して次の実行に続ける
  *   (1 件の処理は途中で止めないので、見込みを超えた分はそのジョブの残りを減らす)
- * - runner 自身(凍結・daily の記録)と、配分を持たないジョブ(results-account-guard)の分は数えない(上限 50 との差に入る)
+ * - runner 自身(凍結・daily の記録・Paid の実行かの読み取り)と、配分を持たないジョブ(results-account-guard)の分は数えない(上限 1,000 との差に入る)
  */
 export type QueryBudget = { left(): number; use(n: number): boolean };
 
@@ -61,6 +62,11 @@ export type CronJob = {
   queryReserved?: boolean;
   /** 1 件を処理するのに要る配分の最低(位置・対象の読み取りと位置の書き込みを含む)。配分がこれに届かない実行では動かさない。allotQueries */
   queryFloor?: number;
+  /**
+   * B93: インスタンス設定の Cloudflare のプランが Paid の実行でだけ、配分に足す数(全体の上限 QUERY_LIMIT にも同じ数を足す)。
+   * ほかのジョブの配分は変えない。今は results-purge だけ(Free の配分は変えない = 2026-10-20 ユーザー決定)
+   */
+  paidExtraShare?: number;
   /** `{ more: true }` = 配分か 1 回の量を使い切り、続きが残っている(成功を記録せず、次の実行で続ける。K17) */
   run(ctx: CronContext): Promise<void | { more: true }>;
 };
@@ -68,11 +74,11 @@ export type CronJob = {
 export type CronRunReport = Array<{ job: string; outcome: "ran" | "continued" | "skipped_frozen" | "stopped_frozen" | "not_due" | "failed" }>;
 
 /**
- * 1 回の実行で配分を持つジョブが出してよい D1 のクエリの数(K17)。D1 の「Queries per Worker invocation」(Free 50)から、
- * runner と results-account-guard の分を残した値。**仮の値**: batch の文を 1 件と数えるか・今も D1 独自に効く上限かは公式に未確認
- * (docs/dev/research/d1_batch_query_limits_2026-10-06.md)。ここでは batch を 1 件と数える(調査の記録: workerd は batch の全文を
- * 1 回の fetch = 1 サブリクエストで送り、D1 の表の行は Workers のサブリクエストの上限を D1 の言葉で書いたもの)。
- * 文ごとに数えられる場合の余裕は、50 との差(runner と results-account-guard の分を除いた残り)だけになる
+ * 1 回の実行で配分を持つジョブが出してよい D1 のクエリの数(K17)。Paid の実行では、due のジョブの paidExtraShare の分だけ足す(B93)。
+ * D1 の 1 回の呼び出しの上限は、Free でも 1,000(2026-10-20 の実測。D1 の Limits の表の「50 (Free)」は古い)で、batch は 1 件と数える
+ * (D9 ③ の実装の記録 9 節の前提 1。docs/dev/research/d1_batch_query_limits_2026-10-06.md の未確認の点は、この実測で解消した)。
+ * 40 は上限ではなく、Free の D1 の 1 日の書き込み 10 万行(アカウント全体)を配信・記録と取り合わないための量の値で、
+ * Free では上げない(2026-10-20 ユーザー決定。backlog B93)。runner と配分を持たないジョブの分は、この外(上限 1,000 との差)に入る
  */
 export const QUERY_LIMIT = 40;
 
@@ -159,21 +165,36 @@ async function recordSuccess(db: Db, job: CronJob, now: number): Promise<void> {
  * 今の登録(jobs.ts)での配分(合計は 40 以内):
  * | 実行                                   | delivery | collect-until | daily | capacity | purge |
  * | -------------------------------------- | -------- | ------------- | ----- | -------- | ----- |
- * | daily のジョブが due でない            | 10       | 8             | –     | 3        | –     |
- * | results-daily が due・tick 優先の枠    | 10       | 6             | 21    | 3        | –     |
- * | results-daily が due・daily 優先の枠   | 10       | 1(最低 6 未満で動かない) | 26 | 3 | – |
- * | results-purge が due・tick 優先の枠    | 10       | 6             | –     | 3        | 16    |
- * | results-purge が due・daily 優先の枠   | 10       | 8             | –     | 3        | 16    |
- * | 両方が due・tick 優先の枠              | 10       | 6             | 21    | 3        | 0(動かない) |
+ * | daily のジョブが due でない            | 10       | 10            | –     | 3        | –     |
+ * | results-daily が due・tick 優先の枠    | 10       | 7             | 20    | 3        | –     |
+ * | results-daily が due・daily 優先の枠   | 10       | 1(最低 7 未満で動かない) | 26 | 3 | – |
+ * | results-purge が due・tick 優先の枠    | 10       | 7             | –     | 3        | 16    |
+ * | results-purge が due・daily 優先の枠   | 10       | 10            | –     | 3        | 16    |
+ * | 両方が due・tick 優先の枠              | 10       | 7             | 20    | 3        | 0(動かない) |
  * | 両方が due・daily 優先の枠             | 0        | 0             | 26    | 3        | 11    |
- * 1 件の最低: delivery 10・collect-until 6・daily 10(到達の確認 1 件)・purge 10(繰り返し 1 回)・capacity 2。
- * 記録 1 件(位置と対象の読み取り 3 + 記録 21 + 位置の書き込み 1 = 25)は daily 優先の枠の 26 に収まる。tick 優先の枠の 21 では到達の確認だけが進む。
- * どのジョブも、daily が due の日でも 30 分(2 枠)に 1 回は 1 件の最低以上の配分を受ける
+ * 1 件の最低: delivery 10・collect-until 7・daily 10(到達の確認 1 件)・purge 10(繰り返し 1 回)・capacity 2。
+ * (B94 で collect-until を 8 / 6 → 10 / 7 にした。tick 優先の枠の daily は 21 → 20)
+ * 記録 1 件(位置と対象の読み取り 3 + 記録 21 + 位置の書き込み 1 = 25)は daily 優先の枠の 26 に収まる。tick 優先の枠の 20 では到達の確認だけが進む。
+ * どのジョブも、daily が due の日でも 30 分(2 枠)に 1 回は 1 件の最低以上の配分を受ける。
+ * Paid の実行(B93): results-purge が due なら、上の表の purge の列に 100 を足し、全体の上限も 140 にする(ほかの列は変わらない)
  */
 export const SLOT_MS = 15 * 60 * 1000;
 export const isTickPrioritySlot = (now: number): boolean => Math.floor(now / SLOT_MS) % 2 === 0;
 
-export function allotQueries(jobs: readonly CronJob[], due: ReadonlySet<string>, now: number): Map<string, number> {
+/**
+ * B93: その実行の全体の上限 = QUERY_LIMIT + Paid の実行で due のジョブの paidExtraShare の合計。
+ * Free の実行(と、プランを読めなかった実行)は QUERY_LIMIT のまま
+ */
+export function queryLimitFor(jobs: readonly CronJob[], due: ReadonlySet<string>, plan: CloudflarePlan): number {
+  if (plan !== "paid") return QUERY_LIMIT;
+  return jobs.reduce((s, j) => s + (j.queryShare !== undefined && due.has(j.name) ? (j.paidExtraShare ?? 0) : 0), QUERY_LIMIT);
+}
+
+/**
+ * 配分の表。plan が paid なら、上の表で決めた配分に、due のジョブの paidExtraShare を足す(B93。足すのは上限に足した分だけなので、
+ * ほかのジョブの配分は Free と同じ。results-purge は、上の表で 0 の枠でも足した分で動く)
+ */
+export function allotQueries(jobs: readonly CronJob[], due: ReadonlySet<string>, now: number, plan: CloudflarePlan = "free"): Map<string, number> {
   const out = new Map<string, number>();
   const shared = jobs.filter((j) => j.queryShare !== undefined);
   const reserved = shared.filter((j) => j.queryReserved);
@@ -200,7 +221,22 @@ export function allotQueries(jobs: readonly CronJob[], due: ReadonlySet<string>,
   }
   // due でない daily のジョブは動かないが、表に宣言の値を入れておく(isDue で not_due になる)
   for (const j of shared) if (!out.has(j.name)) out.set(j.name, j.queryShare!);
+  if (plan === "paid") for (const j of shared) if (j.paidExtraShare && due.has(j.name)) out.set(j.name, out.get(j.name)! + j.paidExtraShare);
   return out;
+}
+
+/**
+ * Paid の実行かを読む(B93)。読むのは、paidExtraShare を持つジョブが due のときだけ(ほかの実行では D1 を読まない)。
+ * 読めなければ Free とみなす(足さない側に倒す)
+ */
+async function planForRun(db: Db, jobs: readonly CronJob[], due: ReadonlySet<string>): Promise<CloudflarePlan> {
+  if (!jobs.some((j) => j.paidExtraShare && j.queryShare !== undefined && due.has(j.name))) return "free";
+  try {
+    return await readCloudflarePlan(db);
+  } catch (e) {
+    console.error("cron: reading the Cloudflare plan failed; using the free allotment", e);
+    return "free";
+  }
 }
 
 export async function runCron(env: Env, scheduledTime: number, jobs: readonly CronJob[]): Promise<CronRunReport> {
@@ -219,7 +255,10 @@ export async function runCron(env: Env, scheduledTime: number, jobs: readonly Cr
       due.set(job.name, e as Error);
     }
   }
-  const allot = allotQueries(runnable, new Set([...due].filter(([, d]) => d === true).map(([n]) => n)), now);
+  const dueNames = new Set([...due].filter(([, d]) => d === true).map(([n]) => n));
+  const plan = await planForRun(db, runnable, dueNames);
+  const allot = allotQueries(runnable, dueNames, now, plan);
+  const limit = queryLimitFor(runnable, dueNames, plan);
   /** 動くジョブ = due で、配分が 1 件の最低に届くもの */
   const willRun = (j: CronJob) => due.get(j.name) === true && (j.queryShare === undefined || allot.get(j.name)! >= (j.queryFloor ?? 1));
   // K17: 配分を持つジョブが出したクエリの実数(全体)
@@ -237,7 +276,7 @@ export async function runCron(env: Env, scheduledTime: number, jobs: readonly Cr
       .slice(i + 1)
       .filter((j) => runnable.includes(j) && willRun(j) && j.queryShare !== undefined)
       .reduce((s, j) => s + allot.get(j.name)!, 0);
-    const ctx = jobContext(env, db, job, now, allot.get(job.name), () => spent + held, (n) => (spent += n));
+    const ctx = jobContext(env, db, now, limit, allot.get(job.name), () => spent + held, (n) => (spent += n));
     try {
       const d = due.get(job.name);
       if (d instanceof Error) throw d;
@@ -271,15 +310,16 @@ export async function runCron(env: Env, scheduledTime: number, jobs: readonly Cr
       }
     }
   }
-  console.log("cron run", JSON.stringify({ scheduledTime: new Date(now).toISOString(), frozen: frozenAtStart, queries: spent, jobs: report }));
+  console.log("cron run", JSON.stringify({ scheduledTime: new Date(now).toISOString(), frozen: frozenAtStart, queries: spent, queryLimit: limit, jobs: report }));
   return report;
 }
 
 /**
  * ジョブに渡す ctx。配分を持つジョブには呼び出しを数える binding を渡す(K17)。
- * spentOrHeld = 全体で使った数 + 後ろで動く予定のすべてのジョブに残す数(全体の残りはこれを QUERY_LIMIT から引いた値)
+ * limit = その実行の全体の上限(queryLimitFor)。spentOrHeld = 全体で使った数 + 後ろで動く予定のすべてのジョブに残す数
+ * (全体の残りはこれを limit から引いた値)
  */
-function jobContext(env: Env, db: Db, job: CronJob, now: number, share: number | undefined, spentOrHeld: () => number, addSpent: (n: number) => void): CronContext {
+function jobContext(env: Env, db: Db, now: number, limit: number, share: number | undefined, spentOrHeld: () => number, addSpent: (n: number) => void): CronContext {
   let jobSpent = 0;
   let jobEnv = env;
   let jobDb = db;
@@ -291,7 +331,7 @@ function jobContext(env: Env, db: Db, job: CronJob, now: number, share: number |
     jobEnv = { ...env, DB: countingD1(env.DB, count), ...(env.RESULTS_DB ? { RESULTS_DB: countingD1(env.RESULTS_DB, count) } : {}) };
     jobDb = getDb(jobEnv);
   }
-  const left = () => Math.max(0, Math.min(share === undefined ? Infinity : share - jobSpent, QUERY_LIMIT - spentOrHeld()));
+  const left = () => Math.max(0, Math.min(share === undefined ? Infinity : share - jobSpent, limit - spentOrHeld()));
   return {
     env: jobEnv,
     db: jobDb,

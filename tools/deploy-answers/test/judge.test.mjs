@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { recommend, LIGHTEST, configOf, sameConfig, exceedsFree, summaryOf, placementOf, reasonsOf, cannotOf, tasksOf, billingOf, notesOf, accountChangeOf, answersFor } from "../judge.mjs";
+import { readFileSync } from "node:fs";
+import { recommend, LIGHTEST, configOf, sameConfig, exceedsFree, summaryOf, placementOf, reasonsOf, cannotOf, tasksOf, billingOf, notesOf, accountChangeOf, answersFor, hostOfConfig, FLOOD } from "../judge.mjs";
+import { renderProposals } from "../render.mjs";
 
 const base = { features: ["ab"], daily_pv: "under_10k", image_upload: false, cloudflare_account: "none", site_on_cloudflare: "no_site", owner_email: "a@example.com" };
 const zone = { cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "yes", install_host: "www.example.com" };
@@ -195,4 +197,78 @@ test("A/B テストだけなら、無料枠を使い切られても出し分け�
   assert.match(waf, /ブラウザの中で続く/);
   assert.doesNotMatch(waf, /出し分けと計測が止まり/);
   assert.match(cannotOf({ ...base, features: ["history"] }, LIGHTEST).find((x) => /WAF/.test(x)), /出し分けと計測が止まり/);
+});
+
+// 決定 64 (3): 別のドメインに edge を載せる構成(edge_address: custom-domain)
+const custom = { ...base, site_on_cloudflare: "no", edge_host: "ab.example.net" };
+
+test("E2 = no × edge_host: none の提示は、E2c を足す前の E2 = no の出力(fixture)と 1 文字も違わない", () => {
+  const v = { ...base, site_on_cloudflare: "no", edge_host: "none" };
+  const before = readFileSync(new URL("./fixtures/e2-no-before-7u.md", import.meta.url), "utf8");
+  assert.equal(renderProposals(v, recommend(v), LIGHTEST), before);
+});
+
+test("E2 = no × edge_host あり → custom-domain(zone_name は auto、画像ありなら asset_public_base も auto、Mode B なし)", () => {
+  const v = { ...custom, image_upload: true };
+  assert.deepEqual(recommend(v), { edge_address: "custom-domain", zone_name: "auto", asset_public_base: "auto", dlite_hosts: [], plan: "free" });
+  assert.equal(recommend(custom).asset_public_base, "none");
+  assert.equal(recommend({ ...v, features: ["ab", "history"], daily_pv: "over_70k" }).plan, "paid");
+});
+
+test("custom-domain × itp → dlite_hosts は空で、できないことに Mode B(新しい文面)", () => {
+  const v = { ...custom, features: ["ab", "itp"] };
+  const r = recommend(v);
+  assert.deepEqual(r.dlite_hosts, []);
+  const modeB = cannotOf(v, r).find((x) => /Mode B/.test(x));
+  assert.match(modeB, /Mode B はタグを入れるサイトのドメインを Cloudflare で管理している構成でだけ使える/);
+  assert.doesNotMatch(modeB, /ドメインありの構成でだけ/);
+});
+
+test("E2 = no × edge_host: none(または未記入)→ 今の workers-dev の推奨と同じ。E2 = yes・no_site では edge_host を見ない", () => {
+  const plain = { ...base, site_on_cloudflare: "no", image_upload: true, features: ["history"], daily_pv: "over_70k" };
+  assert.deepEqual(recommend({ ...plain, edge_host: "none" }), recommend(plain));
+  assert.equal(recommend({ ...plain, edge_host: "none" }).edge_address, "workers-dev");
+  assert.equal(recommend({ ...base, edge_host: "ab.example.net" }).edge_address, "workers-dev");
+  assert.equal(recommend({ ...base, ...zone, edge_host: "ab.example.net" }).edge_address, "route");
+});
+
+test("custom-domain ではアカウントを入れ替えない(既存の Paid・Free のどちらでも)", () => {
+  for (const existing_plan of ["free", "paid"]) {
+    const v = { ...custom, cloudflare_account: "existing", existing_plan };
+    assert.equal(accountChangeOf(v, recommend(v)), null, existing_plan);
+  }
+  assert.equal(recommend({ ...custom, cloudflare_account: "existing", existing_plan: "paid" }).plan, "paid");
+});
+
+test("hostOfConfig: custom-domain → edge_host、route → install_host、workers-dev → null", () => {
+  const v = { install_host: "www.example.com", edge_host: "ab.example.net" };
+  assert.equal(hostOfConfig(v, { edge_address: "custom-domain" }), "ab.example.net");
+  assert.equal(hostOfConfig(v, { edge_address: "route" }), "www.example.com");
+  assert.equal(hostOfConfig(v, LIGHTEST), null);
+});
+
+test("custom-domain の文: 要約・置き場所・理由・人に頼む作業・注意・できないこと", () => {
+  const r = recommend({ ...custom, image_upload: true });
+  assert.ok(summaryOf(r, "ab.example.net").startsWith("別のドメイン(ab.example.net) × "));
+  assert.equal(placementOf(r), placementOf({ ...r, edge_address: "route" }));
+  assert.equal(
+    reasonsOf(custom, r)[0],
+    "タグを入れるサイトのドメインは Cloudflare に無いが、Cloudflare に置ける別のドメインがあるので、そのドメインで動かす(WAF・キャッシュが使える。Safari 対策の Mode B は使えない)",
+  );
+  assert.ok(has(tasksOf(custom, r), /ゾーンの設定用\(期限 = 翌日\)/));
+  for (const cloudflare_account of ["existing", "none", "separate"]) {
+    const v = { ...custom, cloudflare_account, existing_plan: "free" };
+    assert.ok(has(tasksOf(v, recommend(v)), /まだ追加していなければ、別のドメインを導入に使うアカウントに追加する/), cloudflare_account);
+  }
+  assert.ok(!has(tasksOf(base, LIGHTEST), /別のドメイン/));
+  assert.ok(!has(tasksOf({ ...base, ...zone }, recommend({ ...base, ...zone })), /別のドメイン/));
+  const vu = { ...custom, features: ["history"], daily_pv: "unknown" };
+  const ru = recommend(vu);
+  assert.ok(has(notesOf(vu, ru), /上限に近づいたら Workers Paid にする/));
+  assert.ok(!has(notesOf(vu, ru), /2\.8/));
+  const vo = { ...custom, features: ["history"], daily_pv: "over_70k", cloudflare_account: "existing", existing_plan: "free" };
+  assert.ok(!has(notesOf(vo, recommend(vo)), /2\.8/));
+  assert.ok(!cannotOf(vo, recommend(vo)).some((x) => x.includes(FLOOD)));
+  assert.ok(!has(cannotOf(vu, ru), /WAF/));
+  assert.ok(!has(billingOf(recommend(vo)), /悪意のある人/));
 });

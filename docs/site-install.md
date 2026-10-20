@@ -37,10 +37,10 @@
 | 表記 | 意味 | 例 |
 |---|---|---|
 | `<ページのホスト>` | エクスペリエンスを出すページ自身のホスト名 | `www.example.com` |
-| `<設置ホスト>` | タグ(`/s/<siteId>.js`)を配っているホスト名。デプロイガイドの `install_host` | `www.example.com` |
+| `<設置ホスト>` | タグ(`/s/<siteId>.js`)を配っているホスト名。デプロイガイドの `install_host`(別のドメインに置く構成では `edge_host`) | `www.example.com` |
 | `<siteId>` | 管理画面で作ったサイトの ID | `site_example` |
 
-デプロイガイドの既定の構成(設置サイトのゾーンに Workers Route を張る)では、`<設置ホスト>` と `<ページのホスト>` は同じになる。設置タグを別のホスト(Custom Domain の例 `ab.example.com`、または `*.workers.dev` の `wtt-static.<アカウントのサブドメイン>.workers.dev`)で配っている場合は両者が異なる。以下の `<設置ホスト>` は、設置タグを配っているそのホストに読み替える。
+デプロイガイドの既定の構成(設置サイトのゾーンに Workers Route を張る)では、`<設置ホスト>` と `<ページのホスト>` は同じになる。設置タグを別のホスト(別のドメインに置く構成の `<edge のホスト>`。例 `ab.example.net`。または `*.workers.dev` の `wtt-static.<アカウントのサブドメイン>.workers.dev`)で配っている場合は両者が異なる。別のドメインに置く構成では、設置タグと edge が同じホストにあるので、`<設置ホスト>` は `<edge のホスト>` になる。以下の `<設置ホスト>` は、設置タグを配っているそのホストに読み替える。
 
 用語(サイト・エクスペリエンス・パターン・目標・公開など)は[運用ガイド 1 節](operations.md#1-用語の要約)にまとめてある。
 
@@ -51,7 +51,7 @@
 ## 1. 前提
 
 - [デプロイガイド](deploy.md)を 5 節まで終えている: edge と control が動き、管理画面にログインでき、スモーク(サイトを作ってエクスペリエンスを開始 → 終了)が通っている
-- `<設置ホスト>` で設置タグを配る配信専用の Worker と edge の Route が効いている(既定の構成では `<設置ホスト>/s/*` が配信専用の Worker、`<設置ホスト>/v1/*` が edge。[デプロイガイド 2.3](deploy.md#23-route-を書く)・[2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker))。`*.workers.dev` で公開する構成では `<設置ホスト>` = `wtt-static.<アカウントのサブドメイン>.workers.dev`(Route は無い。制約は[導入構成の選び方 2 節](install-patterns.md#2-edge-の置き方問い-1))
+- `<設置ホスト>` で設置タグを配る配信専用の Worker と edge の Route が効いている(既定の構成では `<設置ホスト>/s/*` が配信専用の Worker、`<設置ホスト>/v1/*` が edge。[デプロイガイド 2.3](deploy.md#23-route-を書く)・[2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker))。別のドメインに置く構成では `<設置ホスト>` = `<edge のホスト>`(`<edge のホスト>/s/*` が配信専用の Worker の Route、edge はそのホストの Custom Domain。[デプロイガイド 2.5](deploy.md#25-公開アドレスの選び方))。`*.workers.dev` で公開する構成では `<設置ホスト>` = `wtt-static.<アカウントのサブドメイン>.workers.dev`(Route は無い)。どちらも制約は[導入構成の選び方 2 節](install-patterns.md#2-edge-の置き方問い-1)
 - サイトに GTM コンテナが入っており、GA4 にデータを送っている(GA4 の Google タグが GTM 内で動いている)。確かめるときは、ページの HTML を取得して探すのではなく、ブラウザの DevTools → Network でページを開き、`gtm.js` と `g/collect` への通信があることを見る(GTM を JavaScript で後から挿入するサイトでは、HTML に GTM のスニペットが無い)
 - GA4 の次の 2 つを控えてある
   - **測定 ID**(`G-` で始まる)— GA4 → 管理 → データストリーム
@@ -71,7 +71,7 @@
 | `導入の形` | **迷ったら `A: JS Cookie(タグ 1 本)`**。もう一方の `B: サーバー発行 Cookie` は Safari 対策の選択肢で、後から移せる([8 節](#8-mode-c-と-mode-b)) |
 | `同意の扱い`(設定のキーは `consentMode`) | **CMP が無ければ「同意を待たずに動かす」(既定。`implicit`)のまま**。同意を得るまで何も動かしたくない場合だけ「訪問者が同意するまで動かさない」(`required`)([7 節](#7-consent-の配線cmp-を使うサイト)) |
 
-作ったら、左メニューの「設定」→「一般」で **`受け付けるサイトのアドレス(Origin)`**(設定のキーは `allowedOrigins`)を確認する。`ドメイン(ホスト名)` から `https://<ドメイン>` が自動で入っている。同じタグを複数のホストのページに置く場合(例 `example.com` と `www.example.com`)は、1 行に 1 つずつ全部を書く。末尾のスラッシュやパスは付けない。ここに無い origin のページからの要求は拒否される(403)。この値はページの origin から決まるので、edge の位置にかかわらず既定値のままでよい。
+作ったら、左メニューの「設定」→「一般」で **`受け付けるサイトのアドレス(Origin)`**(設定のキーは `allowedOrigins`)を確認する。`ドメイン(ホスト名)` から `https://<ドメイン>` が自動で入っている。同じタグを複数のホストのページに置く場合(例 `example.com` と `www.example.com`)は、1 行に 1 つずつ全部を書く。末尾のスラッシュやパスは付けない。ここに無い origin のページからの要求は拒否される(403)。この値はページの origin から決まるので、edge の位置にかかわらず既定値のままでよい(edge を別のドメインに置く構成でも、入れるのはページの origin で、edge のホストではない)。
 
 ほかの設定項目はすべて既定のままでよい。一覧と意味は [11 節](#11-サイト設定項目の全一覧)。分析用の外部 ID(GA4 プロパティ ID / BigQuery データセット)は、分析を始めるときに[分析ガイド 2 節 (d)](analytics.md#d-サイトに外部-id-を設定する)で設定する。
 
@@ -95,7 +95,7 @@
 - **GTM のカスタム HTML タグで入れない。JS で後から挿入もしない。** どちらも読み込みが遅れて上の条件を満たさず、元の表示が見えてから切り替わる。CSP の nonce も引き継げない。導入の確認だけなら GTM 経由でも動く(割り当て・Cookie・`ab_exposure` の push は行われる)が、チラつきが出るので、本番のエクスペリエンスを始める前に `<head>` に直接書く形へ移す
 - **サイトが CSP の nonce を使っているなら、タグにも同じ nonce を付ける**(`<script nonce="..." src="...">`)。詳しくは [10 節](#10-コードの変更と-csp)
 
-確認: ブラウザで `https://<設置ホスト>/s/<siteId>.js` を開き、JavaScript が表示されること。設置タグを別オリジン(`*.workers.dev` / Custom Domain)で配っているときは、404 が配信専用の Worker の応答(本文 `not found`)になる。サイトの 404 ページ(HTML)が出るのは Route 構成だけ。
+確認: ブラウザで `https://<設置ホスト>/s/<siteId>.js` を開き、JavaScript が表示されること。設置タグを別オリジン(別のドメインに置く構成の `<edge のホスト>` / `*.workers.dev`)で配っているときは、404 が配信専用の Worker の応答(本文 `not found`)になる。サイトの 404 ページ(HTML)が出るのは、設置サイトのゾーンに Route を置く構成だけ。
 
 - `not found` という短い文字列だけが出る → そのサイトがまだ一度も公開されていない(デプロイガイドのスモークで開始 → 終了していれば公開済み)か、公開の後の配信ファイルの更新が済んでいない(管理画面のサイトの上部に警告が出る。[運用ガイド 4 節](operations.md#4-公開の反映))か、サイト ID の綴り違い。この状態でもサイトは元の表示のまま動く
 - サイトの 404 ページ(HTML)が出る → 配信専用の Worker の Route が効いていない。[デプロイガイド 2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker) の確認を見直す
@@ -222,7 +222,7 @@ runtime は失敗を `console.debug`(`wtt: …` で始まる)に出す。Chrome 
 | タグの URL でサイトの 404 ページが出る | 配信専用の Worker の Route | [デプロイガイド 2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker) |
 | `_ab_vid` が作られない | タグが読み込まれているか(DevTools → Network で `<siteId>.js` が 200)/ `consentMode` が `required` で同意待ちになっていないか / `window.__ab` に `denied` を置いていないか | [7 節](#7-consent-の配線cmp-を使うサイト)。Mode B の Cookie は HttpOnly なので Application → Cookies で見る |
 | Network で `/v1/sites/<siteId>/decision` が 403(この通信は[履歴条件](#9-履歴条件と-visitor-profile)を使うサイトでだけ起きる) | ページの origin が `allowedOrigins` に完全一致しているか(`https://`・ポート・`www` の有無) | [2 節](#2-サイトを作る)の `allowedOrigins` に追加する |
-| Network で `/v1/sites/<siteId>/decision` が 404 | `<設置ホスト>/v1/*` の Route | [デプロイガイド 2.3](deploy.md#23-route-を書く) |
+| Network で `/v1/sites/<siteId>/decision` が 404 | 要求の宛先(Network の Request URL のホスト)で edge が公開されているか。公開の仕方は導入構成で決まる: 設置サイトのゾーンに置く構成では `<設置ホスト>/v1/*` の Route、別のドメインに置く構成では `<edge のホスト>` の Custom Domain、`*.workers.dev` の構成では `wtt-edge.<アカウントのサブドメイン>.workers.dev` | [デプロイガイド 2.3](deploy.md#23-route-を書く) |
 | 元の表示が一瞬見えてから切り替わる(チラつく) | タグに `async` / `defer` が付いていないか / GTM 経由で入れていないか / CSS の変更か(CSS の変更は prehide しない) | [3 節](#3-タグを置く)のとおり viewport の meta の直後に同期で置く |
 | Console に `wtt: decision timeout` | 応答がサイト設定の `decisionTimeoutMs` を超えた。その読み込みではエクスペリエンスを出さない(元の表示のまま) | 通信環境を変えて再確認する。常に起きるなら `decisionTimeoutMs` を上げる([11 節](#11-サイト設定項目の全一覧)) |
 | `dataLayer` に `ab_exposure` はあるが DebugView に無い | GTM のトリガーのイベント名の綴り / GTM を公開したか / 測定 ID / DebugView の対象端末 / Brave などで GTM が遮断されていないか | 4.2 を見直し、GTM プレビューでタグの発火を追う |
@@ -311,7 +311,7 @@ A から B へは後から移せるが、Cookie の発行元が変わるので�
 
 ### Mode B(サーバー発行 Cookie)
 
-サイトが Cloudflare のゾーン配下にあるときの Safari 対策。サイト本体のサーバーの改修は要らない。
+サイトが Cloudflare のゾーン配下にあるときの Safari 対策。サイト本体のサーバーの改修は要らない。edge を別のドメインに置く構成と `*.workers.dev` の構成では使えない(ページのホストに `/__ab/*` を置けないため)。Safari 対策は Mode A か Mode C にする。
 
 1. サイト設定の `導入の形` を `B: サーバー発行 Cookie(同じゾーンの Workers Route。サイトが Cloudflare 配下のとき)` にし、`hosts` に `<ページのホスト>` を 1 行に 1 つ書く(小文字。日本語ドメインは punycode)
 2. `<ページのホスト>/__ab/*` の Route を追加して edge を再デプロイする(デプロイガイドの `dlite_hosts`。[2.3](deploy.md#23-route-を書く))
@@ -337,7 +337,7 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 - 配信条件の閲覧したページの条件(このページを見たことがある・N 回以上見た・最後に見たのが N 日以内)/ 目標の条件(目標を達成したことがある)。オーディエンスに含めた場合も同じ
 - エクスペリエンスの `persistAssignment: true`(一度出したパターンを出し続ける)
 
-**必要な設置作業**: `<設置ホスト>/v1/*` の Route。デプロイガイドの既定の構成では 2.3 で張ってあるので、追加の作業は無い。タグは decision / event の URL を自分の読み込み元から組み立てる(`https://<設置ホスト>/v1/sites/<siteId>/decision`)ため、この Route が無いとサイト本体に届いて 404 になる。
+**必要な設置作業**: 無い。decision / event を受ける edge の公開は、デプロイガイドの手順([2.3](deploy.md#23-route-を書く))で済んでいる。公開の仕方は導入構成で決まる: 設置サイトのゾーンに置く構成では `<設置ホスト>/v1/*` の Route、別のドメインに置く構成では `<edge のホスト>` の Custom Domain、`*.workers.dev` の構成では `wtt-edge.<アカウントのサブドメイン>.workers.dev`。タグは decision / event を、設置タグのファイルに書き込まれた edge の宛先(デプロイガイド 3.4 の `AB_EDGE_ORIGIN`)に送る。edge に届かないと decision が失敗し、エクスペリエンスは出ない(元の表示のまま)。設置サイトのゾーンに置く構成で Route が無いと、要求がサイト本体に届いて 404 になる。
 
 保存するのは閲覧回数・目標達成回数・保存済みの割当だけで、生のイベントや個人情報は保存しない。最終訪問から `retentionDays`(既定 90 日)で自動的に消える。**`retentionDays` を変えると、その後に訪問した訪問者から新しい日数が効く**(保持期限は訪問のたびに「その時点の設定」で置き直される)。変更より前の最終訪問から一度も戻ってこない訪問者の Profile は、変更前の日数で消える。短くした場合に休眠中の Profile まで即時に短くする手段は無いので、保持の方針を説明するときはこの挙動を含める。
 
@@ -378,6 +378,8 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 | Trusted Types の強制(`require-trusted-types-for 'script'`) | **非対応**。HTML(`innerHTML` による挿入そのものが拒否される。`<script>` の有無を問わない)と CUSTOM_JS は動かない。TEXT / IMAGE / HIDE / ATTRIBUTE / CSS は動く(`<style>` の `textContent` は Trusted Types の対象外)。失敗はその変更だけに閉じる |
 
 **設置タグや edge が設置サイトと別オリジンの構成**(`*.workers.dev` や別ドメインで公開している)では、`connect-src` に edge のホストを足す(decision / event の送信先)。結果を記録する場合も、テストの参加と目標の達成を同じ edge の `/event` に送るので、`connect-src` に edge のホストが要る(足さないと送信がブラウザで止まり、ツールの側では失敗として数えられない)。設置タグの `script-src` には、設置タグを配るホスト(配信専用の Worker)を allowlist 方式のサイトだけ足す(nonce 方式なら設置タグの nonce で通る)。同一オリジンの構成(設置サイトのゾーンの Route)では不要。
+
+別のドメインに置く構成では、設置タグと edge が同じ `<edge のホスト>`(例 `ab.example.net`)にあるので、足すホストはこの 1 つ(`connect-src` と、allowlist 方式なら `script-src`)。`*.workers.dev` の構成では、`connect-src` に edge のホスト(`wtt-edge.<アカウントのサブドメイン>.workers.dev`)、`script-src` に配信専用の Worker のホスト(`wtt-static.<アカウントのサブドメイン>.workers.dev`)と、2 つに分かれる。どちらの別オリジンの構成でも、サイトの `allowedOrigins` にページの origin が要り([2 節](#2-サイトを作る))、Mode B は使えない([8 節](#8-mode-c-と-mode-b))。
 
 **プレビューを設置タグ経由で開くときの追加の読み込み**: 設置したページでプレビューを開く(URL の末尾に `#__ab_preview=<experimentId>:<variantId>` を付けて開く)と、タグが設置タグと同じオリジンから `/s/preview/<hash>.js` を 1 本追加で読む。この `<script>` にも設置タグの nonce を付けるので、上の表のとおり設置タグに nonce を付けていれば CSP の設定を足す必要はない(allowlist 方式のサイトでは、設置タグと同じホストがすでに許可されていれば通る)。読み込めなかったときは、プレビューを適用せずに元の表示のままにする。通常の訪問者の読み込みでは、このファイルは読まない。
 
@@ -528,7 +530,7 @@ GA4 で `ab_error` のイベント数を見れば、制限に当たったペー�
 
 | 送信先 | 送信される情報 | 利用目的 | Cookie |
 |---|---|---|---|
-| 運営者自身の Cloudflare アカウント上で動く Worker(`<設置ホスト>` の Route)。第三者への送信ではない | **decision**(エクスペリエンスの割当の要求): `v`(設定のバージョン)、`url`(閲覧中のページの URL。クエリ・フラグメントを含む)、`referrer`(参照元の URL)、`device`(`desktop` / `mobile` / `tablet` の判定結果)、`viewport`(ブラウザの表示領域の幅・高さ)、`browser`(ブラウザの判定結果)、`os`(OS の判定結果)、`firstVisitAt`(初回の訪問時刻。匿名の ID の発行時刻から読み取る)、`visitorId`(Mode A。ツールが発行した匿名の ID。ID の先頭に発行時刻(初回の訪問日時)を含む) | A/B テストの割当(どのパターンを出すか)の決定 | `_ab_vid`(`正本 Cookie 名`。ツールが発行する匿名の識別子。値の先頭に発行時刻(初回の訪問日時)を含む。Mode C でも、初回の訪問の時刻を持つためだけに置く)、`UUID Cookie` を有効にしている場合はその Cookie(正本から導出した UUID) |
+| 運営者自身の Cloudflare アカウント上で動く Worker(edge)。宛先のホストは導入構成で決まる: 設置サイトのゾーンに置く構成では `<設置ホスト>`、別のドメインに置く構成では `<edge のホスト>`、`*.workers.dev` の構成では `wtt-edge.<アカウントのサブドメイン>.workers.dev`。第三者への送信ではない | **decision**(エクスペリエンスの割当の要求): `v`(設定のバージョン)、`url`(閲覧中のページの URL。クエリ・フラグメントを含む)、`referrer`(参照元の URL)、`device`(`desktop` / `mobile` / `tablet` の判定結果)、`viewport`(ブラウザの表示領域の幅・高さ)、`browser`(ブラウザの判定結果)、`os`(OS の判定結果)、`firstVisitAt`(初回の訪問時刻。匿名の ID の発行時刻から読み取る)、`visitorId`(Mode A。ツールが発行した匿名の ID。ID の先頭に発行時刻(初回の訪問日時)を含む) | A/B テストの割当(どのパターンを出すか)の決定 | `_ab_vid`(`正本 Cookie 名`。ツールが発行する匿名の識別子。値の先頭に発行時刻(初回の訪問日時)を含む。Mode C でも、初回の訪問の時刻を持つためだけに置く)、`UUID Cookie` を有効にしている場合はその Cookie(正本から導出した UUID) |
 | 同上 | **event**(目標の達成・同意の撤回): `type`(`goal` / `forget`)、`goalId`(達成した目標の識別子。`type` が `goal` のとき)、`visitorId`(Mode A) | A/B テストの効果測定(Conversion の計上)、および同意撤回時のサーバー側の履歴の削除 | 同上 |
 | 同上(**結果を記録するサイトだけ**。サイトの設定の「結果を記録する」) | **event の結果の送信**: テストの参加(`type` = `participant`。`runId`(テストの記録の識別子)、`variantId`(表示したパターン)、`device`(`desktop` / `mobile` / `tablet` の判定結果)、`applied`(変更の適用の状態: 成功 / 失敗 / 後から失敗 / 回復))と、目標の達成(`type` = `conversion`。`goalId`、`runIds`(参加しているテストの記録の識別子の一覧))。`visitorId`(Mode A・Mode C) | テストの結果(パターンごとの参加者と目標の達成)の集計。保存先は運営者の Cloudflare アカウントの計測用のデータベース(D1)で、訪問者 ID はそのまま保存せず、鍵付きのハッシュ(HMAC-SHA-256)にして保存する。保存の期間は、テストの記録を終えた時点(評価時点と終了の早い方)からサイトの設定の保持期間(既定 90 日)を過ぎた後、書き込みの予算に余裕のある日に消すまで(大きなテストは消し終えるまで数日かかる)。集計した結果(パターンごとの人数と CV の数など)は、参加者ごとの記録を消した後も管理画面に残る | 同上。ほかにブラウザの `localStorage` に送信済みの印を 1 つ置く(下の注記) |
 

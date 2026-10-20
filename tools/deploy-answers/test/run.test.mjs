@@ -174,7 +174,7 @@ test("アカウントが変わる確認は、それが起きる構成の節の�
     rec: out.slice(out.indexOf("## 推奨構成"), out.indexOf("## 最軽量構成")),
     light: out.slice(out.indexOf("## 最軽量構成"), out.indexOf("## 人に頼む作業")),
   });
-  const r = run(answers({ cloudflare_account: "existing", existing_plan: "paid", site_on_cloudflare: "no" }));
+  const r = run(answers({ cloudflare_account: "existing", existing_plan: "paid", site_on_cloudflare: "no", edge_host: "none" }));
   assert.equal(r.code, 0);
   assert.ok(r.output.startsWith("## 推奨構成\n"));
   const { rec } = sections(r.output);
@@ -197,8 +197,8 @@ test("アカウントが変わる確認は、それが起きる構成の節の�
 
 test("ドメインなしの構成の注意は「悪意のある人」で書き、「第三者」を使わない。誰でも知ることができる理由の括弧は出力の初出だけ", () => {
   const cases = [
-    answers({ cloudflare_account: "existing", existing_plan: "paid", site_on_cloudflare: "no" }),
-    answers({ cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "no", other_workers: "unknown" }),
+    answers({ cloudflare_account: "existing", existing_plan: "paid", site_on_cloudflare: "no", edge_host: "none" }),
+    answers({ cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "no", edge_host: "none", other_workers: "unknown" }),
     answers({ cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "yes", install_host: "www.example.com" }),
     answers({ features: "[ab, history]", daily_pv: "over_70k" }),
     answers(),
@@ -224,7 +224,7 @@ test("提示の推奨構成・最軽量構成の要約の下に、管理画面�
 });
 
 test("アカウントが変わる構成の --accept は、--confirm-account-change が無ければ終了コード 2 で止まり、ファイルを変えない", () => {
-  const text = answers({ cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "no", other_workers: "yes" });
+  const text = answers({ cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "no", edge_host: "none", other_workers: "yes" });
   for (const accept of ["recommended", "lightest"]) {
     const r = run(text, { accept });
     assert.equal(r.code, 2, accept);
@@ -235,7 +235,7 @@ test("アカウントが変わる構成の --accept は、--confirm-account-chan
 });
 
 test("--confirm-account-change 付きなら、上段を separate に書き換えて元の答えをコメントに残し、下段を書く", () => {
-  const text = answers({ cloudflare_account: "existing", existing_plan: "paid", site_on_cloudflare: "no" });
+  const text = answers({ cloudflare_account: "existing", existing_plan: "paid", site_on_cloudflare: "no", edge_host: "none" });
   const r = run(text, { accept: "recommended", confirmAccountChange: true });
   assert.equal(r.code, 0);
   assert.match(r.text, /^cloudflare_account: separate   # 元の答え: existing。Workers Paid のため/m);
@@ -295,4 +295,32 @@ test("手で書いた構成で、上段が既存の Paid のアカウントな�
   assert.equal(r.code, 2);
   assert.equal(r.text, undefined);
   assert.match(r.output, /- plan\(plan\)/);
+});
+
+// 決定 64 (3): 別のドメインに edge を載せる構成(edge_address: custom-domain)
+const CUSTOM = "owner_email: a@example.com\nedge_host: ab.example.net\nedge_address: custom-domain\nzone_name: auto\nasset_public_base: auto\naccepted: manual\n";
+
+test("提示と要約のホストは、custom-domain なら edge_host(install_host ではない)", () => {
+  const r = run(answers({ site_on_cloudflare: "no", edge_host: "ab.example.net", image_upload: "true" }));
+  assert.equal(r.code, 0);
+  assert.match(r.output, /\*\*別のドメイン\(ab\.example\.net\) × Free × 画像のアップロードあり\(R2 から配信\)\*\*/);
+  assert.match(r.output, /\*\*ドメインなし\(\*\.workers\.dev\) × Free × 画像のアップロードなし\*\*/);
+  const configured = run("owner_email: a@example.com\ninstall_host: www.example.com\nedge_host: ab.example.net\nedge_address: custom-domain\nzone_name: example.net\nasset_public_base: none\n");
+  assert.equal(configured.code, 0);
+  assert.match(configured.output, /\*\*別のドメイン\(ab\.example\.net\) × Free × 画像のアップロードなし\*\*/);
+});
+
+test("--resolve-zone: custom-domain は edge_host がゾーンに属するかで見て書き込む。属さなければ E2c を聞き直す(終了コード 2)", () => {
+  const r = run(CUSTOM, { resolveZone: "example.net" });
+  assert.equal(r.code, 0);
+  assert.equal(parseAnswers(r.text).values.zone_name, "example.net");
+  assert.equal(parseAnswers(r.text).values.asset_public_base, "https://wtt-assets.example.net");
+  const bad = run(CUSTOM, { resolveZone: "example.org" });
+  assert.equal(bad.code, 2);
+  assert.equal(bad.text, undefined);
+  assert.equal(bad.output, "edge_host(ab.example.net)はゾーン example.org に属していない。ゾーンを選び直すか、E2c を聞き直す\n");
+  // install_host がゾーンに属していても、custom-domain では見ない
+  assert.equal(run(`install_host: www.example.org\n${CUSTOM}`, { resolveZone: "example.org" }).code, 2);
+  const fixed = CUSTOM.replace("zone_name: auto", "zone_name: example.net");
+  assert.equal(run(fixed, { resolveZone: "example.org" }).code, 2);
 });

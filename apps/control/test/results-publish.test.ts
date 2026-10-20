@@ -4,6 +4,7 @@ import { sql } from "kysely";
 import { RUN_ID_RE, type CompiledConfig } from "@wtt/core";
 import { getDb } from "../src/db";
 import { publishSite } from "../src/publish";
+import { collectionStops } from "../src/results/report";
 import { call, choosePrimaryGoal, createExperiment, experimentRow, json, publishRes, RESULTS_STORE, runDirect, setupOwner, siteRow, testEnv, TEXT_CHANGE } from "./helpers";
 
 // D9 ②(設計書 §6.3・§9.3、plan ② の K15・Task 11): Publish が compiled config に results を出し、収集の状態の変化を記録する
@@ -182,6 +183,25 @@ describe("Publish の results(D9 ②)", () => {
     const at = await getDb(env).selectFrom("results_collection_log").select("at").where("site_id", "=", sid).where("publish_version", "=", v4).executeTakeFirstOrThrow();
     const pub = await getDb(env).selectFrom("publishes").select("activated_at").where("site_id", "=", sid).where("version", "=", v4).executeTakeFirstOrThrow();
     expect(at.at).toBe(pub.activated_at);
+  });
+
+  it("B110: records the published results_enabled, not whether results.runs is non-empty, and the stop periods are unaffected", async () => {
+    // 結果を記録する Site で、run を持つテストが無い公開(本番の v15 と同じ形): config に results は無いが、記録は enabled 1
+    const { owner, sid } = await resultsSite();
+    await testExperiment(owner.token, sid, "exp_hero");
+    const v1 = await publish(owner.token, sid);
+    expect((await activeConfig(sid)).results).toBeUndefined();
+    expect(await logRows(sid)).toEqual([{ enabled: 1, publish_version: v1 }]);
+    // 開始(runs にテストが載る)と終了(runs が空に戻る。個票が残るので forget のために results は出す)でも、公開された設定は変わらないので足さない
+    await transition(owner.token, sid, "exp_hero", "running");
+    const runId = (await experimentRow(sid, "exp_hero")).run_id!;
+    expect((await activeConfig(sid)).results).toEqual({ forget: true, runs: { exp_hero: runId } });
+    await transition(owner.token, sid, "exp_hero", "archived");
+    expect((await activeConfig(sid)).results).toEqual({ forget: true, runs: {} });
+    expect(await logRows(sid)).toEqual([{ enabled: 1, publish_version: v1 }]);
+    // テストの期間(開始から終了まで)に、記録の止まっていた期間は出ない
+    const exp = await experimentRow(sid, "exp_hero");
+    expect(await collectionStops(testEnv, getDb(env), sid, exp.started_at!, exp.stopped_at!)).toEqual({ periods: [], stopMs: 0 });
   });
 
   it("superseded publish does not record collection log", async () => {

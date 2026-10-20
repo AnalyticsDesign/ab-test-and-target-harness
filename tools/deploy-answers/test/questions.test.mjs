@@ -5,8 +5,8 @@ import { QUESTIONS, checkAnswers, checkConfigured, isConfigured, isBlank, hostPr
 const ok = { features: ["ab"], daily_pv: "under_10k", image_upload: false, cloudflare_account: "none", site_on_cloudflare: "no_site", owner_email: "a@example.com" };
 const ids = (issues) => issues.map((i) => i.id);
 
-test("質問の表は 9 問で、ID の順が N1 N2 N3 E1 E1b E2 E2a E2b E3", () => {
-  assert.deepEqual(QUESTIONS.map((q) => q.id), ["N1", "N2", "N3", "E1", "E1b", "E2", "E2a", "E2b", "E3"]);
+test("質問の表は 10 問で、ID の順が N1 N2 N3 E1 E1b E2 E2a E2b E2c E3", () => {
+  assert.deepEqual(QUESTIONS.map((q) => q.id), ["N1", "N2", "N3", "E1", "E1b", "E2", "E2a", "E2b", "E2c", "E3"]);
 });
 
 test("すべて答えていれば問題なし", () => {
@@ -26,13 +26,13 @@ test("条件付きの問い: E1b は existing のときだけ、E2a は yes の�
 
 test("E2b(止まると困る Worker)は、既存の Free のアカウント × ドメインなし(no / no_site)のときだけ聞く", () => {
   const free = { ...ok, cloudflare_account: "existing", existing_plan: "free" };
-  assert.deepEqual(ids(checkAnswers({ ...free, site_on_cloudflare: "no" })), ["E2b"]);
+  assert.deepEqual(ids(checkAnswers({ ...free, site_on_cloudflare: "no", edge_host: "none" })), ["E2b"]);
   assert.deepEqual(ids(checkAnswers({ ...free, site_on_cloudflare: "no_site" })), ["E2b"]);
-  assert.deepEqual(ids(checkAnswers({ ...free, site_on_cloudflare: "no", other_workers: "unknown" })), []);
+  assert.deepEqual(ids(checkAnswers({ ...free, site_on_cloudflare: "no", edge_host: "none", other_workers: "unknown" })), []);
   assert.deepEqual(ids(checkAnswers({ ...free, site_on_cloudflare: "yes", install_host: "www.example.com" })), []);
-  assert.deepEqual(ids(checkAnswers({ ...free, existing_plan: "paid", site_on_cloudflare: "no" })), []);
-  assert.deepEqual(ids(checkAnswers({ ...ok, site_on_cloudflare: "no" })), []);
-  assert.equal(checkAnswers({ ...free, site_on_cloudflare: "no", other_workers: "maybe" })[0].id, "E2b");
+  assert.deepEqual(ids(checkAnswers({ ...free, existing_plan: "paid", site_on_cloudflare: "no", edge_host: "none" })), []);
+  assert.deepEqual(ids(checkAnswers({ ...ok, site_on_cloudflare: "no", edge_host: "none" })), []);
+  assert.equal(checkAnswers({ ...free, site_on_cloudflare: "no", edge_host: "none", other_workers: "maybe" })[0].id, "E2b");
 });
 
 test("選択肢に無い値は、選べる値を添えて返す", () => {
@@ -125,4 +125,45 @@ test("checkConfigured: 上段で既存の Paid のアカウントと答えたの
   assert.deepEqual(checkConfigured({ ...base, plan: "paid" }), []);
   assert.deepEqual(checkConfigured({ ...base, cloudflare_account: "separate" }), []);
   assert.deepEqual(checkConfigured({ ...base, existing_plan: "free" }), []);
+});
+
+test("E2c(別のドメインのホスト)は E2 = no のときだけ聞く。値はホストか none(決定 64 (3))", () => {
+  const no = { ...ok, site_on_cloudflare: "no" };
+  const [blank] = checkAnswers(no);
+  assert.deepEqual([blank.id, blank.key, blank.message], ["E2c", "edge_host", "未回答"]);
+  assert.deepEqual(checkAnswers({ ...no, edge_host: "none" }), []);
+  assert.deepEqual(checkAnswers({ ...no, edge_host: "ab.example.net" }), []);
+  const [url] = checkAnswers({ ...no, edge_host: "https://ab.example.net/" });
+  assert.equal(url.id, "E2c");
+  assert.match(url.message, /ホストだけを書く\(候補: ab\.example\.net\)/);
+  assert.deepEqual(ids(checkAnswers({ ...ok, site_on_cloudflare: "yes", cloudflare_account: "existing", existing_plan: "free", install_host: "www.example.com" })), []);
+  assert.deepEqual(ids(checkAnswers({ ...ok, site_on_cloudflare: "no_site" })), []);
+});
+
+test("checkConfigured: edge_address: custom-domain(別のドメインのホストで公開。決定 64 (3))", () => {
+  // install_host は custom-domain では要らない(base に無くても問題なし)
+  const base = { owner_email: "a@example.com", edge_address: "custom-domain", edge_host: "ab.example.net", zone_name: "example.net", asset_public_base: "none" };
+  assert.deepEqual(checkConfigured(base), []);
+  const { edge_host: _h, ...noHost } = base;
+  const [missing] = checkConfigured(noHost);
+  assert.deepEqual([missing.id, missing.message], ["edge_host", "edge_address: custom-domain のときは必須"]);
+  assert.deepEqual(ids(checkConfigured({ ...base, edge_host: "none" })), ["edge_host"]);
+  assert.match(checkConfigured({ ...base, edge_host: "none" })[0].message, /ホストの形/);
+  const { zone_name: _z, ...noZone } = base;
+  const [zone] = checkConfigured(noZone);
+  assert.deepEqual([zone.id, zone.message], ["zone_name", "edge_address: custom-domain のときは必須(auto でもよい)"]);
+  assert.deepEqual(checkConfigured({ ...base, zone_name: "auto" }), []);
+  const [outside] = checkConfigured({ ...base, zone_name: "example.org" });
+  assert.deepEqual([outside.id, outside.message], ["zone_name", "edge_host(ab.example.net)がゾーン example.org に属していない"]);
+  const [dl] = checkConfigured({ ...base, dlite_hosts: ["www.example.com"] });
+  assert.equal(dl.id, "dlite_hosts");
+  assert.match(dl.message, /edge_address: route のときだけ/);
+  assert.deepEqual(checkConfigured({ ...base, asset_public_base: "auto" }), []);
+});
+
+test("checkConfigured: asset_public_base: auto はゾーンのある構成(route・custom-domain)だけ。edge_address の値は 3 つ", () => {
+  const [auto] = checkConfigured({ owner_email: "a@example.com", edge_address: "workers-dev", asset_public_base: "auto" });
+  assert.deepEqual([auto.id, auto.message], ["asset_public_base", "auto は edge_address: route か custom-domain のときだけ使える"]);
+  const [other] = checkConfigured({ owner_email: "a@example.com", edge_address: "other", asset_public_base: "none" });
+  assert.deepEqual([other.id, other.message], ["edge_address", "route / workers-dev / custom-domain のどれかで書く(今: other)"]);
 });

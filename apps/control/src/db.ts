@@ -84,7 +84,14 @@ export type InstanceSettingRow = { key: string; value: string; updated_at: numbe
 
 /** migrations/0014_results_collection.sql(D9 ②)。一度開始したエクスペリエンスを削除した後の ID(設計書 §6.3) */
 export type RetiredExperimentIdRow = { site_id: string; experiment_id: string; retired_at: number };
-/** 同上。Publish で公開された収集の状態が変わった時刻(設計書 §6.6)。id は SQLite の rowid(足すときは省く) */
+/**
+ * 同上。Publish で公開された収集の状態が変わった時刻(設計書 §6.6)。id は SQLite の rowid(足すときは省く)。
+ * enabled = その公開の Site の results_enabled(results.runs にテストを載せる設定か)。runs が空かどうかではない(B110:
+ * run を持つテストが無い公開でも、Site が記録する設定なら 1)。テストを開始した公開から cutoff までの公開では、そのテストは
+ * running か paused なので「設定が有効」と「runs にそのテストが載る」が一致し、収集の停止の期間(report.ts の collectionStops)の計算は変わらない。
+ * もともとの限界: 記録は公開ごと・Site ごとなので、開始(started_at)から開始の公開が成功するまでの間(通常は数秒。公開が失敗すれば次の公開まで)を表せない
+ * 0014 のコメントの「compiled config に results.runs を載せるか」もこの意味(適用済みのマイグレーションなので直していない)
+ */
 export type ResultsCollectionLogRow = { id: Generated<number>; site_id: string; at: number; enabled: number; publish_version: number };
 /** 同上。Cron のジョブの実行の記録(last_run_day = UTC の YYYY-MM-DD) */
 export type CronJobRunRow = { job: string; last_run_day: string | null; last_success_at: number | null };

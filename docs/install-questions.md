@@ -8,7 +8,7 @@ AI エージェントに導入を任せるとき、エージェントが最初�
 
 - 最初のメッセージで「質問は最大 9 つ。1 つずつ聞くが、分かっているならまとめて答えてもよい」と伝え、4 節の書式を示す
 - `deploy-answers.yaml` に答えが書かれている質問は飛ばす。`<` で始まる値は未記入として聞く
-- 1 問ずつ、表の順に聞く。E1b・E2a・E2b は、条件を満たすときだけ聞く
+- 1 問ずつ、表の順に聞く。E1b・E2a・E2b・E2c は、条件を満たすときだけ聞く
 - 質問文と選択肢は表の文言を使う。言い回しを相手に合わせて補ってよいが、選択肢を足したり減らしたりしない。用語は「補足」の列を添えて説明する
 - **構成を勧める判断をしない**。選択肢に推奨の印を付けず、構成の話は検査スクリプトの出力に任せる
 - 答えが選択肢に当てはまらないときは、近い選択肢を示して選び直してもらう(自由に解釈して進めない)
@@ -29,9 +29,10 @@ AI エージェントに導入を任せるとき、エージェントが最初�
 |---|---|---|---|---|
 | E1 | Cloudflare のアカウントは | (a) 持っていない = `none` / (b) 持っていて、そこに入れる = `existing` / (c) 持っているが、この製品用に別に作る = `separate` | アカウント = Cloudflare の契約の単位。1 つのアカウントに入れられるのは、この製品 1 つまで。同じアカウントのほかの Worker(Cloudflare の上で動くプログラム)と無料枠を分け合う。(a)(c) は、この後に作り方を案内する | `cloudflare_account` |
 | E1b | (E1 = `existing` のとき)そのアカウントは有料の Workers Paid プランですか | (a) いいえ(無料)= `free` / (b) はい = `paid` / (c) 分からない → 確かめ方: Cloudflare のダッシュボードの Manage account(アカウントの管理)→ Billing(請求)→ Subscriptions(サブスクリプション)に Workers Paid があるか | ドメインなしの構成になる場合に、有料プランのアカウントを避けるために確かめる(理由は構成の提示で説明する) | `existing_plan` |
-| E2 | タグを入れるサイトのドメインは、導入する Cloudflare アカウントで管理していますか | (a) している = `yes` / (b) していない = `no` / (c) 分からない → 確かめ方: `curl -sI https://<ホスト>/` の `server:` が `cloudflare` なら、Cloudflare を通っている(どのアカウントで管理しているかは、ダッシュボードのドメインの一覧で確かめる)/ (d) サイトはまだ無い・試すだけ = `no_site` | ドメイン = `www.example.com` の `example.com` の部分。Cloudflare で管理している = Cloudflare のダッシュボードにそのドメインが追加されていて(Cloudflare ではこれを「ゾーン」と呼ぶ)、サイトへのアクセスが Cloudflare を通っている状態。管理していなくても導入はできる(Cloudflare が用意するアドレスで動かし、後からドメインに移せる) | `site_on_cloudflare` |
+| E2 | タグを入れるサイトのドメインは、導入する Cloudflare アカウントで管理していますか | (a) している = `yes` / (b) していない = `no` / (c) 分からない → 確かめ方: `curl -sI https://<ホスト>/` の `server:` が `cloudflare` なら、Cloudflare を通っている(どのアカウントで管理しているかは、ダッシュボードのドメインの一覧で確かめる)/ (d) サイトはまだ無い・試すだけ = `no_site` | ドメイン = `www.example.com` の `example.com` の部分。Cloudflare で管理している = Cloudflare のダッシュボードにそのドメインが追加されていて(Cloudflare ではこれを「ゾーン」と呼ぶ)、サイトへのアクセスが Cloudflare を通っている状態。管理していなくても導入はできる(Cloudflare が用意するアドレスで動かし、後からドメインに移せる)。別のドメインを Cloudflare に置けるなら、そのドメインで動かせる(E2c) | `site_on_cloudflare` |
 | E2a | (E2 = `yes` のとき)タグを入れるページのホストは | 自由入力(例 `www.example.com`) | ホスト = ページの URL の `https://` の後ろから、最初の `/` の手前まで | `install_host` |
 | E2b | (E1 = `existing`・E1b = `free` で、E2 = `no` か `no_site` のとき)そのアカウントに、止まると困る Worker はありますか | (a) ある = `yes` / (b) ない = `no` / (c) 分からない = `unknown` | Worker = Cloudflare の上で動くプログラム。ほかのサイトやサービスで使っている仕組みがあれば「ある」。万が一、悪意のある人がプログラムで大量のアクセスを送ってきた場合(タグのアドレスはサイトの HTML に書かれるので、誰でも知ることができる)、ドメインなしの構成にはアクセスを制限する仕組み(WAF)を置けないため、無料枠を使い切られ、その日は同じアカウントの Worker がすべて止まる。「ある」「分からない」なら、この製品用に新しいアカウントを作る構成が勧められる。分からなければ「分からない」でよい | `other_workers` |
+| E2c | (E2 = `no` のとき)導入に使う Cloudflare アカウントに追加済みか、これから追加できる別のドメインはありますか。あれば、この製品に使うホスト名を教えてください | (a) ある → ホスト名(例 `ab.example.net`)/ (b) ない = `none` | 別のドメインのホスト(例 `ab.example.net`)で設置タグと計測の送信を受ける構成になる。ドメインを Cloudflare に追加するには、そのドメインのネームサーバーを Cloudflare に切り替える(サイトのドメインとは別なので、サイトには影響しない)。ほかの Cloudflare アカウントで使っているドメインは選ばない(切り替えると、そのドメインで動いているほかのサービスに及ぶ)。サイトとは別のホストになるので、Safari 対策の Mode B は使えない | `edge_host` |
 | E3 | 管理画面にログインする Google アカウントのメールアドレスは | 自由入力 | この後、Google 側でログイン用の設定(OAuth クライアント)を一緒に作る | `owner_email` |
 
 ## 4. まとめて答える書式
@@ -47,6 +48,7 @@ existing_plan:              # existing のとき: free / paid
 site_on_cloudflare:         # yes / no / no_site
 install_host:               # site_on_cloudflare: yes のとき(例 www.example.com)
 other_workers:              # existing・free でドメインなしのとき: yes / no / unknown
+edge_host:                  # site_on_cloudflare: no のとき: 別のドメインのホスト(例 ab.example.net)/ none
 owner_email:                # Google アカウントのメールアドレス
 ```
 
@@ -56,4 +58,4 @@ owner_email:                # Google アカウントのメールアドレス
 2. どちらにするかを答える。エージェントが `--accept recommended` か `--accept lightest` で構成を書き込む。選んだ構成でアカウントが変わる(既存のアカウントではなく、新しく作るアカウントに入れる)ときは、出力の先頭の「確認: アカウントが変わる」がそのまま示される。アカウントの変更に同意したときだけ、エージェントが `--confirm-account-change` を付けて書き込む(構成を選ぶ了承とは別に、もう 1 回答える)
 3. 以後は[デプロイガイド](deploy.md)の手順どおりに進む。人が止まるのは、Cloudflare と Google の画面での操作と、最後の動作確認
 
-構成を自分で決めている場合は、`deploy-answers.yaml` の下段の行の `#` を外して書く(`owner_email` は上段)。スクリプトは書かれた構成の矛盾を検査して要約を出し、了承は `--accept manual` で行う。
+構成を自分で決めている場合は、`deploy-answers.yaml` の下段の行の `#` を外して書く(`owner_email` と、`route` なら `install_host`、`custom-domain` なら `edge_host` は上段)。スクリプトは書かれた構成の矛盾を検査して要約を出し、了承は `--accept manual` で行う。

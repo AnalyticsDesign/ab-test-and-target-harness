@@ -39,7 +39,7 @@ test("ファイルが無い・不明な引数・空の値・--accept と --resol
 
 test("--confirm-account-change は値を取らないフラグとして --accept と一緒に使える", () => {
   const dir = mkdtempSync(join(tmpdir(), "wtt-answers-"));
-  const text = ANSWERS.replace("cloudflare_account: none\nsite_on_cloudflare: no_site", "cloudflare_account: existing\nexisting_plan: paid\nsite_on_cloudflare: no");
+  const text = ANSWERS.replace("cloudflare_account: none\nsite_on_cloudflare: no_site", "cloudflare_account: existing\nexisting_plan: paid\nsite_on_cloudflare: no\nedge_host: none");
   writeFileSync(join(dir, "deploy-answers.yaml"), text);
   assert.equal(runCli(["--accept", "lightest"], dir).status, 2);
   assert.equal(readFileSync(join(dir, "deploy-answers.yaml"), "utf8"), text);
@@ -53,4 +53,15 @@ test("聞き直しは終了コード 2", () => {
   const r = runCli([], dir);
   assert.equal(r.status, 2);
   assert.match(r.stdout, /## 聞き直す問い/);
+});
+
+test("E2 = no・edge_host ありの答えで --accept recommended → 下段に custom-domain と zone_name: auto(決定 64 (3))", () => {
+  const dir = mkdtempSync(join(tmpdir(), "wtt-answers-"));
+  const text = ANSWERS.replace("site_on_cloudflare: no_site", "site_on_cloudflare: no\nedge_host: ab.example.net").replace("# edge_address: route  # x", "# edge_address: route  # x\n# zone_name: example.com  # z");
+  writeFileSync(join(dir, "deploy-answers.yaml"), text);
+  assert.equal(runCli(["--accept", "recommended"], dir).status, 0);
+  const out = readFileSync(join(dir, "deploy-answers.yaml"), "utf8");
+  assert.match(out, /^edge_address: custom-domain   # x$/m);
+  assert.match(out, /^zone_name: auto   # z$/m);
+  assert.match(out, /^accepted: recommended$/m);
 });

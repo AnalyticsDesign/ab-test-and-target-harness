@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { kvKeys } from "@wtt/core";
-import { allotQueries, isTickPrioritySlot, runCron, type CronContext, type CronJob } from "../src/cron/runner";
+import { allotQueries, isTickPrioritySlot, queryLimitFor, runCron, type CronContext, type CronJob } from "../src/cron/runner";
 import { CRON_JOBS } from "../src/cron/jobs";
 import { resultsCapacityJob, resultsCollectUntilJob, resultsDailyJob, resultsDeliveryJob, resultsPurgeJob } from "../src/cron/results-jobs";
 import type { Env, ResultsHealthRpc } from "../src/env";
@@ -471,6 +471,25 @@ describe("results-purge: 保持期限・queue・孤児(K12・K18)", () => {
     expect((await experimentRow(sid, "exp_t")).results_purged_at).toBe(T23 + DAY);
   });
 
+  test("B93: Paid では 1 回の実行で消す量が増える(Free は配分 16 のまま)", { timeout: 60_000 }, async () => {
+    // 予算は十分(量はクエリの配分で決まる)。参加 15,000 行: Free は 1 回で 6,000 行(DELETE 3 回)、Paid は配分 116 で 1 回で消し終える
+    const owner = await setupOwner();
+    const sid = await recordingSite(owner);
+    const runId = await retentionFixture(owner, sid, "exp_t", T23 - 40 * DAY, 15_000);
+    const run = (t: number) => runCron(cronEnv(fakeResultsBudget({ writeBudget: 1_000_000 })), t, [resultsPurgeJob]);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const lastRun = () => JSON.parse(String(log.mock.calls.filter((c) => c[0] === "cron run").at(-1)![1])) as { queries: number; queryLimit: number };
+    expect(await run(T23)).toEqual([{ job: "results-purge", outcome: "continued" }]);
+    expect(await countRows(runId)).toBe(9_000);
+    expect(lastRun().queryLimit).toBe(40);
+    await env.DB.prepare("insert into instance_settings (key, value, updated_at, updated_by) values ('cloudflarePlan', '\"paid\"', 1, null)").run();
+    expect(await run(T23 + 15 * MIN)).toEqual([{ job: "results-purge", outcome: "ran" }]);
+    expect(await countRows(runId)).toBe(0);
+    expect((await experimentRow(sid, "exp_t")).results_purged_at).toBe(T23 + 15 * MIN);
+    expect(lastRun().queryLimit).toBe(140);
+    expect(lastRun().queries).toBeLessThanOrEqual(116);
+  });
+
   test("容量以外の理由で止めた日は削除しない", async () => {
     const owner = await setupOwner();
     const sid = await recordingSite(owner);
@@ -592,6 +611,50 @@ describe("results-collect-until(K11)", () => {
     expect(await runCron(cronEnv(), Date.now(), [resultsCollectUntilJob])).toEqual([{ job: "results-collect-until", outcome: "ran" }]);
     expect((await kvSettings(sid)).resultsCollectUntil).toEqual(expected);
     expect((await siteRow(sid)).collect_until_dirty).toBe(0);
+  });
+
+  test("B94: 印の立った Site を、全体の一巡を待たずに先に直す(位置が後ろにあっても)", { timeout: 60_000 }, async () => {
+    // run を持つ Site を 4 つ作り、全体の段の位置を最後の Site の手前に置く。先頭の Site に印を立てると、次の実行で直る
+    const owner = await setupOwner();
+    const ids = ["b94-a", "b94-b", "b94-c", "b94-d"];
+    for (const id of ids) {
+      await siteWithId(owner, id);
+      await startTest(owner, id, "exp_t");
+    }
+    await env.DB.prepare("insert into cron_cursors (job, day, cursor) values ('results-collect-until', '2026-11-20', ?)").bind(ids[2]).run();
+    const first = ids[0]!;
+    await env.DB.prepare("update experiments set started_at = started_at - ? where site_id = ?").bind(DAY, first).run();
+    await env.DB.prepare("update sites set collect_until_dirty = 1 where id = ?").bind(first).run();
+    const expected = await collectUntilMap(getDb(env), first);
+    expect((await kvSettings(first)).resultsCollectUntil).not.toEqual(expected);
+    // 印の Site の書き直し(締め切りの表・プラン・凍結の確かめ・印の 0 戻しの 4 件)で、この実行の全体の段は続きを次に回す(continued)
+    expect(await runCron(cronEnv(), Date.now(), [resultsCollectUntilJob])).toEqual([{ job: "results-collect-until", outcome: "continued" }]);
+    expect((await kvSettings(first)).resultsCollectUntil).toEqual(expected);
+    expect((await siteRow(first)).collect_until_dirty).toBe(0);
+    // 全体の段の位置は動かない(先頭に戻らない)。次の実行で続き(ids[3])から進み、末尾まで来て先頭へ
+    expect((await cursorRows()).find((r) => r.job === "results-collect-until")?.cursor).toBe(ids[2]);
+    expect(await runCron(cronEnv(), Date.now() + 15 * MIN, [resultsCollectUntilJob])).toEqual([{ job: "results-collect-until", outcome: "ran" }]);
+    expect((await cursorRows()).find((r) => r.job === "results-collect-until")?.cursor).toBeNull();
+  });
+
+  test("B94: 書き直しに失敗し続ける印の Site があっても、同じ実行で後ろの印の Site を直す", async () => {
+    const owner = await setupOwner();
+    const bad = await siteWithId(owner, "b94-bad");
+    const good = await siteWithId(owner, "b94-good");
+    for (const id of [bad, good]) {
+      await startTest(owner, id, "exp_t");
+      await env.DB.prepare("update experiments set started_at = started_at - ? where site_id = ?").bind(DAY, id).run();
+      await env.DB.prepare("update sites set collect_until_dirty = 1 where id = ?").bind(id).run();
+    }
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const e = cronEnv(undefined, undefined, { CONFIG_KV: failingKv(new RegExp(`^${kvKeys.settings(bad)}$`)) });
+    // 1 回の実行で、bad は失敗して飛ばし、印の段の位置を越えて good まで直す(配分 10: 位置 1 + 一覧 1 + bad 3 + good 4)
+    await runCron(e, Date.now(), [resultsCollectUntilJob]);
+    expect((await siteRow(good)).collect_until_dirty).toBe(0);
+    expect((await siteRow(bad)).collect_until_dirty).toBe(1);
+    // 次の実行は bad から試し直す(印の段は一巡ごとに先頭へ)
+    await runCron(e, Date.now() + 15 * MIN, [resultsCollectUntilJob]);
+    expect((await siteRow(bad)).collect_until_dirty).toBe(1);
   });
 
   test("concurrent_site_patch_overwrite_is_repaired_by_cron", async () => {
@@ -814,18 +877,28 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
     const daily = tick + 15 * MIN;
     expect(isTickPrioritySlot(tick)).toBe(true);
     expect(isTickPrioritySlot(daily)).toBe(false);
-    const allot = (due: string[], t: number) => {
-      const m = Object.fromEntries(allotQueries(CRON_JOBS, new Set(due), t));
+    const allot = (due: string[], t: number, plan: "free" | "paid" = "free") => {
+      const m = Object.fromEntries(allotQueries(CRON_JOBS, new Set(due), t, plan));
       return { d: m["results-delivery"], c: m["results-collect-until"], daily: m["results-daily"], cap: m["results-capacity"], purge: m["results-purge"] };
     };
-    expect(allot([], tick)).toMatchObject({ d: 10, c: 8, cap: 3 });
-    expect(allot([], daily)).toMatchObject({ d: 10, c: 8, cap: 3 });
-    expect(allot(["results-daily"], tick)).toMatchObject({ d: 10, c: 6, daily: 21, cap: 3 });
+    expect(allot([], tick)).toMatchObject({ d: 10, c: 10, cap: 3 });
+    expect(allot([], daily)).toMatchObject({ d: 10, c: 10, cap: 3 });
+    expect(allot(["results-daily"], tick)).toMatchObject({ d: 10, c: 7, daily: 20, cap: 3 });
     expect(allot(["results-daily"], daily)).toMatchObject({ d: 10, c: 1, daily: 26, cap: 3 });
-    expect(allot(["results-purge"], tick)).toMatchObject({ d: 10, c: 6, cap: 3, purge: 16 });
-    expect(allot(["results-purge"], daily)).toMatchObject({ d: 10, c: 8, cap: 3, purge: 16 });
-    expect(allot(["results-daily", "results-purge"], tick)).toEqual({ d: 10, c: 6, daily: 21, cap: 3, purge: 0 });
+    expect(allot(["results-purge"], tick)).toMatchObject({ d: 10, c: 7, cap: 3, purge: 16 });
+    expect(allot(["results-purge"], daily)).toMatchObject({ d: 10, c: 10, cap: 3, purge: 16 });
+    expect(allot(["results-daily", "results-purge"], tick)).toEqual({ d: 10, c: 7, daily: 20, cap: 3, purge: 0 });
     expect(allot(["results-daily", "results-purge"], daily)).toEqual({ d: 0, c: 0, daily: 26, cap: 3, purge: 11 });
+    // B93: Paid の実行は、purge が due のときだけ purge に 100 を足す(ほかの列と、purge が due でない実行は Free と同じ)
+    expect(allot([], tick, "paid")).toEqual(allot([], tick));
+    expect(allot(["results-daily"], daily, "paid")).toEqual(allot(["results-daily"], daily));
+    expect(allot(["results-purge"], tick, "paid")).toMatchObject({ d: 10, c: 7, cap: 3, purge: 116 });
+    expect(allot(["results-purge"], daily, "paid")).toMatchObject({ d: 10, c: 10, cap: 3, purge: 116 });
+    expect(allot(["results-daily", "results-purge"], tick, "paid")).toEqual({ d: 10, c: 7, daily: 20, cap: 3, purge: 100 });
+    expect(allot(["results-daily", "results-purge"], daily, "paid")).toEqual({ d: 0, c: 0, daily: 26, cap: 3, purge: 111 });
+    expect(queryLimitFor(CRON_JOBS, new Set(["results-purge"]), "paid")).toBe(140);
+    expect(queryLimitFor(CRON_JOBS, new Set(["results-purge"]), "free")).toBe(40);
+    expect(queryLimitFor(CRON_JOBS, new Set(["results-daily"]), "paid")).toBe(40);
     // 記録 1 件(位置と対象の読み取り 3 + 記録 21 + 位置の書き込み 1)は daily 優先の枠に収まる
     expect(allot(["results-daily"], daily).daily).toBeGreaterThanOrEqual(3 + 21 + 1);
     for (const due of [[], ["results-daily"], ["results-purge"], ["results-daily", "results-purge"]])
@@ -856,7 +929,7 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
   /** 登録と同じ並び・配分・最低を持つ偽のジョブ(daily は 0 時、purge は 23 時) */
   const fakeJobs = (used: Record<string, number>, dailyShare = 26) => [
     greedy("tick-1", 10, 10, { every: "tick" }, used),
-    greedy("tick-2", 8, 6, { every: "tick" }, used),
+    greedy("tick-2", 10, 7, { every: "tick" }, used),
     greedy("daily", dailyShare, 10, { daily: { afterUtcHour: 0 } }, used),
     greedy("capacity", 3, 2, { every: "tick" }, used, true),
     greedy("purge", 16, 10, { daily: { afterUtcHour: 23 } }, used),
@@ -866,7 +939,7 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
   };
 
   test("daily uses its full share and capacity still runs in the same invocation", async () => {
-    // daily 優先の枠: daily は配分 26 を使い切り、登録で後ろの容量も 3 を使える。tick-2 は残り 1 が最低 6 に届かず、位置も読まずに continued
+    // daily 優先の枠: daily は配分 26 を使い切り、登録で後ろの容量も 3 を使える。tick-2 は残り 1 が最低 7 に届かず、位置も読まずに continued
     const used: Record<string, number> = {};
     const daily = tickSlot(at("2026-11-20T00:00:00Z")) + 15 * MIN;
     const report = await runCron(testEnv, daily, fakeJobs(used));
@@ -891,12 +964,12 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
     // results-daily は済んだ日: tick 優先でも daily 優先でも purge 16・容量 3 と tick のジョブで 40 以内
     await env.DB.prepare("insert into cron_job_runs (job, last_run_day, last_success_at) values ('daily', '2026-11-20', 0)").run();
     await runCron(testEnv, tick, fakeJobs(used));
-    expect(used).toEqual({ "tick-1": 10, "tick-2": 6, capacity: 3, purge: 16 });
+    expect(used).toEqual({ "tick-1": 10, "tick-2": 7, capacity: 3, purge: 16 });
     expect(sum()).toBeLessThanOrEqual(40);
     await env.DB.prepare("delete from cron_job_runs where job = 'purge'").run();
     clear(used);
     await runCron(testEnv, tick + 15 * MIN, fakeJobs(used));
-    expect(used).toEqual({ "tick-1": 10, "tick-2": 8, capacity: 3, purge: 16 });
+    expect(used).toEqual({ "tick-1": 10, "tick-2": 10, capacity: 3, purge: 16 });
     expect(sum()).toBeLessThanOrEqual(40);
   });
 
@@ -907,12 +980,12 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
     const r1 = await runCron(testEnv, tick + 15 * MIN, fakeJobs(used));
     expect(r1.map((r) => r.outcome)).toEqual(["continued", "continued", "ran", "ran", "ran"]);
     expect(used).toEqual({ daily: 26, capacity: 3, purge: 11 });
-    // tick 優先の枠(daily と purge がまだ due の日): tick 10・6、daily 21、purge は 0 で動かない(continued = 成功を記録しない)
+    // tick 優先の枠(daily と purge がまだ due の日): tick 10・7、daily 20、purge は 0 で動かない(continued = 成功を記録しない)
     await env.DB.prepare("delete from cron_job_runs").run();
     clear(used);
     const r2 = await runCron(testEnv, tick + DAY, fakeJobs(used));
     expect(r2.map((r) => r.outcome)).toEqual(["ran", "ran", "ran", "ran", "continued"]);
-    expect(used).toEqual({ "tick-1": 10, "tick-2": 6, daily: 21, capacity: 3 });
+    expect(used).toEqual({ "tick-1": 10, "tick-2": 7, daily: 20, capacity: 3 });
     expect(await jobRun("purge")).toBeNull();
   });
 
@@ -949,6 +1022,67 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
       expect((await siteRow(sid)).collect_until_dirty).toBe(0);
       expect((await snapshotRows(sid, eid)).length).toBe(1);
     }
+  });
+
+  test("B93: プランは paidExtraShare を持つジョブが due のときだけ読み、読めなければ Free の配分で動く", async () => {
+    const used: Record<string, number> = {};
+    const jobs = () => fakeJobs(used).map((j) => (j.name === "purge" ? { ...j, paidExtraShare: 100 } : j));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const lastRun = () => JSON.parse(String(log.mock.calls.filter((c) => c[0] === "cron run").at(-1)![1])) as { queryLimit: number };
+    await env.DB.prepare("insert into instance_settings (key, value, updated_at, updated_by) values ('cloudflarePlan', '\"paid\"', 1, null)").run();
+    // daily は済んだ日の 23 時: purge が due → Paid の配分 116
+    await env.DB.prepare("insert into cron_job_runs (job, last_run_day, last_success_at) values ('daily', '2026-11-20', 0)").run();
+    const t23 = tickSlot(at("2026-11-20T23:00:00Z"));
+    // プランの読み取り(readInstanceSettings の `"key" in (…)`。凍結の読み取りは `"key" = ?`)を数え、throwPlan なら投げる D1
+    let planReads = 0;
+    let throwPlan = false;
+    const isPlanRead = (q: string) => q.includes('from "instance_settings"') && q.includes('"key" in');
+    const spyDb = new Proxy(env.DB, {
+      get(t, p) {
+        if (p === "prepare")
+          return (q: string) => {
+            if (isPlanRead(q)) {
+              planReads++;
+              if (throwPlan) throw new Error("injected plan read failure");
+            }
+            return t.prepare(q);
+          };
+        const v = Reflect.get(t, p);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    }) as D1Database;
+    const spyEnv = { ...testEnv, DB: spyDb };
+    await runCron(spyEnv, t23, jobs());
+    expect(planReads).toBe(1);
+    expect(used.purge).toBe(116);
+    expect(lastRun().queryLimit).toBe(140);
+    // purge が due でない実行は、プランを読まない(Free と同じ配分)
+    planReads = 0;
+    clear(used);
+    await runCron(spyEnv, tickSlot(at("2026-11-21T12:00:00Z")), jobs());
+    expect(planReads).toBe(0);
+    expect(used.purge).toBeUndefined();
+    expect(lastRun().queryLimit).toBe(40);
+    // プランの読み取りが失敗した → Free の配分で動き、ログに残す
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    throwPlan = true;
+    clear(used);
+    await env.DB.prepare("delete from cron_job_runs where job = 'purge'").run();
+    await env.DB.prepare("update cron_job_runs set last_run_day = '2026-11-21' where job = 'daily'").run();
+    await runCron(spyEnv, t23 + DAY, jobs());
+    expect(planReads).toBe(1);
+    expect(used.purge).toBe(16);
+    expect(lastRun().queryLimit).toBe(40);
+    expect(err.mock.calls.some((c) => String(c[0]).includes("reading the Cloudflare plan failed"))).toBe(true);
+    // 壊れた値は readInstanceSettings が既定(Free)に倒す(例外にはならない)
+    throwPlan = false;
+    await env.DB.prepare("update instance_settings set value = 'not json' where key = 'cloudflarePlan'").run();
+    clear(used);
+    await env.DB.prepare("delete from cron_job_runs where job = 'purge'").run();
+    await env.DB.prepare("update cron_job_runs set last_run_day = '2026-11-22' where job = 'daily'").run();
+    await runCron(spyEnv, t23 + 2 * DAY, jobs());
+    expect(used.purge).toBe(16);
+    expect(lastRun().queryLimit).toBe(40);
   });
 
   test("前のジョブが見込みを超えて実行の時点の残りが最低に届かないジョブは動かさず、次の動ける枠で進む", async () => {
@@ -1007,7 +1141,7 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
   });
 
   test("tick 優先・daily 優先の枠で、配分が 1 件の最低に届かないジョブは位置も読まない", async () => {
-    // collect-until は daily 優先の枠で配分 1(最低 6 未満)→ 動かない(cron_cursors を読まない = クエリ 0)
+    // collect-until は daily 優先の枠で配分 1(最低 7 未満)→ 動かない(cron_cursors を読まない = クエリ 0)
     const counted: string[] = [];
     const job: CronJob = {
       ...resultsCollectUntilJob,

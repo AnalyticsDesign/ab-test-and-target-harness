@@ -22,18 +22,25 @@
 | | A. 設置サイトのゾーンに載せる(既定・推奨) | B. 別のドメインに載せる | C. Cloudflare にゾーンを持たない |
 |---|---|---|---|
 | 当てはまる状況 | 設置サイトの DNS が Cloudflare にあり、設置ホストのレコードがプロキシ有効(オレンジの雲) | 設置サイトの DNS は Cloudflare に移せないが、別のドメインを Cloudflare のゾーンにできる | Cloudflare にゾーンを 1 つも置けない |
-| 可否 | 可 | 可(手順の詳細はデプロイガイドに無い。下の注記) | **可(制約あり)**。前提 = Free アカウントで、止まって困る Workers が同じアカウントに無いこと |
-| 公開の仕方 | `<設置ホスト>/s/*`(`wtt-static`)と `/v1/*`(edge)の Workers Route | Custom Domain(例 `ab.<別ドメイン>`。`wtt-static` にも別のホストを付ける) | `*.workers.dev`(`edge_address: workers-dev`。`wtt-edge` と `wtt-static` の 2 つ) |
-| タグと設置サイトの関係 | 同一オリジン。CORS 設定は不要 | 別オリジン。サイトの `allowedOrigins` に設置サイトの origin を入れる | 別オリジン。サイトが CSP を出していれば `wtt-static` と edge のホストを足す |
-| Mode B(サーバー発行 Cookie。Safari 対策の一方式) | 使える | 使えない(ページのホストに `/__ab/*` を張れないため) | 使えない |
-| Cache Rule / WAF Rate Limiting Rule | 設置サイトのゾーンに作る | edge を載せたゾーンに作る(Cache Rule の条件のホスト名は設置タグを配るホスト(`wtt-static` のホスト)、WAF の条件のホスト名は edge のホスト) | **作れない**。万が一、悪意のある人がプログラムで大量のアクセスを送ってきた場合(タグのアドレスはサイトの HTML に書かれるので、誰でも知ることができる)、アクセスを制限できず、無料枠の日次上限を使い切られて当日の配信が止まる(Free なら課金は起きない) |
+| 可否 | 可 | 可 | **可(制約あり)**。前提 = Free アカウントで、止まって困る Workers が同じアカウントに無いこと |
+| 公開の仕方 | `<設置ホスト>/s/*`(`wtt-static`)と `/v1/*`(edge)の Workers Route | edge は Custom Domain `<edge のホスト>`(例 `ab.example.net`)、`wtt-static` は同じホストの Route `<edge のホスト>/s/*`。`edge_address: custom-domain` | `*.workers.dev`(`edge_address: workers-dev`。`wtt-edge` と `wtt-static` の 2 つ) |
+| タグと設置サイトの関係 | 同一オリジン。CORS 設定は不要 | 別オリジン。サイトの `allowedOrigins` にページの origin が要る。サイトが CSP を出していれば `script-src` と `connect-src` に `<edge のホスト>` を足す(設置タグと edge が同じホストなので 1 つ) | 別オリジン。サイトが CSP を出していれば `wtt-static` と edge のホストを足す |
+| Mode B(サーバー発行 Cookie。Safari 対策の一方式) | 使える | 使えない(ページのホストに `/__ab/*` を置けないため) | 使えない |
+| Cache Rule / WAF Rate Limiting Rule | 設置サイトのゾーンに作る | edge を置いたゾーンに作る。Cache Rule の条件のホスト名は `<edge のホスト>`。WAF Rate Limiting Rule の条件はパスだけで、[デプロイガイド 2.7](deploy.md#27-waf-rate-limiting-rule推奨) と同じ式 | **作れない**。万が一、悪意のある人がプログラムで大量のアクセスを送ってきた場合(タグのアドレスはサイトの HTML に書かれるので、誰でも知ることができる)、アクセスを制限できず、無料枠の日次上限を使い切られて当日の配信が止まる(Free なら課金は起きない) |
 
 ### 各構成の注意
 
 - **A の前提の確認**: `curl -sI https://<設置ホスト>/ | grep -i '^server:'` が `server: cloudflare` を返せばプロキシ経由になっている。返さない場合、Workers Route は発火しない(タグの URL がサイト本体の 404 になる)
 - **DNS を Cloudflare に移すのはサイト全体に及ぶ作業**。ネームサーバーの変更、既存レコードの移行、SSL/TLS の暗号化モードの設定などが要り、この製品の手順の範囲外。サイトの管理者と相談して先に済ませる。ネームサーバーを移さずに一部のホストだけ Cloudflare に載せる方式(CNAME セットアップ)は Business プラン以上
-- **B**: デプロイガイドの 2.3 / 2.6 / 2.7 / 2.9 は A の書き方になっている。B では 2.3 の `routes` を `{ "pattern": "ab.<別ドメイン>", "custom_domain": true }` に、2.6 の条件のホスト名を設置タグを配るホスト(`wtt-static` のホスト)に、2.7 の条件のホスト名を edge のホストに、`<設置ホスト>` を設置タグを配るホストに読み替える(`/v1/*` の確認は edge のホストで行う)。`wtt-static` には 2.9 のとおり別のホストを付ける。**B の構成は実機で検証していない**
-- **C**: ドメインを用意せずに始められる簡易的な導入方法。技術的な制限(期限・PV 上限)は無く、そのまま本番にも使える。上の表の制約を引き受ける。次のどれかに当てはまるなら、ドメインを 1 つ用意して(年 $10 前後)Cloudflare の Free ゾーンに追加し、A か B にするほうがよい: Safari 対策(Mode B)を使いたい / 悪意のある人の大量のアクセスでその日の出し分けと計測が止まると困る / 1 日のアクセスが無料枠(10 万リクエスト)に近い。後から移る手順は[デプロイガイド 2.8](deploy.md#28-ドメインありへの移行workers-dev--route)(Worker・KV・サイト設定はそのまま。設置タグの URL だけ変わる)
+- **B(別のドメインに置く構成)**: edge と設置タグを、ページと別のドメインのホスト(`<edge のホスト>`)から配る。手順はデプロイガイドの `custom-domain` のときの手順([2.3](deploy.md#23-route-を書く)・[2.5](deploy.md#25-公開アドレスの選び方)・[2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker))で、代償の一覧は[デプロイガイド 1 節の制約 (3)](deploy.md#1-前提と全体像)。別オリジンになるので、次の 5 つを引き受ける。
+  - サイトの `allowedOrigins` に、ページの origin が要る(edge のホストではない)。サイトを作ると `https://<ドメイン>` が入る。ページのホストが複数なら足す
+  - サイトが CSP を出していれば、`script-src` と `connect-src` に `<edge のホスト>` を足す。設置タグと edge が同じホストなので、足すホストは 1 つ([サイト導入ガイド 10 節](site-install.md#10-コードの変更と-csp))
+  - Mode B は使えない。Mode B はページのホストに `/__ab/*` の Route を置く必要があり、edge を別のドメインに置くとそれができないため。Safari 対策は Mode A か Mode C にする([サイト導入ガイド 8 節](site-install.md#8-mode-c-と-mode-b))
+  - 設置タグを別のドメインのホストから読み込むので、ブラウザや拡張機能の追跡防止の機能に遮断されやすい
+  - WAF の遮断(Cloudflare の 1015)は、別オリジンの構成ではタグが読めない。WAF の応答には別のドメインのページから読むための許可のヘッダーが付かず、ブラウザが通信の失敗として扱うので、429 の通知(`ab_error` の `rate_limited`)が出ない。edge の上限(Rate Limiting binding)の 429 は許可のヘッダーを付けているので通知される([運用ガイド 7 節](operations.md#429-が訪問者に与える影響))
+
+  edge を置くドメインはサイトのドメインとは別なので、別のドメインを Cloudflare に追加してもサイトには影響しない。**B の構成は実機で検証していない**
+- **C**: ドメインを用意せずに始められる簡易的な導入方法。技術的な制限(期限・PV 上限)は無く、そのまま本番にも使える。上の表の制約を引き受ける。次のどれかに当てはまるなら、ドメインを 1 つ用意して(年 $10 前後)Cloudflare の Free ゾーンに追加し、設置サイトのゾーンに置く構成(A)か別のドメインに置く構成(B)にするほうがよい: 悪意のある人の大量のアクセスでその日の出し分けと計測が止まると困る / 1 日のアクセスが無料枠(10 万リクエスト)に近い。Safari 対策(Mode B)を使いたいなら、設置サイトのゾーンに置く構成(A)にする(別のドメインに置く構成(B)でも Mode B は使えない)。設置サイトのゾーンに置く構成(A)へ後から移る手順は[デプロイガイド 2.8](deploy.md#28-ドメインありへの移行workers-dev--route)(Worker・KV・サイト設定はそのまま。設置タグの URL だけ変わる)。別のドメインに置く構成(B)へ移る手順はまだ無い
 
 ## 3. 料金プラン(問い 2)
 
@@ -58,7 +65,9 @@ Free で収まる PV の目安(どれが先に効くかはサイトの構成で�
 
 ### 上限を超えたとき(Free)
 
-その日の残りは、edge の Route が Worker を実行しなくなる。Cloudflare 側の Route の設定で、Worker を素通りしてサイト本体に渡す(fail open)か、Cloudflare のエラー 1027 を返す(fail closed)かを選べる。どちらでも**ページは元の表示のまま動き、エクスペリエンスが出ないだけ**になる(Exposure も GA4 に届かない)。control も同じ上限を共有するので、管理画面の操作も失敗する。構成 C(`*.workers.dev`)では Route が無いので fail open / fail closed の選択は無く、判定と計測の送信が失敗する(ページは元の表示のまま動く)。設置タグのファイルは静的アセットなので、この上限に数えられない。
+その日の残りは、Cloudflare が edge の Worker を実行しなくなる。**ページは元の表示のまま動き、エクスペリエンスが出ないだけ**になる(Exposure も GA4 に届かない)。control も同じ上限を共有するので、管理画面の操作も失敗する。設置タグのファイルは静的アセットなので、この上限に数えられない。
+
+上限を超えたときの動きには、Worker を素通りしてサイト本体に渡す(fail open)と、Cloudflare のエラー 1027 を返す(fail closed)の 2 つがある。本製品は fail closed を前提にする。fail open にすると、訪問者の ID を含む判定と計測の送信がサイト本体のサーバーに届き、その応答はサイトごとに違うため。この動きは設定ファイル(`wrangler.jsonc`)では持てない。Custom Domain と `*.workers.dev` には選ぶ項目が無く、上限を超えると 1027 を返す。別のドメインに置く構成(B)では edge は Custom Domain なので 1027 になり、`*.workers.dev` の構成(C)も同じ。どちらも判定と計測の送信が失敗し、ページは元の表示のまま動く。
 
 ### 監視
 
@@ -93,18 +102,17 @@ Free では Cloudflare の課金通知が使えないので、ダッシュボー
 
 ## 6. 決めた内容をデプロイガイドへ渡す
 
-決めた内容は `deploy-answers.yaml` の下段([デプロイガイド 0.2](deploy.md#02-構成を決める質問と入力ファイル-deploy-answersyaml))に書く。
+決めた内容は `deploy-answers.yaml` の下段([デプロイガイド 0.2](deploy.md#02-構成を決める質問と入力ファイル-deploy-answersyaml))に書く(`owner_email` と、設置サイトのゾーンに置く構成(A)なら `install_host`、別のドメインに置く構成(B)なら `edge_host` は上段の行に書く。雛形の上段に最初から行があり、下段にもう 1 行書くと同じキーが 2 回書かれた誤りになる)。
 
 | 決めたこと | 書く項目 |
 |---|---|
 | 構成 A の設置ホストとゾーン | `install_host` / `zone_name` |
+| 構成 B(別のドメイン)の edge のホストとゾーン | `edge_address: custom-domain` / `edge_host` / `zone_name`(`edge_host` が属するゾーン) |
 | 構成 C(ゾーンなし) | `edge_address: workers-dev`(`install_host` / `zone_name` は不要) |
 | 画像の公開先 | `asset_public_base`(カスタムドメインの URL、`dev-assets`、または `none` = R2 なし) |
 | control を自分のドメインに載せる | `control_address: custom` / `control_host` |
 | 管理画面を自分のドメインに載せる | `admin_address: custom` / `admin_host` |
 | 入口の守り | `control_protection`(`none` / `waf` / `access`) |
 | edge の WAF ルールと、edge の Rate Limiting binding の値 | `edge_waf_rate_limit` / `edge_waf_requests_per_10s` |
-| Mode B(サーバー発行 Cookie) | `dlite_hosts` |
+| Mode B(サーバー発行 Cookie。構成 A のときだけ) | `dlite_hosts` |
 | 料金プラン | `plan`(`free` / `paid`。`paid` なら導入の前にダッシュボードで切り替える) |
-
-構成 B は入力ファイルで表せないので、エージェントに任せる場合は最初に「edge を Custom Domain `ab.<別ドメイン>` で公開する」と伝える。

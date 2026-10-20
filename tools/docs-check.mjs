@@ -48,7 +48,7 @@ if (!existsSync(join(root, ANSWERS_EXAMPLE))) problems.push(`${ANSWERS_EXAMPLE}:
 else {
   const y = readFileSync(join(root, ANSWERS_EXAMPLE), "utf8");
   if (!y.includes("設定値ではない")) problems.push(`${ANSWERS_EXAMPLE}:1 answers-header: 先頭コメントに「設定値ではない」の明示が無い`);
-  for (const k of ["features", "daily_pv", "image_upload", "cloudflare_account", "existing_plan", "site_on_cloudflare", "install_host", "other_workers", "owner_email", "edge_address", "zone_name", "asset_public_base", "dlite_hosts", "plan", "accepted", "release_tag", "control_address", "control_host", "control_protection", "edge_waf_rate_limit", "edge_waf_requests_per_10s", "asset_max_mb", "admin_address", "admin_host"]) {
+  for (const k of ["features", "daily_pv", "image_upload", "cloudflare_account", "existing_plan", "site_on_cloudflare", "install_host", "other_workers", "edge_host", "owner_email", "edge_address", "zone_name", "asset_public_base", "dlite_hosts", "plan", "accepted", "release_tag", "control_address", "control_host", "control_protection", "edge_waf_rate_limit", "edge_waf_requests_per_10s", "asset_max_mb", "admin_address", "admin_host"]) {
     if (!new RegExp(`^#? ?${k}:`, "m").test(y)) problems.push(`${ANSWERS_EXAMPLE}:0 answers-key: 項目 ${k} が無い`);
   }
   // レート制限の既定どうしの関係(7q / K6)。数値は正規表現で抜き出す(JSONC は構文解析しない)。抜き出せないときも黙って通さない

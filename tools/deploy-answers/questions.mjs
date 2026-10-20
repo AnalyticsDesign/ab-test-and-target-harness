@@ -16,6 +16,8 @@ export const QUESTIONS = [
     values: ["yes", "no", "unknown"],
     when: (v) => v.cloudflare_account === "existing" && v.existing_plan === "free" && (v.site_on_cloudflare === "no" || v.site_on_cloudflare === "no_site"),
   },
+  // サイトのドメインが Cloudflare に無いとき、Cloudflare に置ける別のドメインのホスト(無ければ none)。決定 64 (3)
+  { id: "E2c", key: "edge_host", kind: "host_or_none", when: (v) => v.site_on_cloudflare === "no" },
   { id: "E3", key: "owner_email", kind: "email" },
 ];
 
@@ -69,6 +71,8 @@ function valueProblem(q, v) {
       return typeof v === "boolean" ? null : "true か false で書く";
     case "host":
       return hostProblem(v);
+    case "host_or_none":
+      return v === "none" ? null : hostProblem(v);
     case "email":
       return typeof v === "string" && EMAIL_RE.test(v) ? null : "メールアドレスの形になっていない";
   }
@@ -104,17 +108,21 @@ export function checkConfigured(values) {
   const issues = [];
   const add = (key, message) => issues.push({ id: key, key, message });
   const edge = values.edge_address ?? "route";
-  if (edge !== "route" && edge !== "workers-dev") add("edge_address", `route か workers-dev で書く(今: ${edge})`);
-  if (edge === "route") {
-    const hp = isBlank(values.install_host) ? "edge_address: route のときは必須" : hostProblem(values.install_host);
-    if (hp) add("install_host", hp);
-    if (isBlank(values.zone_name)) add("zone_name", "edge_address: route のときは必須(auto でもよい)");
-    else if (values.zone_name !== "auto" && !hp && !hostInZone(values.install_host, values.zone_name))
-      add("zone_name", `install_host(${values.install_host})がゾーン ${values.zone_name} に属していない`);
+  if (edge !== "route" && edge !== "workers-dev" && edge !== "custom-domain") add("edge_address", `route / workers-dev / custom-domain のどれかで書く(今: ${edge})`);
+  // ゾーンのある構成は、edge のホストとゾーンが要る。route は設置サイトのホスト、custom-domain は別のドメインのホスト(決定 64 (3))
+  const zoned = edge === "route" || edge === "custom-domain";
+  if (zoned) {
+    const hostKey = edge === "route" ? "install_host" : "edge_host";
+    const host = values[hostKey];
+    const hp = isBlank(host) ? `edge_address: ${edge} のときは必須` : hostProblem(host);
+    if (hp) add(hostKey, hp);
+    if (isBlank(values.zone_name)) add("zone_name", `edge_address: ${edge} のときは必須(auto でもよい)`);
+    else if (values.zone_name !== "auto" && !hp && !hostInZone(host, values.zone_name))
+      add("zone_name", `${hostKey}(${host})がゾーン ${values.zone_name} に属していない`);
   }
   const asset = values.asset_public_base;
   if (isBlank(asset)) add("asset_public_base", "必須(none / dev-assets / auto / https://<ホスト>)");
-  else if (asset === "auto" && edge !== "route") add("asset_public_base", "auto は edge_address: route のときだけ使える");
+  else if (asset === "auto" && !zoned) add("asset_public_base", "auto は edge_address: route か custom-domain のときだけ使える");
   else if (!(asset === "none" || asset === "dev-assets" || asset === "auto" || /^https:\/\/[^/\s]+\/?$/.test(asset)))
     add("asset_public_base", "none / dev-assets / auto / https://<ホスト> のどれかで書く");
   const dl = values.dlite_hosts ?? [];
