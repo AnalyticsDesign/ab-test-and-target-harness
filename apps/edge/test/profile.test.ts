@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:workers";
 import { runDurableObjectAlarm, runInDurableObject, reset } from "cloudflare:test";
 import { generateVisitorId, inTraffic, type Experiment, type PageContext } from "@wtt/core";
-import { PROFILE_KEY, profileStub, type ProfileDecideInput, type ProfileRecord } from "../src/profile";
+import { PROFILE_KEY, profileStub, type ProfileDecideInput, type ProfileRecord, type VisitorProfile } from "../src/profile";
 
 const DAY = 86400;
 const ctx: PageContext = { url: "https://site.example/pricing", query: {}, device: "desktop", referrer: "" };
@@ -12,7 +12,7 @@ const exp = (over: Partial<Experiment> = {}): Experiment => ({
   ...over,
 });
 const input = (over: Partial<ProfileDecideInput> = {}): ProfileDecideInput => ({
-  retentionDays: 90, patternKeys: ["p_pricing"], matchedPatterns: ["p_pricing"], experiments: [exp()], ctx, visitorId: "B".repeat(43), ...over,
+  retentionDays: 90, patternKeys: ["p_pricing"], matchedPatterns: ["p_pricing"], experiments: [exp()], ctx, visitorId: "B".repeat(43), allowCreate: true, ...over,
 });
 const nowSec = () => Math.floor(Date.now() / 1000);
 const readProfile = (stub: ReturnType<typeof profileStub>) => runInDurableObject(stub, (_i, state) => state.storage.get<ProfileRecord>(PROFILE_KEY));
@@ -39,7 +39,8 @@ describe("VisitorProfile.decide (spec §7.4 ④ / §8.2)", () => {
   it("現在ページの pages を評価の前に加算し、eligible を返し、firstSeen / lastSeen を刻む", async () => {
     const stub = profileStub(env, "site_p", "B".repeat(43));
     const out = await stub.decide(input({ experiments: [exp({ targeting: { hist: "visited", pattern: "p_pricing" } })] }));
-    expect(out).toEqual([{ experimentId: "exp_001", variantId: expect.stringMatching(/^v[AB]$/) }]); // 同じページで visited が真(current_page_history_semantics の DO 半分)
+    expect(out.created).toBe(true);
+    expect(out.results).toEqual([{ experimentId: "exp_001", variantId: expect.stringMatching(/^v[AB]$/) }]); // 同じページで visited が真(current_page_history_semantics の DO 半分)
     const p = (await readProfile(stub))!;
     expect(p.pages.p_pricing!.count).toBe(1);
     expect(p.firstSeenAt).toBeGreaterThan(nowSec() - 5);
@@ -57,16 +58,16 @@ describe("VisitorProfile.decide (spec §7.4 ④ / §8.2)", () => {
   it("persistAssignment: 初回の割当を保存し、以後はそれを返す。保存済みの Variant が消えていれば再割当して上書き(§7.3)", async () => {
     const stub = profileStub(env, "site_p", "B".repeat(43));
     const e = exp({ persistAssignment: true });
-    const first = await stub.decide(input({ experiments: [e] }));
+    const first = (await stub.decide(input({ experiments: [e] }))).results;
     const p1 = (await readProfile(stub))!;
     expect(p1.assignments.exp_001!.variant).toBe(first[0]!.variantId);
     // 保存済みを差し替えて優先されることを見る(ハッシュとは逆の Variant を置く)
     const other = first[0]!.variantId === "vA" ? "vB" : "vA";
     await runInDurableObject(stub, (_i, state) => state.storage.put(PROFILE_KEY, { ...p1, assignments: { exp_001: { variant: other, at: 1 } } }));
-    expect((await stub.decide(input({ experiments: [e] })))[0]!.variantId).toBe(other);
+    expect((await stub.decide(input({ experiments: [e] }))).results[0]!.variantId).toBe(other);
     // 消えた Variant は再割当して上書き
     await runInDurableObject(stub, (_i, state) => state.storage.put(PROFILE_KEY, { ...p1, assignments: { exp_001: { variant: "vGone", at: 1 } } }));
-    const re = await stub.decide(input({ experiments: [e] }));
+    const re = (await stub.decide(input({ experiments: [e] }))).results;
     expect(re[0]!.variantId).toMatch(/^v[AB]$/);
     expect((await readProfile(stub))!.assignments.exp_001!.variant).toBe(re[0]!.variantId);
   });
@@ -116,7 +117,64 @@ describe("VisitorProfile.recordGoal / forget (spec §9.2)", () => {
     await stub2.decide(input({ visitorId: v, patternKeys: [], matchedPatterns: [], experiments: [exp({ id: "__proto__", persistAssignment: true })] }));
     const first = (await readProfile(stub2))!.assignments["__proto__"]!.variant;
     const again = await stub2.decide(input({ visitorId: v, patternKeys: [], matchedPatterns: [], experiments: [exp({ id: "__proto__", persistAssignment: true, trafficPercentage: 1 })] }));
-    expect(again).toEqual([{ experimentId: "__proto__", variantId: first }]);
+    expect(again.results).toEqual([{ experimentId: "__proto__", variantId: first }]);
+  });
+});
+
+describe("VisitorProfile の allowCreate と保存の順(plan12 K9)", () => {
+  const alarmOf = (stub: ReturnType<typeof profileStub>) => runInDurableObject(stub, (_i, state) => state.storage.getAlarm());
+
+  it("save_sets_alarm_before_writing_the_record", async () => {
+    const stub = profileStub(env, "site_p", generateVisitorId());
+    // put が失敗する storage で新しい ID の decision → 記録は無く、削除の予約だけが残る
+    await runInDurableObject(stub, async (instance, state) => {
+      const original = state.storage.put.bind(state.storage);
+      (state.storage as { put: unknown }).put = async () => {
+        throw new Error("put failed");
+      };
+      try {
+        await expect((instance as VisitorProfile).decide(input())).rejects.toThrow("put failed");
+      } finally {
+        (state.storage as { put: unknown }).put = original;
+      }
+    });
+    expect(await readProfile(stub)).toBeUndefined();
+    const alarm = await alarmOf(stub);
+    expect(alarm).not.toBeNull();
+    // その予約が動いても、空の Profile で何も壊れない(記録も予約も残さず、次の decision は普通に保存する)
+    await runInDurableObject(stub, (_i, state) => state.storage.setAlarm(Date.now() - 1000));
+    await triggerOverdueAlarm(stub, (await alarmOf(stub))!);
+    expect(await readProfile(stub)).toBeUndefined();
+    expect(await alarmOf(stub)).toBeNull();
+    expect((await stub.decide(input())).created).toBe(true);
+    expect(await readProfile(stub)).toBeDefined();
+  });
+
+  it("記録が無く allowCreate: false なら、評価だけして保存しない(created: false)", async () => {
+    const stub = profileStub(env, "site_p", generateVisitorId());
+    const e = exp({ targeting: { hist: "visited", pattern: "p_pricing" } });
+    const out = await stub.decide(input({ experiments: [e], allowCreate: false }));
+    expect(out.created).toBe(false);
+    expect(out.results).toEqual([{ experimentId: "exp_001", variantId: expect.stringMatching(/^v[AB]$/) }]); // 今のページの閲覧は評価の前に数える(保存した場合と同じ)
+    expect(await readProfile(stub)).toBeUndefined();
+    expect(await alarmOf(stub)).toBeNull();
+    // goal も同じ
+    expect(await stub.recordGoal("g_lead", 90, undefined, false)).toEqual({ created: false });
+    expect(await readProfile(stub)).toBeUndefined();
+    expect(await alarmOf(stub)).toBeNull();
+  });
+
+  it("既存の訪問者は allowCreate に関わらず保存し、created は false", async () => {
+    const stub = profileStub(env, "site_p", generateVisitorId());
+    expect((await stub.decide(input())).created).toBe(true);
+    expect((await stub.decide(input({ allowCreate: false }))).created).toBe(false);
+    expect((await readProfile(stub))!.pages.p_pricing!.count).toBe(2);
+    expect(await stub.recordGoal("g_lead", 90, undefined, false)).toEqual({ created: false });
+    expect((await readProfile(stub))!.goals.g_lead!.count).toBe(1);
+    // recordGoal は allowCreate を省略すると作る(新しい ID なら created: true)
+    const fresh = profileStub(env, "site_p", generateVisitorId());
+    expect(await fresh.recordGoal("g_lead", 90)).toEqual({ created: true });
+    expect(await fresh.recordGoal("g_lead", 90)).toEqual({ created: false });
   });
 });
 

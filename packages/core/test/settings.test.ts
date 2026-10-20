@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { SiteSettingsSchema, parseSiteSettings, toRuntimeSettings, kvKeys } from "../src/settings";
 import { DecisionBodySchema, DliteRequestSchema } from "../src/protocol";
 import { DEFAULT_ANALYTICS } from "../src/analytics-defaults";
+import { NEW_PROFILE_BUDGET_DEFAULTS, NEW_PROFILE_HOURLY_RATIO, NEW_PROFILE_INSTANCE_PER_DAY_FREE, newProfileLimits, utcHourKey } from "../src/new-profile-budget";
 
 describe("SiteSettings (spec §5.4 site-settings record)", () => {
   it("applies defaults from minimal input", () => {
@@ -165,5 +166,38 @@ describe("resultsCollectUntil (D9 ②、K7)", () => {
   it("is not baked into the runtime settings", () => {
     const s = SiteSettingsSchema.parse({ ...min, resultsCollectUntil: { AAAAAAAAAAAAAAAAAAAAAA: 5 } });
     expect(toRuntimeSettings(s)).not.toHaveProperty("resultsCollectUntil");
+  });
+});
+
+describe("newProfileBudget(plan12 K9・決定 63 (8))", () => {
+  const min = { settingsVersion: 1, siteId: "site_1" };
+  it("newProfileBudget の無い record も読める(既存の record の互換)", () => {
+    expect(SiteSettingsSchema.parse(min).newProfileBudget).toBeUndefined();
+  });
+  it("perDay は 1 以上の整数。instancePerDay は省略できる", () => {
+    expect(SiteSettingsSchema.parse({ ...min, newProfileBudget: { perDay: 20_000 } }).newProfileBudget).toEqual({ perDay: 20_000 });
+    expect(SiteSettingsSchema.parse({ ...min, newProfileBudget: { perDay: 20_000, instancePerDay: 20_000 } }).newProfileBudget).toEqual({ perDay: 20_000, instancePerDay: 20_000 });
+    expect(SiteSettingsSchema.safeParse({ ...min, newProfileBudget: { perDay: 0 } }).success).toBe(false);
+    expect(SiteSettingsSchema.safeParse({ ...min, newProfileBudget: { perDay: 1.5 } }).success).toBe(false);
+    expect(SiteSettingsSchema.safeParse({ ...min, newProfileBudget: { perDay: 100_000_001 } }).success).toBe(false);
+    expect(SiteSettingsSchema.safeParse({ ...min, newProfileBudget: { perDay: 10, instancePerDay: 0 } }).success).toBe(false);
+    expect(SiteSettingsSchema.safeParse({ ...min, newProfileBudget: { perDay: 10, extra: 1 } }).success).toBe(false); // strict
+    expect(SiteSettingsSchema.safeParse({ ...min, newProfileBudget: {} }).success).toBe(false);
+  });
+  it("runtime の設定には焼かない", () => {
+    const s = SiteSettingsSchema.parse({ ...min, newProfileBudget: { perDay: 5 } });
+    expect(toRuntimeSettings(s)).not.toHaveProperty("newProfileBudget");
+  });
+  it("newProfileLimits は 1 時間の上限を 1 日の上限 × 0.1 の切り上げにする", () => {
+    expect(NEW_PROFILE_HOURLY_RATIO).toBe(0.1);
+    expect(NEW_PROFILE_BUDGET_DEFAULTS).toEqual({ free: 20_000, paid: 200_000 });
+    expect(NEW_PROFILE_INSTANCE_PER_DAY_FREE).toBe(20_000);
+    expect(newProfileLimits(20_000)).toEqual({ perHour: 2_000, perDay: 20_000 });
+    expect(newProfileLimits(15)).toEqual({ perHour: 2, perDay: 15 });
+    expect(newProfileLimits(1)).toEqual({ perHour: 1, perDay: 1 });
+  });
+  it("utcHourKey は UTC の YYYY-MM-DDTHH", () => {
+    expect(utcHourKey(Date.UTC(2026, 9, 19, 23, 59, 59))).toBe("2026-10-19T23");
+    expect(utcHourKey(Date.UTC(2026, 9, 20, 0, 0, 0))).toBe("2026-10-20T00");
   });
 });

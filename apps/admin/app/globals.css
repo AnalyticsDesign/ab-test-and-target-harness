@@ -101,6 +101,8 @@ a.btn { text-decoration: none; }
 /* 確認のモーダルで、チェックを入れたときに本文と差し替える注意(B46)。取り消せない結果を目立たせる。文字は読みやすさのため本文色の太字 */
 .confirm-warning { border: 1px solid var(--danger); border-left-width: 4px; background: var(--danger-soft); color: var(--text); font-weight: 600; padding: 10px 12px; border-radius: var(--radius); }
 .banner-warn { background: var(--warn-soft); border: 1px solid var(--warn); color: var(--text); padding: 8px 12px; border-radius: var(--radius); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+/* 急がない案内の控えめな帯(管理画面の新しい版がある、など)。警告色は使わない */
+.banner-note { background: var(--sunken); border: 1px solid var(--border); color: var(--muted); padding: 8px 12px; border-radius: var(--radius); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 /* 画面の幅いっぱいに敷く帯(枠の外側に置くバナー)。角丸を落とし、下線だけ残し、縮まない */
 .banner-full { margin: 0; border-radius: 0; border-width: 0 0 1px; flex-shrink: 0; }
 .badge { display: inline-block; font-size: 11.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--gray-soft); color: var(--muted); }

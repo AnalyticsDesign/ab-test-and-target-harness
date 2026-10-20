@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { API_CONTRACT_VERSION, CLIENT_VERSION_HEADER } from "@wtt/core";
 
 /**
  * admin E2E が共有する定数とログインヘルパ。
@@ -12,6 +13,15 @@ import { expect, type APIRequestContext, type Locator, type Page } from "@playwr
  * migrations を当て直すため(= 実行のたびに「まだ誰もいない」状態から始まる)。
  */
 export const ADMIN_URL = "http://localhost:3000";
+
+/**
+ * BFF(`/api/control/*`)を画面を通さずに直接叩く E2E の補助が付けるヘッダー(plan12 K3)。
+ * 管理画面の JS(lib/client.ts の api())と同じく版を名乗る。名乗らない書き込みは、BFF が版 0 を名乗るので control が 426 にする。
+ * `page.evaluate` の中(ブラウザ)では呼べないので、Node 側で呼んだ値を引数で渡す
+ */
+export function controlHeaders(): Record<string, string> {
+  return { [CLIENT_VERSION_HEADER]: String(API_CONTRACT_VERSION) };
+}
 export const CONTROL_URL = "http://localhost:8799";
 export const EDGE_URL = "http://127.0.0.1:8787";
 /** 設置タグの配信ファイル(/s/*)を配う場所 = 偽の Cloudflare API(e2e/fake-cf-api.mjs)。本番では配信専用の Worker */
@@ -152,10 +162,10 @@ export async function createSite(page: Page, site: { id: string; name: string },
   await expect(page).toHaveURL(new RegExp(`/sites/${site.id}$`));
   await expect(page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "設定" })).toBeVisible(); // SITE ナビが出ている = Site 一覧が更新された
   if (opts.results !== true) {
-    const status = await page.evaluate(async (id) => {
-      const r = await fetch(`/api/control/sites/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ resultsEnabled: false }) });
+    const status = await page.evaluate(async ([id, h]) => {
+      const r = await fetch(`/api/control/sites/${id}`, { method: "PATCH", headers: { "content-type": "application/json", ...h }, body: JSON.stringify({ resultsEnabled: false }) });
       return r.status;
-    }, site.id);
+    }, [site.id, controlHeaders()] as const);
     expect(status).toBe(200);
     // 画面(Site の設定・開始の確認)が新しい値を読むように、読み直す
     await page.reload();

@@ -2,6 +2,7 @@ import { collectUntilFor, DEFAULT_PLAN, type EvaluationPlan } from "@wtt/stats";
 import type { Db, ExperimentRow, SiteRow } from "../db";
 import type { Env } from "../env";
 import type { LoadedPlan } from "../evaluation-plan";
+import { readCloudflarePlan } from "../instance-settings";
 import { putSettingsRecord } from "../site-settings";
 import { WriteFrozen, type WriteGuard } from "./guard";
 import type { ReadSession } from "./read-session";
@@ -11,7 +12,7 @@ import type { ReadSession } from "./read-session";
  * 目標参加者数の到達の記録。
  *
  * - 締め切りの値は D1 から毎回計算する(`collectUntilFor`)。KV の settings を書くのは site-settings.ts の putSettingsRecord
- *   (writeSiteRecords もこれを使う)だけで、呼び出し元はすべて collectUntilMap の表を渡す(Site の PATCH で書き直しても締め切りが消えない)
+ *   (putSiteRecords もこれを使う)だけで、呼び出し元はすべて collectUntilMap の表を渡す(Site の PATCH で書き直しても締め切りが消えない)
  * - 開始・計画の変更・到達の記録・終了のときは rewriteCollectUntil で settings だけを書き直す(bootstrap には焼かないので、
  *   静的ファイルの出し直しは要らない)。失敗したら sites.collect_until_dirty = 1 にし、15 分ごとの Cron が書き直す
  */
@@ -31,21 +32,33 @@ function timingOf(planJson: string | null): PlanTiming {
  * 開始の時刻は started_at(無ければ計画の fixed_at)。終了の時刻は終了したものだけ(評価時点の前の終了なら終了の時刻が締め切り)
  */
 export async function collectUntilMap(db: Db, siteId: string): Promise<Record<string, number>> {
+  return (await collectUntilMaps(db, [siteId])).get(siteId) ?? {};
+}
+
+/**
+ * 複数の Site の締め切りの表を 1 回の読み取りで求める(plan12 K10: site-settings-refresh と refreshSiteRecords が Site ごとに読まないため)。
+ * siteIds を省くと全 Site。戻り値に無い Site は表が空
+ */
+export async function collectUntilMaps(db: Db, siteIds?: readonly string[]): Promise<Map<string, Record<string, number>>> {
+  const out = new Map<string, Record<string, number>>();
+  if (siteIds !== undefined && siteIds.length === 0) return out;
   const rows = await db
     .selectFrom("experiments as e")
     .leftJoin("evaluation_plans as p", (j) => j.onRef("p.site_id", "=", "e.site_id").onRef("p.experiment_id", "=", "e.id"))
-    .select(["e.run_id", "e.status", "e.started_at", "e.stopped_at", "p.plan_json", "p.fixed_at", "p.reached_at"])
-    .where("e.site_id", "=", siteId)
+    .select(["e.site_id", "e.run_id", "e.status", "e.started_at", "e.stopped_at", "p.plan_json", "p.fixed_at", "p.reached_at"])
+    .$if(siteIds !== undefined, (q) => q.where("e.site_id", "in", siteIds!))
     .where("e.run_id", "is not", null)
     .where((w) => w.or([w("e.status", "in", ["running", "paused"]), w("e.results_purged_at", "is", null)]))
+    .orderBy("e.site_id")
     .orderBy("e.run_id")
     .execute();
-  const out: Record<string, number> = {};
   for (const r of rows) {
     const startedAt = r.started_at ?? r.fixed_at;
     if (r.run_id === null || startedAt === null) continue;
     const stoppedAt = r.status === "archived" ? r.stopped_at : null;
-    out[r.run_id] = collectUntilFor(timingOf(r.plan_json), startedAt, r.reached_at ?? null, stoppedAt);
+    const table = out.get(r.site_id) ?? {};
+    table[r.run_id] = collectUntilFor(timingOf(r.plan_json), startedAt, r.reached_at ?? null, stoppedAt);
+    out.set(r.site_id, table);
   }
   return out;
 }
@@ -54,13 +67,16 @@ export async function collectUntilMap(db: Db, siteId: string): Promise<Record<st
  * KV の Site の設定の記録を、D1 から計算した締め切りで書き直す(settings だけ。host キーは変えない)。
  * 例外は投げない: 失敗したら collect_until_dirty = 1 にして、15 分ごとの Cron に任せる。凍結中(guard が投げる)は印も書かない。
  * 成功しても印は 0 に戻さない(並行して失敗した、より新しい書き直しの印を消さないため。0 に戻すのは Cron)
+ * D1 の読み取りは 3(Site の行・プラン・締め切りの表。plan12 K10 でプランが増えて 2 → 3)。成功時の書き込みは KV のみ
  */
 export async function rewriteCollectUntil(env: Env, db: Db, siteId: string, guard: WriteGuard): Promise<void> {
   try {
     const row = await db.selectFrom("sites").selectAll().where("id", "=", siteId).executeTakeFirst();
     if (!row) return; // Site が消えた(削除が KV も消す)
     // settings だけを書く(host キーは変わらないので書かない。KV の書き込みの回数を増やさない)
-    await putSettingsRecord(env, row, await collectUntilMap(db, siteId));
+    // plan12 K10: 予算もここで組み立てる(締め切りだけ書くと予算が消える)。書き直しを使う route は PATCH と同じ競合(CL-Medium-11)を持つが、
+    // run を持つ Site は results-collect-until が 15 分以内に、すべての Site は site-settings-refresh が翌日までに D1 の値へ直す
+    await putSettingsRecord(env, row, { plan: await readCloudflarePlan(db), collectUntil: await collectUntilMap(db, siteId) });
   } catch (e) {
     console.error("collect-until rewrite failed (the cron retries)", e);
     try {

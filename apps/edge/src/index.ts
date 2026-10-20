@@ -13,6 +13,21 @@ export const app = new Hono<{ Bindings: Env }>();
 
 app.get("/", (c) => c.text("wtt-edge", 200));
 
+type EdgeContext = Context<{ Bindings: Env }>;
+
+/**
+ * Rate Limiting binding の 429(/v1/sites/* と D-lite の decision で同じ本文)。Retry-After は binding の period(10 秒)に合わせた再試行目安。
+ * cors = true(/v1/sites/:sid/decision・/event)には `Access-Control-Allow-Origin: *` を付ける(plan12 K11・決定 63 の SDD 着手時の改め (二)):
+ * 別オリジンの構成でも runtime が 429 を読めるように。KV(許可する Origin の一覧)を読む前の応答なので一覧とは比べず、検査の順は変えない。
+ * runtime は資格情報を送らないので `*` で読め、本文は固定の文字列だけ
+ */
+function rateLimited(c: EdgeContext, cors: boolean): Response {
+  return c.text("rate limited", 429, cors ? { "Retry-After": "10", "Access-Control-Allow-Origin": "*" } : { "Retry-After": "10" });
+}
+
+/** waitUntil を this ごと渡す(新しい Profile の予算の報告。plan12 K9) */
+const waitUntilOf = (c: EdgeContext) => (p: Promise<unknown>): void => c.executionCtx.waitUntil(p);
+
 // spec §9.5 の適用順序: ① 形式検証 → ② レート制限 → ③ Origin 検証 → ④ 評価(needsProfile は DO、§7.4)
 app.post("/v1/sites/:siteId/decision", async (c) => {
   const siteId = c.req.param("siteId");
@@ -29,22 +44,20 @@ app.post("/v1/sites/:siteId/decision", async (c) => {
   if (!body.success) return c.text("bad request", 400);
   const visitorId = body.data.visitorId;
   if (!visitorId || !isAcceptableVisitorId(visitorId)) return c.text("bad request", 400);
-  if (!(await rateLimitOk(c.env, c.req.header("CF-Connecting-IP")))) {
-    return c.text("rate limited", 429, { "Retry-After": "10" }); // binding の period(10 秒)に合わせた再試行目安
-  }
+  if (!(await rateLimitOk(c.env, c.req.header("CF-Connecting-IP")))) return rateLimited(c, true);
   const settings = await loadSettings(c.env, siteId);
   if (!settings) return c.text("not found", 404);
   if (settings.mode !== "A") return c.text("not found", 404); // spec §7.1: ブラウザ直接経路は Mode A のみ
   const origin = c.req.header("Origin") ?? null;
   if (!originAllowed(settings, origin)) return c.text("forbidden", 403);
   const config = await loadConfig(c.env, siteId, body.data.v);
-  const out = await evaluateDecision(c.env, siteId, settings, config, body.data, visitorId, body.data.firstVisitAt);
+  const out = await evaluateDecision(c.env, siteId, settings, config, body.data, visitorId, body.data.firstVisitAt, waitUntilOf(c));
   if (out === null) return c.text("profile unavailable", 503, corsHeaders(origin)); // 503 も CORS 付き — runtime が status を読めるように(§10.7)
   return c.json(out, 200, corsHeaders(origin));
 });
 
 /** spec §9.5: preflight は decision / event 共通(Mode A のみ、Origin 完全一致) */
-async function preflight(c: Context<{ Bindings: Env }>): Promise<Response> {
+async function preflight(c: EdgeContext): Promise<Response> {
   const siteId = c.req.param("siteId");
   if (!siteId || !SITE_ID_RE.test(siteId)) return c.text("not found", 404);
   const settings = await loadSettings(c.env, siteId);
@@ -72,9 +85,7 @@ app.post("/v1/sites/:siteId/event", async (c) => {
   if (!body.success) return c.text("bad request", 400);
   const visitorId = body.data.visitorId;
   if (!visitorId || !isAcceptableVisitorId(visitorId)) return c.text("bad request", 400); // mode_a_event_requires_visitor_id
-  if (!(await rateLimitOk(c.env, c.req.header("CF-Connecting-IP")))) {
-    return c.text("rate limited", 429, { "Retry-After": "10" });
-  }
+  if (!(await rateLimitOk(c.env, c.req.header("CF-Connecting-IP")))) return rateLimited(c, true);
   const settings = await loadSettings(c.env, siteId);
   if (!settings) return c.text("not found", 404);
   if (settings.mode !== "A") return c.text("not found", 404);
@@ -85,7 +96,7 @@ app.post("/v1/sites/:siteId/event", async (c) => {
     const out = await handleResultsEvent(c.env, c.executionCtx, siteId, settings, body.data, visitorId, Date.now());
     return c.json(out, 200, corsHeaders(origin));
   }
-  const outcome = await handleEvent(c.env, siteId, settings, body.data, visitorId);
+  const outcome = await handleEvent(c.env, siteId, settings, body.data, visitorId, waitUntilOf(c));
   if (outcome === "failed") return c.text("profile unavailable", 503, corsHeaders(origin)); // 503 も CORS 付き — runtime が status を読めるように(§10.7)
   return c.body(null, 204, corsHeaders(origin));
 });
@@ -115,12 +126,13 @@ app.post("/__ab/event", async (c) => {
     // 同一オリジンの経路なので CORS は付けない(Mode A と同じ判定・同じ応答の形)
     return c.json(await handleResultsEvent(c.env, c.executionCtx, siteId, settings, body.data, existing, Date.now()), 200);
   }
-  const outcome = await handleEvent(c.env, siteId, settings, body.data, existing);
+  const outcome = await handleEvent(c.env, siteId, settings, body.data, existing, waitUntilOf(c));
   if (outcome === "failed") return c.text("profile unavailable", 503);
   return c.body(null, 204);
 });
 
-// spec §9.6: D-lite Proxy Mode。同一ゾーンの Workers Route で受けるため CORS もレート制限も適用しない(§9.6)
+// spec §9.6: D-lite Proxy Mode。同一ゾーンの Workers Route で受けるため CORS は付けない(§9.6)。
+// レート制限(Rate Limiting binding)は decision にだけ掛け、同意の撤回はその前に処理する(plan12 K14 (e)・決定 63 (13)(e))
 app.post("/__ab/decision", async (c) => {
   const host = new URL(c.req.url).hostname;
   const siteId = await loadSiteIdByHost(c.env, host);
@@ -151,6 +163,8 @@ app.post("/__ab/decision", async (c) => {
     for (const sc of revokeCookies(cookieHeader, settings)) res.headers.append("Set-Cookie", sc);
     return res;
   }
+  // 撤回を 429 にしない(Cookie が消えず、訪問者が撤回できたと思い込むため)。decision は Identity の発行の前に止める(Set-Cookie を出さない)
+  if (!(await rateLimitOk(c.env, c.req.header("CF-Connecting-IP")))) return rateLimited(c, false);
   const body = req.data as DecisionBody; // body.visitorId は D-lite では無視(spec §9.1。Cookie が正)
   // 決定 49 §7.2: _ab_uuid の導出の salt は Site で不変。未 Publish(active が無い)なら出さない。
   // body.v の config が active と同じ版なら、同じ config を 2 度読まずに使い回す(違う版のときだけ active を読む)
@@ -159,7 +173,7 @@ app.post("/__ab/decision", async (c) => {
   const saltConfig = activeVersion === null ? null : activeVersion === body.v ? config : await loadConfig(c.env, siteId, activeVersion);
   const { visitorId, setCookies } = await resolveDliteIdentity(cookieHeader, settings, saltConfig?.siteSalt ?? null);
   // 決定 49 §7.3: D-lite は正本 Cookie が HttpOnly でブラウザから読めないので、初回の訪問は edge が ID(UUIDv7)から読む
-  const out = await evaluateDecision(c.env, siteId, settings, config, body, visitorId, visitorIdIssuedAt(visitorId));
+  const out = await evaluateDecision(c.env, siteId, settings, config, body, visitorId, visitorIdIssuedAt(visitorId), waitUntilOf(c));
   // DO 障害(503)でも Identity の発行・Max-Age 延長は続ける(r1 CL-High-1)。落とすと DO 障害中は毎 PV 新しい ID → 新しい DO を叩く増幅になる
   // 設計書 §6.2: D-lite の runtime は ID(HttpOnly の Cookie)を読めないので、送信済みの印と比べる短いハッシュを edge が返す
   if (out !== null) {
@@ -175,5 +189,6 @@ app.post("/__ab/decision", async (c) => {
 export { VisitorProfile } from "./profile";
 export { ResultsBudget } from "./results-budget";
 export { ResultsHealth } from "./results-health";
+export { NewProfileBudget } from "./new-profile-budget";
 
 export default app;

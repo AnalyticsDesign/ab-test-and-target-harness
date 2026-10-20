@@ -5,6 +5,7 @@ import { generateVisitorId, kvKeys, type Experiment } from "@wtt/core";
 import app from "../src/index";
 import { __resetEdgeCaches } from "../src/store";
 import { PROFILE_KEY, profileStub, type ProfileRecord } from "../src/profile";
+import { __setNewProfileCounterForTests, createNewProfileCounter } from "../src/new-profile-counter";
 import type { Env } from "../src/env";
 
 const ORIGIN = "https://site.example";
@@ -39,6 +40,7 @@ const readProfile = (siteId: string, visitorId: string) =>
 
 beforeEach(async () => {
   __resetEdgeCaches();
+  __setNewProfileCounterForTests(null); // isolate の数え役をテストごとに作り直す
   await env.CONFIG_KV.put(kvKeys.settings("site_p"), JSON.stringify({ settingsVersion: 1, siteId: "site_p", allowedOrigins: [ORIGIN], retentionDays: 30 }));
   await env.CONFIG_KV.put(kvKeys.active("site_p"), "1");
   await env.CONFIG_KV.put(kvKeys.config("site_p", 1), JSON.stringify({ ...base, siteId: "site_p", needsProfile: true, experiments: [exp] }));
@@ -127,6 +129,81 @@ describe("POST /v1/sites/:siteId/event (spec §9.2)", () => {
     expect(res.status).toBe(503);
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
     spy.mockRestore();
+  });
+});
+
+describe("/event と新しい Profile の予算(plan12 K9)・binding の 429(K11)", () => {
+  async function seedBudgetSite(newProfileBudget: object): Promise<string> {
+    const siteId = `site_nbe_${crypto.randomUUID().slice(0, 8)}`;
+    await env.CONFIG_KV.put(kvKeys.settings(siteId), JSON.stringify({ settingsVersion: 1, siteId, allowedOrigins: [ORIGIN], newProfileBudget }));
+    await env.CONFIG_KV.put(kvKeys.active(siteId), "1");
+    await env.CONFIG_KV.put(kvKeys.config(siteId, 1), JSON.stringify({ ...base, siteId, needsProfile: true, experiments: [exp] }));
+    return siteId;
+  }
+  const goal = (visitorId: string) => ({ type: "goal", goalId: "g_lead", visitorId });
+
+  it("/event の新しい ID も、予算が尽きた後は保存しない(204)。既存の ID は保存する", async () => {
+    const s = await seedBudgetSite({ perDay: 1 });
+    const v1 = generateVisitorId();
+    expect((await send(`/v1/sites/${s}/event`, goal(v1))).status).toBe(204);
+    expect((await readProfile(s, v1))!.goals.g_lead!.count).toBe(1); // 1 件を作って報告 → 尽きた
+    const v2 = generateVisitorId();
+    expect((await send(`/v1/sites/${s}/event`, goal(v2))).status).toBe(204);
+    expect(await readProfile(s, v2)).toBeUndefined();
+    expect(await runInDurableObject(profileStub(env, s, v2), (_i, state) => state.storage.getAlarm())).toBeNull();
+    expect((await send(`/v1/sites/${s}/event`, goal(v1))).status).toBe(204);
+    expect((await readProfile(s, v1))!.goals.g_lead!.count).toBe(2);
+  });
+
+  it("newProfileBudget の無い Site の /event は予算の DO を呼ばない", async () => {
+    let reports = 0;
+    const spy = new Proxy(env.NEW_PROFILE_BUDGET!, { get(t, p) { const v = Reflect.get(t, p); if (p === "get") reports++; return typeof v === "function" ? v.bind(t) : v; } }) as Env["NEW_PROFILE_BUDGET"];
+    for (let i = 0; i < 6; i++) expect((await send("/v1/sites/site_p/event", goal(generateVisitorId()), { envOverride: { NEW_PROFILE_BUDGET: spy } })).status).toBe(204);
+    expect(reports).toBe(0);
+  });
+
+  it("profile_exception_is_not_counted", async () => {
+    // 数え役: Profile の DO の例外(record の "failed")は手元を変えない
+    const T = Date.UTC(2026, 9, 19, 12);
+    const counts: number[] = [];
+    const unit = createNewProfileCounter({ now: () => T, report: async (_d, _s, _h, _day, count) => { counts.push(count); return { exhaustedUntil: null }; } });
+    for (let i = 0; i < 10; i++) unit.record("s1", { perDay: 100 }, "failed", T, () => {});
+    expect(counts).toEqual([]); // 手元は 0 件のまま(報告も出ない)
+    unit.record("s1", { perDay: 100 }, "created", T, () => {});
+    expect(counts).toEqual([1]);
+
+    // edge: Profile の DO の呼び出しの例外だけが "failed"。KV の読み取りの失敗では record を呼ばない
+    const s = await seedBudgetSite({ perDay: 100 });
+    const calls: string[] = [];
+    __setNewProfileCounterForTests({ canCreate: () => { calls.push("canCreate"); return true; }, record: (_s, _b, outcome) => { calls.push(outcome); } });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const broken = { idFromName: () => ({}) as DurableObjectId, get: () => ({ recordGoal: async () => { throw new Error("do down"); } }) } as unknown as Env["VISITOR_PROFILE"];
+    expect((await send(`/v1/sites/${s}/event`, goal(generateVisitorId()), { envOverride: { VISITOR_PROFILE: broken } })).status).toBe(503);
+    expect(calls).toEqual(["canCreate", "failed"]);
+    calls.length = 0;
+    __resetEdgeCaches();
+    const activeKey = kvKeys.active(s);
+    const failingKv = new Proxy(env.CONFIG_KV, {
+      get(t, p) {
+        const v = Reflect.get(t, p);
+        if (p === "get") return (key: string, ...rest: unknown[]) => (key === activeKey ? Promise.reject(new Error("kv down")) : (v as (...a: unknown[]) => unknown).call(t, key, ...rest));
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    }) as Env["CONFIG_KV"];
+    expect((await send(`/v1/sites/${s}/event`, goal(generateVisitorId()), { envOverride: { CONFIG_KV: failingKv } })).status).toBe(503);
+    expect(calls).toEqual([]); // canCreate も record も呼ばない
+    spy.mockRestore();
+  });
+
+  it("binding の 429 に Access-Control-Allow-Origin: * が付く(KV を読まない)", async () => {
+    let kv = 0;
+    const kvSpy = new Proxy(env.CONFIG_KV, { get(t, p) { const v = Reflect.get(t, p); if (p === "get") kv++; return typeof v === "function" ? v.bind(t) : v; } }) as Env["CONFIG_KV"];
+    const res = await send("/v1/sites/site_p/event", goal(generateVisitorId()), { origin: "https://other.example", envOverride: { DECISION_RATE_LIMITER: { limit: async () => ({ success: false }) }, CONFIG_KV: kvSpy } });
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(res.headers.get("Retry-After")).toBe("10");
+    expect(await res.text()).toBe("rate limited");
+    expect(kv).toBe(0);
   });
 });
 

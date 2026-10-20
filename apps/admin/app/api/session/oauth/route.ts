@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { clientVersionHeaders, controlUrl, isHttps, selfOrigin, sessionCookie } from "@/lib/control";
+import { controlRequest, forwardedFrom, isHttps, selfOrigin, sessionCookie } from "@/lib/control";
 import { FLOW_COOKIE, FLOW_RE, expiredFlowCookie } from "@/lib/oauth-flow";
 import { safeNext } from "@/lib/safe-next";
 
@@ -19,12 +19,13 @@ export async function GET(req: Request): Promise<Response> {
   const flow = url.searchParams.get("flow");
   const code = url.searchParams.get("code");
   if (!expected || !flow || !FLOW_RE.test(flow) || flow !== expected || !code) return go("/login?error=oauth_failed");
-  const res = await fetch(`${controlUrl()}/auth/handoff/exchange`, {
+  // top-level の遷移なのでブラウザは版を名乗れず 0 になるが、宛先の /auth/* は古い版の判定の対象外(plan12 K3)
+  const res = await controlRequest("/auth/handoff/exchange", {
     method: "POST",
-    headers: { "content-type": "application/json", ...clientVersionHeaders() },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ code }),
-    cache: "no-store",
-  }).catch(() => null);
+    ...forwardedFrom(req),
+  });
   const data = res?.ok ? ((await res.json().catch(() => null)) as { token?: unknown } | null) : null;
   const session = typeof data?.token === "string" && data.token !== "" ? data.token : null;
   if (!session) return go("/login?error=oauth_failed");

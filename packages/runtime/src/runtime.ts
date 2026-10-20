@@ -207,6 +207,17 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
     }
   };
   const exposure = createExposureTracker(config, names, assignments, pushDataLayer);
+  // Plan 12 K11: edge が 429 を返したら、そのページで 1 回だけ ab_error を積む。decision・event・結果・D-lite の送信はすべてこれを通る。
+  // 撤回の後(consent 撤回の送信・forget・旧世代の応答)は積まない。通信の失敗(reject)は積まない(別オリジンの WAF の遮断は通知されない)
+  let rateLimited = false;
+  const fetchFn: typeof fetch = (...a) =>
+    deps.fetchFn(...a).then((r) => {
+      if (r.status === 429 && !rateLimited && !revoked) {
+        rateLimited = true;
+        pushDataLayer({ event: "ab_error", ab_error_type: "rate_limited" });
+      }
+      return r;
+    });
 
   /** revoke 時に旧 Identity 由来の状態を捨てる。§16 の「旧 Identity は復元しない」を getAssignments にも及ぼす(r1 CX-Medium-1) */
   function clearAssignments(): void {
@@ -237,7 +248,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
 
   function postGoal(goal: Goal): void {
     const body = goalBody(goal);
-    if (body) track(sendEvent(deps.fetchFn, apiUrl("event"), body));
+    if (body) track(sendEvent(fetchFn, apiUrl("event"), body));
   }
 
   /** 送信準備が整った世代で、溜めた Goal を検知順に送る */
@@ -305,7 +316,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
               // 2xx で JSON を読めないもの(D-lite の Cookie なしの 204)・非 2xx(429 など)・通信の失敗は、すべて印を付けない応答
               // (送信側は result が stored などのときだけ印を付ける。次のページで送り直す)
               return track(
-                postEvent(deps.fetchFn, apiUrl("event"), b)
+                postEvent(fetchFn, apiUrl("event"), b)
                   .then((r) => r.ok && r.json())
                   .catch(() => null),
               );
@@ -339,7 +350,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
           body.visitorId = identity.visitorId; // D-lite は Cookie が正(§9.1)
           body.firstVisitAt = identity.firstVisitAt; // Mode C でも参考用の匿名 ID そのものは送らない(時刻だけ。決定 49 §7.4)
         }
-        outcome = await requestDecision(deps.fetchFn, apiUrl("decision"), body, myAborter.signal, config.version);
+        outcome = await requestDecision(fetchFn, apiUrl("decision"), body, myAborter.signal, config.version);
         // D-lite: 応答(Set-Cookie)が settle した。応答が空・失敗・期限切れの abort でも送信を始める(r1 CL-High-1 / r2 CX-High-1)。
         // 期限で abort された初回訪問は Cookie が届いていないことがあり、その Goal は edge が 204 で無視する(既知の制約)
         if (dlite && !isRevoked()) {
@@ -412,7 +423,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
 
   function sendDliteConsentDenied(): void {
     // §16: D-lite は consent body を 1 回送り、edge が両 Cookie に Max-Age=0 を返す(DO へは転送しない)
-    void sendEvent(deps.fetchFn, "/__ab/decision", { kind: "consent", value: "denied" }); // 同じ POST・keepalive。失敗は握る
+    void sendEvent(fetchFn, "/__ab/decision", { kind: "consent", value: "denied" }); // 同じ POST・keepalive。失敗は握る
   }
 
   const consentMachine = createConsent(settings.consentMode, deps.win.__ab?.consent, {
@@ -458,7 +469,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
           pendingForget = Promise.race([
             Promise.allSettled(inflight).then(() => undefined),
             new Promise<void>((resolve) => setTimeout(resolve, FORGET_WAIT_MS)),
-          ]).then(() => sendEvent(deps.fetchFn, apiUrl("event"), { type: "forget", visitorId: forgetId }));
+          ]).then(() => sendEvent(fetchFn, apiUrl("event"), { type: "forget", visitorId: forgetId }));
         }
         revokeIdentity(settings, deps.doc); // Cookie は即時に消す(forget は控えた ID で送る)
       }

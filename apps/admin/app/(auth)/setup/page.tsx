@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Field } from "@/components/Field";
 import { ErrorBox } from "@/components/ErrorBox";
 import { SubmitButton } from "@/components/SubmitButton";
+import { browserVersionHeaders } from "@/lib/client";
 
 export default function SetupPage() {
   const [busy, setBusy] = useState(false);
@@ -15,7 +16,7 @@ export default function SetupPage() {
     const fd = new FormData(e.currentTarget);
     const res = await fetch("/api/session/setup", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...browserVersionHeaders() },
       body: JSON.stringify(Object.fromEntries(fd.entries())),
     });
     setBusy(false);

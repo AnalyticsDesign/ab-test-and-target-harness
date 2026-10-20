@@ -35,6 +35,7 @@ export const DEFAULT_MESSAGES: Record<string, string> = {
   last_workspace: "最後のワークスペースは削除できません",
   workspace_has_running_experiments: "配信中のエクスペリエンスがあります",
   write_frozen: "メンテナンス中のため、変更を保存できません",
+  client_too_old: "管理画面が古い版です",
   // D9 ③(plan ③ の K25): 評価計画と結果
   evaluation_plan_incomplete: "評価計画が足りないため、テストを開始できません",
   evaluation_plan_locked: "開始後の評価計画は、評価時点の前に期間と人数を延ばす変更だけができます",

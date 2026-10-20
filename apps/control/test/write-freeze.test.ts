@@ -6,7 +6,7 @@ import { getDb } from "../src/db";
 import type { Env } from "../src/env";
 import { kvKeys } from "@wtt/core";
 import { AUTH_ALLOW } from "../src/auth-paths";
-import { freezeHint, isFreezeExempt, isWriteFrozen, parseWriteFreeze, readWriteFreeze, retryAfterSeconds, writeFrozenError, type WriteFreeze } from "../src/write-freeze";
+import { freezeHint, isWriteGateExempt, isWriteFrozen, parseWriteFreeze, readWriteFreeze, retryAfterSeconds, writeFrozenError, type WriteFreeze } from "../src/write-freeze";
 import { active, BREAK_GLASS, call, createExperiment, createSite, expectEnvelope, failingD1Query, fakeDeployer, json, publishRes, setupOwner, siteRow, siteWithRunning } from "./helpers";
 
 /** 凍結の行を直接書く(運用者が deploy.md の SQL で書くのと同じ形) */
@@ -93,31 +93,31 @@ describe("write freeze guard (D13 / decision 56 (4))", () => {
     const exempt = [
       ...new Set(
         app.routes
-          .filter((r) => (WRITE.has(r.method) && isFreezeExempt(r.method, r.path)) || (r.method === "ALL" && isFreezeExempt("POST", r.path)))
+          .filter((r) => (WRITE.has(r.method) && isWriteGateExempt(r.method, r.path)) || (r.method === "ALL" && isWriteGateExempt("POST", r.path)))
           .map((r) => `${r.method} ${r.path}`),
       ),
     ].sort();
     expect(exempt).toEqual(["ALL /auth/*", "POST /auth/handoff/exchange", "POST /break-glass/reset-link", "POST /sites/:sid/evaluate"]);
     // catch-all が実際に開くパス。ここに業務の書き込みを足すと凍結から素通しになるので、足すなら凍結の判定を見直す(レビュー r1 CL-Low-3)
     expect([...AUTH_ALLOW].sort()).toEqual(["/auth/get-session", "/auth/request-password-reset", "/auth/reset-password", "/auth/sign-in/email", "/auth/sign-out", "/auth/sign-up/email"]);
-    expect(isFreezeExempt("POST", "/auth/sign-out")).toBe(true);
+    expect(isWriteGateExempt("POST", "/auth/sign-out")).toBe(true);
     // 何も書かない what-if の計算(ユーザー決定 2026-10-08)。パスの形が違えば通さない
-    expect(isFreezeExempt("POST", "/sites/site_a/evaluate")).toBe(true);
-    expect(isFreezeExempt("POST", "/sites/site_a/evaluate/x")).toBe(false);
-    expect(isFreezeExempt("POST", "/sites/site_a/experiments/e/evaluate")).toBe(false);
-    expect(isFreezeExempt("PUT", "/sites/site_a/evaluate")).toBe(false);
-    expect(isFreezeExempt("POST", "/auth/sign-in/email")).toBe(true);
-    expect(isFreezeExempt("GET", "/sites")).toBe(true);
-    expect(isFreezeExempt("HEAD", "/sites")).toBe(true);
-    expect(isFreezeExempt("POST", "/authx")).toBe(false);
-    expect(isFreezeExempt("POST", "/break-glassx")).toBe(false);
-    expect(isFreezeExempt("POST", "/invitations/x/accept")).toBe(false);
-    expect(isFreezeExempt("POST", "/setup")).toBe(false);
+    expect(isWriteGateExempt("POST", "/sites/site_a/evaluate")).toBe(true);
+    expect(isWriteGateExempt("POST", "/sites/site_a/evaluate/x")).toBe(false);
+    expect(isWriteGateExempt("POST", "/sites/site_a/experiments/e/evaluate")).toBe(false);
+    expect(isWriteGateExempt("PUT", "/sites/site_a/evaluate")).toBe(false);
+    expect(isWriteGateExempt("POST", "/auth/sign-in/email")).toBe(true);
+    expect(isWriteGateExempt("GET", "/sites")).toBe(true);
+    expect(isWriteGateExempt("HEAD", "/sites")).toBe(true);
+    expect(isWriteGateExempt("POST", "/authx")).toBe(false);
+    expect(isWriteGateExempt("POST", "/break-glassx")).toBe(false);
+    expect(isWriteGateExempt("POST", "/invitations/x/accept")).toBe(false);
+    expect(isWriteGateExempt("POST", "/setup")).toBe(false);
   });
 
   it("every mounted write route answers 503 write_frozen while frozen (sweep)", async () => {
     await freeze('{"reason":"v1.1 への更新","until":"2099-01-01T00:00:00+09:00"}');
-    const routes = [...new Set(app.routes.filter((r) => WRITE.has(r.method) && !isFreezeExempt(r.method, r.path)).map((r) => `${r.method} ${r.path}`))];
+    const routes = [...new Set(app.routes.filter((r) => WRITE.has(r.method) && !isWriteGateExempt(r.method, r.path)).map((r) => `${r.method} ${r.path}`))];
     expect(routes.length).toBeGreaterThan(30);
     for (const r of routes) {
       const [method, path] = r.split(" ") as [string, string];

@@ -27,8 +27,19 @@ describe("api()", () => {
     fd.set("file", new Blob(["x"]), "a.png");
     await api("POST", "/sites/s1/assets", fd);
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.headers).toBeUndefined();
+    expect(new Headers(init.headers).has("content-type")).toBe(false);
     expect(init.body).toBe(fd);
+  });
+
+  it("どの要求もこの画面の版を名乗る(呼び出し元の headers でも上書きさせない。plan12 K3)", async () => {
+    fetchMock.mockImplementation(async () => json(200, {}));
+    const fd = new FormData();
+    await api("GET", "/me");
+    await api("POST", "/sites/s1/assets", fd);
+    await api("PATCH", "/sites/s1", { name: "x" }, { headers: { "x-wtt-client-version": "999" } });
+    for (const [, init] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      expect(new Headers(init.headers).get("x-wtt-client-version")).toBe("1");
+    }
   });
 
   it("204 は null、非 2xx は封筒の code で ApiClientError", async () => {

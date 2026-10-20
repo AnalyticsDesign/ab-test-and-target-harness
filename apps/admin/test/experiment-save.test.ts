@@ -22,4 +22,18 @@ describe("saveErrorMessage", () => {
   it("partly saved for another reason: the existing reload advice", () => {
     expect(saveErrorMessage(other, true)).toBe("入力の検証に失敗しました(一部は保存されています。最新の状態を確認するにはこの画面を再読み込みしてください)");
   });
+
+  // plan12 K5 / K6: 古い管理画面は 3 段の保存の途中で 426 になり得る。凍結と逆に、再読み込みを案内する(入力は消える)
+  it("partly saved and 426 client_too_old: tell to reload and that unsaved input is lost, not 'save again later'", () => {
+    const tooOld = new ApiClientError(426, "client_too_old", { message: "管理画面が古い版です", hint: "管理画面ならページを再読み込みしてください" });
+    const text = saveErrorMessage(tooOld, true);
+    expect(text).toContain("管理画面が古い版です");
+    expect(text).toContain("一部は保存されています");
+    expect(text).toContain("再読み込み");
+    expect(text).toContain("未保存の入力は消えます");
+    expect(text).not.toContain("もう一度保存すると");
+    expect(text).not.toContain("入力はそのまま残っています");
+    // 何も保存されていない 426 は封筒のまま
+    expect(saveErrorMessage(tooOld, false)).toBe("管理画面が古い版です 管理画面ならページを再読み込みしてください");
+  });
 });

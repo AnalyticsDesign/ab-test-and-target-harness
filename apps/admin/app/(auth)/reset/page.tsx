@@ -4,6 +4,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Field } from "@/components/Field";
 import { ErrorBox } from "@/components/ErrorBox";
 import { SubmitButton } from "@/components/SubmitButton";
+import { browserVersionHeaders } from "@/lib/client";
 import { resetErrorMessage } from "@/lib/reset-errors";
 
 /** control の reset-link API が配る URL がこのページ(`/reset?token=…`)。token を control の `POST /auth/reset-password` に渡す(決定 35 (2)) */
@@ -20,7 +21,7 @@ export default function ResetPage() {
     const fd = new FormData(e.currentTarget);
     const res = await fetch("/api/control/auth/reset-password", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...browserVersionHeaders() },
       body: JSON.stringify({ token, newPassword: fd.get("password") }),
     });
     setBusy(false);

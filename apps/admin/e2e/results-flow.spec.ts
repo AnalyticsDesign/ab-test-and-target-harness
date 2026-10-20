@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect, type APIRequestContext, type Page, type Request, type TestInfo } from "@playwright/test";
 import { pickVariant, uuidToVisitorId } from "@wtt/core";
-import { appAlert, changeStatus, createExperiment, createSite, E2E_REGISTRY_DIR, e2eLogDir, EDGE_URL, login, pick, waitForHydration } from "./fixtures";
+import { appAlert, changeStatus, controlHeaders, createExperiment, createSite, E2E_REGISTRY_DIR, e2eLogDir, EDGE_URL, login, pick, waitForHydration } from "./fixtures";
 
 /**
  * D9 ③(plan ③ の Task 17・K26、設計書 §17): テストの結果の流れを、空の状態から画面で通す。
@@ -36,8 +36,8 @@ type Json = Record<string, unknown>;
 /** 管理画面の BFF 経由で control を呼ぶ(ログイン中の Cookie を使う)。準備と読み取りだけに使い、確かめる操作は画面で行う */
 async function control(page: Page, method: string, path: string, body?: unknown): Promise<{ status: number; json: Json | null }> {
   return page.evaluate(
-    async ([m, p, b]) => {
-      const r = await fetch(`/api/control${p}`, { method: m, headers: b === undefined ? undefined : { "content-type": "application/json" }, body: b === undefined ? undefined : JSON.stringify(b) });
+    async ([m, p, b, h]) => {
+      const r = await fetch(`/api/control${p}`, { method: m, headers: b === undefined ? h : { "content-type": "application/json", ...h }, body: b === undefined ? undefined : JSON.stringify(b) });
       const text = await r.text();
       let json: Record<string, unknown> | null = null;
       try {
@@ -47,7 +47,7 @@ async function control(page: Page, method: string, path: string, body?: unknown)
       }
       return { status: r.status, json };
     },
-    [method, path, body] as const,
+    [method, path, body, controlHeaders()] as const,
   );
 }
 

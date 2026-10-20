@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, expect, type Page, type Request } from "@playwright/test";
-import { appAlert, createSite, login, waitForHydration } from "./fixtures";
+import { appAlert, controlHeaders, createSite, login, waitForHydration } from "./fixtures";
 
 /**
  * D9 ②・③: Site の設定の「結果を記録する」。E2E の control には計測用のデータベース(RESULTS_DB = ローカルの wtt-results。plan ③ の K26)があるので、
@@ -29,11 +29,11 @@ const EXP_ID = "exp_e2e_res";
 /** 管理画面の BFF 経由で control を呼ぶ(準備だけに使い、確かめる操作は画面で行う) */
 async function api(page: Page, method: string, path: string, body?: unknown): Promise<number> {
   return page.evaluate(
-    async ([m, p, b]) => {
-      const r = await fetch(`/api/control${p}`, { method: m, headers: b === undefined ? undefined : { "content-type": "application/json" }, body: b === undefined ? undefined : JSON.stringify(b) });
+    async ([m, p, b, h]) => {
+      const r = await fetch(`/api/control${p}`, { method: m, headers: b === undefined ? h : { "content-type": "application/json", ...h }, body: b === undefined ? undefined : JSON.stringify(b) });
       return r.status;
     },
-    [method, path, body] as const,
+    [method, path, body, controlHeaders()] as const,
   );
 }
 

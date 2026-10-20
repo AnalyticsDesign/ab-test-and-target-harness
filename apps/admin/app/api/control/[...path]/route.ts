@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { badOrigin, clientVersionHeaders, controlUnreachable, controlUrl, originHeader, originVerdict, SESSION_COOKIE } from "@/lib/control";
+import { badOrigin, controlRequest, controlUnreachable, forwardedFrom, originHeader, originVerdict, SESSION_COOKIE } from "@/lib/control";
 
 /**
  * BFF(spec §13.4)。ブラウザは同一オリジンの `/api/control/*` だけを叩き、ここが Cookie のセッショントークンを
@@ -56,17 +56,17 @@ async function proxy(req: Request, ctx: { params: Promise<{ path: string[] }> })
     return envelope(403, "forbidden", "このパスはブラウザからは呼べません", "下書きの確認は、API キーで control の draft-bootstrap を直接呼んでください(エージェント向けガイドのレシピ)");
   }
   const url = new URL(req.url);
-  const target = `${controlUrl()}/${path.map(encodeURIComponent).join("/")}${url.search}`;
+  const target = `/${path.map(encodeURIComponent).join("/")}${url.search}`;
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  // ブラウザから来たヘッダは引き継がない(authorization / x-setup-token / x-api-key の持ち込みや header injection を断つ)。
+  // ブラウザから来たヘッダは引き継がない(authorization / x-setup-token / x-api-key / x-wtt-client-ip の持ち込みや header injection を断つ)。
   // 必要なものだけを組み立て直す: content-type(multipart の boundary ごと)/ Bearer / Origin
-  // (Origin は control の `/auth/*` が検証する。ブラウザが名乗ったものだけを渡し、無ければ付けない = control 側で fail-closed)
-  const headers = new Headers({ ...originHeader(req), ...clientVersionHeaders() });
+  // (Origin はブラウザが名乗ったものだけを渡し、無ければ付けない)。版と接続元 IP は controlRequest が付ける(plan12 K3 / K8)
+  const headers = new Headers(originHeader(req));
   const ct = req.headers.get("content-type");
   if (ct) headers.set("content-type", ct);
   if (token) headers.set("authorization", `Bearer ${token}`);
   const body = req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer();
-  const res = await fetch(target, { method: req.method, headers, body, cache: "no-store" }).catch(() => null);
+  const res = await controlRequest(target, { method: req.method, headers, body, ...forwardedFrom(req) });
   // control に届かないときも封筒を返す(ブラウザ側の `api()` は「非 2xx は必ず封筒」を前提にしている)
   if (!res) return controlUnreachable();
   // 応答も素通しにはしない。control の set-auth-token / set-cookie をブラウザに渡さない。

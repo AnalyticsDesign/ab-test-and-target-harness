@@ -1,5 +1,7 @@
 "use client";
 
+import { API_CONTRACT_VERSION, CLIENT_VERSION_HEADER } from "@wtt/core";
+
 /** control の封筒(spec §13.5 決定 34): `{ error, message, hint?, path?, ...details }`。message / hint は日本語 */
 export type ErrorEnvelope = {
   error?: string;
@@ -22,12 +24,23 @@ export class ApiClientError extends Error {
   }
 }
 
+/**
+ * plan12 K3: ブラウザの JS が BFF に送る要求はすべて、この画面(JS)が作られた時点の API 契約の版を名乗る。
+ * BFF は自分とこの値の小さいほうを control に名乗るので、admin を更新した後も開いたままの古いタブ(名乗らない = 0)の書き込みは
+ * control が 426 で止める。宛先が判定の対象外でも必ず付ける約束(付け忘れは test/control-headers.test.ts が止める)
+ */
+export function browserVersionHeaders(): Record<string, string> {
+  return { [CLIENT_VERSION_HEADER]: String(API_CONTRACT_VERSION) };
+}
+
 /** ブラウザは同一オリジンの BFF だけを叩く(spec §13.4)。非 2xx は ApiClientError */
 export async function api<T = unknown>(method: string, path: string, body?: unknown, init: RequestInit = {}): Promise<T> {
   const isForm = body instanceof FormData;
+  // FormData は content-type を付けない(boundary はブラウザに任せる)。版は呼び出し元の headers でも上書きさせない
+  const contentType: Record<string, string> = isForm || body === undefined ? {} : { "content-type": "application/json" };
   const res = await fetch(`/api/control${path}`, {
     method,
-    headers: isForm || body === undefined ? init.headers : { "content-type": "application/json", ...(init.headers as Record<string, string>) },
+    headers: { ...contentType, ...(init.headers as Record<string, string> | undefined), ...browserVersionHeaders() },
     body: isForm ? body : body === undefined ? undefined : JSON.stringify(body),
   });
   const data = res.status === 204 ? null : await res.json().catch(() => null);

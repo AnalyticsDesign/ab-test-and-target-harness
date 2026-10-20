@@ -1,4 +1,4 @@
-import { clientVersionHeaders, controlFetch, controlUrl } from "@/lib/control";
+import { controlFetch, controlRequest, requestClientIp } from "@/lib/control";
 import { loginView } from "@/lib/login-view";
 import { inviteView, invitationStatusLabel } from "@/lib/invite-view";
 import type { PublicInvitation, SessionUser } from "@/lib/types";
@@ -7,7 +7,7 @@ import { AcceptInviteForm } from "./AcceptInviteForm";
 /** 招待の内容は認証不要で読める(control の `GET /invitations/:id`)。サーバー側で読むので control の URL は表に出ない */
 export default async function InvitePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const res = await fetch(`${controlUrl()}/invitations/${encodeURIComponent(id)}`, { cache: "no-store", headers: clientVersionHeaders() }).catch(() => null);
+  const res = await controlRequest(`/invitations/${encodeURIComponent(id)}`, { clientIp: await requestClientIp() });
   if (!res) return <p className="error-box">control に接続できませんでした。しばらく待ってから再読み込みしてください</p>;
   if (!res.ok) return <p className="error-box">招待が見つかりません</p>;
   const inv = (await res.json()) as PublicInvitation;

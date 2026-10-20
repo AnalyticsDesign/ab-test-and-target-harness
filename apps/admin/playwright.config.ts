@@ -70,7 +70,10 @@ export default defineConfig({
     {
       // 本番と同じ経路(vinext build の出力を Workers ランタイムで動かす)。`next dev` で走らせると Workers で動くことを何も確かめない。
       // build はルートの `pnpm e2e:admin` が playwright の前に済ませる(global-setup.ts と同じ理由でここには置かない)
-      // `--var` で wrangler.jsonc の本番値(AB_CONTROL_URL)をローカル control に上書きする。BFF は接続元 IP を control に転送しない(決定 35 (4))
+      // `--var` で wrangler.jsonc の本番値(AB_CONTROL_URL)をローカル control に上書きする。
+      // BFF は control を service binding(wrangler.jsonc の services → build の出力の dist/server/wrangler.json)で呼び、
+      // 接続元 IP を x-wtt-client-ip で渡す(plan12 K8)。binding の相手は、同じ WRANGLER_REGISTRY_PATH(wranglerServer)の dev registry に
+      // 登録された上の control。起動の順は問わない(相手が居ない間は binding が 503 を返す)
       // `package.json` の `preview` と同じコマンド(生成設定のパスは scripts にだけある)
       command: `pnpm preview --var AB_CONTROL_URL:${CONTROL_URL}`,
       url: `${ADMIN_URL}/login`,
@@ -90,6 +93,8 @@ export default defineConfig({
     { name: "write-freeze", testMatch: /write-freeze\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     { name: "experiment-kind", testMatch: /experiment-kind-flow/, dependencies: ["publish"], use: { browserName: "chromium" } },
     { name: "results-settings", testMatch: /results-settings\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    // plan12 K6: 版のバナー(/capabilities を差し替えて確かめるだけで、状態は変えない)
+    { name: "version-banner", testMatch: /version-banner\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // B77: パターン UI と目標名(専用のサイトを作るので publish-flow の状態には触らないが、owner の setup は publish-flow が行う)
     { name: "variant-ui", testMatch: /variant-ui\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // D9 ③: 結果の記録の流れ(評価計画 → 開始 → edge への参加・CV → 結果のタブ → 終了と採用 → 複製の下書き)。専用のサイトを作る

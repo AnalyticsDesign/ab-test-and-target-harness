@@ -5,7 +5,8 @@ import { compile, generateVisitorId, inTraffic, kvKeys, parseSiteSettings, patte
 import { evaluateDecision } from "../src/decision";
 import app from "../src/index";
 import { PROFILE_KEY, profileStub, type ProfileRecord } from "../src/profile";
-import { __resetEdgeCaches } from "../src/store";
+import { __resetEdgeCaches, loadConfig, loadSettings } from "../src/store";
+import { __setNewProfileCounterForTests } from "../src/new-profile-counter";
 import type { Env } from "../src/env";
 
 const ORIGIN = "https://site.example";
@@ -59,6 +60,7 @@ const readProfile = (siteId: string, visitorId: string) =>
 
 beforeEach(async () => {
   __resetEdgeCaches();
+  __setNewProfileCounterForTests(null); // isolate の数え役(module の中に 1 つ)をテストごとに作り直す
   await env.CONFIG_KV.put(kvKeys.settings("site_d"), JSON.stringify({ settingsVersion: 1, siteId: "site_d", allowedOrigins: [ORIGIN] }));
   await env.CONFIG_KV.put(kvKeys.active("site_d"), "1");
   await env.CONFIG_KV.put(kvKeys.config("site_d", 1), JSON.stringify(cfg));
@@ -430,7 +432,7 @@ describe("閲覧の条件(保存する形の page から compile した版 2。�
     const DAY = 86_400_000;
     const now = Date.UTC(2026, 9, 6, 1, 0);
     const at = async (url: string, vid: string, t: number) =>
-      (await evaluateDecision(env as unknown as Env, "site_d", settings, config, body(url, vid), vid, null, t))!.experiments.map((x) => x.id);
+      (await evaluateDecision(env as unknown as Env, "site_d", settings, config, body(url, vid), vid, null, () => {}, t))!.experiments.map((x) => x.id);
     const old = generateVisitorId();
     expect(await at("/pricing", old, now - 10 * DAY)).toEqual([]);
     expect((await readProfile("site_d", old))!.pages[PID]!.lastAt).toBe(Math.floor((now - 10 * DAY) / 1000));
@@ -444,5 +446,105 @@ describe("閲覧の条件(保存する形の page から compile した版 2。�
     const v = generateVisitorId();
     expect(await ids(await post("/v1/sites/site_d/decision", body("/lp", v)))).toEqual(["X", "Y"]);
     expect(await ids(await post("/v1/sites/site_d/decision", body(`/${"x".repeat(300)}`, v)))).toEqual(["Y"]);
+  });
+});
+
+describe("新しい Profile の予算(plan12 K9)", () => {
+  const vid = () => generateVisitorId();
+  const body = (url: string, visitorId: string) => ({ v: 5, url: `${ORIGIN}${url}`, referrer: "", device: "desktop" as const, visitorId });
+  /** site_d の needsProfile の版 5 を、予算のあるサイトに写す。予算の DO(site:<siteId>)を他のテストと分けるため ID は毎回変える */
+  async function seedBudgetSite(newProfileBudget: object): Promise<string> {
+    const siteId = `site_nb_${crypto.randomUUID().slice(0, 8)}`;
+    await env.CONFIG_KV.put(kvKeys.settings(siteId), JSON.stringify({ settingsVersion: 1, siteId, allowedOrigins: [ORIGIN], newProfileBudget }));
+    const raw = JSON.parse((await env.CONFIG_KV.get(kvKeys.config("site_d", 5)))!);
+    await env.CONFIG_KV.put(kvKeys.active(siteId), "5");
+    await env.CONFIG_KV.put(kvKeys.config(siteId, 5), JSON.stringify({ ...raw, siteId }));
+    return siteId;
+  }
+  /** 予算の DO の namespace の spy(get に触れた回数 = 報告の回数) */
+  function budgetSpy(onGet: () => void): Env["NEW_PROFILE_BUDGET"] {
+    return new Proxy(env.NEW_PROFILE_BUDGET!, {
+      get(target, prop) {
+        const v = Reflect.get(target, prop);
+        if (prop === "get") onGet();
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    }) as Env["NEW_PROFILE_BUDGET"];
+  }
+  const alarmOf = (siteId: string, visitorId: string) => runInDurableObject(profileStub(env, siteId, visitorId), (_i, state) => state.storage.getAlarm());
+  const hereExp = { ...exp, id: "exp_here" };
+
+  it("new_profiles_over_budget_are_evaluated_without_saving", async () => {
+    const s = await seedBudgetSite({ perDay: 1 });
+    const v1 = vid();
+    expect((await post(`/v1/sites/${s}/decision`, body("/pricing", v1))).status).toBe(200);
+    expect(await readProfile(s, v1)).toBeDefined(); // 1 件を作って報告(waitUntil の中)→ 予算の DO が尽きたと返す
+    const v2 = vid();
+    const res = await post(`/v1/sites/${s}/decision`, body("/pricing", v2));
+    expect(res.status).toBe(200);
+    // 結果は保存した場合と同じ(今のページの閲覧を評価の前に数えるので、初回の同じページで exp_here が成立する)
+    expect(await res.json()).toEqual({ v: 5, experiments: [{ id: "exp_here", variant: pickVariant(hereExp, v2) }] });
+    expect(await readProfile(s, v2)).toBeUndefined(); // DO の storage に記録が無い
+    expect(await alarmOf(s, v2)).toBeNull(); // alarm も無い
+  });
+
+  it("existing_profiles_are_not_counted_against_budget", async () => {
+    // 尽きた後(allowCreate: false)でも、既存の ID の decision は保存される
+    const s = await seedBudgetSite({ perDay: 1 });
+    const v1 = vid();
+    await post(`/v1/sites/${s}/decision`, body("/pricing", v1));
+    expect((await post(`/v1/sites/${s}/decision`, body("/pricing", v1))).status).toBe(200);
+    expect((await readProfile(s, v1))!.pages.p_pricing!.count).toBe(2); // 閲覧の数が増える
+    // 尽きる前でも、既存の ID は "not_created" なので手元の数は増えない(6 回の decision でも報告が出ない)
+    const s2 = await seedBudgetSite({ perDay: 1000 });
+    let reports = 0;
+    const envOverride = { NEW_PROFILE_BUDGET: budgetSpy(() => reports++) };
+    const v2 = vid();
+    await post(`/v1/sites/${s2}/decision`, body("/pricing", v2), { envOverride });
+    expect(reports).toBe(1); // isolate で最初の 1 件はすぐ報告
+    for (let i = 0; i < 6; i++) await post(`/v1/sites/${s2}/decision`, body("/pricing", v2), { envOverride });
+    expect(reports).toBe(1);
+    expect((await readProfile(s2, v2))!.pages.p_pricing!.count).toBe(7);
+  });
+
+  it("newProfileBudget の無い Site は予算の DO を呼ばない", async () => {
+    let reports = 0;
+    const envOverride = { NEW_PROFILE_BUDGET: budgetSpy(() => reports++) };
+    for (let i = 0; i < 6; i++) expect((await post("/v1/sites/site_d/decision", body("/pricing", vid()), { envOverride })).status).toBe(200);
+    expect(reports).toBe(0);
+  });
+
+  it("decision の応答は報告を待たない(報告を返さない stub でも decision が返る)", async () => {
+    const s = await seedBudgetSite({ perDay: 1000 });
+    const settings = (await loadSettings(env as unknown as Env, s))!;
+    const config = await loadConfig(env as unknown as Env, s, 5);
+    let reports = 0;
+    const hanging = {
+      idFromName: (name: string) => env.NEW_PROFILE_BUDGET!.idFromName(name),
+      get: () => ({
+        report: () => {
+          reports++;
+          return new Promise(() => {});
+        },
+      }),
+    } as unknown as Env["NEW_PROFILE_BUDGET"];
+    const waits: Promise<unknown>[] = [];
+    const v = vid();
+    const out = await evaluateDecision({ ...(env as unknown as Env), NEW_PROFILE_BUDGET: hanging }, s, settings, config, body("/pricing", v), v, null, (p) => waits.push(p));
+    expect(out).toEqual({ v: 5, experiments: [{ id: "exp_here", variant: pickVariant(hereExp, v) }] });
+    expect(reports).toBe(1); // 報告は出ているが、返るのを待たない
+    expect(waits).toHaveLength(1); // waitUntil の中
+    expect(await readProfile(s, v)).toBeDefined();
+  });
+
+  it("binding の 429 に Access-Control-Allow-Origin: * が付く(KV を読まない)", async () => {
+    let touched = 0;
+    const envOverride: Partial<Env> = { CONFIG_KV: kvSpy(() => touched++), DECISION_RATE_LIMITER: { limit: async () => ({ success: false }) } };
+    const res = await post("/v1/sites/site_d/decision", okBody(), { envOverride, origin: "https://other.example" });
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*"); // 許可の一覧とは比べない(KV を読む前の応答)
+    expect(res.headers.get("Retry-After")).toBe("10");
+    expect(await res.text()).toBe("rate limited");
+    expect(touched).toBe(0);
   });
 });

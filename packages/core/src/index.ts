@@ -25,3 +25,4 @@ export * from "./pattern-id";
 export * from "./api-contract"; // zod-free(admin の BFF と control が使う)
 export * from "./duplicate"; // zod-free
 export * from "./results"; // zod-free(runtime が import する)
+export * from "./new-profile-budget"; // zod-free(edge の新しい Profile の予算。runtime は使わない)

@@ -24,10 +24,16 @@ const newJar = (entries: Record<string, string> = {}) => ({
   },
 });
 
-vi.mock("next/headers", () => ({ cookies: async () => jar }));
+/** Server Component が `headers()` で読む「BFF が受けた要求」のヘッダー(controlFetch が接続元 IP を拾う) */
+let reqHeaders = new Headers();
+/** wrangler.jsonc の services(CONTROL)。null = binding の無い構成(公開 URL で呼ぶ) */
+let binding: { fetch: ReturnType<typeof vi.fn> } | null = null;
+
+vi.mock("next/headers", () => ({ cookies: async () => jar, headers: async () => reqHeaders }));
+vi.mock("@/lib/control-binding", () => ({ controlBinding: async () => binding }));
 vi.mock("next/navigation", () => ({ redirect: (url: string) => { throw new Error(`redirect:${url}`); } }));
 
-const { GET, POST, DELETE } = await import("@/app/api/control/[...path]/route");
+const { GET, POST, PATCH, DELETE } = await import("@/app/api/control/[...path]/route");
 const { POST: login } = await import("@/app/api/session/login/route");
 const { POST: logout } = await import("@/app/api/session/logout/route");
 const { POST: setup } = await import("@/app/api/session/setup/route");
@@ -58,6 +64,8 @@ const post = (url: string, init: RequestInit = {}) => new Request(url, { method:
 
 beforeEach(() => {
   jar = newJar();
+  reqHeaders = new Headers();
+  binding = null;
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -66,7 +74,7 @@ afterEach(() => {
 });
 
 describe("BFF /api/control/[...path]", () => {
-  // backlog D13 / 決定 56 (1): control へ転送する要求は版を名乗る(ブラウザが名乗った値は引き継がない)
+  // backlog D13 / 決定 56 (1): control へ転送する要求は版を名乗る(ブラウザが BFF より新しい版を名乗っても BFF の版を超えない。plan12 K3)
   it("the proxy and the session routes send x-wtt-client-version to control", async () => {
     jar = newJar({ wtt_session: "tok" });
     fetchMock.mockResolvedValueOnce(controlRes(200, { ok: true }));
@@ -77,7 +85,7 @@ describe("BFF /api/control/[...path]", () => {
     await controlFetch("/me", { headers: { "x-wtt-client-version": "999" } });
     expect(lastCall().headers.get("x-wtt-client-version")).toBe("1");
     fetchMock.mockResolvedValueOnce(controlRes(201, { workspaceId: "w", userId: "u" }));
-    await setup(post(`${ORIGIN}/api/session/setup`, { headers: { "content-type": "application/json", "x-setup-token": "t" }, body: JSON.stringify({ email: "a@example.com", name: "A", workspaceName: "W" }) }));
+    await setup(post(`${ORIGIN}/api/session/setup`, { headers: { "content-type": "application/json", "x-setup-token": "t", "x-wtt-client-version": "1" }, body: JSON.stringify({ email: "a@example.com", name: "A", workspaceName: "W" }) }));
     expect(lastCall().headers.get("x-wtt-client-version")).toBe("1");
   });
 
@@ -105,12 +113,14 @@ describe("BFF /api/control/[...path]", () => {
         "x-api-key": "wtt_stolen_key",
         "x-invitation-id": "inv1",
         "x-forwarded-for": "10.0.0.1",
+        // control の BFF の入口が接続元 IP として信じるヘッダー(plan12 K8)。ブラウザが名乗った値は渡さない
+        "x-wtt-client-ip": "10.0.0.2",
       },
     });
     await GET(req, params(["me"]));
     const { headers } = lastCall();
     expect(headers.get("authorization")).toBe("Bearer tok1"); // Cookie 由来のものだけ
-    for (const name of ["cookie", "x-setup-token", "x-api-key", "x-invitation-id", "x-forwarded-for"]) {
+    for (const name of ["cookie", "x-setup-token", "x-api-key", "x-invitation-id", "x-forwarded-for", "x-wtt-client-ip"]) {
       expect(headers.get(name), name).toBeNull();
     }
   });
@@ -285,18 +295,50 @@ describe("BFF /api/control/[...path]", () => {
   });
 });
 
-describe("cf-connecting-ip(control の IP 単位レート制限の鍵)", () => {
-  it("受信した cf-connecting-ip は転送しない。旧フラグ AB_TRUST_CLIENT_IP_HEADER が環境に残っていても同じ(決定 35 (4))", async () => {
-    // Cloudflare 配下では CF-Connecting-IP は Cloudflare が接続元 IP で上書きするので、BFF の転送はそもそも届かない。
-    // Cloudflare 外の構成は spec に無く、そこで転送すると「ブラウザの JS が自分で IP を名乗って制限を回避できる」欠陥に戻る
-    vi.stubEnv("AB_TRUST_CLIENT_IP_HEADER", "1");
+describe("接続元 IP(control の IP 単位レート制限の鍵。plan12 K8)", () => {
+  // control の BFF の入口(ControlBff)は x-wtt-client-ip を接続元 IP として信じるので、admin がその境界になる。
+  // Cloudflare 配下の cf-connecting-ip は Cloudflare が接続元 IP で上書きするのでブラウザは偽れない。x-wtt-client-ip は偽れる
+  const forged = { "cf-connecting-ip": "203.0.113.9", "x-wtt-client-ip": "198.51.100.1" };
+
+  it("受けた要求の cf-connecting-ip を x-wtt-client-ip に入れる。cf-connecting-ip そのものとブラウザが付けた x-wtt-client-ip は渡さない", async () => {
     jar = newJar({ wtt_session: "tok1" });
     fetchMock.mockResolvedValue(controlRes(200, {}));
-    await DELETE(new Request("http://admin.test/api/control/sites/s1", { method: "DELETE", headers: { "cf-connecting-ip": "203.0.113.9" } }), params(["sites", "s1"]));
+    await DELETE(new Request("http://admin.test/api/control/sites/s1", { method: "DELETE", headers: forged }), params(["sites", "s1"]));
+    expect(lastCall().headers.get("x-wtt-client-ip")).toBe("203.0.113.9");
     expect(lastCall().headers.get("cf-connecting-ip")).toBeNull();
+    // /api/session/* の 5 本も同じ
+    fetchMock.mockImplementation(async () => controlRes(200, { token: "t", workspaceId: "w" }, { "set-auth-token": "t" }));
+    await login(post("http://admin.test/api/session/login", { headers: forged, body: "{}" }));
+    expect(lastCall().headers.get("x-wtt-client-ip")).toBe("203.0.113.9");
+    await setup(post("http://admin.test/api/session/setup", { headers: forged, body: "{}" }));
+    expect(lastCall().headers.get("x-wtt-client-ip")).toBe("203.0.113.9");
+    await acceptInvite(post("http://admin.test/api/session/accept-invite", { headers: forged, body: JSON.stringify({ id: "inv1" }) }));
+    expect(lastCall().headers.get("x-wtt-client-ip")).toBe("203.0.113.9");
+    jar = newJar({ wtt_session: "tok1" });
+    await logout(post("http://admin.test/api/session/logout", { headers: forged }));
+    expect(lastCall().headers.get("x-wtt-client-ip")).toBe("203.0.113.9");
+    jar = newJar({ wtt_oauth_flow: "flow-0123456789abcdef" });
+    await oauth(new Request("http://admin.test/api/session/oauth?flow=flow-0123456789abcdef&code=c", { headers: { host: "admin.test", ...forged } }));
+    expect(lastCall().url).toBe(`${CONTROL}/auth/handoff/exchange`);
+    expect(lastCall().headers.get("x-wtt-client-ip")).toBe("203.0.113.9");
+  });
 
-    await login(post("http://admin.test/api/session/login", { headers: { "cf-connecting-ip": "203.0.113.9" }, body: "{}" }));
-    expect(lastCall().headers.get("cf-connecting-ip")).toBeNull();
+  it("Server Component(controlFetch)は headers() の cf-connecting-ip を渡す。ブラウザや呼び出し元が付けた x-wtt-client-ip は使わない", async () => {
+    reqHeaders = new Headers(forged);
+    fetchMock.mockResolvedValue(controlRes(200, {}));
+    await controlFetch("/me", { headers: { "x-wtt-client-ip": "198.51.100.1" } });
+    expect(lastCall().headers.get("x-wtt-client-ip")).toBe("203.0.113.9");
+  });
+
+  it("接続元 IP が分からないときは x-wtt-client-ip を付けない(空の値も送らない)", async () => {
+    fetchMock.mockImplementation(async () => controlRes(200, {}));
+    await GET(new Request("http://admin.test/api/control/me", { headers: { "x-wtt-client-ip": "198.51.100.1" } }), params(["me"]));
+    expect(lastCall().headers.has("x-wtt-client-ip")).toBe(false);
+    await GET(new Request("http://admin.test/api/control/me", { headers: { "cf-connecting-ip": " " } }), params(["me"]));
+    expect(lastCall().headers.has("x-wtt-client-ip")).toBe(false);
+    reqHeaders = new Headers({ "x-wtt-client-ip": "198.51.100.1" });
+    await controlFetch("/me", { headers: { "x-wtt-client-ip": "198.51.100.1" } });
+    expect(lastCall().headers.has("x-wtt-client-ip")).toBe(false);
   });
 });
 
@@ -613,5 +655,118 @@ describe("controlUrl", () => {
     expect(isHttps(new Request("https://admin.test/x", { headers: { "x-forwarded-proto": "http" } }))).toBe(true);
     expect(isHttps(new Request("http://admin.test/x", { headers: { "x-forwarded-proto": "https" } }))).toBe(true);
     expect(isHttps(new Request("http://admin.test/x"))).toBe(false);
+  });
+});
+
+describe("版の名乗り(plan12 K3)", () => {
+  // ブラウザの JS(lib/client.ts の api() と認証まわりの画面)は自分の版を名乗る。BFF は自分とブラウザの小さいほうを名乗る
+  // (admin を更新した後も開いたままの古いタブは名乗らない = 0 になり、その書き込みを control が 426 で止められる)
+  const versionSent = () => lastCall().headers.get("x-wtt-client-version");
+  const cases: Array<[string, Record<string, string>, string]> = [
+    ["ブラウザが 1 を名乗る", { "x-wtt-client-version": "1" }, "1"],
+    ["ブラウザが名乗らない", {}, "0"],
+    ["ブラウザの名乗りが読めない", { "x-wtt-client-version": "abc" }, "0"],
+    ["ブラウザが BFF より新しい版を名乗る", { "x-wtt-client-version": "999" }, "1"],
+  ];
+
+  it("bff_names_the_lower_of_own_and_browser_version", async () => {
+    fetchMock.mockImplementation(async () => controlRes(200, { token: "t", workspaceId: "w" }, { "set-auth-token": "t" }));
+    for (const [label, h, expected] of cases) {
+      jar = newJar({ wtt_session: "tok1" });
+      await POST(post("http://admin.test/api/control/sites/s1/publish", { headers: h, body: "{}" }), params(["sites", "s1", "publish"]));
+      expect(versionSent(), `proxy: ${label}`).toBe(expected);
+      await login(post("http://admin.test/api/session/login", { headers: h, body: "{}" }));
+      expect(versionSent(), `login: ${label}`).toBe(expected);
+      await setup(post("http://admin.test/api/session/setup", { headers: h, body: "{}" }));
+      expect(versionSent(), `setup: ${label}`).toBe(expected);
+      await acceptInvite(post("http://admin.test/api/session/accept-invite", { headers: h, body: JSON.stringify({ id: "inv1" }) }));
+      expect(versionSent(), `accept-invite: ${label}`).toBe(expected);
+      jar = newJar({ wtt_session: "tok1" });
+      await logout(post("http://admin.test/api/session/logout", { headers: h }));
+      expect(versionSent(), `logout: ${label}`).toBe(expected);
+      jar = newJar({ wtt_oauth_flow: "flow-0123456789abcdef" });
+      await oauth(new Request("http://admin.test/api/session/oauth?flow=flow-0123456789abcdef&code=c", { headers: { host: "admin.test", ...h } }));
+      expect(versionSent(), `oauth: ${label}`).toBe(expected);
+    }
+    // サーバー側の呼び出し(Server Component の controlFetch)はブラウザを介さないので、自分の版をそのまま名乗る
+    reqHeaders = new Headers({ "x-wtt-client-version": "0" });
+    await controlFetch("/me", { headers: { "x-wtt-client-version": "0" } });
+    expect(versionSent()).toBe("1");
+  });
+
+  it("版を名乗らない /api/control/* への書き込みは 426(control の封筒をそのまま返す)", async () => {
+    // control の判定(apps/control/src/client-version.ts)を写した偽物: 名乗りが MIN_CLIENT_VERSION より小さい書き込みは 426
+    const { MIN_CLIENT_VERSION, parseClientVersion } = await import("@wtt/core");
+    fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+      const v = parseClientVersion(new Headers(init.headers).get("x-wtt-client-version"));
+      return v !== null && v < MIN_CLIENT_VERSION
+        ? controlRes(426, { error: "client_too_old", message: "管理画面が古い版です", hint: "ページを再読み込みしてください", clientVersion: v })
+        : controlRes(200, { ok: true });
+    });
+    jar = newJar({ wtt_session: "tok1" });
+    const json = { "content-type": "application/json" };
+    const res = await PATCH(post("http://admin.test/api/control/sites/s1", { method: "PATCH", headers: json, body: "{}" }), params(["sites", "s1"]));
+    expect(res.status).toBe(426);
+    await expect(res.json()).resolves.toMatchObject({ error: "client_too_old", clientVersion: 0 });
+    // 名乗れば通る
+    const ok = await PATCH(post("http://admin.test/api/control/sites/s1", { method: "PATCH", headers: { ...json, "x-wtt-client-version": "1" }, body: "{}" }), params(["sites", "s1"]));
+    expect(ok.status).toBe(200);
+  });
+});
+
+describe("service binding(plan12 K8)", () => {
+  it("binding があれば env.CONTROL.fetch で呼び、公開 URL の fetch は呼ばない", async () => {
+    binding = { fetch: vi.fn(async () => controlRes(200, { id: "u1" })) };
+    jar = newJar({ wtt_session: "tok1" });
+    const res = await GET(new Request("http://admin.test/api/control/me?x=1", { headers: { "cf-connecting-ip": "203.0.113.9", "x-wtt-client-version": "1" } }), params(["me"]));
+    expect(res.status).toBe(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const sent = binding.fetch.mock.calls[0]![0] as Request;
+    expect(sent).toBeInstanceOf(Request);
+    expect(sent.url).toBe(`${CONTROL}/me?x=1`);
+    expect(sent.headers.get("authorization")).toBe("Bearer tok1");
+    expect(sent.headers.get("x-wtt-client-ip")).toBe("203.0.113.9");
+    expect(sent.headers.get("x-wtt-client-version")).toBe("1");
+    // Server Component の読み取りも binding を通る
+    await controlFetch("/me");
+    expect(binding.fetch).toHaveBeenCalledTimes(2);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("binding の fetch が throw したら 502 control_unreachable。公開 URL には戻さない", async () => {
+    // 黙って公開 URL に戻すと、利用者ごとのレート制限の枠が気づかれずに全員 1 枠に戻る
+    binding = { fetch: vi.fn(async () => { throw new Error("binding down"); }) };
+    fetchMock.mockImplementation(async () => controlRes(200, {}));
+    jar = newJar({ wtt_session: "tok1" });
+    const res = await GET(new Request("http://admin.test/api/control/me"), params(["me"]));
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toMatchObject({ error: "control_unreachable" });
+    expect((await login(post("http://admin.test/api/session/login", { body: "{}" }))).status).toBe(502);
+    expect((await controlFetch("/me")).status).toBe(502);
+    expect(binding.fetch).toHaveBeenCalledTimes(3);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("ヘッダーに入れられない値(改行・全角)は throw せず null / 502 の封筒(binding の有無を問わない)", async () => {
+    // 初回セットアップの setupToken は利用者が入力した値のまま x-setup-token に入る。new Headers が同期で投げても封筒で返す
+    const { controlRequest } = await import("@/lib/control");
+    fetchMock.mockImplementation(async () => controlRes(201, { workspaceId: "w" }));
+    for (const b of [null, { fetch: vi.fn(async () => controlRes(201, { workspaceId: "w" })) }]) {
+      binding = b;
+      for (const bad of ["a\nb", "全角のトークン"]) {
+        await expect(controlRequest("/setup", { method: "POST", headers: { "x-setup-token": bad } })).resolves.toBeNull();
+        const res = await setup(post("http://admin.test/api/session/setup", { body: JSON.stringify({ setupToken: bad, email: "a@example.com" }) }));
+        expect(res.status).toBe(502);
+        await expect(res.json()).resolves.toMatchObject({ error: "control_unreachable" });
+      }
+      if (b) expect(b.fetch).not.toHaveBeenCalled();
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("binding の無い構成では公開 URL の fetch で呼ぶ", async () => {
+    fetchMock.mockResolvedValue(controlRes(200, {}));
+    await GET(new Request("http://admin.test/api/control/me"), params(["me"]));
+    expect(lastCall().url).toBe(`${CONTROL}/me`);
   });
 });

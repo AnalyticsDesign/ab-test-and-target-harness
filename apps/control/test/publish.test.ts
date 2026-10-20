@@ -22,7 +22,7 @@ import {
 } from "./helpers";
 import { getDb } from "../src/db";
 import type { Env } from "../src/env";
-import { buildCompileInput, publishSite, sha256Hex, type PublishResult } from "../src/publish";
+import { buildCompileInput, cleanupOldVersions, publishSite, sha256Hex, type PublishResult } from "../src/publish";
 
 /**
  * `:active` の put の直前に D1 の `active_version` を別の版へ進める KV。
@@ -175,13 +175,13 @@ describe("publish (spec §13.6)", () => {
     for (let i = 0; i < 6; i++) expect((await publishSite(deployEnv(), db, site, owner.userId, t0 + i * 1000)).ok).toBe(true);
     // 6 版すべて 5 分以内に active だったので削除されない
     for (let v = 1; v <= 6; v++) expect(await config(sid, v)).not.toBeNull();
-    // 10 分後の 7 回目: 直近 5 版(v3〜v7)だけ残る。v1 / v2 は削除
+    // 10 分後の 7 回目(plan12 K14 (b): 「直近 5 版」の保持はやめた)。掃除は配信ファイルの出し直しより前に走るので、その時点で配信ファイルが
+    // 配っている版は v6。残るのは v6 以上(= 配信ファイルが配る版以上。v6・v7)だけで、v1〜v5 は削除
     expect((await publishSite(deployEnv(), db, await siteRow(sid), owner.userId, t0 + 600_000)).ok).toBe(true);
-    expect(await config(sid, 1)).toBeNull();
-    expect(await config(sid, 2)).toBeNull();
-    for (let v = 3; v <= 7; v++) expect(await config(sid, v)).not.toBeNull();
+    for (let v = 1; v <= 5; v++) expect(await config(sid, v)).toBeNull();
+    for (let v = 6; v <= 7; v++) expect(await config(sid, v)).not.toBeNull();
     const deleted = await db.selectFrom("publishes").select(["version", "kv_deleted"]).where("site_id", "=", sid).orderBy("version").execute();
-    expect(deleted.filter((r) => r.kv_deleted === 1).map((r) => r.version)).toEqual([1, 2]);
+    expect(deleted.filter((r) => r.kv_deleted === 1).map((r) => r.version)).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("failed_publish_cleanup_never_deletes_active_config", async () => {
@@ -195,7 +195,7 @@ describe("publish (spec §13.6)", () => {
     expect(r.ok).toBe(false);
     expect(await active(sid)).toBe("7");
     expect(await config(sid, 7)).not.toBeNull();
-    for (let v = 3; v <= 6; v++) expect(await config(sid, v)).not.toBeNull(); // 直近 5 版も失敗 Publish に巻き込まれない
+    for (let v = 3; v <= 6; v++) expect(await config(sid, v)).not.toBeNull(); // 5 分以内に有効だった版も失敗 Publish に巻き込まれない(掃除は走らない)
     // 読み戻し失敗(hash 不一致)でも v9 のキーは片付け、active は触らない
     const r2 = await publishSite(deployEnv({ CONFIG_KV: failingKv(/config:v9$/, "get") }), db, await siteRow(sid), owner.userId, t0 + 601_000);
     expect(r2.ok).toBe(false);
@@ -325,7 +325,7 @@ describe("publish (spec §13.6)", () => {
 
   it("cleanup keeps the version kv active points at even when d1 disagrees", async () => {
     // 複合故障: active put の成否が不明で KV が D1 に追いつかないまま Publish が進む状態。
-    // D1 の記帳(直近 5 版 / activated_at)だけで消す判断をすると、edge が読んでいる版を消してしまう
+    // D1 の記帳(activated_at / 新しい版)だけで消す判断をすると、edge が読んでいる版を消してしまう
     const { owner, sid } = await siteWithRunning();
     const db = getDb(env);
     const t0 = 1_800_000_000_000;
@@ -345,14 +345,32 @@ describe("publish (spec §13.6)", () => {
     for (let i = 1; i < 7; i++) expect((await publishSite(stuck, db, await siteRow(sid), owner.userId, t0 + i * 1000)).ok).toBe(true); // v2..v7
     expect(await active(sid)).toBe("1"); // edge はまだ v1 を配信している
     expect((await siteRow(sid)).active_version).toBe(7); // D1 だけが先に進んだ
-    // 10 分後の Publish。直近 5 版は v4〜v8、v1 は押し出され activated_at も 10 分前 —
-    // 守れるのは「KV の active が v1 を指している」という事実だけ
+    // 10 分後の Publish。v1 は新しい版に押し出され activated_at も 10 分前 —
+    // 守れるのは「KV の active が v1 を指している」という事実だけ(v8 は今書いた版)
     expect((await publishSite(stuck, db, await siteRow(sid), owner.userId, t0 + 600_000)).ok).toBe(true); // v8
     expect(await active(sid)).toBe("1");
     expect(await config(sid, 1)).not.toBeNull(); // 配信中の config は消さない
-    expect(await config(sid, 2)).toBeNull();
-    expect(await config(sid, 3)).toBeNull();
-    for (let v = 4; v <= 8; v++) expect(await config(sid, v)).not.toBeNull();
+    // 「直近 5 版」は無いので消える。配信ファイルが配っている版(v7。掃除の時点)以上の v7・v8 は残り、v2〜v6 は消える
+    for (let v = 2; v <= 6; v++) expect(await config(sid, v)).toBeNull();
+    for (let v = 7; v <= 8; v++) expect(await config(sid, v)).not.toBeNull();
+  });
+
+  it("cleanup_keeps_only_versions_needed_for_the_switch", async () => {
+    // plan12 K14 (b): 公開を 7 回した後に残るのは、配信中の版・配信ファイルが配る版以上・5 分以内に有効だった版だけ
+    const { owner, sid } = await siteWithRunning();
+    const db = getDb(env);
+    const t0 = 1_800_000_000_000;
+    for (let i = 0; i < 7; i++) expect((await publishSite(deployEnv(), db, await siteRow(sid), owner.userId, t0 + i * 1000)).ok).toBe(true);
+    // 7 版目の掃除の時点では 7 版すべてが 5 分以内に有効だった → 全部残る
+    for (let v = 1; v <= 7; v++) expect(await config(sid, v)).not.toBeNull();
+    // 5 分より後に cleanupOldVersions を呼ぶ(Cron と同じ呼び方)。7 版目だけが残る
+    expect(await cleanupOldVersions(deployEnv(), db, sid, 7, t0 + 6 * 60_000)).toBeGreaterThan(0);
+    for (let v = 1; v <= 6; v++) expect(await config(sid, v)).toBeNull();
+    expect(await config(sid, 7)).not.toBeNull();
+    // 何も消すものが無いときは beforeDelete(凍結の確かめ)も呼ばない
+    let guarded = 0;
+    await cleanupOldVersions(deployEnv(), db, sid, 7, t0 + 7 * 60_000, async () => void guarded++);
+    expect(guarded).toBe(0);
   });
 
   it("delayed retry never overwrites a newer version", async () => {

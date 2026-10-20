@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { kvKeys, parseSiteSettings } from "@wtt/core";
 import { call, json, setupOwner, inviteAndJoin, createSite, failingKv, failingD1Insert, siteRow, expectEnvelope } from "./helpers";
+import { getDb } from "../src/db";
+import { releaseHosts, siteToSettings } from "../src/site-settings";
 
 async function kvSettings(siteId: string) {
   const raw = await env.CONFIG_KV.get(kvKeys.settings(siteId));
@@ -304,5 +306,155 @@ describe("sites", () => {
     expect((await json(res)).required).toBe("owner");
     expect((await call("GET", `/sites/${id}`, { token: owner.token })).status).toBe(200); // 消えていない
     expect((await call("DELETE", `/sites/${id}`, { token: owner.token })).status).toBe(204);
+  });
+});
+
+// plan12 K10・K15: 新しい訪問者の記録の上限(サイトごとの上書き + プランの既定)
+describe("sites: new profile budget (plan12 K10)", () => {
+  const rawKv = async (sid: string) => JSON.parse((await env.CONFIG_KV.get(kvKeys.settings(sid)))!) as Record<string, unknown>;
+
+  it("a new site gets the plan default budget in its KV record (Free: perDay and instancePerDay)", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id } = await createSite(token, workspaceId);
+    expect((await rawKv(id)).newProfileBudget).toEqual({ perDay: 20_000, instancePerDay: 20_000 });
+    expect((await json(await call("GET", `/sites/${id}`, { token }))).newProfileBudgetPerDay).toBeNull();
+  });
+  it("the Paid plan record has no instancePerDay", async () => {
+    const { token, workspaceId } = await setupOwner();
+    await env.DB.prepare("insert into instance_settings (key, value, updated_at, updated_by) values ('cloudflarePlan', '\"paid\"', 1, null)").run();
+    const { id } = await createSite(token, workspaceId);
+    expect((await rawKv(id)).newProfileBudget).toEqual({ perDay: 200_000 });
+  });
+  it("a per-site value overrides the plan default and null returns to it", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id } = await createSite(token, workspaceId);
+    const res = await call("PATCH", `/sites/${id}`, { token, body: { newProfileBudgetPerDay: 5000 } });
+    expect(res.status).toBe(200);
+    expect((await json(res)).newProfileBudgetPerDay).toBe(5000);
+    expect((await rawKv(id)).newProfileBudget).toEqual({ perDay: 5000, instancePerDay: 20_000 });
+    expect((await siteRow(id)).new_profile_budget_per_day).toBe(5000);
+    const back = await call("PATCH", `/sites/${id}`, { token, body: { newProfileBudgetPerDay: null } });
+    expect((await json(back)).newProfileBudgetPerDay).toBeNull();
+    expect((await rawKv(id)).newProfileBudget).toEqual({ perDay: 20_000, instancePerDay: 20_000 });
+  });
+  it("rejects 0, decimals and 100,000,001 with 422, and an editor gets 403", async () => {
+    const owner = await setupOwner();
+    const { id } = await createSite(owner.token, owner.workspaceId);
+    for (const bad of [0, 1.5, 100_000_001, -1, "5000"]) {
+      const res = await call("PATCH", `/sites/${id}`, { token: owner.token, body: { newProfileBudgetPerDay: bad } });
+      expect(res.status).toBe(422);
+    }
+    expect((await call("PATCH", `/sites/${id}`, { token: owner.token, body: { newProfileBudgetPerDay: 100_000_000 } })).status).toBe(200);
+    const ed = await inviteAndJoin(owner.token, owner.workspaceId, "editor");
+    expect((await call("PATCH", `/sites/${id}`, { token: ed.token, body: { newProfileBudgetPerDay: 10 } })).status).toBe(403);
+  });
+  it("siteToSettings (bake input) never carries the budget, and changing the budget does not mark the static files stale", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id } = await createSite(token, workspaceId);
+    await call("PATCH", `/sites/${id}`, { token, body: { newProfileBudgetPerDay: 5000 } });
+    expect(siteToSettings(await siteRow(id))).not.toHaveProperty("newProfileBudget");
+    expect((await siteRow(id)).static_stale).toBe(0);
+  });
+  it("a new site's column defaults to null (the migration itself is covered by migration-backfill)", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id } = await createSite(token, workspaceId);
+    expect((await siteRow(id)).new_profile_budget_per_day).toBeNull();
+  });
+});
+
+// plan12 K14 (c): 外した host の KV は D1 が確定した後に、D1 に持ち主が居ないときだけ消す
+describe("host release order (plan12 K14 (c))", () => {
+  /** 指定したキーの get が最初の 1 回だけ古い値を返す KV(KV が結果整合で古い値を返す窓の再現)。以降は本物に委譲する */
+  function staleGetOnce(key: string, stale: string): KVNamespace {
+    let served = false;
+    return new Proxy(env.CONFIG_KV, {
+      get(target, prop) {
+        const v = Reflect.get(target, prop);
+        if (prop === "get")
+          return async (k: string, ...rest: unknown[]) => {
+            if (k === key && !served) {
+              served = true;
+              return stale;
+            }
+            return (target.get as (...a: unknown[]) => unknown).apply(target, [k, ...rest]);
+          };
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    }) as KVNamespace;
+  }
+  /** Site A が host H を hosts_json に持ったまま、D1 の site_hosts では Site B が H を持つ状態(A の外した後に B が取った、を後から見た形)にする */
+  async function moveHostToB(h: string, bId: string) {
+    await env.DB.prepare("update site_hosts set site_id = ? where host = ?").bind(bId, h).run();
+    await env.CONFIG_KV.put(kvKeys.host(h), bId);
+  }
+
+  it("host_release_keeps_mapping_owned_by_another_site", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const a = await createSite(token, workspaceId, { id: "site_ra", mode: "B", domain: "h.example.com" });
+    const b = await createSite(token, workspaceId, { id: "site_rb", domain: "b.example.com" });
+    await moveHostToB("h.example.com", b.id);
+    // A が H を外す PATCH。後始末の KV の get が古い "A" を 1 回返しても、D1 で B が持っているので H の mapping は消えない
+    const res = await call("PATCH", `/sites/${a.id}`, { token, body: { hosts: [] }, envOverride: { CONFIG_KV: staleGetOnce(kvKeys.host("h.example.com"), a.id) } });
+    expect(res.status).toBe(200);
+    expect(await env.CONFIG_KV.get(kvKeys.host("h.example.com"))).toBe(b.id);
+  });
+
+  it("releaseHosts deletes only a host nobody owns in d1 and whose kv points at this site", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const a = await createSite(token, workspaceId, { id: "site_rc", mode: "B", domain: "own.example.com" });
+    const db = getDb(env);
+    // 自 Site が D1 で持っている間は消さない(確定前に呼ばれても守る)
+    await releaseHosts(env, db, a.id, ["own.example.com"]);
+    expect(await env.CONFIG_KV.get(kvKeys.host("own.example.com"))).toBe(a.id);
+    // 持ち主が居なければ、自 Site を指す mapping を消す。他 Site を指す mapping は消さない
+    await env.DB.prepare("delete from site_hosts where host = ?").bind("own.example.com").run();
+    await env.CONFIG_KV.put(kvKeys.host("other.example.com"), "site_someone_else");
+    await releaseHosts(env, db, a.id, ["own.example.com", "other.example.com", "none.example.com"]);
+    expect(await env.CONFIG_KV.get(kvKeys.host("own.example.com"))).toBeNull();
+    expect(await env.CONFIG_KV.get(kvKeys.host("other.example.com"))).toBe("site_someone_else");
+  });
+
+  it("a failed d1 batch on patch leaves the kv mapping of the host it tried to remove", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const a = await createSite(token, workspaceId, { id: "site_rd", mode: "B", domain: "keep.example.com" });
+    // K14 (c) の保証 = 外す host の KV は D1 の確定の前に消さない。「消した後に戻し直す」実装と区別するため、
+    // (1) host:keep の delete を記録し、(2) host:keep の put(戻しの put)を失敗させる。前進の経路が put するのは host:new だけ
+    const deletes: string[] = [];
+    const recordingKv = new Proxy(failingKv(/^host:keep\.example\.com$/), {
+      get(target, prop) {
+        const v = Reflect.get(target, prop);
+        if (prop === "delete") return (key: string, ...rest: unknown[]) => (deletes.push(key), (v as (...a: unknown[]) => unknown).call(target, key, ...rest));
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    }) as KVNamespace;
+    const res = await call("PATCH", `/sites/${a.id}`, { token, body: { hosts: ["new.example.com"] }, envOverride: { DB: failingD1Insert(env.DB, "site_hosts"), CONFIG_KV: recordingKv } });
+    expect(res.status).toBe(409);
+    expect(deletes).not.toContain(kvKeys.host("keep.example.com")); // D1 が確定しなかったので、外そうとした host の KV は消していない
+    expect(await env.CONFIG_KV.get(kvKeys.host("keep.example.com"))).toBe(a.id); // 外そうとした host は D1 も KV も旧値のまま
+    expect(await env.CONFIG_KV.get(kvKeys.host("new.example.com"))).toBeNull(); // 書いた新しい host は戻す
+    expect((await json(await call("GET", `/sites/${a.id}`, { token }))).hosts).toEqual(["keep.example.com"]);
+  });
+
+  it("site deletion does not delete a mapping another site now owns, even when kv returns a stale value", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const a = await createSite(token, workspaceId, { id: "site_re", mode: "B", domain: "gone.example.com" });
+    const b = await createSite(token, workspaceId, { id: "site_rf", domain: "b2.example.com" });
+    await moveHostToB("gone.example.com", b.id);
+    const res = await call("DELETE", `/sites/${a.id}`, { token, envOverride: { CONFIG_KV: staleGetOnce(kvKeys.host("gone.example.com"), a.id) } });
+    expect(res.status).toBe(204);
+    expect(await env.CONFIG_KV.get(kvKeys.host("gone.example.com"))).toBe(b.id);
+    expect(await env.CONFIG_KV.get(kvKeys.settings(a.id))).toBeNull(); // 自分のほかの記録は消える
+  });
+
+  it("workspace deletion does not delete a mapping another site now owns, even when kv returns a stale value", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const keeper = await json<{ id: string }>(await call("POST", "/workspaces", { token, body: { name: "Keeper" } }));
+    const a = await createSite(token, workspaceId, { id: "site_rg", mode: "B", domain: "ws-gone.example.com" });
+    const b = await createSite(token, keeper.id, { id: "site_rh", domain: "b3.example.com" });
+    await moveHostToB("ws-gone.example.com", b.id);
+    const res = await call("DELETE", `/workspaces/${workspaceId}`, { token, envOverride: { CONFIG_KV: staleGetOnce(kvKeys.host("ws-gone.example.com"), a.id) } });
+    expect(res.status).toBe(204);
+    expect(await env.CONFIG_KV.get(kvKeys.host("ws-gone.example.com"))).toBe(b.id);
+    expect(await env.CONFIG_KV.get(kvKeys.settings(a.id))).toBeNull();
   });
 });

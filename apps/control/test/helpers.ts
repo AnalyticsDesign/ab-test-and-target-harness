@@ -400,6 +400,58 @@ export function beforeD1Batch(db: D1Database, hook: () => Promise<unknown>): D1D
   }) as D1Database;
 }
 
+/**
+ * plan12 K13: `insert into "<table>"` の最初の 1 回を、テストが離すまで止める D1 ラッパ(並行した要求の順を作る)。
+ * - at: "before" = 本物の insert を出す前で止める / "after" = insert が終わった後、呼び出し元(Better Auth の adapter)へ返す前で止める
+ * - reached = 止まった所に着いたら解ける。release() で先へ進める
+ * Better Auth の内部には触れない。getAuth は env.DB ごとに組み立てるので、envOverride の DB にこれを渡すと、
+ * この D1 を使う Better Auth が別に作られる(adapter の create → kysely-d1 の prepare().bind().all() がここを通る)
+ */
+export function pausingD1Insert(db: D1Database, table: string, at: "before" | "after"): { db: D1Database; reached: Promise<void>; release(): void } {
+  let reach!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((r) => (reach = r));
+  const gate = new Promise<void>((r) => (release = r));
+  let used = false;
+  const pausing = (stmt: D1PreparedStatement): D1PreparedStatement =>
+    new Proxy(stmt, {
+      get(s, p) {
+        if (p === "run" || p === "first" || p === "all" || p === "raw") {
+          const f = Reflect.get(s, p) as (...a: unknown[]) => Promise<unknown>;
+          return async (...args: unknown[]) => {
+            if (at === "before") {
+              reach();
+              await gate;
+              return f.apply(s, args);
+            }
+            const out = await f.apply(s, args);
+            reach();
+            await gate;
+            return out;
+          };
+        }
+        if (p === "bind") return (...args: unknown[]) => pausing(s.bind(...args));
+        const x = Reflect.get(s, p);
+        return typeof x === "function" ? x.bind(s) : x;
+      },
+    });
+  const wrapped = new Proxy(db, {
+    get(target, prop) {
+      const v = Reflect.get(target, prop);
+      if (prop === "prepare") {
+        return (sqlText: string) => {
+          const stmt = target.prepare(sqlText);
+          if (used || !new RegExp(`^\\s*insert into "?${table}"?\\s`, "i").test(sqlText)) return stmt;
+          used = true;
+          return pausing(stmt);
+        };
+      }
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  }) as D1Database;
+  return { db: wrapped, reached, release };
+}
+
 /** Site を 1 つ作る(Task 3 以降のテストが Site 配下のルートを叩くのに使う) */
 export async function createSite(token: string, workspaceId: string, overrides: Record<string, unknown> = {}): Promise<{ id: string }> {
   const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "Site", domain: "www.example.com", ...overrides } });

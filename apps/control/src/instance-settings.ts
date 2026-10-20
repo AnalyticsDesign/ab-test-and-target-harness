@@ -58,6 +58,9 @@ export async function readInstanceSettings(db: Db): Promise<InstanceSettings> {
   return out;
 }
 
+/** Cloudflare のプラン(KV の Site の設定の記録に書く新しい訪問者の予算の既定が決まる。plan12 K10) */
+export const readCloudflarePlan = async (db: Db): Promise<CloudflarePlan> => (await readInstanceSettings(db)).cloudflarePlan;
+
 export async function writeInstanceSettings(db: Db, patch: Partial<InstanceSettings>, updatedBy: string | null, now = Date.now()): Promise<void> {
   const rows = KEYS.filter((k) => patch[k] !== undefined).map((k) => ({ key: k, value: JSON.stringify(patch[k]), updated_at: now, updated_by: updatedBy }));
   if (rows.length === 0) return;

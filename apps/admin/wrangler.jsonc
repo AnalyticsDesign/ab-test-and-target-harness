@@ -9,8 +9,11 @@
   "assets": { "directory": "dist/client", "not_found_handling": "none", "binding": "ASSETS" },
   // 生成値のまま(>= 2025-04-01 なので process.env に vars が入る = BFF が AB_CONTROL_URL を読める。control と揃えて引き下げない)
   "compatibility_date": "2026-09-17",
-  // global_fetch_strictly_public: BFF が同じアカウントの control Worker を公開 URL で fetch するため。無いと error 1042
+  // global_fetch_strictly_public: 下の services の無い構成で、BFF が同じアカウントの control Worker を公開 URL で fetch するため。無いと error 1042
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  // 同じアカウントの wtt-control を内部の接続で呼ぶ。利用者の IP を渡すため。無い構成では公開 URL で呼ぶ
+  // (宛先は control の BFF 用の入口 ControlBff。control を先に deploy しておく)
+  "services": [{ "binding": "CONTROL", "service": "wtt-control", "entrypoint": "ControlBff" }],
   // vars はここが**本番値**(docs/deploy.md 4 節)。ローカル開発(`pnpm admin:dev` = next dev)は `.env.local`、
   // Workers ランタイムのローカル確認(`pnpm -C apps/admin preview`)と E2E は `wrangler dev --var` で上書きする
   "vars": {

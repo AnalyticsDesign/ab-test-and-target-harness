@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { Field } from "@/components/Field";
 import { ErrorBox } from "@/components/ErrorBox";
 import { SubmitButton } from "@/components/SubmitButton";
+import { browserVersionHeaders } from "@/lib/client";
 
 export function PasswordLoginForm() {
   const router = useRouter();
@@ -16,7 +17,7 @@ export function PasswordLoginForm() {
     const fd = new FormData(e.currentTarget);
     const res = await fetch("/api/session/login", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...browserVersionHeaders() },
       body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }),
     });
     setBusy(false);

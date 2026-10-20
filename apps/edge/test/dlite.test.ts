@@ -173,6 +173,24 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
     expect(cookieByName(res, "_ab_uuid")).not.toContain("HttpOnly");
     for (const sc of res.headers.getSetCookie()) expect(sc).not.toContain("Max-Age=31536000"); // 新規発行しない
   });
+  it("decision は binding の limit が success: false なら 429 で Set-Cookie が無い。同意の撤回は制限の前なので 204 と Max-Age=0(決定 63 (13)(e))", async () => {
+    let keys: string[] = [];
+    const limited: Partial<Env> = { DECISION_RATE_LIMITER: { limit: async ({ key }) => { keys.push(key); return { success: false }; } } };
+    const res = await post(decisionBody(), undefined, limited);
+    expect(res.status).toBe(429);
+    expect(await res.text()).toBe("rate limited");
+    expect(res.headers.get("Retry-After")).toBe("10");
+    expect(res.headers.getSetCookie()).toEqual([]); // Identity を発行しない
+    expect(keys).toEqual(["unknown"]); // CF-Connecting-IP が無ければ共通の鍵(/v1/sites/* と同じ)
+    keys = [];
+    const vid = generateVisitorId();
+    const rev = await post({ kind: "consent", value: "denied" }, `_ab_vid=${vid}`, limited);
+    expect(rev.status).toBe(204);
+    expect(cookieByName(rev, "_ab_vid")).toContain("Max-Age=0");
+    expect(keys).toEqual([]); // 撤回には制限を掛けない
+    // 制限に掛からなければ今までどおり
+    expect((await post(decisionBody(), undefined, { DECISION_RATE_LIMITER: { limit: async () => ({ success: true }) } })).status).toBe(200);
+  });
   it("unknown version keeps Set-Cookie and returns empty experiments (spec §9.3 のエラー時挙動に整合)", async () => {
     const res = await post({ ...decisionBody(), v: 9 });
     expect(res.status).toBe(200);

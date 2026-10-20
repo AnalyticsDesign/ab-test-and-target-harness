@@ -41,7 +41,7 @@ export function mountOpenApi(app: Hono<AppEnv>): void {
           title: "AB Test and Target Harness control API",
           version: "0.1.0",
           description:
-            "メンテナンス中(書き込みの凍結中)は、ログイン以外の変更操作(POST / PUT / PATCH / DELETE)が 503 `write_frozen` になります。封筒の `hint` に理由と再開の見込み、`Retry-After` ヘッダーに待つ秒数が入ります。封筒の `retryAfter` にも同じ秒数が入ります。読み取り(GET)と、配信条件の計算(`POST /sites/{sid}/evaluate`)はそのまま使えます。凍結の状態は `GET /capabilities` の `writeFreeze` で確かめられます。",
+            "メンテナンス中(書き込みの凍結中)は、ログイン以外の変更操作(POST / PUT / PATCH / DELETE)が 503 `write_frozen` になります。封筒の `hint` に理由と再開の見込み、`Retry-After` ヘッダーに待つ秒数が入ります。封筒の `retryAfter` にも同じ秒数が入ります。読み取り(GET)と、配信条件の計算(`POST /sites/{sid}/evaluate`)はそのまま使えます。凍結の状態は `GET /capabilities` の `writeFreeze` で確かめられます。\n\n管理画面などのクライアントがリクエストヘッダー `x-wtt-client-version` で名乗った版が、この control の最低の版(全応答のヘッダー `x-wtt-min-client-version`、`GET /capabilities` の `minClientVersion`)より古いとき、変更操作(POST / PUT / PATCH / DELETE。ログインまわりと `POST /sites/{sid}/evaluate` を除く)は 426 `client_too_old` になります。封筒に `apiVersion`・`minClientVersion`・`clientVersion` が入ります。版を名乗らないクライアント(curl やエージェント)は判定されません。管理画面はページを再読み込みすると新しい版になります。",
         },
         components: {
           securitySchemes: { bearer: { type: "http", scheme: "bearer", description: "セッショントークンまたは API キー(wtt_…)" } },

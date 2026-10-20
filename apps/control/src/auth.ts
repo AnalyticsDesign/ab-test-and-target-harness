@@ -138,6 +138,21 @@ function buildAuth(env: Env) {
             if (ctx?.path === "/sign-up/email") return;
             if (!(await hasAccess(db, session.userId))) throw new APIError("FORBIDDEN", { message: "not_invited" });
           },
+          /**
+           * plan12 K13(r4 CX-High-2): パスワードの経路(sign-in/email・sign-up/email)で作ったセッションは、保存した後に
+           * その人のパスワードの記録(account の providerId = 'credential')がまだあるかを確かめる。
+           * Better Auth はパスワードの記録を読んで検証してからセッションを作り、作る前に読み直さないので、非常口を閉じた後の掃除
+           * (cron/break-glass-sweep.ts)の前に始まったログインが、掃除の後にセッションを作れてしまう。記録が無ければそのセッションを消して断る。
+           * 掃除の 2 つの削除は 1 つの batch なので、保存が掃除の前ならその batch が消し、後ならこの確かめが消す(どちらの順でも残らない)。
+           * ctx.path は basePath(/auth)を含まない endpoint の path(上の before と同じ)
+           */
+          after: async (session, ctx) => {
+            if (!session || (ctx?.path !== "/sign-in/email" && ctx?.path !== "/sign-up/email")) return;
+            const r = await sql<{ n: number }>`select count(*) as n from account where "userId" = ${session.userId} and "providerId" = 'credential'`.execute(db);
+            if (Number(r.rows[0]?.n ?? 0) > 0) return;
+            await sql`delete from session where id = ${session.id}`.execute(db);
+            throw new APIError("UNAUTHORIZED", { message: "password_login_disabled" });
+          },
         },
       },
       account: { create: { before: accountBefore }, update: { before: accountBefore } },

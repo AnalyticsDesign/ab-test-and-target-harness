@@ -1,7 +1,7 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { compileRegex, REGEX_LIMITS } from "@wtt/core";
 import { COMPLETION_1_TARGETING } from "../../../packages/core/test/fixtures/completion-1";
-import { changeStatus, createExperiment, createSite, login, openSite, waitForHydration } from "./fixtures";
+import { changeStatus, controlHeaders, createExperiment, createSite, login, openSite, waitForHydration } from "./fixtures";
 
 /**
  * 決定 49(設計書 §15 の admin): オーディエンスを作る → エクスペリエンスで選ぶ → 保存 → 実行中の参照を編集して確認を挟む → Publish の確認画面で
@@ -74,7 +74,7 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     await login(page);
     await createSite(page, SITE_AUD);
     // Goal は BFF 経由の API で作る(Goal の画面は今回の対象外)
-    expect((await page.request.post(`/api/control/sites/${SITE_AUD.id}/goals`, { data: { id: "g_lead", name: "資料請求", type: "CUSTOM", config: {} } })).status()).toBe(201);
+    expect((await page.request.post(`/api/control/sites/${SITE_AUD.id}/goals`, { headers: controlHeaders(), data: { id: "g_lead", name: "資料請求", type: "CUSTOM", config: {} } })).status()).toBe(201);
     await newAudience(page, "Pricing visitors");
     await expect(page.getByLabel("ID", { exact: true })).toHaveValue("aud_pricing_visitors");
     await chip(page, "閲覧したページ").click(); // クリックすると一番外側の末尾に入る
@@ -278,12 +278,12 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     if (!r.ok) throw new Error(r.issue.code);
     expect(r.instructions).toBeGreaterThan(100); // 準備のエクスペリエンスを 5 件以下に抑える
     const n = Math.floor(REGEX_LIMITS.instructionsPerSite / r.instructions) + 1;
-    expect((await page.request.post(`/api/control/sites/${SITE_AUD.id}/audiences`, { data: { id: "aud_e2e_budget", name: "E2E budget", definition: { ctx: "path", op: "regex", value: src } } })).status()).toBe(201);
+    expect((await page.request.post(`/api/control/sites/${SITE_AUD.id}/audiences`, { headers: controlHeaders(), data: { id: "aud_e2e_budget", name: "E2E budget", definition: { ctx: "path", op: "regex", value: src } } })).status()).toBe(201);
     for (let i = 0; i < n; i++) {
       await nav(page).getByRole("link", { name: "エクスペリエンス" }).click(); // 2 回目以降は編集画面にいるので、毎回実験の一覧へ戻ってから作る
       const e = { id: `exp_e2e_budget_${i}`, name: `E2E budget ${i}` };
       await createExperiment(page, e);
-      expect((await page.request.patch(`/api/control/sites/${SITE_AUD.id}/experiments/${e.id}`, { data: { targeting: { audience: "aud_e2e_budget" } } })).status()).toBe(200); // 保存は通る
+      expect((await page.request.patch(`/api/control/sites/${SITE_AUD.id}/experiments/${e.id}`, { headers: controlHeaders(), data: { targeting: { audience: "aud_e2e_budget" } } })).status()).toBe(200); // 保存は通る
       await changeStatus(page, SITE_AUD.id, e.id, /^開始/); // 最後の 1 件の自動 Publish は止まるが、status は running になる
     }
     await openPublish(page);

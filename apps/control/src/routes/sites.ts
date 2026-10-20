@@ -26,8 +26,10 @@ import {
   deleteSiteRecords,
   SiteCreateSchema,
   SitePatchSchema,
-  writeSiteRecords,
+  putSiteRecords,
+  releaseHosts,
 } from "../site-settings";
+import { readCloudflarePlan } from "../instance-settings";
 
 export const siteRoutes = new Hono<AppEnv>();
 
@@ -101,6 +103,8 @@ siteRoutes.post(
       results_enabled: resultsStore(c.env) ? 1 : 0, results_retention_days: 90,
       // D9 ③(K11): 列の既定と同じ値
       collect_until_dirty: 0,
+      // plan12 K10: null = Cloudflare のプランの既定
+      new_profile_budget_per_day: null,
     };
     const { next, error } = applySitePatch(base, {
       mode: body.mode, hosts: body.mode === "B" ? [body.domain] : [],
@@ -117,12 +121,12 @@ siteRoutes.post(
     }
     // Plan 2 繰越の順序契約: settings record(+ host)を先に書き、config は Publish で書く
     try {
-      await writeSiteRecords(c.env, next, [], {}); // 新しい Site には run が無い(収集の締め切りの表は空)
+      await putSiteRecords(c.env, next, { plan: await readCloudflarePlan(db), collectUntil: {} }); // 新しい Site には run が無い(収集の締め切りの表は空)
     } catch (e) {
       await db.deleteFrom("sites").where("id", "=", next.id).execute(); // site_hosts は CASCADE
       // settings の put だけ成功して host の put で落ちた場合、KV に孤児の settings record が残る。
       // D1 を巻き戻したなら KV も巻き戻す(ベストエフォート。失敗しても元の 503 を返す)
-      await deleteSiteRecords(c.env, next, []).catch(() => {});
+      await deleteSiteRecords(c.env, db, next, []).catch(() => {});
       throw e;
     }
     return c.json(siteJson(next), 201);
@@ -210,20 +214,29 @@ siteRoutes.patch(
     const nextHosts: string[] = JSON.parse(next.hosts_json);
     /**
      * 失敗した PATCH の KV 後始末: 旧行から settings record と host キーを書き直す。
-     * `writeSiteRecords(env, site, nextHosts)` は (1) 旧 settings record を put、(2) 旧 hosts のキーを put、
-     * (3) nextHosts のうち旧 hosts に無く自 Site を指すキーを delete、をまとめてやるので、
+     * (1) 旧 settings record を put、(2) 旧 hosts のキーを put(putSiteRecords)、
+     * (3) nextHosts のうち旧 hosts に無いキーを releaseHosts(D1 に持ち主が居ないときだけ、自 Site を指すものを delete)、をまとめてやるので、
      * 前進方向に書いた分をちょうど打ち消す。**settings record を戻さないと KV だけが D1 より先に進んだまま残り、
      * 次の PATCH が旧行から再導出して「配信中の Cookie 名」を旧名リストにも載せずに捨ててしまう。**
      * ベストエフォート(ここで失敗しても元のエラーを返す。その Site の次の PATCH が自己修復する)
      */
     // D9 ③(K11): 収集の締め切りの表は前進・戻しの両方に同じものを付ける(どちらで書いても締め切りを消さない)
-    const collectUntil = await collectUntilMap(db, site.id);
-    const restoreKv = () => writeSiteRecords(c.env, site, nextHosts, collectUntil).catch(() => {});
-    // (1) 衝突検査(D1)。(2) KV。(3) site_hosts の入れ替えと sites の更新を 1 batch。
+    // plan12 K10: 新しい訪問者の予算の既定もプランから同じように付ける。KV に CAS が無いので、この put と D1 の確定の間に書き直し
+    // (プランの変更・rewriteCollectUntil)が古い行を読むと古い記録が残りうる(CL-Medium-11)が、site-settings-refresh が翌日までに D1 の値へ直す
+    const extras = { plan: await readCloudflarePlan(db), collectUntil: await collectUntilMap(db, site.id) };
+    const prevHosts: string[] = JSON.parse(site.hosts_json);
+    const addedHosts = nextHosts.filter((h) => !prevHosts.includes(h));
+    const removedHosts = prevHosts.filter((h) => !nextHosts.includes(h));
+    const restoreKv = async () => {
+      await putSiteRecords(c.env, site, extras).catch(() => {});
+      await releaseHosts(c.env, db, site.id, addedHosts).catch(() => {});
+    };
+    // (1) 衝突検査(D1)。(2) KV の put(新しい設定と新しい hosts。消さない)。(3) site_hosts の入れ替えと sites の更新を 1 batch。
+    // (4) 外した host の KV を releaseHosts で消す(D1 の確定の後。plan12 K14 (c))。
     // activation = KV put なので KV が先。失敗すれば D1 は旧値のまま(= 503 で再試行できる)
     await assertHostsFree(db, next.id, nextHosts);
     try {
-      await writeSiteRecords(c.env, next, JSON.parse(site.hosts_json), collectUntil);
+      await putSiteRecords(c.env, next, extras);
     } catch (e) {
       await restoreKv(); // settings は書けたが host の put で落ちた、など途中まで進んだ場合
       throw e;
@@ -246,6 +259,9 @@ siteRoutes.patch(
       console.error("host_in_use (batch)", e);
       throw new ApiError(409, "host_in_use", { message: "ホスト名の登録が競合しました", hint: "再試行してください" });
     }
+    // D1 が確定したので、外した host の KV を消す。D1 の site_hosts に持ち主が居ないものだけ(別の Site が取った host は消さない)。
+    // 確定済みなので失敗しても保存は成功として返す(KV に残った mapping は、その host を取る Site の PATCH が上書きする)
+    await releaseHosts(c.env, db, next.id, removedHosts).catch((e) => console.error("releaseHosts failed after patch", e));
     // 決定 49: タイムゾーンは compiled config で配るので、変えたら未公開の変更に数える(応答の contentUpdatedAt も合わせる)。
     // D9 ②(設計書 §6.6): 結果の記録の切り替えも次の Publish で compiled config の results が変わるので数える(保持期間だけの変更は config に載らないので数えない)
     if (next.timezone !== site.timezone || next.results_enabled !== site.results_enabled) {
@@ -303,7 +319,7 @@ siteRoutes.delete(
     // K6・K12: 応答の後に 1 回だけ個票を消し始める(残りは Cron が queue から消す)
     if (c.env.RESULTS_DB && c.env.RESULTS_BUDGET) c.executionCtx.waitUntil(kickOffPurgeForSites(c.env, db, [site.id], now));
     // D1 の外の後片づけ(KV・R2)は D1 の削除が成功した後
-    await deleteSiteRecords(c.env, site, versions);
+    await deleteSiteRecords(c.env, db, site, versions);
     await deleteSiteAssets(c.env, site.id); // R2 の画像(ベストエフォート)
     return c.body(null, 204);
   },

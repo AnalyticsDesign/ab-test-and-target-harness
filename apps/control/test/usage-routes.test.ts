@@ -1,7 +1,9 @@
 // apps/control/test/usage-routes.test.ts
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetUsageCache } from "../src/usage";
-import { call, expectEnvelope, googleSignIn, inviteAndJoin, json, setupOwner, uniqueEmail } from "./helpers";
+import { env } from "cloudflare:workers";
+import { kvKeys } from "@wtt/core";
+import { call, createSite, expectEnvelope, googleSignIn, inviteAndJoin, json, setupOwner, uniqueEmail } from "./helpers";
 
 // backlog D10 / brief K4・K6・K10・K13、plan K18・K26
 const ACCOUNT = "0123456789abcdef0123456789abcdef";
@@ -149,5 +151,23 @@ describe("usage routes (D10)", () => {
     const env = await expectEnvelope(res);
     expect(env.error).toBe("usage_upstream_failed");
     expect(JSON.stringify(env)).not.toContain("not authorized"); // 上流の生の文言は detail(ログ)だけ
+  });
+});
+
+// plan12 K10: プランを変えたら全サイトの KV の記録を書き直す
+describe("usage settings: plan change rewrites site records (plan12 K10)", () => {
+  const budgetOf = async (sid: string) => (JSON.parse((await env.CONFIG_KV.get(kvKeys.settings(sid)))!) as Record<string, unknown>).newProfileBudget;
+  it("rewrites every site on the spot and keeps a per-site override", async () => {
+    const owner = await setupOwner();
+    const a = await createSite(owner.token, owner.workspaceId);
+    const b = await createSite(owner.token, owner.workspaceId, { domain: "b.example.com" });
+    await call("PATCH", `/sites/${b.id}`, { token: owner.token, body: { newProfileBudgetPerDay: 5000 } });
+    expect(await budgetOf(a.id)).toEqual({ perDay: 20_000, instancePerDay: 20_000 });
+    expect((await patch(owner.token, { cloudflarePlan: "paid" })).status).toBe(200);
+    expect(await budgetOf(a.id)).toEqual({ perDay: 200_000 });
+    expect(await budgetOf(b.id)).toEqual({ perDay: 5000 });
+    expect((await patch(owner.token, { cloudflarePlan: "free" })).status).toBe(200);
+    expect(await budgetOf(a.id)).toEqual({ perDay: 20_000, instancePerDay: 20_000 });
+    expect(await budgetOf(b.id)).toEqual({ perDay: 5000, instancePerDay: 20_000 });
   });
 });

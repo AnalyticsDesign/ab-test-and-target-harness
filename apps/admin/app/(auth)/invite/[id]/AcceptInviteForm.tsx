@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { Field } from "@/components/Field";
 import { ErrorBox } from "@/components/ErrorBox";
 import { SubmitButton } from "@/components/SubmitButton";
+import { browserVersionHeaders } from "@/lib/client";
 import type { InviteView } from "@/lib/invite-view";
 import { roleLabel } from "@/lib/roles";
 
@@ -30,7 +31,7 @@ export function AcceptInviteForm({
     setError(null);
     const res = await fetch("/api/session/accept-invite", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...browserVersionHeaders() },
       body: JSON.stringify({ id, ...body }),
     });
     setBusy(false);

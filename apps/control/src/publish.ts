@@ -21,12 +21,13 @@ import type { Env } from "./env";
 import { orderForCompile, overlapWarnings } from "./experiment-order";
 import { newId } from "./ids";
 import { siteToSettings } from "./site-settings";
+import { NOT_FROZEN_SQL } from "./write-freeze";
 import { confirmDeliveries, deliveredDefinitionInsert, deliveredDefinitionsFor, plansForDelivery, prepareDeliveredDefinitions, setDeliveredGeneration, type PreparedDelivery } from "./results/delivered";
 import { apiGuard } from "./results/guard";
 import { requestStaticDeploy, type StaticDeployOutcome, type StaticDeployState } from "./static-delivery";
 
-export const KEEP_RECENT = 5; // spec §9.4: 直近 5 版
 export const RECENT_ACTIVE_MS = 5 * 60_000; // spec §9.4: 5 分以内に active だった版
+const MARK_CHUNK = 50; // kv_deleted の印を 1 文で付ける版の数の上限(D1 のバインド変数は 1 文 100 個まで)
 
 // 失敗形のフィールド名は §13.5 の封筒に揃える(error = 機械可読コード、message = 文)
 export type PublishResult =
@@ -469,33 +470,38 @@ export function publicPublishResult(r: PublishResult): PublishResult {
 }
 
 /**
- * spec §9.4: 直近 KEEP_RECENT 版・active 版・RECENT_ACTIVE_MS 以内に active だった版は残し、それ以外の config キーを削除する。
+ * spec §9.4: 切り替えに必要な版 = KV の active の版・今書いた版・RECENT_ACTIVE_MS 以内に active だった版・配信ファイルが配る版(以上)だけを残し、
+ * それ以外の config キーを削除する(plan12 K14 (b): 「直近 N 版」の保持はやめた)。公開のとき(publishSite)と、control の Cron `config-cleanup` から呼ぶ。
  *
  * 配信ファイル(静的アセット)が配っている版も残す(① 不明なら何も消さない ② その版以上 ③ 切り替えの直後 5 分は前の版。決定 52 / plan K20)。
  *
  * 「active 版」の正本は **KV の `active` レコード**(= edge が実際に読む値)であって、D1 の記帳ではない。
  * put の成否不明(`kv_rate_limited`)のあと D1 だけが巻き戻り、その版が `failed` / `activated_at = null` のまま
- * 直近 5 版から押し出されると、D1 だけを見た cleanup は**配信中の config を消してしまう**。
+ * 新しい版に押し出されると、D1 だけを見た cleanup は**配信中の config を消してしまう**。
  * そのため KV を読んでその版を必ず残し、KV が読めなければ 1 件も消さない(fail-closed)
  */
-async function cleanupOldVersions(env: Env, db: Db, siteId: string, writtenVersion: number, nowMs: number): Promise<void> {
+export async function cleanupOldVersions(env: Env, db: Db, siteId: string, writtenVersion: number, nowMs: number, beforeDelete?: () => Promise<void>): Promise<number> {
+  // 戻り値 = 出した D1 のクエリの数(KV は数えない)。Cron が 1 回の実行の D1 の予算を数えるのに使う
+  let queries = 0;
   let served: number | null;
   try {
     const raw = await env.CONFIG_KV.get(kvKeys.active(siteId));
     served = raw === null ? null : Number(raw);
   } catch {
-    return; // KV が読めない = いま何が配信されているか分からない。何も消さない
+    return queries; // KV が読めない = いま何が配信されているか分からない。何も消さない
   }
-  if (served !== null && !Number.isInteger(served)) return; // 壊れた active レコード。同上
+  if (served !== null && !Number.isInteger(served)) return queries; // 壊れた active レコード。同上
   // 決定 52 / plan K20: 配信ファイル(静的アセット)が配っている版。配信ファイルの更新が遅れている間も、
   // 古い bootstrap が decision でその版を求めるので、その版の config を残す
+  queries++;
   const st = await db
     .selectFrom("sites")
     .select(["static_served_version", "static_prev_served_version", "static_served_at"])
     .where("id", "=", siteId)
     .executeTakeFirst();
   // ① 配っている版がまだ分からない(確かめた出し直しが無い)なら何も消さない
-  if (!st || st.static_served_version === null) return;
+  if (!st || st.static_served_version === null) return queries;
+  queries++;
   const rows = await db
     .selectFrom("publishes")
     .select(["id", "version", "status", "activated_at", "kv_deleted"])
@@ -510,13 +516,28 @@ async function cleanupOldVersions(env: Env, db: Db, siteId: string, writtenVersi
   for (const r of rows) if (r.version >= st.static_served_version) keep.add(r.version);
   // ③ 切り替えから RECENT_ACTIVE_MS の間は、前に配っていた版も残す(切り替えの直後、ブラウザに最大 60 秒残る前の bootstrap が decision でその版を求める)
   if (st.static_prev_served_version !== null && st.static_served_at !== null && nowMs - st.static_served_at < RECENT_ACTIVE_MS) keep.add(st.static_prev_served_version);
-  for (const r of rows.slice(0, KEEP_RECENT)) keep.add(r.version);
   for (const r of rows) if (r.activated_at !== null && nowMs - r.activated_at < RECENT_ACTIVE_MS) keep.add(r.version);
-  for (const r of rows) {
-    if (keep.has(r.version)) continue;
-    await env.CONFIG_KV.delete(kvKeys.config(siteId, r.version)).catch(() => {});
-    await db.updateTable("publishes").set({ kv_deleted: 1 }).where("id", "=", r.id).execute();
+  const doomed = rows.filter((r) => !keep.has(r.version));
+  if (doomed.length === 0) return queries;
+  // 消す(KV を書く)直前の確かめ。Cron は凍結の確かめをここに渡す(公開の途中の掃除は渡さない)。凍結中は投げて何も消さない
+  if (beforeDelete) {
+    queries++; // 確かめの読み取り 1 件
+    await beforeDelete();
   }
+  for (const r of doomed) await env.CONFIG_KV.delete(kvKeys.config(siteId, r.version)).catch(() => {});
+  // 消した印は D1 の 1 文にまとめる(Cron の D1 の予算を版の数に比例させない)。D1 のバインド変数の上限に収まるよう CHUNK ずつ。
+  // KV の削除より後に印を付けるので、途中で止まっても印の無い版は次の掃除でもう一度消される(冪等)
+  for (let i = 0; i < doomed.length; i += MARK_CHUNK) {
+    queries++;
+    // wtt-control への書き込みなので、凍結の印が無いことを条件に入れる(確かめと書き込みの間に凍結が入っても書かない。0 行 = 次の掃除がやり直す)
+    await db
+      .updateTable("publishes")
+      .set({ kv_deleted: 1 })
+      .where("id", "in", doomed.slice(i, i + MARK_CHUNK).map((r) => r.id))
+      .where(sql<boolean>`${sql.raw(NOT_FROZEN_SQL)}`)
+      .execute();
+  }
+  return queries;
 }
 
 /**

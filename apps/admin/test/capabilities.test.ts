@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CAPABILITIES, resolveCapabilities } from "../lib/capabilities";
 
 // 決定 43 (6) / 44 (5): 取得失敗は「有効」側、edge 未設定は「帯なし」側に倒す。最終判定は control
@@ -12,6 +14,8 @@ describe("resolveCapabilities", () => {
       passwordLogin: true,
       resultsStore: false,
       writeFreeze: null,
+      apiVersion: null,
+      minClientVersion: null,
     });
   });
   it("falls_back_to_defaults_on_error_or_malformed", () => {
@@ -22,10 +26,10 @@ describe("resolveCapabilities", () => {
     expect(resolveCapabilities({ status: 200, data: { imageUpload: false, edgeOrigin: 1, edgeOnWorkersDev: true } })).toEqual(DEFAULT_CAPABILITIES);
     expect(resolveCapabilities({ status: 200, data: { imageUpload: false, edgeOrigin: "https://x.workers.dev", edgeOnWorkersDev: "yes" } })).toEqual(DEFAULT_CAPABILITIES);
     // edgeOrigin が null で edgeOnWorkersDev が true は control の実装上あり得ないが、形としては正しいのでそのまま通す
-    expect(resolveCapabilities({ status: 200, data: { imageUpload: true, edgeOrigin: null, edgeOnWorkersDev: true } })).toEqual({ imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: true, passwordLogin: false, resultsStore: false, writeFreeze: null });
+    expect(resolveCapabilities({ status: 200, data: { imageUpload: true, edgeOrigin: null, edgeOnWorkersDev: true } })).toEqual({ imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: true, passwordLogin: false, resultsStore: false, writeFreeze: null, apiVersion: null, minClientVersion: null });
     // 決定 46: パスワード欄・リセットリンク・帯は「型が正しい true」だけで出す(型不正は応答全体を既定に倒す)
     expect(resolveCapabilities({ status: 200, data: { imageUpload: true, passwordLogin: "yes" } })).toEqual(DEFAULT_CAPABILITIES);
-    expect(DEFAULT_CAPABILITIES).toEqual({ imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null });
+    expect(DEFAULT_CAPABILITIES).toEqual({ imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null, apiVersion: null, minClientVersion: null });
     // tagOrigin が「存在するが型不正」なら応答全体を既定に倒す
     expect(resolveCapabilities({ status: 200, data: { imageUpload: true, tagOrigin: 1 } })).toEqual(DEFAULT_CAPABILITIES);
   });
@@ -46,7 +50,7 @@ describe("resolveCapabilities", () => {
   });
   it("fills_missing_fields_with_defaults", () => {
     // 古い control(/capabilities に edgeOrigin が無い版)にも耐える
-    expect(resolveCapabilities({ status: 200, data: { imageUpload: false } })).toEqual({ imageUpload: false, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null });
+    expect(resolveCapabilities({ status: 200, data: { imageUpload: false } })).toEqual({ imageUpload: false, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null, apiVersion: null, minClientVersion: null });
     expect(resolveCapabilities({ status: 200, data: { imageUpload: false, passwordLogin: true } }).passwordLogin).toBe(true);
   });
 });
@@ -119,5 +123,146 @@ describe("write freeze banner", () => {
     expect(nextWriteFreeze(frozen, { ...base, tagOrigin: 1 })).toEqual(frozen); // 7i の tagOrigin も同じ規則
     expect(nextWriteFreeze(frozen, [])).toEqual(frozen); // 配列
     expect(nextWriteFreeze(null, { ...base, writeFreeze: "yes" })).toBeNull();
+  });
+});
+
+import { nextCapabilities, versionBannerKind } from "../lib/capabilities";
+import { startCapabilitiesPoll } from "../lib/capabilities-poll";
+
+// plan12 K6: 管理画面の版(own)と control の /capabilities の版から、版のバナーの種類を決める
+describe("versionBannerKind", () => {
+  it("own 1 vs control api 1 / min 1: no banner", () => {
+    expect(versionBannerKind(1, { apiVersion: 1, minClientVersion: 1 })).toBeNull();
+  });
+  it("own below min: incompatible (writes are refused)", () => {
+    expect(versionBannerKind(1, { apiVersion: 2, minClientVersion: 2 })).toBe("incompatible");
+  });
+  it("own below api but not below min: outdated", () => {
+    expect(versionBannerKind(1, { apiVersion: 2, minClientVersion: 1 })).toBe("outdated");
+  });
+  it("own above api: control_outdated", () => {
+    expect(versionBannerKind(2, { apiVersion: 1, minClientVersion: 1 })).toBe("control_outdated");
+  });
+  it("no capabilities, or an old control without the numbers: no banner", () => {
+    expect(versionBannerKind(1, null)).toBeNull();
+    expect(versionBannerKind(1, { apiVersion: null, minClientVersion: null })).toBeNull();
+    expect(versionBannerKind(1, { apiVersion: 2, minClientVersion: null })).toBeNull();
+    expect(versionBannerKind(1, { apiVersion: null, minClientVersion: 2 })).toBeNull();
+  });
+});
+
+describe("parseCapabilities: apiVersion / minClientVersion", () => {
+  const base = { imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false };
+  it("reads both numbers", () => {
+    const c = parseCapabilities({ ...base, apiVersion: 3, minClientVersion: 2 });
+    expect(c?.apiVersion).toBe(3);
+    expect(c?.minClientVersion).toBe(2);
+  });
+  it("a missing number (old control) becomes null and the rest is kept", () => {
+    expect(parseCapabilities(base)).toMatchObject({ apiVersion: null, minClientVersion: null, imageUpload: true });
+    expect(parseCapabilities({ ...base, apiVersion: 3 })).toMatchObject({ apiVersion: 3, minClientVersion: null });
+  });
+  it("a wrongly typed number makes the whole body null", () => {
+    expect(parseCapabilities({ ...base, apiVersion: "3", minClientVersion: 1 })).toBeNull();
+    expect(parseCapabilities({ ...base, apiVersion: 3, minClientVersion: null })).toBeNull();
+    expect(parseCapabilities({ ...base, apiVersion: Number.NaN, minClientVersion: 1 })).toBeNull();
+  });
+  it("nextCapabilities replaces on a good body and keeps the previous on a failure", () => {
+    const prev = { ...DEFAULT_CAPABILITIES, apiVersion: 1, minClientVersion: 1 };
+    expect(nextCapabilities(prev, { ...base, apiVersion: 2, minClientVersion: 2 })).toMatchObject({ apiVersion: 2, minClientVersion: 2 });
+    expect(nextCapabilities(prev, null)).toBe(prev);
+    expect(nextCapabilities(prev, { ...base, apiVersion: "x" })).toBe(prev);
+  });
+});
+
+// 共有の取り直し: WriteFreezeBanner と VersionBanner が別々に取りに行かない(60 秒に 1 回)
+describe("capabilities poll", () => {
+  type Listener = () => void;
+  const fakeDoc = () => {
+    const listeners = new Set<Listener>();
+    return {
+      visibilityState: "visible" as string,
+      addEventListener: (_t: "visibilitychange", l: Listener) => void listeners.add(l),
+      removeEventListener: (_t: "visibilitychange", l: Listener) => void listeners.delete(l),
+      fire: () => listeners.forEach((l) => l()),
+      size: () => listeners.size,
+    };
+  };
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("fetches once per 60 s no matter how many banners read the result", async () => {
+    const doc = fakeDoc();
+    const fetchCaps = vi.fn(async () => ({}));
+    const seen: unknown[] = [];
+    // バナーが 2 つあっても、取得するのは CapabilitiesBanners が呼ぶ 1 回の poll だけ(ここでは poll を 1 つ起動して数える)
+    const stop = startCapabilitiesPoll({ fetchCaps, onData: (d) => seen.push(d), doc });
+    expect(fetchCaps).toHaveBeenCalledTimes(0);
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(fetchCaps).toHaveBeenCalledTimes(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchCaps).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchCaps).toHaveBeenCalledTimes(2);
+    expect(seen).toHaveLength(2);
+    stop();
+  });
+
+  it("skips hidden tabs, refetches when the tab becomes visible, and a failure is passed as null", async () => {
+    const doc = fakeDoc();
+    const fetchCaps = vi.fn(async () => {
+      throw new Error("down");
+    });
+    const seen: unknown[] = [];
+    const stop = startCapabilitiesPoll({ fetchCaps, onData: (d) => seen.push(d), doc });
+    doc.visibilityState = "hidden";
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fetchCaps).toHaveBeenCalledTimes(0);
+    doc.fire(); // 隠れたままの visibilitychange では取らない
+    expect(fetchCaps).toHaveBeenCalledTimes(0);
+    doc.visibilityState = "visible";
+    doc.fire();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchCaps).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([null]); // 失敗は null(呼び出し側が直前の表示を保つ)
+    stop();
+  });
+
+  it("stop() clears the timer and the listener, and drops a response that arrives after it", async () => {
+    const doc = fakeDoc();
+    let resolve!: (v: unknown) => void;
+    const fetchCaps = vi.fn(() => new Promise<unknown>((r) => (resolve = r)));
+    const seen: unknown[] = [];
+    const stop = startCapabilitiesPoll({ fetchCaps, onData: (d) => seen.push(d), doc });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchCaps).toHaveBeenCalledTimes(1);
+    stop();
+    expect(doc.size()).toBe(0);
+    resolve({});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seen).toEqual([]);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fetchCaps).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 取得を 1 回にする構造: /capabilities を取りに行くのは useCapabilitiesPoll だけで、CapabilitiesBanners がそれを 1 回呼んで 2 つの帯に値を渡す
+describe("capabilities banners structure", () => {
+  const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const read = (f: string) => strip(readFileSync(path.join(import.meta.dirname, "..", f), "utf8"));
+  it("only the poll hook fetches /capabilities; CapabilitiesBanners calls it once and feeds both banners", () => {
+    expect(read("components/useCapabilitiesPoll.ts")).toMatch(/startCapabilitiesPoll\(/);
+    const banners = read("components/CapabilitiesBanners.tsx");
+    expect(banners.match(/useCapabilitiesPoll\(/g)).toHaveLength(1);
+    expect(banners).toMatch(/<WriteFreezeBanner\b/);
+    expect(banners).toMatch(/<VersionBanner\b/);
+    for (const f of ["components/WriteFreezeBanner.tsx", "components/VersionBanner.tsx"]) {
+      const src = read(f);
+      expect(src, f).not.toMatch(/useCapabilitiesPoll|from "@\/lib\/client"|\bapi\(|fetch\(/);
+    }
+    // layout は CapabilitiesBanners だけを置く(帯を直接置くと取得が増える)
+    const layout = read("app/w/layout.tsx");
+    expect(layout).toMatch(/<CapabilitiesBanners\b/);
+    expect(layout).not.toMatch(/<WriteFreezeBanner\b|<VersionBanner\b/);
   });
 });

@@ -9,11 +9,13 @@
   "ratelimits": [{ "name": "DECISION_RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 1000, "period": 10 } }],
   // Visitor Profile。SQLite-backed(Free プランで利用可)。ID は idFromName("<siteId>:<visitorId>")
   // 結果の記録の 1 日の予算(ResultsBudget)は導入全体で 1 つ(idFromName("global"))。収集できなかった送信の数(ResultsHealth)はサイトごと(idFromName("<siteId>"))
+  // 新しい訪問者の Profile の予算(NewProfileBudget)は、サイトごと(idFromName("site:<siteId>"))と導入全体(idFromName("instance"))
   "durable_objects": {
     "bindings": [
       { "name": "VISITOR_PROFILE", "class_name": "VisitorProfile" },
       { "name": "RESULTS_BUDGET", "class_name": "ResultsBudget" },
-      { "name": "RESULTS_HEALTH", "class_name": "ResultsHealth" }
+      { "name": "RESULTS_HEALTH", "class_name": "ResultsHealth" },
+      { "name": "NEW_PROFILE_BUDGET", "class_name": "NewProfileBudget" }
     ]
   },
   // 計測用 D1(wtt-results。テストの結果の参加者ごとの記録)。`wrangler d1 create wtt-results` で作った database_id に置き換える(docs/deploy.md 2.2)。
@@ -34,7 +36,9 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["VisitorProfile"] },
     // 結果の記録の予算と、収集できなかった送信の数(どちらも SQLite。Free プランで使える)
-    { "tag": "v2", "new_sqlite_classes": ["ResultsBudget", "ResultsHealth"] }
+    { "tag": "v2", "new_sqlite_classes": ["ResultsBudget", "ResultsHealth"] },
+    // 新しい訪問者の Profile の予算(SQLite。Free プランで使える)
+    { "tag": "v3", "new_sqlite_classes": ["NewProfileBudget"] }
   ],
   // 設置サイトのゾーンに紐づく Workers Route。`/v1/*` は decision / event。bootstrap(`/s/*`)は配信専用の Worker が受ける(docs/deploy.md を参照して自分のドメインに置き換える)。
   // Mode B(サーバー発行 Cookie)を使う Site は <site-domain>/__ab/* を、needsProfile の Site は <site-domain>/v1/* を同じ形式で追加する

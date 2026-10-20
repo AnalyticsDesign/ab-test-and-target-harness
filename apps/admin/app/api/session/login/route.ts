@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { clientVersionHeaders, controlUnreachable, controlUrl, isHttps, originHeader, requireOrigin, sessionCookie } from "@/lib/control";
+import { controlRequest, controlUnreachable, forwardedFrom, isHttps, originHeader, requireOrigin, sessionCookie } from "@/lib/control";
 import { NOT_INVITED } from "@/lib/oauth-errors";
 
 /**
@@ -10,11 +10,13 @@ export async function POST(req: Request): Promise<Response> {
   const noOrigin = requireOrigin(req);
   if (noOrigin) return noOrigin;
   const body = (await req.json().catch(() => ({}))) as { email?: unknown; password?: unknown };
-  const res = await fetch(`${controlUrl()}/auth/sign-in/email`, {
+  // 接続元 IP を渡す(control のログインのレート制限が利用者ごとに効く。plan12 K8)
+  const res = await controlRequest("/auth/sign-in/email", {
     method: "POST",
-    headers: { "content-type": "application/json", ...originHeader(req), ...clientVersionHeaders() },
+    headers: { "content-type": "application/json", ...originHeader(req) },
     body: JSON.stringify({ email: body.email, password: body.password }),
-  }).catch(() => null);
+    ...forwardedFrom(req),
+  });
   if (!res) return controlUnreachable();
   const data = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
   if (!res.ok) {

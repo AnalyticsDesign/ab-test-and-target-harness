@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { API_CONTRACT_VERSION, API_VERSION_HEADER } from "@wtt/core";
+import { API_CONTRACT_VERSION, API_VERSION_HEADER, MIN_CLIENT_VERSION, MIN_CLIENT_VERSION_HEADER } from "@wtt/core";
 import { alignToWindow, AUTH_RATE_LIMIT, call } from "./helpers";
 
 // backlog D13 / 決定 56 (1): control は全応答に自分の API 契約の版を付ける(判定はしない)
 describe("api contract version header (D13 / decision 56 (1))", () => {
-  const expectVersion = (res: Response, label: string) => expect(res.headers.get(API_VERSION_HEADER), label).toBe(String(API_CONTRACT_VERSION));
+  const expectVersion = (res: Response, label: string) => {
+    expect(res.headers.get(API_VERSION_HEADER), label).toBe(String(API_CONTRACT_VERSION));
+    // plan12 K4: 最低の版も同じ入口で付ける(管理画面のバナーと API クライアントが読む)
+    expect(res.headers.get(MIN_CLIENT_VERSION_HEADER), `${label} (min client version)`).toBe(String(MIN_CLIENT_VERSION));
+  };
 
   it("is 1 in v1.0", () => {
     expect(API_CONTRACT_VERSION).toBe(1);
     expect(API_VERSION_HEADER).toBe("x-wtt-api-version");
+    expect(MIN_CLIENT_VERSION_HEADER).toBe("x-wtt-min-client-version");
+    expect(MIN_CLIENT_VERSION).toBe(1);
   });
 
   it("is on success, error envelopes and passthrough responses", async () => {
@@ -17,6 +23,7 @@ describe("api contract version header (D13 / decision 56 (1))", () => {
     expectVersion(await call("GET", "/me"), "401 envelope");
     expectVersion(await call("GET", "/no-such-route"), "404 envelope");
     expectVersion(await call("GET", "/auth/get-session"), "Better Auth passthrough");
+    expectVersion(await call("POST", "/workspaces", { headers: { "x-wtt-client-version": "abc" }, body: {} }), "426 envelope");
   });
 
   it("is on the 429 of the rate limiter (the first middleware runs before it)", async () => {

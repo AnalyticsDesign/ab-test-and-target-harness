@@ -1,6 +1,7 @@
 import { test, expect, type ConsoleMessage, type Page, type Request, type Response } from "@playwright/test";
 import {
   ADMIN_URL,
+  controlHeaders,
   STATIC_URL,
   EXPERIMENT,
   EXPERIMENT_FAILED,
@@ -451,7 +452,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     // (かつては `PUT …/changes` が 1 行 12 個の bind 変数を使う単一の複数行 INSERT で、9 件以上が D1 の
     // 「1 クエリ 100 変数」上限に当たって 500 になっていた。d51c5db で 8 行ずつに分割して解消済み。10 件はその分割も通る)
     const bigChanges = Array.from({ length: 10 }, (_, i) => ({ id: `c_big${i}`, type: "TEXT", selector: `.c_big${i}`, payload: { text: "x".repeat(60_000) } }));
-    const seeded = await page.request.put(`/api/control/sites/${SITE_FAILED.id}/experiments/${EXPERIMENT_FAILED.id}/variants/b/changes`, { data: bigChanges });
+    const seeded = await page.request.put(`/api/control/sites/${SITE_FAILED.id}/experiments/${EXPERIMENT_FAILED.id}/variants/b/changes`, { headers: controlHeaders(), data: bigChanges });
     expect(seeded.status()).toBe(200);
 
     const started = await changeStatus(page, SITE_FAILED.id, EXPERIMENT_FAILED.id, /^開始/);

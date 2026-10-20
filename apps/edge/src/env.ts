@@ -1,6 +1,7 @@
 import type { VisitorProfile } from "./profile";
 import type { ResultsBudget } from "./results-budget";
 import type { ResultsHealth } from "./results-health";
+import type { NewProfileBudget } from "./new-profile-budget";
 
 /** Rate Limiting binding(spec 決定 12)。ローカルで binding が無くても動くよう optional(fail-open は Task 9) */
 export type RateLimiter = { limit(options: { key: string }): Promise<{ success: boolean }> };
@@ -20,6 +21,11 @@ export type Env = {
    * 無いときは失敗を数えないだけにする(HealthBuffer が捨てる。リクエストの経路は止めない)
    */
   RESULTS_HEALTH?: DurableObjectNamespace<ResultsHealth>;
+  /**
+   * 新しい Profile の予算(plan12 K9)。サイトごと(idFromName("site:<siteId>"))と導入全体(idFromName("instance"))。
+   * wrangler.jsonc には常にあるが、型は optional にして、無いときは報告が失敗するだけにする(止めない = fail-open)
+   */
+  NEW_PROFILE_BUDGET?: DurableObjectNamespace<NewProfileBudget>;
   /** 計測用 D1(wtt-results。設計書 §6.4)。無ければ結果は書かない(fail-closed) */
   RESULTS_DB?: D1Database;
   /** 訪問者 ID を HMAC するための鍵(base64。復号して 32 バイト以上)。edge の secret で、無ければ結果は書かない(fail-closed) */

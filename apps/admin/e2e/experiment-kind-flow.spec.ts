@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { createExperiment, createSite, login, openSite, waitForHydration } from "./fixtures";
+import { controlHeaders, createExperiment, createSite, login, openSite, waitForHydration } from "./fixtures";
 
 /**
  * 決定 51(設計書 §3〜§4・§10、plan ① Task 9): 種別(パーソナライズ)の作成、複製の画面、開始・再開の重なりの確認、公開の確認画面の警告。
@@ -9,11 +9,11 @@ import { createExperiment, createSite, login, openSite, waitForHydration } from 
 /** 管理画面の BFF 経由で control を呼ぶ(ログイン中の Cookie を使う)。準備だけに使い、確かめる操作は画面で行う */
 async function control(page: Page, method: string, path: string, body?: unknown): Promise<number> {
   return page.evaluate(
-    async ([m, p, b]) => {
-      const r = await fetch(`/api/control${p}`, { method: m, headers: b === undefined ? undefined : { "content-type": "application/json" }, body: b === undefined ? undefined : JSON.stringify(b) });
+    async ([m, p, b, h]) => {
+      const r = await fetch(`/api/control${p}`, { method: m, headers: b === undefined ? h : { "content-type": "application/json", ...h }, body: b === undefined ? undefined : JSON.stringify(b) });
       return r.status;
     },
-    [method, path, body] as const,
+    [method, path, body, controlHeaders()] as const,
   );
 }
 

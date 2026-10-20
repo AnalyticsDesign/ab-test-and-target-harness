@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { clientVersionHeaders, controlUnreachable, controlUrl, isHttps, originHeader, requireOrigin, SESSION_COOKIE, sessionCookie } from "@/lib/control";
+import { controlRequest, controlUnreachable, forwardedFrom, isHttps, originHeader, requireOrigin, SESSION_COOKIE, sessionCookie } from "@/lib/control";
 
 /**
  * 招待の受諾(spec §13.3)。既にログイン中なら Bearer だけを送って既存アカウントで参加し、
@@ -12,13 +12,15 @@ export async function POST(req: Request): Promise<Response> {
   if (typeof id !== "string" || id === "") return Response.json({ error: "bad_request", message: "招待 ID がありません" }, { status: 400 });
   const jar = await cookies();
   const existing = jar.get(SESSION_COOKIE)?.value;
-  const headers: Record<string, string> = { "content-type": "application/json", ...originHeader(req), ...clientVersionHeaders() };
+  const headers: Record<string, string> = { "content-type": "application/json", ...originHeader(req) };
   if (existing) headers.authorization = `Bearer ${existing}`;
-  const res = await fetch(`${controlUrl()}/invitations/${encodeURIComponent(id)}/accept`, {
+  // 招待の受諾は control の古い版の判定(426)の対象なので、ブラウザの版との小さいほうを名乗る(forwardedFrom)
+  const res = await controlRequest(`/invitations/${encodeURIComponent(id)}/accept`, {
     method: "POST",
     headers,
     body: JSON.stringify(existing ? {} : body),
-  }).catch(() => null);
+    ...forwardedFrom(req),
+  });
   if (!res) return controlUnreachable();
   const data = (await res.json().catch(() => ({}))) as { token?: string; workspaceId?: string };
   if (!res.ok) return Response.json(data, { status: res.status }); // control の封筒をそのまま返す

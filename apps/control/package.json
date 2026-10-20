@@ -7,6 +7,7 @@
     "guide:build": "node scripts/embed-guide.mjs",
     "test": "node scripts/embed-guide.mjs && vitest run",
     "typecheck": "tsc --noEmit",
+    "contract:update": "tsx scripts/contract-update.ts",
     "dev": "wrangler dev -c wrangler.jsonc -c ../admin/e2e/deployer.wrangler.jsonc",
     "auth:schema": "better-auth generate --config src/auth.cli.ts --output migrations/0001_better_auth.sql --yes",
     "d1:migrate:local": "wrangler d1 migrations apply wtt-control --local",
@@ -34,6 +35,7 @@
     "@cloudflare/workers-types": "^5.20260831.1",
     "@types/better-sqlite3": "^7.6.13",
     "better-sqlite3": "^12.2.0",
+    "tsx": "^4",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "wrangler": "^4.128.0"

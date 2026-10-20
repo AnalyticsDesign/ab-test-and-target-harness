@@ -1,5 +1,5 @@
 import { test, expect, type Request } from "@playwright/test";
-import { ADMIN_URL, EXPERIMENT, OWNER_EMAIL, PASSWORD, SITE, WORKSPACE_NAME, login, openWorkspace, pick, waitForHydration } from "./fixtures";
+import { ADMIN_URL, EXPERIMENT, OWNER_EMAIL, PASSWORD, SITE, WORKSPACE_NAME, controlHeaders, login, openWorkspace, pick, waitForHydration } from "./fixtures";
 
 /**
  * 招待で入った EDITOR の境界(spec §13.2 決定 13)。
@@ -90,7 +90,7 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await expect(editor.getByRole("button", { name: "一時停止" })).toHaveCount(0);
 
   // UI の出し分けに頼らず、BFF 経由で直接叩いても 403(spec §13.2)
-  const res = await editor.request.post(`/api/control/sites/${SITE.id}/experiments/${EXPERIMENT.id}/status`, { data: { status: "running" } });
+  const res = await editor.request.post(`/api/control/sites/${SITE.id}/experiments/${EXPERIMENT.id}/status`, { headers: controlHeaders(), data: { status: "running" } });
   expect(res.status()).toBe(403);
   expect(await res.json()).toMatchObject({ error: "forbidden", required: "admin" });
 
@@ -103,8 +103,12 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await expect(editorNav.getByRole("link", { name: "画面表示" })).toBeVisible();
   await expect(editorNav.getByRole("link", { name: "システム管理者" })).toHaveCount(0);
   await expect(editorNav.getByRole("link", { name: "ワークスペース", exact: true })).toHaveCount(0);
-  const created = await editor.request.post("/api/control/workspaces", { data: { name: "By editor" } });
+  const created = await editor.request.post("/api/control/workspaces", { headers: controlHeaders(), data: { name: "By editor" } });
   expect(created.status()).toBe(403);
+  // plan12 K3: 版を名乗らない書き込み(admin の更新より前に開いたタブ)は、BFF が版 0 を名乗り、control が権限の判定より前に 426 で断る
+  const unnamed = await editor.request.post("/api/control/workspaces", { data: { name: "By old tab" } });
+  expect(unnamed.status()).toBe(426);
+  expect(await unnamed.json()).toMatchObject({ error: "client_too_old", clientVersion: 0 });
 
   // B45: ロールは選んだ瞬間に反映されるので確認を挟む。キャンセルなら変わらない →「変更する」で変わる(この後の流れのため編集者に戻す)
   await openWorkspace(page);
@@ -200,8 +204,8 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await page.getByRole("link", { name: "メンバー", exact: true }).click();
   await expect(page.getByTestId("members").getByRole("row").filter({ hasText: "editor@e2e.example" })).toHaveCount(0);
   // 最後の 1 人は API でも外せない
-  const me = (await (await page.request.get(`${ADMIN_URL}/api/control/me`)).json()) as { id: string };
-  expect((await page.request.delete(`${ADMIN_URL}/api/control/instance-admins/${me.id}`)).status()).toBe(409);
+  const me = (await (await page.request.get(`${ADMIN_URL}/api/control/me`, { headers: controlHeaders() })).json()) as { id: string };
+  expect((await page.request.delete(`${ADMIN_URL}/api/control/instance-admins/${me.id}`, { headers: controlHeaders() })).status()).toBe(409);
 
   // 決定 54 (10): 設定 > ワークスペース。ホームの「新しいワークスペース」から作成の欄へ → 作る → 削除の確認で名前を打ち込んで消す
   await page.goto(`${ADMIN_URL}/w`);
@@ -227,10 +231,10 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await confirmBox.getByRole("textbox").fill("E2E Temp");
   // Review Focus 3(r1 CX-Medium-3 / CL-Medium-7): 確認欄を開いた後に、別の操作でエクスペリエンスが開始された
   // = 画面はまだ押せる状態のまま、押した時点でサーバーが 409 を返す。BFF から直接作って開始する(ログインは増やさない)
-  const ctl = (path: string, data: unknown) => page.request.post(`${ADMIN_URL}/api/control${path}`, { data });
+  const ctl = (path: string, data: unknown) => page.request.post(`${ADMIN_URL}/api/control${path}`, { headers: controlHeaders(), data });
   expect((await ctl(`/workspaces/${tempId}/sites`, { name: "E2E Temp Site", domain: "temp.e2e.example", id: "site_e2e_temp" })).status()).toBe(201);
   // D9 ③: 計測用のデータベースがある導入の新しい Site は結果を記録する(開始に評価計画の目標が要る)ので、記録しない設定にしてから開始する(fixtures.ts の createSite と同じ)
-  expect((await page.request.patch(`${ADMIN_URL}/api/control/sites/site_e2e_temp`, { data: { resultsEnabled: false } })).status()).toBe(200);
+  expect((await page.request.patch(`${ADMIN_URL}/api/control/sites/site_e2e_temp`, { headers: controlHeaders(), data: { resultsEnabled: false } })).status()).toBe(200);
   expect((await ctl("/sites/site_e2e_temp/experiments", { id: "exp_e2e_temp", name: "E2E temp", urlMatch: { op: "contains", value: "/" } })).status()).toBe(201);
   expect((await ctl("/sites/site_e2e_temp/experiments/exp_e2e_temp/status", { status: "running" })).status()).toBe(200);
   await confirmBox.getByRole("button", { name: "削除する" }).click();

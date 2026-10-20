@@ -270,7 +270,7 @@ workspaceRoutes.delete(
     // この Workspace にしか居なかった人のログイン状態を切る(他の Workspace の Member / 有効な招待があれば残る)
     for (const userId of memberIds) await revokeSessionsIfNoAccess(db, userId);
     for (const site of sites) {
-      await deleteSiteRecords(c.env, site, versionsBySite.get(site.id) ?? []);
+      await deleteSiteRecords(c.env, db, site, versionsBySite.get(site.id) ?? []);
       await deleteSiteAssets(c.env, site.id);
     }
     // K6・K12: 応答の後に 1 回だけ個票を消し始める(残りは Cron が queue から消す)
@@ -617,6 +617,8 @@ workspaceRoutes.post(
         }
         // sign-up ゲート(auth.ts hooks.before)が弾いた = この招待が並行して使われた / 失効した
         if (status === "FORBIDDEN") throw new ApiError(410, "invitation_used", { hint: "招待が既に使われたか失効しています" });
+        // plan12 K13: 登録の途中で非常口が閉じ、掃除がパスワードの記録を消した(auth.ts の session.create.after が断った)。5xx にしない
+        if (status === "UNAUTHORIZED") throw new ApiError(401, "unauthorized", { hint: PASSWORD_LOGIN_DISABLED_HINT });
         throw e; // それ以外(D1 障害など)は 5xx のまま上げてサーバー側に記録する
       }
       token = headers.get("set-auth-token");

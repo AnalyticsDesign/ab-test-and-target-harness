@@ -13,7 +13,7 @@ describe("同じ入力なら edge とブラウザで同じ判定(決定 49、設
       ...(c.hasViewportMeta ? { viewport: { w: c.width, h: 800 } } : {}), firstVisitAt: c.firstVisitAt,
     };
     const settings = parseSiteSettings({ settingsVersion: 1, siteId: "site_parity" })!;
-    const out = await evaluateDecision(env as unknown as Env, "site_parity", settings, PARITY_CONFIG, body, generateVisitorId(), c.firstVisitAt, c.now);
+    const out = await evaluateDecision(env as unknown as Env, "site_parity", settings, PARITY_CONFIG, body, generateVisitorId(), c.firstVisitAt, () => {}, c.now);
     expect(out!.experiments.map((e) => e.id)).toEqual(c.expected);
   });
 });

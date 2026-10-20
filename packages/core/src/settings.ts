@@ -53,6 +53,15 @@ export const SiteSettingsSchema = z
     // 設計書 §5.3 / D9 ② K7: 結果の収集の締め切り(runId → epoch ミリ秒)。この時刻以降のその run への参加・CV は edge が捨てる。
     // 無い run = 締め切りなし。bootstrap には焼かない(toRuntimeSettings に入れない)。値を書くのは D9 ③ の control
     resultsCollectUntil: z.record(z.string(), z.number().int().min(0)).optional(),
+    // 決定 63 (8)・plan12 K9: 新しい訪問者の Profile の 1 日の予算(edge が作った後に数えて止める)。無い = 予算なし(今までどおり)。
+    // instancePerDay は導入全体の上限で、Free のときだけ control が書く。bootstrap には焼かない(toRuntimeSettings に入れない)。
+    // optional の追加なので settingsVersion は据え置き(strict のため、このフィールドを書く前に edge を deploy する)
+    newProfileBudget: z
+      .strictObject({
+        perDay: z.number().int().min(1).max(100_000_000),
+        instancePerDay: z.number().int().min(1).max(100_000_000).optional(),
+      })
+      .optional(),
   })
   .refine((s) => s.visitorCookieName !== s.uuidCookieName, { message: "visitorCookieName and uuidCookieName must differ" })
   // spec §4(決定 1): Mode B の BYOID は Bridge フック(Phase 2)。MVP では併用不可(r2 CX-Medium-10)

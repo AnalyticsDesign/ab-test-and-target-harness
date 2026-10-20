@@ -164,5 +164,12 @@ describe("public strings carry no private design references", () => {
     noPrivateRef("write_frozen", JSON.stringify(await json(await call("PATCH", `/sites/${sid}`, { token, body: {} }))));
     await env.DB.prepare("update instance_settings set value = 'x' where key = 'writeFreeze'").run();
     noPrivateRef("write_frozen_unreadable", JSON.stringify(await json(await call("PATCH", `/sites/${sid}`, { token, body: {} }))));
+    await env.DB.prepare("delete from instance_settings where key = 'writeFreeze'").run();
+    // plan12: 古い管理画面の書き込みを断る 426 の封筒(代表の 4 種目)。形に合わない名乗りは版 0 = 古い
+    const tooOld = await call("PATCH", `/sites/${sid}`, { token, headers: { "x-wtt-client-version": "abc" }, body: {} });
+    expect(tooOld.status).toBe(426);
+    const tooOldBody = await json(tooOld);
+    expect(tooOldBody.error).toBe("client_too_old");
+    noPrivateRef("client_too_old", JSON.stringify(tooOldBody));
   });
 });

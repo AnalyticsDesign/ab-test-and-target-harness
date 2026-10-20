@@ -14,6 +14,9 @@ import { ApiError } from "./errors";
  */
 export const WRITE_FREEZE_KEY = "writeFreeze";
 
+/** 凍結の印が無いこと(Cron が wtt-control へ書く 1 文の条件に入れる SQL の断片。行の有無が正 = isWriteFrozen と同じ判定)。Cron の書き込みはすべてこれを使う */
+export const NOT_FROZEN_SQL = `NOT EXISTS (SELECT 1 FROM instance_settings WHERE key = '${WRITE_FREEZE_KEY}')`;
+
 /** reason = null は「行はあるが読めない」か「D1 が読めない」。since = 入れた時刻(epoch ミリ秒。D1 が読めないときは null) */
 export type WriteFreeze = { reason: string | null; until: string | null; since: number | null };
 
@@ -82,6 +85,7 @@ export function writeFrozenError(f: WriteFreeze, now: number): ApiError {
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
+ * 「書き込みの関門」を通さない要求(凍結と、plan12 の古い版の判定=client-version.ts が同じ一覧を使う)。
  * 決定 56 (4): 凍結中も通す要求。読み取り(GET / HEAD / OPTIONS)と、ログインまわり(/auth/* = Better Auth と Google ログインの 3 経路、
  * /break-glass/* = 非常口)だけ。**それ以外の書き込みはすべて断る**(一覧で通す側を持つので、後から足したルートも自動で対象に入る)。
  * ログインに伴うセッション・ユーザーの行の作成と、API キーの検証に伴う行の書き戻しは、この経路の内側か GET なので止まらない
@@ -90,7 +94,7 @@ const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 // 何も書かない POST(配信条件の what-if)。凍結中もエージェントが配信条件を確かめられるようにする(レビュー r1 CL-Medium-3 → ユーザー決定 2026-10-08)
 const READ_ONLY_POST = /^\/sites\/[^/]+\/evaluate$/;
 
-export function isFreezeExempt(method: string, pathname: string): boolean {
+export function isWriteGateExempt(method: string, pathname: string): boolean {
   const m = method.toUpperCase();
   if (!WRITE_METHODS.has(m)) return true;
   if (m === "POST" && READ_ONLY_POST.test(pathname)) return true;
@@ -99,7 +103,7 @@ export function isFreezeExempt(method: string, pathname: string): boolean {
 
 /** 書き込みの要求のときだけスイッチを読む(読み取りと訪問者への配信には負担をかけない) */
 export const writeFreezeGuard = createMiddleware<AppEnv>(async (c, next) => {
-  if (isFreezeExempt(c.req.method, new URL(c.req.url).pathname)) return next();
+  if (isWriteGateExempt(c.req.method, new URL(c.req.url).pathname)) return next();
   const f = await readWriteFreeze(c.get("db"));
   if (f) throw writeFrozenError(f, Date.now()); // Retry-After は errorHandler が extra.retryAfter から付ける
   await next();

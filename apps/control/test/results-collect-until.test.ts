@@ -168,7 +168,7 @@ describe("収集の締め切り(resultsCollectUntil)", () => {
     const sid = await recordingSite(owner);
     const runId = await startTest(owner, sid, "exp_t", { minDays: 7 });
     const before = (await kvSettings(sid)).resultsCollectUntil;
-    // 前進の settings の put が 1 回落ちる → 503。戻しの writeSiteRecords(旧行)も締め切りを付けて書く
+    // 前進の settings の put が 1 回落ちる → 503。戻しの putSiteRecords(旧行)も締め切りを付けて書く
     const res = await call("PATCH", `/sites/${sid}`, {
       token: owner.token,
       body: { decisionTimeoutMs: 900 },

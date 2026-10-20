@@ -76,13 +76,13 @@ Free では Cloudflare の課金通知が使えないので、ダッシュボー
 |---|---|---|---|
 | 個人、管理者 1 人 | `*.workers.dev`(既定) | 何もしない。ログインは Google アカウント(パスワードの経路は普段閉じている) | なし |
 | 小規模チーム | 自分のドメイン(`control.<ドメイン>`) | ゾーンの WAF Rate Limiting Rule | ゾーン 1 つ(edge と同じゾーンでよい)。Free では edge 用のルールと 1 本を分け合う。Free は条件にホスト名を使えないので、同じゾーンのほかのサイトが control と同じパスを使っていないかを先に確かめる([デプロイガイド 7.2](deploy.md#72-2-waf-rate-limiting-rules)) |
-| 外部エージェントに叩かせる、到達自体を絞りたい | 自分のドメイン | Cloudflare Access(50 ユーザーまで無料) | Zero Trust の設定。管理画面(admin Worker)の BFF はサービストークンで通す(対応は今後)。管理画面自体に Access を掛ける手順はデプロイガイド 4.5 |
+| 外部エージェントに叩かせる、到達自体を絞りたい | 自分のドメイン | Cloudflare Access(50 ユーザーまで無料) | Zero Trust の設定。エージェントはサービストークンを付ける。管理画面(admin Worker)から control への通信は service binding で、Access を経由しないので、admin には要らない。管理画面自体に Access を掛ける手順はデプロイガイド 4.5 |
 
 自分のドメインを使う 2 つの守りは実機で検証していない。詳しくは[デプロイガイド 7 節](deploy.md#7-無認証入口の防御)。後から切り替えても、ユーザー・API キー・公開履歴はそのまま使える。
 
 管理画面へのログインはどの構成でも **Google アカウント**で、入れるのは招待されたメールアドレスだけ。メール + パスワードの経路は普段閉じているので、**総当たりの標的になるパスワード入力が無い**(Google でログインできなくなったときだけ開ける手順が[デプロイガイド 8 節](deploy.md#8-非常時の入り方)にある)。本人確認と多要素認証は Google 側に寄るので、**管理画面に入る Google アカウントでは 2 段階認証を有効にする**。用意するものは Google の OAuth クライアント 1 つ(クライアント ID と クライアント シークレット。[デプロイガイド 3.3](deploy.md#33-secrets))。
 
-**管理画面(admin)** は control とは別の Worker として Cloudflare Workers に置く(既定は `https://wtt-admin.<アカウントのサブドメイン>.workers.dev`)。自分のドメインに載せると招待・リセットリンクの見た目が整い、Access / WAF をゾーンで掛けられる(`admin_address: custom`)。運用者の PC でのローカル実行は開発用で、導入の選択肢ではない。
+**管理画面(admin)** は control とは別の Worker として Cloudflare Workers に置く(既定は `https://wtt-admin.<アカウントのサブドメイン>.workers.dev`)。admin は control を service binding(同じ Cloudflare アカウントの Worker 同士の内部の接続)で呼ぶので、**admin と control は同じ Cloudflare アカウントに置く**。この接続は control のゾーンを経由しないので、control に掛けた WAF・Access の対象にならず、ログインの回数は control が利用者の IP ごとに数える。自分のドメインに載せると招待・リセットリンクの見た目が整い、Access / WAF をゾーンで掛けられる(`admin_address: custom`)。運用者の PC でのローカル実行は開発用で、導入の選択肢ではない。
 
 ## 5. 付加機能(問い 4)
 

@@ -1,6 +1,7 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { API_CONTRACT_VERSION, CLIENT_VERSION_HEADER } from "@wtt/core";
+import { API_CONTRACT_VERSION, CLIENT_IP_HEADER, CLIENT_VERSION_HEADER, lowerClientVersion } from "@wtt/core";
+import { controlBinding } from "./control-binding";
 import type { SessionUser } from "./types";
 
 /**
@@ -14,16 +15,70 @@ export function controlUrl(): string {
   return (process.env[key] ?? "http://localhost:8788").replace(/\/+$/, "");
 }
 
+export const SESSION_COOKIE = "wtt_session";
+
+/** control への要求の名乗り。版(x-wtt-client-version)と接続元 IP(x-wtt-client-ip)。付けるのは controlRequest だけ */
+export type ControlRequestInit = RequestInit & {
+  /** 利用者の接続元 IP。null / 未指定なら x-wtt-client-ip を付けない(空の値は送らない) */
+  clientIp?: string | null;
+  /** 名乗る版。未指定ならこの admin の版(サーバー側の呼び出し)。ブラウザから受けた要求は forwardedFrom(req) の値を渡す */
+  clientVersion?: number;
+};
+
 /**
- * backlog D13 / 決定 56 (1): control へのすべての要求で、この admin がビルドされた時点の API 契約の版を名乗る。
- * ブラウザではなく BFF が付ける(古いのは BFF 自身で、ブラウザが名乗る値は信用できない)。control を呼ぶ fetch はすべてこれを headers に混ぜる
- * (漏れは test/control-headers.test.ts が止める)
+ * control を呼ぶ唯一の入口(plan12 K8。ほかの場所に fetch を書くと test/control-headers.test.ts が落ちる)。
+ * - 版(backlog D13 / 決定 56 (1)・plan12 K3)と接続元 IP は、ここで付け直す。呼び出し元の headers に同じ名前があっても上書き・削除する
+ *   (ブラウザが名乗った x-wtt-client-ip を control に渡さない。control の BFF の入口はこの値を接続元 IP として信じる)
+ * - binding(wrangler.jsonc の services)があれば `env.CONTROL.fetch`、無い構成(手元の `next dev` を含む)だけ公開 URL の fetch。
+ *   binding があるのに throw したら null(呼び出し元は 502 control_unreachable にする)で、公開 URL には戻さない
+ *   (黙って戻すと、利用者ごとのレート制限の枠が気づかれずに全員 1 枠に戻るため)
+ * - 届かなかったときは throw せず null を返す。binding の相手が無いときに返る 503 などの応答は、そのまま返す(手を加えない)
  */
-export function clientVersionHeaders(): Record<string, string> {
-  return { [CLIENT_VERSION_HEADER]: String(API_CONTRACT_VERSION) };
+export async function controlRequest(path: string, init: ControlRequestInit = {}): Promise<Response | null> {
+  const { clientIp, clientVersion = API_CONTRACT_VERSION, ...rest } = init;
+  const binding = await controlBinding();
+  // ヘッダーの組み立ても try の中に置く: 利用者が入力した値(初回セットアップの x-setup-token など)に改行や全角の文字が
+  // 入っていると `new Headers` / `set` が同期で TypeError を投げる。投げさせると Route Handler が封筒でない 500 になるので、
+  // 届かないときと同じ null(= 呼び出し元の 502 の封筒)にする
+  try {
+    const headers = new Headers(rest.headers);
+    headers.set(CLIENT_VERSION_HEADER, String(clientVersion));
+    headers.delete(CLIENT_IP_HEADER);
+    if (clientIp) headers.set(CLIENT_IP_HEADER, clientIp);
+    const url = `${controlUrl()}${path}`;
+    const requestInit: RequestInit = { ...rest, headers, cache: "no-store" };
+    return binding ? await binding.fetch(new Request(url, requestInit)) : await fetch(url, requestInit);
+  } catch {
+    return null;
+  }
 }
 
-export const SESSION_COOKIE = "wtt_session";
+/**
+ * BFF が受けた要求の接続元 IP。Cloudflare が付ける cf-connecting-ip だけを見る(Cloudflare が接続元で上書きするのでブラウザは偽れない)。
+ * ブラウザが名乗れる x-wtt-client-ip は見ない。空なら null(手元の開発など、Cloudflare を通らない要求)
+ */
+export function clientIpOf(headers: Headers): string | null {
+  const ip = headers.get("cf-connecting-ip")?.trim();
+  return ip ? ip : null;
+}
+
+/**
+ * ブラウザから受けた要求を control へ渡すときの名乗り(Route Handler 用。controlRequest の init に混ぜる)。
+ * 版は自分とブラウザの小さいほう(plan12 K3): admin を更新した後も開いたままの古いタブは名乗らない = 0 になり、
+ * その書き込みを control が 426 で止められる。宛先が判定の対象外(/auth/* など)なら 0 でも困らない
+ */
+export function forwardedFrom(req: Request): { clientIp: string | null; clientVersion: number } {
+  return { clientIp: clientIpOf(req.headers), clientVersion: lowerClientVersion(API_CONTRACT_VERSION, req.headers.get(CLIENT_VERSION_HEADER)) };
+}
+
+/** Server Component から見た、いま描いている画面の要求の接続元 IP(読めなければ null) */
+export async function requestClientIp(): Promise<string | null> {
+  try {
+    return clientIpOf(await headers());
+  } catch {
+    return null;
+  }
+}
 
 /**
  * control に届かなかったときの封筒。BFF の応答は必ず封筒である(= `lib/client.ts` の `api` が
@@ -34,15 +89,15 @@ export const controlUnreachable = (): Response =>
 
 /**
  * サーバーコンポーネント / Route Handler から control を呼ぶ。Cookie のセッショントークンを Bearer にする(spec §13.4)。
+ * ブラウザを介さない呼び出しなので、版はこの admin の版をそのまま名乗る(plan12 K3)。接続元 IP は画面の要求の cf-connecting-ip。
  * control に届かない場合も throw せず `{ status: 502 }` を返す(サーバーコンポーネントを 500 で落とさない)
  */
 export async function controlFetch<T>(path: string, init: RequestInit = {}): Promise<{ status: number; data: T }> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   const headers = new Headers(init.headers);
-  for (const [k, v] of Object.entries(clientVersionHeaders())) headers.set(k, v);
   if (token) headers.set("authorization", `Bearer ${token}`);
   if (init.body && typeof init.body === "string") headers.set("content-type", "application/json");
-  const res = await fetch(`${controlUrl()}${path}`, { ...init, headers, cache: "no-store" }).catch(() => null);
+  const res = await controlRequest(path, { ...init, headers, clientIp: await requestClientIp() });
   if (!res) return { status: 502, data: null as T };
   const data = (res.status === 204 ? null : await res.json().catch(() => null)) as T;
   return { status: res.status, data };
@@ -117,10 +172,13 @@ export const badOrigin = (): Response =>
   Response.json({ error: "bad_origin", message: "この要求の送信元は受け付けられません", hint: "管理画面を開き直してから操作してください" }, { status: 403 });
 
 /**
- * Better Auth(control の `/auth/*`)は origin を検証する。サーバー間 fetch には Sec-Fetch-* が自動で付くため、
- * origin が無いと 403 MISSING_OR_NULL_ORIGIN になる。control の trustedOrigins は AB_ADMIN_URL(= admin のオリジン)。
- * **ブラウザが付けた Origin をそのまま渡すだけ**にして、BFF が admin を名乗って control の CSRF 検査を
- * 素通りさせない(無ければ何も付けず、control 側に fail-closed で弾かせる)
+ * ブラウザが付けた Origin を control に渡す。control の trustedOrigins は AB_ADMIN_URL(= admin のオリジン)で、
+ * 招待の受諾の Bearer 無しの分岐はこの Origin を照合する。**ブラウザが付けた Origin をそのまま渡すだけ**にして、
+ * BFF が admin を名乗って control の照合を素通りさせない(無ければ何も付けない)。
+ * Better Auth(control の `/auth/*`)の origin の検査は、Cookie も Sec-Fetch-* も無い要求では行われない。
+ * BFF は Cookie ではなく Bearer で呼び、service binding・サーバー間の fetch のどちらにも Sec-Fetch-* は付かない
+ * (手元で確かめた)ので、ログイン系の経路では control 側の検査は効かない。門は BFF の requireOrigin / originVerdict。
+ * Sec-Fetch-* を BFF が作って付けることはしない(ブラウザの値ではないものを名乗らない)
  */
 export function originHeader(req: Request): Record<string, string> {
   const origin = browserOrigin(req);
@@ -131,7 +189,8 @@ export function originHeader(req: Request): Record<string, string> {
  * 状態を変える session ルート(login / setup / accept-invite)の Origin ゲート。
  * fetch() の POST は必ず Origin を付け、他サイトからの form POST にも現代のブラウザは Origin を付けるので、
  * 「Origin が無い」= ブラウザ以外か、CSRF 検査を外しにきた要求 → 403。有るなら admin 自身と一致していること(`originVerdict`)。
- * control 側の照合(Better Auth の trustedOrigins)は `/auth/*` だけに効き、招待受諾は通らない。
+ * control 側の Better Auth の origin の検査は、BFF の要求(Bearer・Sec-Fetch-* 無し)では行われない(originHeader の注記)ので、
+ * login / setup の門はここだけ。
  * 招待受諾の Bearer 無し分岐は、ここの門に加えて control も転送された Origin を AB_ADMIN_URL と照合する(二重の門)
  */
 export function requireOrigin(req: Request): Response | null {
@@ -144,7 +203,8 @@ export function requireOrigin(req: Request): Response | null {
 /**
  * logout だけの例外。`<form method="post">` からの呼び出しで Origin が無かった場合でも control 側の
  * セッションは失効させたいので admin 自身のオリジンを名乗る(logout の CSRF は「勝手にログアウトさせられる」だけで、
- * Cookie の削除はどのみち起きる。逆に失効させ損ねると盗まれたトークンが 7 日間生き続ける)
+ * Cookie の削除はどのみち起きる。逆に失効させ損ねると盗まれたトークンが 7 日間生き続ける)。
+ * いまの BFF の要求には Better Auth の origin の検査が掛からない(originHeader の注記)が、検査が効く形に変わっても失効が止まらないよう名乗り続ける
  */
 export function originOrSelfHeader(req: Request): Record<string, string> {
   return { origin: browserOrigin(req) ?? selfOrigin(req) };

@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { api, describeError, fieldErrors } from "@/lib/client";
+import { budgetFromInput, NEW_PROFILE_BUDGET_HINT, NEW_PROFILE_BUDGET_LABEL } from "@/lib/new-profile-budget";
 import { capacityWarning, cspNotice, resultsToggleNotice, splitCode } from "@/lib/results-settings";
 import type { AnalyticsSettings, Site } from "@/lib/types";
 import { replaceParam } from "@/lib/url-state";
@@ -139,6 +140,8 @@ export function SiteSettingsForm({
       resultsRetentionDays: Number(fd.get("resultsRetentionDays")),
       timezone: fd.get("timezone"),
       decisionTimeoutMs: Number(fd.get("decisionTimeoutMs")),
+      // 空欄 = null で、使用状況の設定のプランの既定に戻す
+      newProfileBudgetPerDay: budgetFromInput(fd.get("newProfileBudgetPerDay")),
       visitorCookieName,
       uuidCookieEnabled: fd.get("uuidCookieEnabled") === "on",
       uuidCookieName: fd.get("uuidCookieName"),
@@ -233,6 +236,9 @@ export function SiteSettingsForm({
               </Field>
               <Field label="decisionTimeoutMs(300〜3000)" error={fields.decisionTimeoutMs}>
                 <input name="decisionTimeoutMs" type="number" min={300} max={3000} defaultValue={site.decisionTimeoutMs} disabled={ro} />
+              </Field>
+              <Field label={NEW_PROFILE_BUDGET_LABEL} hint={NEW_PROFILE_BUDGET_HINT} error={fields.newProfileBudgetPerDay}>
+                <input name="newProfileBudgetPerDay" type="number" min={1} max={100000000} step={1} defaultValue={site.newProfileBudgetPerDay ?? ""} placeholder="空欄 = プランの既定" disabled={ro} />
               </Field>
               <h3>結果を記録する</h3>
               <p className="muted">テストの参加者と目標の達成を、この導入のデータベースに記録します。記録するのは、有効にした後に開始したテストだけです</p>

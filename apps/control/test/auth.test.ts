@@ -5,8 +5,10 @@ import { HTTPException } from "hono/http-exception";
 import { app } from "../src/index";
 import { errorHandler } from "../src/errors";
 import { getAuth } from "../src/auth";
-import { alignToWindow, AUTH_RATE_LIMIT, BREAK_GLASS, call, json, setupOwner, SETUP_TOKEN, uniqueEmail, expectEnvelope, failingD1Insert, failingD1Query, setupReq, googleSignIn } from "./helpers";
+import { alignToWindow, AUTH_RATE_LIMIT, BREAK_GLASS, call, json, setupOwner, SETUP_TOKEN, uniqueEmail, expectEnvelope, failingD1Insert, failingD1Query, setupReq, googleSignIn, testEnv } from "./helpers";
 import type { Env } from "../src/env";
+import { breakGlassSweep } from "../src/cron/break-glass-sweep";
+import { runCron } from "../src/cron/runner";
 
 describe("setup and sign-up gate", () => {
   it("setup creates owner and workspace, then /me works with bearer", async () => {
@@ -35,6 +37,18 @@ describe("setup and sign-up gate", () => {
     // 名前を省くとメールの @ より前。ログインは Google
     const { token } = await googleSignIn(email);
     expect(await json(await call("GET", "/me", { token: token! }))).toMatchObject({ email, name: email.split("@")[0] });
+  });
+  it("setup leaves no credential row for the owner, so a closed-door sweep keeps the owner's Google session (plan12 K13)", async () => {
+    const email = uniqueEmail("owner");
+    const res = await call("POST", "/setup", { headers: { "x-setup-token": SETUP_TOKEN }, body: { email, workspaceName: "W" } });
+    expect(res.status).toBe(201);
+    const { userId } = await json<{ userId: string }>(res);
+    const credentialRows = await env.DB.prepare(`select count(*) as n from account where "providerId" = 'credential' and "userId" = ?`).bind(userId).first<{ n: number }>();
+    expect(credentialRows?.n).toBe(0);
+    const { token } = await googleSignIn(email);
+    // トークンが無い(非常口が閉じている)状態で掃除のジョブを動かしても、オーナーのセッションは残る
+    expect(await runCron(testEnv, Date.now(), [breakGlassSweep])).toEqual([{ job: "break-glass-sweep", outcome: "ran" }]);
+    expect((await call("GET", "/me", { token: token! })).status).toBe(200);
   });
   it("setup rejects a password field", async () => {
     const res = await call("POST", "/setup", { headers: { "x-setup-token": SETUP_TOKEN }, body: { email: uniqueEmail(), workspaceName: "W", password: "password123" } });

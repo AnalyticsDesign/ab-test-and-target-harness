@@ -13,7 +13,8 @@ import { apiGuard } from "../src/results/guard";
 import type { ReadSession } from "../src/results/read-session";
 import { computeSnapshot } from "../src/results/snapshot";
 import { hourOf } from "../src/results/time";
-import { putSettingsRecord, settingsRecord, siteToSettings } from "../src/site-settings";
+import { composeSettingsRecord, putSettingsRecord, siteToSettings } from "../src/site-settings";
+import { siteSettingsRefreshJob } from "../src/cron/site-settings-refresh";
 import { call, createExperiment, experimentRow, failingKv, fakeDeployer, fakeResultsBudget, fakeResultsHealth, json, RESULTS_STORE, seedResults, setupOwner, siteRow, testEnv, testEnvWith } from "./helpers";
 import {
   backdate,
@@ -605,9 +606,48 @@ describe("results-collect-until(K11)", () => {
     expect((await siteRow(sid)).collect_until_dirty).toBe(0);
     expect(await runCron(cronEnv(), Date.now(), [resultsCollectUntilJob])).toEqual([{ job: "results-collect-until", outcome: "ran" }]);
     const kv = await kvSettings(sid);
-    expect(kv).toEqual(JSON.parse(JSON.stringify({ ...siteToSettings(await siteRow(sid)), resultsCollectUntil: table })));
+    expect(kv).toEqual(JSON.parse(JSON.stringify({ ...siteToSettings(await siteRow(sid)), newProfileBudget: { perDay: 20_000, instancePerDay: 20_000 }, resultsCollectUntil: table })));
     expect(Object.keys(kv.resultsCollectUntil as object)).toEqual([runId]);
     expect(kv.consentMode).toBe("required");
+  });
+
+  test("the plan-change rewrite (refreshSiteRecords) keeps resultsCollectUntil on a run-bearing site", async () => {
+    const owner = await setupOwner();
+    const sid = await recordingSite(owner);
+    const runId = await startTest(owner, sid, "exp_t");
+    const table = await collectUntilMap(getDb(env), sid);
+    expect(Object.keys(table)).toEqual([runId]);
+    const res = await call("PATCH", "/usage/settings", { token: owner.token, body: { cloudflarePlan: "paid" }, envOverride: RESULTS_STORE });
+    expect(res.status).toBe(200);
+    const kv = await kvSettings(sid);
+    expect(kv.newProfileBudget).toEqual({ perDay: 200_000 });
+    expect(kv.resultsCollectUntil).toEqual(table);
+  });
+
+  test("a run-bearing site keeps newProfileBudget (and its deadlines) after results-collect-until and site-settings-refresh run", async () => {
+    // 締め切りの Cron が予算なしの記録を書き戻すと、site-settings-refresh と 15 分ごとに書き合う(controller Ruling 1)
+    const owner = await setupOwner();
+    const sid = await recordingSite(owner);
+    const runId = await startTest(owner, sid, "exp_t");
+    const budget = { perDay: 20_000, instancePerDay: 20_000 };
+    expect((await kvSettings(sid)).newProfileBudget).toEqual(budget);
+    // 締め切りの表がずれて書き直しが走る状態にする
+    await env.DB.prepare("update sites set collect_until_dirty = 1 where id = ?").bind(sid).run();
+    await env.CONFIG_KV.put(kvKeys.settings(sid), JSON.stringify({ ...siteToSettings(await siteRow(sid)), resultsCollectUntil: { stale: 1 } }));
+    expect(await runCron(cronEnv(), Date.now(), [resultsCollectUntilJob])).toEqual([{ job: "results-collect-until", outcome: "ran" }]);
+    const kv = await kvSettings(sid);
+    expect(kv.newProfileBudget).toEqual(budget);
+    expect(Object.keys(kv.resultsCollectUntil as object)).toEqual([runId]);
+    // プランを Paid に変えた後は、collect-until が Paid の予算を書く(Free の予算に戻さない)
+    await env.DB.prepare("insert into instance_settings (key, value, updated_at, updated_by) values ('cloudflarePlan', '\"paid\"', 1, null)").run();
+    await env.CONFIG_KV.put(kvKeys.settings(sid), JSON.stringify({ ...siteToSettings(await siteRow(sid)), resultsCollectUntil: { stale: 1 } }));
+    await runCron(cronEnv(), Date.now(), [resultsCollectUntilJob]);
+    expect((await kvSettings(sid)).newProfileBudget).toEqual({ perDay: 200_000 });
+    // site-settings-refresh と書き合わない(同じ形に合っているので変わらない)
+    await runCron(cronEnv(), at("2026-12-01T00:30:00Z"), [siteSettingsRefreshJob]);
+    const after = await kvSettings(sid);
+    expect(after.newProfileBudget).toEqual({ perDay: 200_000 });
+    expect(Object.keys(after.resultsCollectUntil as object)).toEqual([runId]);
   });
 });
 
@@ -1036,7 +1076,7 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
         .run();
       sites.push(sid);
     }
-    // 1. 凍結中: 5 本とも見送る(results-account-guard は wtt-control に書かないので動く)
+    // 1. 凍結中: 9 本のうち wtt-control に書く 8 本とも見送る(results-account-guard は wtt-control に書かないので動く)
     await freeze();
     const report = await runCron(cronEnv(), at("2026-11-20T23:00:00Z"), CRON_JOBS);
     expect(report).toEqual([
@@ -1046,6 +1086,9 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
       { job: "results-daily", outcome: "skipped_frozen" },
       { job: "results-capacity", outcome: "skipped_frozen" },
       { job: "results-purge", outcome: "skipped_frozen" },
+      { job: "site-settings-refresh", outcome: "skipped_frozen" },
+      { job: "break-glass-sweep", outcome: "skipped_frozen" },
+      { job: "config-cleanup", outcome: "skipped_frozen" },
     ]);
     await env.DB.prepare("delete from instance_settings where key = 'writeFreeze'").run();
     // 2. 実行中の凍結: デプロイ専用の Worker の応答を待つ間に凍結 → 配信の確認は書かずに止まる。後のジョブも最初の書き込みの前に止まる
@@ -1089,10 +1132,11 @@ describe("fix round 1: 共有の関数・孤児の確かめ直し・打ち切り
     const owner = await setupOwner();
     const sid = await recordingSite(owner);
     const row = await siteRow(sid);
-    expect(settingsRecord(row, {}).record).toEqual(siteToSettings(row));
-    expect(settingsRecord(row, { r1: 5 }).record).toEqual({ ...siteToSettings(row), resultsCollectUntil: { r1: 5 } });
-    await putSettingsRecord(testEnv, row, { r1: 5 });
-    expect(await kvSettings(sid)).toEqual(JSON.parse(JSON.stringify(settingsRecord(row, { r1: 5 }).record)));
+    const budget = { perDay: 20_000, instancePerDay: 20_000 };
+    expect(composeSettingsRecord(row, { plan: "free", collectUntil: {} })).toEqual({ ...siteToSettings(row), newProfileBudget: budget });
+    expect(composeSettingsRecord(row, { plan: "free", collectUntil: { r1: 5 } })).toEqual({ ...siteToSettings(row), newProfileBudget: budget, resultsCollectUntil: { r1: 5 } });
+    await putSettingsRecord(testEnv, row, { plan: "free", collectUntil: { r1: 5 } });
+    expect(await kvSettings(sid)).toEqual(JSON.parse(JSON.stringify(composeSettingsRecord(row, { plan: "free", collectUntil: { r1: 5 } }))));
   });
 
   test("Site の削除の queue の行は Site の確かめの分も見込み、purge の配分 16 を超えない", { timeout: 30_000 }, async () => {

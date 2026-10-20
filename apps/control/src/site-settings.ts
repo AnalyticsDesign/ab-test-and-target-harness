@@ -1,9 +1,13 @@
 import { sql } from "kysely";
 import { z } from "zod";
-import { AnalyticsSettingsSchema, DEFAULT_ANALYTICS, canonicalTimeZone, kvKeys, SITE_ID_RE, SiteSettingsSchema, type SiteSettings } from "@wtt/core";
+import {
+  AnalyticsSettingsSchema, DEFAULT_ANALYTICS, canonicalTimeZone, kvKeys, NEW_PROFILE_BUDGET_DEFAULTS, NEW_PROFILE_INSTANCE_PER_DAY_FREE, SITE_ID_RE, SiteSettingsSchema,
+  type NewProfileBudget, type SiteSettings,
+} from "@wtt/core";
 import { toStatement, type Db, type SiteRow } from "./db";
 import type { Env } from "./env";
 import { ApiError, validationFailed } from "./errors";
+import type { CloudflarePlan } from "./instance-settings";
 
 const HOST_RE = /^[a-z0-9.-]+$/;
 
@@ -30,7 +34,7 @@ export const SITE_PATCH_COLUMNS = [
   "retention_days", "consent_mode", "decision_timeout_ms",
   "visitor_cookie_name", "uuid_cookie_enabled", "uuid_cookie_name", "previous_cookie_names_json",
   "forget_on_revoke", "timezone", "analytics_json", "ga4_property_id", "bigquery_dataset",
-  "results_enabled", "results_retention_days", "updated_at",
+  "results_enabled", "results_retention_days", "new_profile_budget_per_day", "updated_at",
 ] as const satisfies readonly (keyof SiteRow)[];
 
 /** Kysely の `compile()`(`sql` / `parameters`)を D1 の prepared statement 配列に写す(batch = 1 トランザクション用) */
@@ -94,6 +98,15 @@ export const SitePatchSchema = z.strictObject({
     .max(365)
     .optional()
     .describe("結果の個票(参加者ごとの記録)の保持期間(日、7〜365。既定 90)。収集を終えてからこの日数を過ぎた個票を消す。判定した結果は消えない"),
+  // plan12 K10: KV の設定の記録にだけ載る(bootstrap には焼かない)ので、変えても公開も配信ファイルの出し直しも要らない
+  newProfileBudgetPerDay: z
+    .number()
+    .int()
+    .min(1)
+    .max(100_000_000)
+    .nullable()
+    .optional()
+    .describe("新しい訪問者の記録の上限(1 日あたり、1〜100,000,000)。履歴の条件を使うサイトで、1 日に新しく記録する訪問者の数の上限。超えた訪問者にもテストは表示されるが、その訪問の記録は残らない。1 時間あたりはこの値の 10% まで。null で使用状況の設定の Cloudflare のプランの既定(Free 20,000 / Paid 200,000)に戻す。Free では全サイトの合計にも 1 日 20,000 件の上限がある"),
   consentMode: z.enum(["implicit", "required"]).optional(),
   decisionTimeoutMs: z.number().int().optional(),
   visitorCookieName: z.string().optional(),
@@ -135,6 +148,7 @@ export function applySitePatch(row: SiteRow, patch: SitePatch, nowMs: number): {
   if (patch.forgetOnRevoke !== undefined) next.forget_on_revoke = patch.forgetOnRevoke ? 1 : 0;
   if (patch.resultsEnabled !== undefined) next.results_enabled = patch.resultsEnabled ? 1 : 0;
   if (patch.resultsRetentionDays !== undefined) next.results_retention_days = patch.resultsRetentionDays;
+  if (patch.newProfileBudgetPerDay !== undefined) next.new_profile_budget_per_day = patch.newProfileBudgetPerDay;
   if (patch.timezone !== undefined) {
     // 大文字小文字だけを一覧の綴りにそろえて保存する(asia/tokyo → Asia/Tokyo。別名は置き換えない)。オフセット形式は IANA 名ではないので受けない(plan ② P14)
     const tz = canonicalTimeZone(patch.timezone);
@@ -223,44 +237,57 @@ function settingsInput(row: SiteRow): unknown {
 }
 
 /**
- * KV の Site の設定の記録(kvKeys.settings)を書く唯一の口。siteToSettings(row) に収集の締め切りの表を足す(空なら項目を出さない)。
- * writeSiteRecords と、締め切りだけの書き直し(results/collect-until.ts の rewriteCollectUntil。host キーは変えない)が使う。
- * 例外はそのまま投げる。戻り値は siteToSettings(row)
+ * KV の Site の設定の記録に足す、siteToSettings(row) 以外の材料。
+ * plan = 使用状況の設定の Cloudflare のプラン(新しい訪問者の予算の既定と導入全体の上限が決まる)、collectUntil = 収集の締め切りの表(D9 ③)
  */
-export async function putSettingsRecord(env: Env, row: SiteRow, collectUntil: Record<string, number>): Promise<SiteSettings> {
-  const { settings, record } = settingsRecord(row, collectUntil);
+export type SettingsExtras = { plan: CloudflarePlan; collectUntil: Record<string, number> };
+
+/** 新しい訪問者の予算(plan12 K10)。サイトの上書きがあればそれ、無ければプランの既定。導入全体の上限は Free のときだけ(Paid は上限なし) */
+export function newProfileBudgetOf(row: SiteRow, plan: CloudflarePlan): NewProfileBudget {
+  return {
+    perDay: row.new_profile_budget_per_day ?? NEW_PROFILE_BUDGET_DEFAULTS[plan],
+    ...(plan === "free" ? { instancePerDay: NEW_PROFILE_INSTANCE_PER_DAY_FREE } : {}),
+  };
+}
+
+/**
+ * KV の Site の設定の記録の中身(書かない)。siteToSettings(row) に新しい訪問者の予算と、収集の締め切りの表(空なら項目を出さない)を足したもの。
+ * **KV の settings 記録の組み立てはここだけ**(putSettingsRecord と、KV の記録を D1 と比べる Cron — results-collect-until・site-settings-refresh — が使う)。
+ * siteToSettings(row) には足さない(bootstrap の焼き込み・デプロイ専用の Worker への入力・焼き直しの判定でも使うため)
+ */
+export function composeSettingsRecord(row: SiteRow, extras: SettingsExtras): SiteSettings {
+  return {
+    ...siteToSettings(row),
+    newProfileBudget: newProfileBudgetOf(row, extras.plan),
+    ...(Object.keys(extras.collectUntil).length > 0 ? { resultsCollectUntil: extras.collectUntil } : {}),
+  };
+}
+
+/** composeSettingsRecord を JSON に通した形(KV に入る形。undefined の項目は消える)。KV の記録と canonicalJson で比べる Cron が使う */
+export const settingsRecordForCompare = (row: SiteRow, extras: SettingsExtras): unknown => JSON.parse(JSON.stringify(composeSettingsRecord(row, extras)));
+
+/**
+ * KV の Site の設定の記録(kvKeys.settings)を書く唯一の口。composeSettingsRecord(row, extras) を put する。
+ * putSiteRecords と、書き直し(results/collect-until.ts の rewriteCollectUntil・site-records.ts の refreshSiteRecords。host キーは変えない)が使う。
+ * 例外はそのまま投げる。戻り値は書いた記録(hosts は siteToSettings(row) と同じ)
+ */
+export async function putSettingsRecord(env: Env, row: SiteRow, extras: SettingsExtras): Promise<SiteSettings> {
+  const record = composeSettingsRecord(row, extras);
   await env.CONFIG_KV.put(kvKeys.settings(row.id), JSON.stringify(record));
-  return settings;
+  return record;
 }
 
 /**
- * KV の Site の設定の記録の中身(書かない)。settings = siteToSettings(row)、record = それに締め切りの表を足したもの(空なら項目を出さない)。
- * putSettingsRecord と、KV の記録を D1 と比べる Cron(results-collect-until)が使う
+ * spec §5.4「設定の配送」: settings record と、新しい hosts の host キーを KV に書く(activation = KV put)。**消さない**
+ * (外した host のキーは D1 の確定の後に releaseHosts で消す。plan12 K14 (c))。
+ * D9 ③(K11): run ごとの収集の締め切り(`collectUntilMap(db, siteId)` の表)と、plan12 K10: Cloudflare のプラン(新しい訪問者の予算の既定)を
+ * extras で受けて settings に足して書く(composeSettingsRecord)。
+ * KV の settings を書くのはこの関数と putSettingsRecord だけなので、呼び出し元は必ず今の表とプランを渡す(渡し忘れると Site の保存で締め切りか予算が消える)
  */
-export function settingsRecord(row: SiteRow, collectUntil: Record<string, number>): { settings: SiteSettings; record: SiteSettings } {
-  const settings = siteToSettings(row);
-  return { settings, record: Object.keys(collectUntil).length > 0 ? { ...settings, resultsCollectUntil: collectUntil } : settings };
-}
-
-/**
- * spec §5.4「設定の配送」: settings record と host キーを KV に書く(activation = KV put)。削除された host のキーは消す。
- * D9 ③(K11): run ごとの収集の締め切り(`collectUntilMap(db, siteId)` の表)を settings に足して書く(空なら項目を出さない)。
- * siteToSettings(row) には足さない(bootstrap の焼き込み・デプロイ専用の Worker への入力・焼き直しの判定でも使うため)。
- * KV の settings を書くのはこの関数と putSettingsRecord だけなので、呼び出し元は必ず今の表を渡す(渡し忘れると Site の保存で締め切りが消える)
- */
-export async function writeSiteRecords(env: Env, row: SiteRow, previousHosts: string[], collectUntil: Record<string, number>): Promise<void> {
+export async function putSiteRecords(env: Env, row: SiteRow, extras: SettingsExtras): Promise<void> {
   try {
-    const settings = await putSettingsRecord(env, row, collectUntil);
+    const settings = await putSettingsRecord(env, row, extras);
     for (const h of settings.hosts) await env.CONFIG_KV.put(kvKeys.host(h), row.id);
-    // 消すのは「自 Site を指している」host キーだけ(他 Site の mapping を巻き込まない)。
-    // KV に CAS が無いため get → delete には TOCTOU が残る(get と delete の間に別 Site が
-    // その mapping を claim すると、その Site の host キーを消してしまう)。既知の残留で、
-    // 巻き込まれた Site の次の PATCH が同じ host を put し直して自己修復する
-    for (const h of previousHosts)
-      if (!settings.hosts.includes(h)) {
-        const cur = await env.CONFIG_KV.get(kvKeys.host(h));
-        if (cur === row.id) await env.CONFIG_KV.delete(kvKeys.host(h));
-      }
   } catch (e) {
     // message は利用者向けの日本語文言に固定する(describeError がそのまま画面に出す)。生の例外文字列は detail に載せ、
     // errorHandler が 5xx をサーバー側にも記録する(routes/sites.ts の host_in_use と同じ形)
@@ -268,15 +295,32 @@ export async function writeSiteRecords(env: Env, row: SiteRow, previousHosts: st
   }
 }
 
-/** Site 削除時の KV 後始末(settings / 自 Site を指す host / active / 予約済み version の config) */
-export async function deleteSiteRecords(env: Env, row: SiteRow, versions: number[]): Promise<void> {
-  await env.CONFIG_KV.delete(kvKeys.settings(row.id));
-  for (const h of JSON.parse(row.hosts_json) as string[]) {
+/**
+ * 外した host の KV の mapping(`host:<h>`)を消す。**D1 の変更が確定した後**に呼ぶ(plan12 K14 (c))。
+ * D1 の site_hosts でその host を持つ Site が**自 Site でも他 Site でも**無いときだけ、KV の値を読み、自 Site を指していれば消す。
+ * 他の Site が D1 で持っていれば(別の Site が取った直後など)KV が古い値を返しても消さない。
+ * 保証の範囲: D1 で確かめてから KV を消すまでの間に別の Site が取る競合は残る(KV に CAS が無いため)。
+ * 取られた Site の次の PATCH が同じ host を put し直して自己修復する。例外はそのまま投げる(呼び出し元が D1 確定後の扱いを決める)
+ */
+export async function releaseHosts(env: Env, db: Db, siteId: string, hosts: string[]): Promise<void> {
+  if (hosts.length === 0) return;
+  const owned = new Set((await db.selectFrom("site_hosts").select("host").where("host", "in", hosts).execute()).map((r) => r.host));
+  for (const h of hosts) {
+    if (owned.has(h)) continue;
     const cur = await env.CONFIG_KV.get(kvKeys.host(h));
-    if (cur === row.id) await env.CONFIG_KV.delete(kvKeys.host(h));
+    if (cur === siteId) await env.CONFIG_KV.delete(kvKeys.host(h));
   }
+}
+
+/**
+ * Site 削除時の KV 後始末(settings / active / 予約済み version の config / 自 Site を指す host)。
+ * **D1 の行を消した後**に呼ぶ(host は releaseHosts が D1 に持ち主が居ないことを確かめてから消す)
+ */
+export async function deleteSiteRecords(env: Env, db: Db, row: SiteRow, versions: number[]): Promise<void> {
+  await env.CONFIG_KV.delete(kvKeys.settings(row.id));
   await env.CONFIG_KV.delete(kvKeys.active(row.id));
   for (const v of versions) await env.CONFIG_KV.delete(kvKeys.config(row.id, v));
+  await releaseHosts(env, db, row.id, JSON.parse(row.hosts_json) as string[]);
 }
 
 /** R2 の `sites/<sid>/` 配下をすべて削除する(ベストエフォート。失敗しても Site 削除は成功させ、残骸は手動で消す(control-deploy の手順は廃止)) */

@@ -14,9 +14,9 @@ describe("完成の基準 1 の edge 半分(runtime 半分は packages/runtime/t
     // runtime が送るのと同じ body(UA の判定は runtime)
     const bodyAt = (url: string) => ({ v: 1, url, referrer: "", device: detectDevice(c.userAgent), browser: detectBrowser(c.userAgent), os: detectOs(c.userAgent), viewport: { w: 390, h: 800 }, firstVisitAt: null });
     // 料金ページの閲覧を、実際の decision で(その時刻の判定として)積む
-    for (const t of c.pricingViews) await evaluateDecision(e, "site_c1", settings, COMPLETION_1_CONFIG, bodyAt(PRICING_URL), vid, null, t);
+    for (const t of c.pricingViews) await evaluateDecision(e, "site_c1", settings, COMPLETION_1_CONFIG, bodyAt(PRICING_URL), vid, null, () => {}, t);
     if (c.leadAt !== null) await profileStub(e, "site_c1", vid).recordGoal("g_lead", 90, Math.floor(c.leadAt / 1000));
-    const out = await evaluateDecision(e, "site_c1", settings, COMPLETION_1_CONFIG, bodyAt(COMPLETION_1_URL), vid, null, c.now);
+    const out = await evaluateDecision(e, "site_c1", settings, COMPLETION_1_CONFIG, bodyAt(COMPLETION_1_URL), vid, null, () => {}, c.now);
     expect(out!.experiments.map((x) => x.id)).toEqual(c.expected ? ["exp_c1"] : []);
   });
 });

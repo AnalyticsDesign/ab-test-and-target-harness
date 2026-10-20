@@ -1,19 +1,20 @@
 // apps/control/src/cron/results-jobs.ts
 import { sql } from "kysely";
-import { kvKeys, nextUtcMidnight, utcDay } from "@wtt/core";
+import { nextUtcMidnight, utcDay } from "@wtt/core";
 import { DEFAULT_PLAN } from "@wtt/stats";
-import type { ExperimentRow, SiteRow } from "../db";
+import type { ExperimentRow } from "../db";
 import type { Env } from "../env";
 import { capacityLevel, loadPlan, mergeStoredPlan, type LoadedPlan } from "../evaluation-plan";
 import { checkReach, collectUntilMap } from "../results/collect-until";
-import { canonicalJson, confirmDeliveries, sitesNeedingDeliveryConfirmation } from "../results/delivered";
+import { confirmDeliveries, sitesNeedingDeliveryConfirmation } from "../results/delivered";
 import { purgeRun, PURGE_DELETE_MAX_ROWS } from "../results/purge";
 import { openRead, readEstimate } from "../results/read-session";
 import { evaluationOf } from "../results/report";
 import { ensureSnapshot, snapshotTarget } from "../results/snapshot";
-import { putSettingsRecord, settingsRecord } from "../site-settings";
-import { WRITE_FREEZE_KEY } from "../write-freeze";
+import { readCloudflarePlan, type CloudflarePlan } from "../instance-settings";
+import { NOT_FROZEN_SQL as NOT_FROZEN } from "../write-freeze";
 import { CronFrozen, type CronContext, type CronJob } from "./runner";
+import { syncSettingsRecord } from "./sync-settings-record";
 
 /**
  * D9 ③(plan ③ の K17・K18・K12・K11・K13・K14・K15・K24、設計書 §9.4・§6.8・§6.9): 結果の Cron のジョブ 5 本。
@@ -39,9 +40,6 @@ import { CronFrozen, type CronContext, type CronJob } from "./runner";
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
-
-/** 凍結の印(instance_settings の writeFreeze の行)が無いこと。自前の書き込みの条件にする(write-freeze.ts の「行の有無が正」) */
-const NOT_FROZEN = `NOT EXISTS (SELECT 1 FROM instance_settings WHERE key = '${WRITE_FREEZE_KEY}')`;
 
 /** 凍結の印を条件にした書き込みが 0 行だったとき、凍結かを確かめて投げる(凍結でなければ何もしない = 対象の行が無かった) */
 async function throwIfFrozen(ctx: CronContext, changes: number | undefined): Promise<void> {
@@ -236,13 +234,12 @@ export const resultsDeliveryJob: CronJob = {
 // ---------------------------------------------------------------------------------------------
 // results-collect-until
 
-/** 1 Site の見込み(締め切りの表の計算 1 + 書き直す前の凍結の確かめ 1 + 印の 0 戻し 1) */
+/**
+ * 1 Site の見込み(締め切りの表の計算 1 + 書き直す前の凍結の確かめ 1 + 印の 0 戻し 1)。
+ * plan12 K10 でプランの読み取り 1 が足された(1 回の実行の最初の 1 Site だけ = 実際は 4)。見込みと配分表は変えない
+ * (増えた分は runner が全体の残りから引くので、後ろのジョブの配分が実行の時点で少し減るだけ)
+ */
 const COLLECT_UNTIL_SITE_COST = 3;
-
-/** putSettingsRecord が書く記録と同じ形(比べるため。undefined の項目は JSON で消える) */
-function expectedSettings(row: SiteRow, collectUntil: Record<string, number>): unknown {
-  return JSON.parse(JSON.stringify(settingsRecord(row, collectUntil).record));
-}
 
 export const resultsCollectUntilJob: CronJob = {
   name: "results-collect-until",
@@ -253,6 +250,9 @@ export const resultsCollectUntilJob: CronJob = {
   queryFloor: 6,
   async run(ctx) {
     const cursors = await loadCursors(ctx, this.name, false);
+    // plan12 K10: 比べる記録に予算が入るので、プランを使う(読むのは最初の Site を処理するときの 1 回。比べる対象が無い実行では読まない)。
+    // プランを渡さずに書くと、予算の入った記録を予算なしに書き戻し、site-settings-refresh と 15 分ごとに書き合う
+    let plan: CloudflarePlan | null = null;
     const out = await runStage(ctx, cursors, this.name, {
       daily: false,
       // 対象 = 書き直しの印のある Site と、run を持つエクスペリエンスがある Site(締め切りの表を持ちうる)。削除の途中の Site は除く
@@ -273,18 +273,10 @@ export const resultsCollectUntilJob: CronJob = {
       cost: () => COLLECT_UNTIL_SITE_COST,
       async process(row) {
         const table = await collectUntilMap(ctx.db, row.id);
-        const raw = await ctx.env.CONFIG_KV.get(kvKeys.settings(row.id));
-        let current: unknown = null;
-        try {
-          current = raw === null ? null : JSON.parse(raw);
-        } catch {
-          current = null; // 読めない記録は書き直す
-        }
-        // 記録の全体を比べる(締め切りの表だけでなく、Site の PATCH と締め切りの書き直しが重なって古い設定が残った場合も直す)
-        if (current === null || canonicalJson(current) !== canonicalJson(expectedSettings(row, table))) {
-          await ctx.assertNotFrozen();
-          await putSettingsRecord(ctx.env, row, table);
-        }
+        plan ??= await readCloudflarePlan(ctx.db);
+        // 記録の全体を D1 と比べて違えば書き直す(締め切りの表だけでなく、Site の PATCH と締め切りの書き直しが重なって古い設定が残った場合も直す)。
+        // 比べ方・書き方は site-settings-refresh と同じ関数(互いに上書きし合わない保証はこの共有に依る)
+        await syncSettingsRecord(ctx, row, { plan, collectUntil: table });
         if (row.collect_until_dirty === 1) {
           const r = await ctx.env.DB.prepare(`UPDATE sites SET collect_until_dirty = 0 WHERE id = ?1 AND collect_until_dirty = 1 AND ${NOT_FROZEN}`).bind(row.id).run();
           await throwIfFrozen(ctx, r.meta.changes);
@@ -366,13 +358,18 @@ async function dailyCandidates(ctx: CronContext, statuses: ExperimentRow["status
 }
 const dailyKey = (c: DailyCandidate) => tupleKey(c.evaluationAt, c.exp.site_id, c.exp.id);
 
-/** 到達の確認の見込み(D1 の呼び出し。パターンの読み取り 1 + 計測用 D1 の batch 1 + 到達の記録 2(凍結の確かめ・UPDATE)+ 締め切りの書き直し 2 + 確かめた日 1) */
+/**
+ * 到達の確認の見込み(D1 の呼び出し。パターンの読み取り 1 + 計測用 D1 の batch 1 + 到達の記録 2(凍結の確かめ・UPDATE)+ 締め切りの書き直し 3 + 確かめた日 1)。
+ * 締め切りの書き直し(rewriteCollectUntil)は Site の行・プラン・締め切りの表の読み取り 3(plan12 K10 でプランの読み取りが増えて 2 → 3)。
+ * 実際は 8 で、見込みの 7 を 1 超える。見込みと配分表は変えない(runner が吸収する)
+ */
 const REACH_COST = 7;
 /**
  * 記録 1 件の見込み(D1 の呼び出し)。ローカルの実測(2026-10-19、countingD1 で数えた)は到達を記録しない場合 17:
  * Site・パターン・計画の読み取り 3 + 到達の確認 2(パターン・計測用 D1 の batch)+ 記録の作成 12(記録の有無・パターン・目標・
  * 届く定義・計画の変更・テスト中の変更・採用・記録の有無・Change・収集の切り替えの読み取り、計測用 D1 の集計の batch 1、凍結の確かめと INSERT)。
- * 同じ件で到達を記録すると + 4(凍結の確かめ・UPDATE・締め切りの書き直しの読み取り 2)
+ * 同じ件で到達を記録すると + 5(凍結の確かめ・UPDATE・締め切りの書き直しの読み取り 3。plan12 K10 でプランの読み取りが増えて +4 → +5)。
+ * 定数は 17 + 4 のままで、到達を記録する件は実際は 1 超える(配分表は変えない。runner が吸収する)
  */
 const SNAPSHOT_COST = 17 + 4;
 

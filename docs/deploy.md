@@ -1214,17 +1214,17 @@ echo "hit=$HIT"   # 期待: hit=1
 | 既定(小〜中規模) | 200 | 約 300 人 | なし |
 | 企業からの訪問が多い BtoB、中〜大規模 | 500 | 約 750 人 | 自社オフィスなど既知の送信元を式で除外する(ゾーンが Business 以上のとき。下の箇条)。binding はこの除外を引き継がないので、除外した送信元からの合計が binding の上限を超えうるなら binding も上げる(2.3) |
 | 大規模 | 1000 | 約 1500 人 | ゾーンが Business 以上なら、数える単位を IP with NAT support にする。Pro 以上なら、期間を 60 秒にして回数を 6 倍(6000)にする。短い一斉アクセスは通し、続く大量送信は止められる。binding は NAT 支援を引き継がず IP ごとの合計で数えるので、1 つの IP からの合計が binding の上限を超えうるなら binding も上げる。期間を 60 秒にしたときの binding の値は 2.3 の規則で 6000 になる |
-| 1000 でも当たる | 上げない | — | そのサイトで `needsProfile` を使わない構成(decision を送らない)にできないかを先に検討する |
+| 1000 でも当たる | 上げない | — | そのサイトを `/v1/*` を呼ばない構成にできないかを先に検討する。履歴の条件・割当の固定(`persistAssignment`)・結果の記録のどれも使わなければ、タグは `/v1/*` に何も送らない |
 
 IP with NAT support は Cloudflare の画面の名前で、日本語の表示は未確認。
 
 人数の目安の前提: `needsProfile` のサイトでは 1 PV で decision 1 回と event 約 1 回を送り、閲覧中の人は 30 秒に 1 PV 程度とした(1 人あたり 10 秒に約 0.7 回)。これは結果を記録しないサイトの値。結果を記録するサイトでは、テストの参加(参加したテストごとに 1 回)と目標の達成の送信が足される。送信済みの印をブラウザに保存できれば同じ訪問者 × テスト(目標)には 1 回だけで、続けて閲覧している間は増えないが、保存できない環境(`localStorage` が使えないなど)ではページごとに送り直す。1 テスト・1 目標のページを初めて開くと 1 PV で 4 回程度になり、テストや目標が多いページではさらに増える。多くの人が同時に初めて開く場面(朝礼で同じページを案内するなど)では目安より少ない人数で当たるので、表の人数をそのまま当てはめない。
 
-上限に触れてもブロックされるのは `/v1/*` だけで、ページ本体・GTM・bootstrap は無傷。ただし decision が 429 を受けた runtime は再試行せず元の表示に戻るため、エクスペリエンスは適用されず Exposure も出ない。目標の `ab_conversion` は `dataLayer` に push され GA4 に届くが、`needsProfile` のサイトの `/event` 転送(Profile の `converted` 履歴の更新)は失われる。その組織の露出だけが黙って欠ける。
+上限に触れてもブロックされるのは `/v1/*` だけで、ページ本体・GTM・bootstrap は無傷。ただし decision が 429 を受けた runtime は再試行せず元の表示に戻るため、エクスペリエンスは適用されず Exposure も出ない。目標の `ab_conversion` は `dataLayer` に push され GA4 に届くが、`needsProfile` のサイトの `/event` 転送(Profile の `converted` 履歴の更新)は失われる。その組織の露出だけが欠ける。429 を受けたページでは、タグが `dataLayer` に `ab_error`(`ab_error_type: "rate_limited"`)を 1 回 push するので、GA4 に送れば遮断の起きた回数を数えられる。ただし edge をページと別のドメインに置く構成では、WAF の遮断の応答をタグが読めず、通信の失敗として扱うので数えられない([運用ガイド 7 節](operations.md#429-が訪問者に与える影響))。
 
 - 値は Free でも `requests_per_period` で変えられる。変えたら、binding の値が 2.3 の規則の値以上かを確かめる(下回っていれば 2.3 の規則の値に上げる)
-- 自社オフィスなど既知の送信元は、式に `and not ip.src in { <IP> }` を足して除外できる。レート制限ルールの式で送信元の IP を使えるのは、ゾーンが Business 以上のとき(Free の式で使えるのは URI Path など)。除外は WAF だけに効き、binding はその送信元も 1 つの IP からの合計で数える
-- `needsProfile: false` のサイトは decision を送らない。`/event` も、結果を記録しないサイトなら送らないので、この上限に触れない。結果を記録するサイトは、テストの参加(訪問者 × テストで初回)と目標の達成(訪問者 × 目標で初回)を `/event` に送る(ページビューごとではない)
+- 自社オフィスなど既知の送信元は、式に `and not ip.src in { <IP> }` を足して除外できる。公開の直後に社内から何度も開いて確かめるなど、自分たちの確認作業が遮断されないようにするために使う。レート制限ルールの式で送信元の IP を使えるのは、ゾーンが Business 以上のとき(Free の式で使えるのは URI Path など)。除外は WAF だけに適用され、edge の binding はその送信元も 1 つの IP からの合計で数える。除外した送信元からの合計が binding の上限(既定 1000 回 / 10 秒)を超えうるなら、binding をその合計まで上げる(2.3)
+- `needsProfile: false`(履歴の条件も割当の固定も使わない)のサイトは decision を送らない。`/event` も、結果を記録しないサイトなら送らないので、この上限に触れない。結果を記録するサイトは、テストの参加(訪問者 × テストで初回)と目標の達成(訪問者 × 目標で初回)を `/event` に送る(ページビューごとではない)
 - プランごとの違い: Free は 1 本・期間 10 秒・IP 単位だけ。Pro は 2 本・期間 1 分まで。Business は 5 本・期間 10 分まで・IP with NAT support も使える。Cookie・ヘッダ単位で数えられるのは Enterprise だけ
 
 429 は本文で判別する。`error code: 1015` は Cloudflare の遮断で、上の確認が検出するのはこの遮断。edge の binding が返す平文の 429 `rate limited` とは、本文で区別する。
@@ -1510,13 +1510,16 @@ control は `*.workers.dev` のままでも動く(ゾーンのキャッシュや
 管理画面は control とは別の Worker(`wtt-admin`)として Cloudflare Workers に置く。Next.js を Vite で動かす vinext を使い、ビルドが `dist/` 配下に生成設定(`wrangler.json`。デプロイ用の設定)と `dist/client`(静的ファイル)を出す。
 
 - 運用者の PC でのローカル実行は開発用(`pnpm admin:dev`)で、導入の選択肢ではない。招待やリセットのリンクが `localhost` を指して複数人で使えないため
-- 複数人で運用する場合、古いバージョンの admin が新しい control に書き込む食い違いが起こりうる。現時点では admin と control を揃えて更新する運用で回避する(API 契約バージョンの導入は将来の検討課題)
+- 管理画面と control はそれぞれ自分の版を名乗る。更新の後も古い管理画面を開いたままの人がいると、その画面からの保存は control が `426 client_too_old` で断る(古い画面が新しい control に書き込む食い違いを防ぐため)。管理画面の上部に帯が出るので、ページを再読み込みすれば直る。帯の種類は[運用ガイド 6 節](operations.md#6-ロールと管理操作)
+- admin は control を **service binding**(`apps/admin/wrangler.jsonc` の `services`。宛先は control の `ControlBff`)で呼ぶ。同じ Cloudflare アカウントの Worker 同士を、公開 URL を経由せずに内部の接続でつなぐ仕組みで、管理画面を操作した人の IP を control に渡すために使う(control のログインの回数の制限が、利用者ごとに分かれる)。**binding は同じ Cloudflare アカウントの Worker しか指せないので、admin と control は同じアカウントに置く**(この文書の手順は 1 つのアカウントに置く形)。binding の宛先が要るので、control を先にデプロイしてから admin をデプロイする
 
 ### 4.1 vars(`apps/admin/wrangler.jsonc`)
 
 | キー | 内容 |
 |---|---|
-| `AB_CONTROL_URL` | 3.5 で確認した control の公開 URL。control 側の `vars.AB_CONTROL_URL` と同じ値にする(違うと sign-in 後に 401 になる) |
+| `AB_CONTROL_URL` | 3.5 で確認した control の公開 URL。control 側の `vars.AB_CONTROL_URL` と同じ値にする(違うと sign-in 後に 401 になる)。binding がある構成でも書く(Google のログインでブラウザを control へ送る先と、binding が無い構成で呼ぶ先に使う) |
+
+`services` の binding(`CONTROL` → `wtt-control` の `ControlBff`)はリポジトリの `apps/admin/wrangler.jsonc` に書いてあり、書き換えない。control の Worker 名を `wtt-control` から変えていなければそのまま使える。
 
 `apps/admin/.env.local` は `pnpm admin:dev`(開発)専用で、デプロイには使われない。
 
@@ -1555,7 +1558,7 @@ pnpm -C apps/admin build      # vinext build。dist/ 配下に生成設定(wrang
 pnpm -C apps/admin deploy:cf  # wrangler deploy --config <ビルドが出した生成設定>
 ```
 
-deploy の出力に `https://wtt-admin.<アカウントのサブドメイン>.workers.dev` が出る。`custom` のときは `https://<admin_host>` を使う。
+deploy の出力に `https://wtt-admin.<アカウントのサブドメイン>.workers.dev` が出る。`custom` のときは `https://<admin_host>` を使う。出力の bindings の一覧に `env.CONTROL (wtt-control#ControlBff)` が出ていれば、control への service binding が設定されている。
 
 ### 4.4 確認
 
@@ -1568,8 +1571,8 @@ curl -sS -w '\n%{http_code}\n' "<AB_ADMIN_URL>/api/control/me"                  
 
 - `/setup` が 404 → `routes` か Worker 名が違う。`pnpm -C apps/admin exec wrangler deployments list --config <ビルドが出した生成設定>` で確認
 - deploy の直後に `/setup` か `/api/control/me` が 404、または本文が `error code: 1042` → 3.5 と同じく公開の反映待ちのことがある。**30 秒待ってから同じ確認をやり直す**(この応答は JSON ではないので `jq` で処理しない)。2 回目も同じなら次の 2 つを見る
-- `/api/control/me` が 404 か、本文に `error code: 1042` → admin の `compatibility_flags` に `global_fetch_strictly_public` が無い(同じアカウントの Worker 同士の fetch に要る)。`apps/admin/wrangler.jsonc` を確認して再デプロイする
-- `/api/control/me` が 502(`control_unreachable`)→ 4.1 の `AB_CONTROL_URL` が control に届いていない(値のミスか control が未デプロイ)
+- `/api/control/me` が 404 か、本文に `error code: 1042` → `services` の binding を外した構成で、admin の `compatibility_flags` に `global_fetch_strictly_public` が無い(binding が無いときは公開 URL で control を呼ぶので、同じアカウントの Worker 同士の fetch に要る)。`apps/admin/wrangler.jsonc` を確認して再デプロイする
+- `/api/control/me` が 502(`control_unreachable`)か、JSON でない 5xx → admin から control に届いていない。binding がある構成では、control が未デプロイか、`ControlBff` を持たない古い版の control が動いている(control をデプロイしてから admin をデプロイし直す)。binding が無い構成では、4.1 の `AB_CONTROL_URL` の値のミスか control が未デプロイ
 - ログイン後に 401 → control の `AB_ADMIN_URL`(3.4)と実際の admin の URL が違う(`trustedOrigins` 不一致)
 
 ### 4.5 任意: Cloudflare Access で管理画面の到達を絞る
@@ -1867,6 +1870,15 @@ runtime を作り直したら control と deployer も必ず再デプロイす�
 - ゾーンの WAF Rate Limiting Rule が以前の既定(100 回 / 10 秒)のままなら、200 に上げるのを勧める(必須ではない)。変え方は 2.7。上げた後も binding の値が 2.3 の規則の値以上かを確かめる(下回っていれば 2.3 の規則の値に上げる)
 - 7.2 の control の WAF を「10 秒に 10 回」で作っていたら、7.2 の新しい目安に見直すのを勧める(必須ではない)
 
+**管理画面の版の確認と service binding を足すリリースの更新**(CHANGELOG の目印「この版より前に開いたタブは再読み込みが要る」「オーナーと非常口でパスワードを使った人が 1 回ログアウトされる」「admin の設定に binding が増える」):
+
+- 順は上の 2 つ目のブロックと手順 4 のまま(edge → deployer → マイグレーション → control → admin)。**edge は control より先にデプロイする**。新しい版の control は、各サイトの設定の記録(KV)に新しい訪問者の記録の上限を書く。前の版の edge はこの項目を知らないので、その記録を読めないものとして扱い、そのサイトの判定と送信が 404 になる。**admin は control より後にデプロイする**。admin の binding の宛先(control の `ControlBff`)が要るため
+- 手順 4 の出力の bindings に `env.CONTROL (wtt-control#ControlBff)` が出ることを確かめる(4.3)。6.4 では、`curl -sSI "<control URL>/llms.txt" | grep -i x-wtt-min-client-version` が `x-wtt-min-client-version: 1` を返すことも確かめる
+- **この版より前に開いた管理画面のタブは、凍結を外した後の最初の保存で「管理画面が古い版です」(426)になる**。ページを再読み込みすれば直る(未保存の入力は消えるので、必要なら控えてから)。更新の前に利用者に伝えておく
+- **更新の後、オーナーと、これまでに非常口(8 節)でパスワードを使った人が 1 回ログアウトされる**。Google でログインし直せばよい。新しい版は、非常口が閉じている間、パスワードの記録とその持ち主のログイン状態を 15 分ごとに消す(8 節)。既存の導入では、初回セットアップがオーナーに誰も知らない乱数のパスワードの記録を残しているので、オーナーも対象になる。非常口が閉じていれば凍結を外してから 15 分以内に、非常口を開けたまま更新したら閉じた後の最初の定期処理で消える。作業者自身もログアウトされうるので、先に伝えておく
+- 新しい訪問者の記録の上限(運用ガイド 7 節)は、凍結を外した後の control の定期処理(15 分ごと)が、1 回に 10 サイトずつ各サイトの設定の記録に入れる。入るまでは上限なしで今までどおり動く。翌日に `pnpm -C apps/control exec wrangler kv key get "site:<siteId>:settings" --namespace-id <namespace ID> --remote` で `newProfileBudget` が入ったことを確かめる。すぐに入れたいサイトは、管理画面でサイトの設定を一度保存する
+- Cron Trigger の本数は増えない(新しい定期処理は既存の 15 分ごとの Cron の中で動く)
+
 ```bash
 pnpm -C apps/admin build && pnpm -C apps/admin deploy:cf   # 4. admin
 ```
@@ -1910,6 +1922,11 @@ curl -sS -X POST "<control URL>/workspaces" | jq -r '.error'   # 期待: "unauth
 - 理由: 新しい版の edge は Durable Object の `ResultsBudget` と `ResultsHealth` を足している。前の版の edge はこの 2 つを持たない。Cloudflare は、使われている Durable Object を消す版のデプロイを、消すためのマイグレーションの指定が無いと受け付けないことがある(実機では確かめていない)
 - 新しい版の edge は、前の版の control・前の版の設置タグ・結果の設定が無い配る設定と組み合わせても動く。結果の送信が無ければ、計測用のデータベースに何も書かない
 - 新しい版の control も edge の `ResultsBudget`・`ResultsHealth` を参照している。control を新しい版のまま残すときも、edge は新しい版でなければならない
+
+**新しい訪問者の記録の上限を足したリリースより前の版へ戻すとき**(CHANGELOG の目印「admin の設定に binding が増える」と同じリリース): edge だけは戻さず、新しい版のまま残す。
+
+- 理由: 新しい版の control がサイトの設定の記録(KV)に新しい訪問者の記録の上限を書いた後は、前の版の edge がその記録を読めず、サイトの判定と送信が 404 になる。control を前の版に戻しても、書いた記録は KV に残る
+- 新しい版の edge は、上限の無い記録(前の版の control が書くもの)も今までどおり読む
 
 ### 6.6 書き込みの凍結(メンテナンス中)
 
@@ -1974,7 +1991,12 @@ control の無認証入口をどう防御するかは、**導入時に次の 3 �
 - 常時開いている: `/auth/google/start`(Google へ送り出す)/ `/auth/callback/google`(Google からの戻り)/ `/auth/handoff/exchange`(ログイン直後に管理画面がセッションを受け取る使い捨てコードの交換)/ `/login-options`(この導入で使えるログイン方法)/ `/break-glass/reset-link`(非常用トークンの照合)/ `/setup`(ユーザー 0 件のときだけ)/ `/invitations/:id/accept`(招待の受諾)
 - **非常時だけ開く**: `/auth/sign-in/email` / `/auth/sign-up/email` / `/auth/request-password-reset` / `/auth/reset-password` の 4 つ(非常用トークンを置いているあいだだけ。置いていなければ 404。8 節)
 
-Workers 内の Rate Limiting binding は本番で実効していなかった実測があるため、補助としては残すが主役にはしない(管理画面経由では経路ごとに全員で 1 枠を共有する。[運用ガイド 7 節](operations.md#7-レート制限の実効))。
+Workers 内の Rate Limiting binding は本番で実効していなかった実測があるため、補助としては残すが防御の中心にはしない(管理画面経由の要求も、操作した人の IP ごとに数える。[運用ガイド 7 節](operations.md#7-レート制限の実効))。
+
+**(2)(3) の対象になる要求**: 管理画面(admin)から control への通信は service binding(4 節)で、control のゾーンを経由しない。そのため (2) の WAF と (3) の Access の対象は、control の公開アドレスに直接届く要求だけになる。
+
+- 対象になる: ブラウザが直接開く Google ログインの 2 経路(`/auth/google/start`・`/auth/callback/google`)/ API キーを使うエージェント・スクリプトの呼び出し / 非常口のトークンの照合(`/break-glass/reset-link`。8 節で人が curl で送る)/ 管理画面を経由せずに入口を直接呼ぶ第三者の要求
+- 対象にならない: 管理画面からのログイン・ログイン直後のセッションの受け取り・初回セットアップ・招待の受諾・その他の管理画面の操作。回数は control の binding が利用者の IP ごとに数える
 
 `GET /llms.txt` も無認証だが、返すのはエージェント向けガイドの本文だけでサイト / エクスペリエンスのデータに触れないため、この 3 択の対象には含めない。
 
@@ -1984,7 +2006,7 @@ Workers 内の Rate Limiting binding は本番で実効していなかった実�
 |---|---|---|---|
 | (1) 何もしない(`*.workers.dev` のまま) | 個人利用、管理者 1 人 | なし(パスワードの経路は普段閉じており、総当たりの標的が無い。本人確認と多要素認証は Google 側) | なし |
 | (2) ゾーンの WAF Rate Limiting Rules | 小規模チームの標準 | control をカスタムドメインに置く(7.1)。Free のゾーンでは、同じゾーンのほかのサイトが control と同じパスを使っていないこと(7.2) | なし |
-| (3) Cloudflare Access(単独または (2) と併用) | 外部エージェントに API を呼び出させる、到達自体を絞りたい | カスタムドメイン(7.1)+ サービストークン対応 | admin / エージェント経路に小変更(将来) |
+| (3) Cloudflare Access(単独または (2) と併用) | 外部エージェントに API を呼び出させる、到達自体を絞りたい | カスタムドメイン(7.1)。エージェントはサービストークンを付ける | なし |
 
 3 つは互いに干渉しない。(1) で始めて後から (2)(3) へ移るコストは小さい(7.1 の作業 + `AB_CONTROL_URL` の差し替えだけで、ユーザー・API キー・公開履歴は引き続き使える。招待 / リセットのリンクは `AB_ADMIN_URL` 側なので影響しない)。
 
@@ -2036,7 +2058,7 @@ Workers 内の Rate Limiting binding は本番で実効していなかった実�
 
 edge 用のルール(2.7)と枠を取り合う点に注意する:
 
-- Free で両方が要るなら、新しいルールは作れない。2.7 のルールの条件式に、control のパスを OR で足して 1 本にする(手順 2 の Free の式)。しきい値は edge と共通(2.7 の値)になる。edge と control への要求は IP ごとに合わせて数えるので、会社の拠点などで訪問者の閲覧がしきい値を超えると、同じ IP の管理者のログインも遮断される(逆も同じ)。1 本にした後は、2.7 の API の PUT を流し直さない(ルールが edge の式だけで置き換わり、control のパスが消える)。control 側でこれ以上絞りたいなら (3) Access を足す(admin の対応の後。7.3)
+- Free で両方が要るなら、新しいルールは作れない。2.7 のルールの条件式に、control のパスを OR で足して 1 本にする(手順 2 の Free の式)。しきい値は edge と共通(2.7 の値)になる。edge と control への要求は IP ごとに合わせて数えるので、会社の拠点などで訪問者の閲覧がしきい値を超えると、同じ IP の管理者がブラウザで直接開く Google ログインの 2 経路(`/auth/google/start`・`/auth/callback/google`)も遮断され、ログインできなくなる(逆も同じ)。管理画面のほかの通信は service binding で control に届き、この WAF を通らないので遮断されない(7 節の冒頭)。1 本にした後は、2.7 の API の PUT を流し直さない(ルールが edge の式だけで置き換わり、control のパスが消える)。control 側でこれ以上絞りたいなら (3) Access を足す(7.3)
 - 別々のしきい値が要るなら Pro 以上(Pro は 2 本まで)
 - 専用のルールを持てるなら(別のゾーン、または Pro 以上)、50 回 / 10 秒にする。WAF は経路を区別せずに数え、Google ログインは開始と戻りで 1 人 2 回になる。50 なら、同じ拠点から 10 秒に約 25 人がログインできる(研修などの一斉ログインの目安)
 
@@ -2047,7 +2069,7 @@ edge 用のルール(2.7)と枠を取り合う点に注意する:
 3. どのホストでも使っていなければ、下の手順で Free の式を書く
 4. 使っているホストがあれば、次から選ぶ:
    - control のパスを WAF に入れない。control の無認証の入口の制限は、control の Rate Limiting binding(`AUTH_RATE_LIMITER`。経路ごと・IP 単位で 30 回 / 10 秒)だけになる。この binding の本番での効き方は限定的([運用ガイド 7 節](operations.md#7-レート制限の実効))なので、(1) と同じ扱いにして、7.0 の必須条件を守る。入力ファイルの `control_protection` は `none` にする
-   - (3) Access に任せる(7.3)。入力ファイルの `control_protection` は `access` にする。ただし、admin の BFF がサービストークンを付ける対応はまだ無い。いま control に Access を掛けると、管理画面から control に届かなくなるので、この案は admin の対応の後に選べる
+   - (3) Access に任せる(7.3)。入力ファイルの `control_protection` は `access` にする。管理画面から control への通信は service binding で Access を経由しないので、Access を掛けても管理画面の操作は止まらない。ブラウザが直接開く Google ログインの 2 経路は Access の判定を受けるので、その扱いを 7.3 のとおりに決める
    - ゾーンを Pro 以上にして、手順 2 の Pro 以上の式(ホスト名の条件つき)を書く
    - control を、ほかのサイトを置いていない別のゾーン(別のドメイン)に置く(7.1)。そのゾーンの 1 本を control 専用に使える
 
@@ -2084,20 +2106,24 @@ echo "hit=$HIT"   # 期待: hit=1
 
 hit=0 なら 1 分後に 1 回だけやり直す。それでも hit=0 なら人に報告する。
 
-管理画面経由の無認証 POST は admin Worker からの接続元 IP(Cloudflare 内部の固定の値で、操作した人の IP とは無関係。実測済み)で control に届くので、経路ごとに全員で 1 枠を共有する。CI や運用スクリプトから連続ログインする場合は枠を数える。**実機検証は未実施。**
+管理画面の BFF の通信は service binding で control に届き、control のゾーンを経由しないので、この WAF には数えられない(7 節の冒頭)。WAF が数えるのは、ブラウザが直接開く Google ログインの 2 経路・API キーの直接の呼び出し・非常口のトークンの照合と、入口を直接呼ぶ第三者の要求。管理画面からのログインの回数は、control の binding が利用者の IP ごとに数える。CI や運用スクリプトから API キーで連続して呼ぶ場合は、この WAF の回数に入る。**実機検証は未実施。**
 
 ### 7.3 (3) Cloudflare Access
 
 Zero Trust(Free で 50 ユーザーまで)の Access アプリケーション(Self-hosted)を `control.<運用者ドメイン>` に作り、ポリシーで許可する相手を決める。ブラウザからの直アクセスにはメールのワンタイム PIN や Google ログインを要求できる。
 
-**この構成での注意**: 管理画面は admin Worker で動き、control へは BFF がサーバー側から通信する。人がブラウザで control にログインする形ではないので、Access の判定で許可されるには次のどちらかが要る。
+**この構成での注意**: Access の判定を受けるのは、control の公開アドレスに直接届く要求だけ(7 節の冒頭)。
 
-- **サービストークン**(推奨): Access で Service Token を発行し、admin の BFF とエージェントが `CF-Access-Client-Id` / `CF-Access-Client-Secret` を毎回付ける。control 側の変更は不要(Access は Worker に届く前で判定する)。admin 側の対応は将来フェーズ
-- **Bypass ポリシー**(この構成では使えない): admin Worker からの接続元 IP は Cloudflare の IP レンジになるので、IP で許可する Bypass は「Cloudflare 全体を許可する」に等しく意味を成さない。サービストークンを使う
+- **管理画面の操作**: admin の BFF は service binding で control を呼び、Access を経由しない。admin にサービストークンを持たせる必要は無い
+- **エージェント**: Access で Service Token を発行し、エージェントが `CF-Access-Client-Id` / `CF-Access-Client-Secret` を毎回付ける。control 側の変更は不要(Access は Worker に届く前で判定する)。サービストークンを付けるのはエージェントだけでよい
+- **Google ログインの 2 経路**(`/auth/google/start`・`/auth/callback/google`): ブラウザが control を直接開くので、Access の判定を受ける。次のどちらかにする
+  - 管理画面に入る人を Access のポリシーで許可し、ログインの前に Access のログインを済ませてもらう(Access のログインと Google のログインの 2 回になる)
+  - この 2 つのパスだけを Bypass にする(Access のアプリケーションをパスごとに分け、その 2 つに Bypass のポリシーを付ける)。この 2 つは Google の認証の開始と戻りで、Bypass にしても、招待されたメールアドレスの Google アカウントでなければログインできない
+- **非常口のトークンの照合**(`/break-glass/reset-link`。8 節): 人が curl で送るので、Access のログインを済ませられない。Access を掛けた導入では、エージェントと同じくサービストークンのヘッダーを curl に付ける
 
 (2) と併用すると、入口で量を絞りつつ到達自体も絞れる。**実機検証は未実施。** 管理画面自体に Access を掛ける話は 4.5 を参照。
 
-ログインを Google アカウントにしても、Access には残る利点がある: control のプログラム自体に穴があっても Worker が動く前で止まる / 許可するメールドメイン・IP・デバイスなどの組織の方針をまとめて掛けられ、到達の記録も残る / 非常用のパスワード経路を開けているあいだ(8 節)の防御になる。引き換えに、admin にも掛けるなら Access のログインと管理画面のログインで二重にログインすることになる。
+ログインを Google アカウントにしても、Access には残る利点がある: control のプログラム自体に穴があっても、直接の呼び出しは Worker が動く前で止まる / 許可するメールドメイン・IP・デバイスなどの組織の方針をまとめて掛けられ、到達の記録も残る / 非常用のパスワード経路を開けているあいだ(8 節)、control への直接のパスワードの試行を止められる(管理画面からのパスワードのログインは service binding を経由するので、止めるには管理画面にも Access を掛ける。4.5)。引き換えに、admin にも掛けるなら Access のログインと管理画面のログインで二重にログインすることになる。
 
 ## 8. 非常時の入り方
 
@@ -2138,13 +2164,20 @@ Zero Trust(Free で 50 ユーザーまで)の Access アプリケーション(Se
 
    閉じた後の注意:
 
-   - **開いているあいだに作られたログイン状態は、閉じた後も使える**(自然に切れるまで残る)。トークンや再設定リンクが人の目に触れた疑いがあるときは、閉じた後にオーナーのパスワードをもう一度再設定する(再設定でそれまでのログイン状態はすべて切れる)
+   - **閉じてから 15 分以内に、パスワードの記録と、パスワードの記録を持つ人のログイン状態(Google でログインしたものを含む)がすべて消える**(control の 15 分ごとの定期処理。書き込みの凍結中は、凍結を外した後の最初の処理で消える)。非常口でパスワードを使った人は、閉じた後に 1 回 Google でログインし直す。パスワードは残らないので、次の非常時もトークンを置いて再設定リンクから入り直す
+   - 消えたことは次のコマンドで確かめられる。`passwords` が 0 なら消えている
+
+     ```bash
+     pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select count(*) as passwords from account where \"providerId\" = 'credential'"
+     ```
+
+   - 開いているあいだに発行された API キーは、この削除では消えない。心当たりの無い鍵があれば、管理画面の API キーの一覧で失効させる([運用ガイド 6 節](operations.md#api-キー))
    - 意図せず開いていた疑いがあるときは、閉じるだけでなく、心当たりのあるユーザーをメンバー一覧から外す。外した時点でその人のログイン状態も切れる(他のワークスペースにも所属している人は、そちらの資格が残るのでログイン状態も残る。必要なら各ワークスペースから外す)
    - まだ受けられていない招待に心当たりがあれば、招待一覧から取り消す。必要なら後から招待し直す
 
 なぜすぐ閉じるか:
 
-- 開くのはオーナーのためだけではない。**過去にパスワードを設定したことのあるメンバーは、そのときのパスワードでログインできる状態に戻る**(パスワードはユーザーごとに D1 に残っているため)
+- 開くのはオーナーのためだけではない。**開いているあいだは、パスワードを設定した人なら誰でもパスワードでログインできる**(パスワードの記録は、閉じた後の削除まで残る)
 - トークンを置いているあいだは、メール + パスワードのログイン・招待リンクからのパスワードでのアカウント作成・メンバー画面の「リセットリンク」も開く
 - **管理画面にログインしているあいだ、どのページにも**「非常用のパスワードログインが開いています」の帯が出る(ログイン前の画面には出ない)。トークンに期限は無いので、ログインして帯が出ていたら閉じ忘れを疑う
 - 開いているあいだ、パスワードの試行を絞るのは補助的な制限だけになる。control の Rate Limiting binding(経路ごと・IP 単位で 30 回 / 10 秒。本番での効き方は限定的。[運用ガイド 7 節](operations.md#7-レート制限の実効))で、パスワードの総当たりを止める仕組みではない。使い終わったらすぐ閉じ、パスワードは推測しにくい長いものにする

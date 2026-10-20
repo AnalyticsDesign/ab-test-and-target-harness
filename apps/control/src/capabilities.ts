@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { API_CONTRACT_VERSION, MIN_CLIENT_VERSION } from "@wtt/core";
 import { passwordLoginOpen } from "./break-glass";
 import type { Env } from "./env";
 
@@ -84,12 +85,15 @@ export const CapabilitiesSchema = z.object({
     })
     .nullable()
     .describe("書き込みの凍結(メンテナンス中)の状態。null = 凍結していない。凍結中はログイン以外の変更操作が 503 write_frozen になる"),
+  apiVersion: z.number().describe("この control の API 契約の版(全応答のヘッダー x-wtt-api-version と同じ値)"),
+  minClientVersion: z.number().describe("この control が受け付ける最低のクライアントの版。x-wtt-client-version で名乗った版がこれより古いと、変更操作が 426 client_too_old になる"),
 });
 export type Capabilities = z.infer<typeof CapabilitiesSchema>;
 
 /** env だけで決まる部分。凍結は D1 を読むのでルートで足す(writeFreeze) */
 export function capabilities(env: Env): Omit<Capabilities, "writeFreeze"> {
   return {
+    apiVersion: API_CONTRACT_VERSION, minClientVersion: MIN_CLIENT_VERSION, // plan12 K6: 管理画面の版のバナーが読む
     imageUpload: imageStore(env) !== null, edgeOrigin: edgeOrigin(env), tagOrigin: tagOrigin(env), edgeOnWorkersDev: edgeOnWorkersDev(env), passwordLogin: passwordLoginOpen(env),
     resultsStore: resultsStore(env),
   };

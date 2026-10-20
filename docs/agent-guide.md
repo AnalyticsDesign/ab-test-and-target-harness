@@ -80,6 +80,8 @@ curl -sS "$AB_CONTROL_URL/me" -H "x-api-key: $AB_API_KEY"
 
 **メンテナンス中の 503**: 更新などの間は、ログイン以外の変更操作が `503 write_frozen` になります(`hint` に理由と再開の見込み、`Retry-After` ヘッダーと封筒の `retryAfter` に待つ秒数)。読み取り(GET)と配信条件の確認(`POST /sites/{sid}/evaluate`)は使えます。`Retry-After` の秒数だけ待ってから再試行し、長引くときは人に知らせてください。凍結の状態は `GET /capabilities` の `writeFreeze`(`null` = 凍結していない)で事前に確かめられます。
 
+**API の版と 426**: 作業の初めに `GET /capabilities` の `apiVersion`(API 契約の版)を確かめ、前回の作業のときと違えば `/openapi.json` を読み直してください(要求や応答の形が変わっていることがあります)。どの応答にも `x-wtt-api-version`(今の版)と `x-wtt-min-client-version`(書き込みを受け付ける最低の版。`/capabilities` の `minClientVersion` と同じ値)のヘッダーが付きます。版を名乗りたいエージェントは、要求に `x-wtt-client-version: <対応している apiVersion>` を付けられます。付けた場合、その版が最低の版より小さいと、変更操作が `426 client_too_old` になります(読み取りは断られません)。付けなければ版の判定はされません。426 を受けたら、`/openapi.json` を読み直して変わった点を確かめ、人に知らせてから、新しい形で送り直してください。
+
 ---
 
 ## 2. レシピ

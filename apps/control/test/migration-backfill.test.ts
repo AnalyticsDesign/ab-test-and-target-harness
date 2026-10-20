@@ -89,3 +89,19 @@ describe("migration 0015: variant original / memo / goal analytics", () => {
     expect(e!.description).toBe("");
   });
 });
+
+describe("migration 0017: new profile budget column (plan12 K15)", () => {
+  it("existing sites get NULL (= the plan default)", async () => {
+    const mine = env.TEST_MIGRATIONS.find((m) => m.name.endsWith("_plan12_defense.sql"))!.name;
+    await reset();
+    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS.filter((m) => m.name < mine));
+    const t = 1_700_000_000_000;
+    await env.DB.batch([
+      env.DB.prepare(`insert into organization (id, name, slug, "createdAt") values ('w1', 'W', 'ws-1', '2026-09-01T00:00:00.000Z')`),
+      env.DB.prepare(`insert into sites (id, workspace_id, name, domain, site_salt, content_updated_at, created_at, updated_at) values ('s1', 'w1', 'S', 'example.com', 'salt', ?1, ?1, ?1)`).bind(t),
+    ]);
+    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+    const row = await env.DB.prepare(`select new_profile_budget_per_day as v from sites where id = 's1'`).first<{ v: number | null }>();
+    expect(row).toEqual({ v: null });
+  });
+});

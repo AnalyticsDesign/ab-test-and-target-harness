@@ -1,7 +1,7 @@
 import type { Capabilities, ChangeType, WriteFreezeState } from "./types";
 import { formatLocalTime } from "./local-time";
 
-export const DEFAULT_CAPABILITIES: Capabilities = { imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null };
+export const DEFAULT_CAPABILITIES: Capabilities = { imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null, apiVersion: null, minClientVersion: null };
 
 export const CHANGE_TYPES: ChangeType[] = ["TEXT", "IMAGE", "HIDE", "ATTRIBUTE", "HTML", "CSS", "CUSTOM_JS"];
 
@@ -20,6 +20,9 @@ export function parseCapabilities(data: unknown): Capabilities | null {
   if (bad("passwordLogin", (v) => typeof v === "boolean")) return null;
   if (bad("resultsStore", (v) => typeof v === "boolean")) return null;
   if (bad("writeFreeze", (v) => v === null || isWriteFreezeState(v))) return null;
+  // plan12 K6: 版の 2 つの数。欠けている(古い control)なら null = 版のバナーを出さない。あるのに数でなければ応答全体を信用しない
+  if (bad("apiVersion", isVersionNumber)) return null;
+  if (bad("minClientVersion", isVersionNumber)) return null;
   return {
     imageUpload: typeof d.imageUpload === "boolean" ? d.imageUpload : DEFAULT_CAPABILITIES.imageUpload,
     edgeOrigin: typeof d.edgeOrigin === "string" ? d.edgeOrigin : null,
@@ -29,7 +32,35 @@ export function parseCapabilities(data: unknown): Capabilities | null {
     passwordLogin: d.passwordLogin === true,
     resultsStore: d.resultsStore === true,
     writeFreeze: isWriteFreezeState(d.writeFreeze) ? d.writeFreeze : null,
+    apiVersion: isVersionNumber(d.apiVersion) ? d.apiVersion : null,
+    minClientVersion: isVersionNumber(d.minClientVersion) ? d.minClientVersion : null,
   };
+}
+
+const isVersionNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+export type VersionBannerKind = "incompatible" | "outdated" | "control_outdated";
+
+/**
+ * plan12 K6: この画面(own = API_CONTRACT_VERSION)と control の版の食い違いから、版のバナーの種類を決める。
+ * - own < min: incompatible(control が書き込みを 426 で断る)/ own < api: outdated(書き込みはできるが新しい版がある)
+ * - own > api: control_outdated(control の更新が漏れている)
+ * cap が無い・どちらかの数が無い(古い control)ときは null(帯を出さない)
+ */
+export function versionBannerKind(own: number, cap: { apiVersion: number | null; minClientVersion: number | null } | null): VersionBannerKind | null {
+  if (cap === null || cap.apiVersion === null || cap.minClientVersion === null) return null;
+  if (own < cap.minClientVersion) return "incompatible";
+  if (own < cap.apiVersion) return "outdated";
+  if (own > cap.apiVersion) return "control_outdated";
+  return null;
+}
+
+/**
+ * 共有の取り直し(useCapabilitiesPoll)の次の状態。取れない・形が不正(parseCapabilities が null)= 直前の状態を保つ
+ * (control が一時的に読めないだけで、帯を消して「保存できる」と伝えない)
+ */
+export function nextCapabilities(prev: Capabilities, data: unknown): Capabilities {
+  return parseCapabilities(data) ?? prev;
 }
 
 /** 200 以外・形が違うときは既定に倒す(画像は出す・帯は出さない)。最終判定は control が返す 409 / 422 / 503 */

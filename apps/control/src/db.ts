@@ -29,6 +29,8 @@ export type SiteRow = {
   results_enabled: number; results_retention_days: number;
   /** migrations/0016_results_reports.sql(D9 ③ K11): 収集の締め切りを KV に書き直す必要がある(0 / 1。書き込みに失敗したとき Cron が拾う) */
   collect_until_dirty: number;
+  /** migrations/0017_plan12_defense.sql(plan12 K10・K15): 新しい訪問者の記録の上限(1 日あたり)。null = Cloudflare のプランの既定 */
+  new_profile_budget_per_day: number | null;
 };
 export type SiteHostRow = { host: string; site_id: string };
 /** migrations/0007_audiences.sql。definition_json = 保存する形の配信条件(core の Targeting) */

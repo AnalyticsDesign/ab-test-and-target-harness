@@ -9,7 +9,13 @@ import { getDb } from "../src/db";
 import type { Env, ResultsBudgetRpc } from "../src/env";
 import { writeInstanceSettings } from "../src/instance-settings";
 import { resetUsageCache } from "../src/usage";
-import { testEnv } from "./helpers";
+import { kvKeys } from "@wtt/core";
+import { siteSettingsRefreshJob } from "../src/cron/site-settings-refresh";
+import { breakGlassSweep } from "../src/cron/break-glass-sweep";
+import { configCleanupJob } from "../src/cron/config-cleanup";
+import { publishSite } from "../src/publish";
+import { siteToSettings } from "../src/site-settings";
+import { call, createExperiment, createSite, failingKv, fakeDeployer, runDirect, setupOwner, siteRow, siteWithRunning, testEnv, TEXT_CHANGE } from "./helpers";
 
 // D9 ②(plan ② の K5・K6・K12、設計書 §9.4・§6.9)
 
@@ -161,14 +167,20 @@ describe("cron runner (D9 ② K5・K6)", () => {
 
   it("registers the account guard in CRON_JOBS", () => {
     // D9 ③(K17): 結果のジョブ 5 本を results-account-guard の後に、この順で(どれも wtt-control に書く)
-    expect(CRON_JOBS).toEqual([resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob]);
+    expect(CRON_JOBS).toEqual([resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob]);
     expect(CRON_JOBS.slice(1).map((j) => [j.name, j.cadence, j.writesControl])).toEqual([
       ["results-delivery", { every: "tick" }, true],
       ["results-collect-until", { every: "tick" }, true],
       ["results-daily", { daily: { afterUtcHour: 0 } }, true],
       ["results-capacity", { every: "tick" }, true],
       ["results-purge", { daily: { afterUtcHour: 23 } }, true],
+      ["site-settings-refresh", { daily: { afterUtcHour: 0 } }, true],
+      ["break-glass-sweep", { every: "tick" }, true],
+      ["config-cleanup", { daily: { afterUtcHour: 1 } }, true],
     ]);
+    // plan12 K13: 配分(queryShare)を持たない(結果のジョブの配分表を変えない)
+    expect(breakGlassSweep.queryShare).toBeUndefined();
+    expect(configCleanupJob.queryShare).toBeUndefined();
     expect(resultsAccountGuard).toMatchObject({ name: "results-account-guard", cadence: { every: "tick" }, writesControl: false });
   });
 });
@@ -281,5 +293,202 @@ describe("results account guard (D9 ② K12)", () => {
     expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), NOW, [resultsAccountGuard])).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
     expect(budget.stop).toHaveBeenCalledExactlyOnceWith("account_usage", NEXT_MIDNIGHT, NOW);
     expect(await jobRuns()).toEqual([]); // wtt-control に書かない(成功の記録も書かない)
+  });
+});
+
+// plan12 K10: site-settings-refresh(KV の Site の設定の記録を D1 + プランの既定から組み立て直して合わせる)
+describe("site-settings-refresh (plan12 K10)", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const T = at("2026-10-21T00:30:00Z");
+  const kvRaw = (sid: string) => env.CONFIG_KV.get(kvKeys.settings(sid));
+  const kvJson = async (sid: string) => JSON.parse((await kvRaw(sid))!) as Record<string, unknown>;
+  /** put の回数を数える KV(他の操作は本物に委譲) */
+  function countingKv() {
+    const puts: string[] = [];
+    const kv = new Proxy(env.CONFIG_KV, {
+      get(target, prop) {
+        const v = Reflect.get(target, prop);
+        if (prop === "put") return (key: string, ...rest: unknown[]) => (puts.push(key), (v as Function).call(target, key, ...rest));
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    });
+    return { kv, puts };
+  }
+  /** 予算の入る前の記録(この plan を deploy した直後の既存サイト)に戻す */
+  const stripBudget = async (sid: string) => env.CONFIG_KV.put(kvKeys.settings(sid), JSON.stringify(siteToSettings(await siteRow(sid))));
+
+  it("is registered as a daily job that writes control", () => {
+    expect(siteSettingsRefreshJob).toMatchObject({ name: "site-settings-refresh", cadence: { daily: { afterUtcHour: 0 } }, writesControl: true });
+    expect(CRON_JOBS).toContain(siteSettingsRefreshJob);
+  });
+
+  it("writes the budget into existing records and puts only the sites whose record differs", async () => {
+    const owner = await setupOwner();
+    const a = await createSite(owner.token, owner.workspaceId);
+    const b = await createSite(owner.token, owner.workspaceId, { domain: "b.example.com" });
+    await stripBudget(a.id);
+    const { kv, puts } = countingKv();
+    expect(await runCron({ ...testEnv, CONFIG_KV: kv }, T, [siteSettingsRefreshJob])).toEqual([{ job: "site-settings-refresh", outcome: "ran" }]);
+    expect((await kvJson(a.id)).newProfileBudget).toEqual({ perDay: 20_000, instancePerDay: 20_000 });
+    expect(puts).toEqual([kvKeys.settings(a.id)]); // b は同じなので put しない
+    expect(await kvRaw(b.id)).not.toBeNull();
+  });
+
+  it("repairs a stale value left by the residual patch race (CL-Medium-11)", async () => {
+    const owner = await setupOwner();
+    const a = await createSite(owner.token, owner.workspaceId);
+    await call("PATCH", `/sites/${a.id}`, { token: owner.token, body: { newProfileBudgetPerDay: 5000 } });
+    // PATCH の KV の put と D1 の確定の間に、古い行で組み立てた記録が KV に残った状態
+    await env.CONFIG_KV.put(kvKeys.settings(a.id), JSON.stringify({ ...siteToSettings(await siteRow(a.id)), newProfileBudget: { perDay: 20_000, instancePerDay: 20_000 } }));
+    await runCron(testEnv, T, [siteSettingsRefreshJob]);
+    expect((await kvJson(a.id)).newProfileBudget).toEqual({ perDay: 5000, instancePerDay: 20_000 });
+  });
+
+  it("does nothing while frozen and catches up after", async () => {
+    const owner = await setupOwner();
+    const a = await createSite(owner.token, owner.workspaceId);
+    await stripBudget(a.id);
+    await freeze();
+    expect(await runCron(testEnv, T, [siteSettingsRefreshJob])).toEqual([{ job: "site-settings-refresh", outcome: "skipped_frozen" }]);
+    expect((await kvJson(a.id)).newProfileBudget).toBeUndefined();
+    await unfreeze();
+    expect(await runCron(testEnv, T + 15 * 60_000, [siteSettingsRefreshJob])).toEqual([{ job: "site-settings-refresh", outcome: "ran" }]);
+    expect((await kvJson(a.id)).newProfileBudget).toBeDefined();
+  });
+
+  it("stops without writing when the freeze starts after the run began", async () => {
+    const owner = await setupOwner();
+    const a = await createSite(owner.token, owner.workspaceId);
+    await stripBudget(a.id);
+    const kv = new Proxy(env.CONFIG_KV, {
+      get(target, prop) {
+        const v = Reflect.get(target, prop);
+        if (prop === "get") return async (...args: unknown[]) => ((await freeze()), (v as Function).apply(target, args));
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    });
+    expect(await runCron({ ...testEnv, CONFIG_KV: kv }, T, [siteSettingsRefreshJob])).toEqual([{ job: "site-settings-refresh", outcome: "stopped_frozen" }]);
+    expect((await kvJson(a.id)).newProfileBudget).toBeUndefined();
+  });
+
+  it("carries the position over to the next day unless it is END", async () => {
+    const owner = await setupOwner();
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) ids.push((await createSite(owner.token, owner.workspaceId, { domain: `c${i}.example.com` })).id);
+    ids.sort();
+    for (const id of ids) await stripBudget(id);
+    // 前日に途中まで回った(ids[0] まで)。今日はその続きから: ids[0] は触らず、ids[1]・ids[2] を直す
+    await env.DB.prepare("insert into cron_cursors (job, day, cursor) values ('site-settings-refresh', '2026-10-20', ?)").bind(ids[0]).run();
+    expect(await runCron(testEnv, T, [siteSettingsRefreshJob])).toEqual([{ job: "site-settings-refresh", outcome: "ran" }]);
+    expect((await kvJson(ids[0]!)).newProfileBudget).toBeUndefined();
+    expect((await kvJson(ids[1]!)).newProfileBudget).toBeDefined();
+    expect((await kvJson(ids[2]!)).newProfileBudget).toBeDefined();
+    // 末尾まで回ったので位置は END(その日は終わり)。翌日は先頭から全サイトを見直す
+    expect(await env.DB.prepare("select day, cursor from cron_cursors where job = 'site-settings-refresh'").first()).toEqual({ day: "2026-10-21", cursor: "#end" });
+    await stripBudget(ids[0]!);
+    expect(await runCron(testEnv, T + 24 * 3_600_000, [siteSettingsRefreshJob])).toEqual([{ job: "site-settings-refresh", outcome: "ran" }]);
+    expect((await kvJson(ids[0]!)).newProfileBudget).toBeDefined();
+  });
+
+  it("covers more sites than one page across runs and records success only at the end", async () => {
+    const owner = await setupOwner();
+    const ids: string[] = [];
+    for (let i = 0; i < 12; i++) ids.push((await createSite(owner.token, owner.workspaceId, { domain: `s${i}.example.com` })).id);
+    for (const id of ids) await stripBudget(id);
+    const first = await runCron(testEnv, T, [siteSettingsRefreshJob]);
+    expect(first).toEqual([{ job: "site-settings-refresh", outcome: "continued" }]);
+    expect((await jobRuns()).find((r) => r.job === "site-settings-refresh")).toBeUndefined();
+    expect(await runCron(testEnv, T + 15 * 60_000, [siteSettingsRefreshJob])).toEqual([{ job: "site-settings-refresh", outcome: "ran" }]);
+    for (const id of ids) expect((await kvJson(id)).newProfileBudget).toBeDefined();
+  });
+});
+
+// plan12 K14 (b): config-cleanup(古い版の config を公開の無い日にも消す)
+describe("config-cleanup (plan12 K14 (b))", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const t0 = 1_800_000_000_000; // 公開の時刻(テスト用の固定値)
+  const T = t0 + 2 * 3_600_000; // 公開の 2 時間後(UTC の時刻は 1 時以降になるよう下で確かめる)
+  /** 配信ファイルが配る版を記録させるため、常に deployed を返す偽のデプロイ専用の Worker を入れる(これが無いと掃除は何も消さない) */
+  const deployEnv = (over: Partial<Env> = {}): Env => ({ ...testEnv, DEPLOYER: fakeDeployer(), ...over });
+  const configExists = async (sid: string, v: number) => (await env.CONFIG_KV.get(kvKeys.config(sid, v))) !== null;
+  /** 公開を n 回する(時刻は 1 秒ずつ。5 分以内なので公開のときの掃除は何も消さない) */
+  async function publishTimes(owner: Awaited<ReturnType<typeof setupOwner>>, sid: string, n: number) {
+    for (let i = 0; i < n; i++) expect((await publishSite(deployEnv(), getDb(env), await siteRow(sid), owner.userId, t0 + i * 1000)).ok).toBe(true);
+  }
+  async function secondSite(owner: Awaited<ReturnType<typeof setupOwner>>) {
+    const { id: sid } = await createSite(owner.token, owner.workspaceId, { id: "site_second", domain: "second.example.com" });
+    const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_second" });
+    await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
+    await runDirect(sid, eid);
+    return sid;
+  }
+
+  it("is registered last as a daily job that writes control and has no query share", () => {
+    expect(new Date(T).getUTCHours()).toBeGreaterThanOrEqual(1);
+    expect(configCleanupJob).toMatchObject({ name: "config-cleanup", cadence: { daily: { afterUtcHour: 1 } }, writesControl: true });
+    expect(configCleanupJob.queryShare).toBeUndefined();
+    expect(CRON_JOBS.at(-1)).toBe(configCleanupJob);
+  });
+
+  it("deletes the retired versions on a day without a publish and keeps the served one", async () => {
+    const { owner, sid } = await siteWithRunning();
+    await publishTimes(owner, sid, 3);
+    for (let v = 1; v <= 3; v++) expect(await configExists(sid, v)).toBe(true); // 公開のときの掃除は 5 分以内の版を消さない
+    expect(await runCron(deployEnv(), T, [configCleanupJob])).toEqual([{ job: "config-cleanup", outcome: "ran" }]);
+    expect(await configExists(sid, 1)).toBe(false);
+    expect(await configExists(sid, 2)).toBe(false);
+    expect(await configExists(sid, 3)).toBe(true);
+    const marks = await getDb(env).selectFrom("publishes").select(["version", "kv_deleted"]).where("site_id", "=", sid).orderBy("version").execute();
+    expect(marks.map((r) => [r.version, r.kv_deleted])).toEqual([[1, 1], [2, 1], [3, 0]]);
+    // 位置は「その日は終わり」になる
+    expect(await env.DB.prepare("select day, cursor from cron_cursors where job = 'config-cleanup'").first()).toEqual({ day: new Date(T).toISOString().slice(0, 10), cursor: "#end" });
+  });
+
+  it("deletes nothing for a site whose kv cannot be read (fail-closed) and still cleans the others", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const other = await secondSite(owner);
+    await publishTimes(owner, sid, 3);
+    await publishTimes(owner, other, 3);
+    const run = await runCron(deployEnv({ CONFIG_KV: failingKv(new RegExp(`^${kvKeys.active(sid)}$`), "get") }), T, [configCleanupJob]);
+    expect(run).toEqual([{ job: "config-cleanup", outcome: "ran" }]);
+    for (let v = 1; v <= 3; v++) expect(await configExists(sid, v)).toBe(true); // 読めないサイトは何も消さない
+    expect(await configExists(other, 1)).toBe(false);
+    expect(await configExists(other, 2)).toBe(false);
+    expect(await configExists(other, 3)).toBe(true);
+  });
+
+  it("does nothing while frozen, and stops before deleting when the freeze starts during the run", async () => {
+    const { owner, sid } = await siteWithRunning();
+    await publishTimes(owner, sid, 3);
+    await freeze();
+    expect(await runCron(deployEnv(), T, [configCleanupJob])).toEqual([{ job: "config-cleanup", outcome: "skipped_frozen" }]);
+    for (let v = 1; v <= 3; v++) expect(await configExists(sid, v)).toBe(true);
+    await unfreeze();
+    // 実行の最初は凍結していないが、KV の active を読んだ後(消す直前の確かめの前)に凍結が入る
+    const freezingKv = new Proxy(env.CONFIG_KV, {
+      get(target, prop) {
+        const v = Reflect.get(target, prop);
+        if (prop === "get")
+          return async (key: string, ...rest: unknown[]) => {
+            const r = await (target.get as (...a: unknown[]) => unknown).apply(target, [key, ...rest]);
+            if (key === kvKeys.active(sid)) await freeze();
+            return r;
+          };
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    }) as KVNamespace;
+    expect(await runCron(deployEnv({ CONFIG_KV: freezingKv }), T, [configCleanupJob])).toEqual([{ job: "config-cleanup", outcome: "stopped_frozen" }]);
+    for (let v = 1; v <= 3; v++) expect(await configExists(sid, v)).toBe(true);
+    await unfreeze();
+    // 凍結が明けた次の実行で消える(日の記録は成功したときだけ)
+    expect(await runCron(deployEnv(), T + 15 * 60_000, [configCleanupJob])).toEqual([{ job: "config-cleanup", outcome: "ran" }]);
+    expect(await configExists(sid, 1)).toBe(false);
+  });
+
+  it("leaves a site without an active version alone and ends the day", async () => {
+    const owner = await setupOwner();
+    await createSite(owner.token, owner.workspaceId); // 公開していない(active_version が無い)サイトは対象外
+    expect(await runCron(deployEnv(), T, [configCleanupJob])).toEqual([{ job: "config-cleanup", outcome: "ran" }]);
+    expect(await env.DB.prepare("select cursor from cron_cursors where job = 'config-cleanup'").first()).toEqual({ cursor: "#end" });
   });
 });

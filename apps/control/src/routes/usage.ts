@@ -7,6 +7,7 @@ import { validationFailed } from "../errors";
 import { readInstanceSettings, UsageSettingsSchema, usageSettingsOf, writeInstanceSettings } from "../instance-settings";
 import { errorResponses } from "../openapi";
 import { assertCanReadUsage, requireInstanceAdmin } from "../roles";
+import { refreshSiteRecords } from "../site-records";
 import { getUsage } from "../usage";
 import { usageConfig } from "../usage/fetch";
 import { RESOURCE_IDS } from "../usage/limits";
@@ -99,7 +100,13 @@ usageRoutes.patch(
     if (!result.success) throw validationFailed(result.error);
   }),
   async (c) => {
-    await writeInstanceSettings(c.get("db"), c.req.valid("json"), c.get("user").id);
-    return c.json(usageSettingsOf(await readInstanceSettings(c.get("db"))));
+    const db = c.get("db");
+    const body = c.req.valid("json");
+    await writeInstanceSettings(db, body, c.get("user").id);
+    const after = await readInstanceSettings(db);
+    // plan12 K10: プランを送ったときは、新しい訪問者の予算の既定が変わりうるので全サイトの KV の記録をその場で書き直す
+    // (書けなかった分は site-settings-refresh が翌日までに直す)。同じプランの再送でも書き直す(前回の書き直しが途中で止まっていた場合のやり直しになる)
+    if (body.cloudflarePlan !== undefined) await refreshSiteRecords(c.env, db, after.cloudflarePlan);
+    return c.json(usageSettingsOf(after));
   },
 );
