@@ -11,7 +11,7 @@ import { newProfileBudgetStub, type NewProfileLimits } from "./new-profile-budge
  * - 作る前に許可を取らないので、応答までの DO への往復は増えない(報告はすべて waitUntil の中)。
  *   その代わり上限を少し超えうる(量は plan12 K9 の「超えうる量」)。予算の DO に届かない間は止められない(fail-open)
  * - タイマーは使わない。時刻の比較だけで判定する(報告のタイムアウトも、次の報告・聞き直しの時刻も)
- * - 止まりを解くのは、時刻(窓の終わり)と、印を立てた後に始めた報告の「尽きていない」の応答だけ。
+ * - 止まりを解くのは、時刻(窓の終わり)と、印を立てた(伸ばした)後に始めた報告の「尽きていない」の応答だけ。
  *   印は DO が返した窓の終わりより後にならないので、止まりっぱなしになる経路は無い
  */
 
@@ -48,7 +48,7 @@ type Dest = {
   stoppedUntil: number;
   /** 印が効いている間に、次に聞き直す時刻 */
   recheckAt: number;
-  /** 印を立てた時刻。これより前に始めた報告の「尽きていない」の応答では印を外さない */
+  /** 印を立てた時刻(効いている印を伸ばした応答では、その報告を始めた時刻まで進める)。これより前に始めた報告の「尽きていない」の応答では印を外さない */
   markedAt: number;
   /** 報告中の報告(始めた時刻)。報告中でなければ null。自分が始めた報告かは、この object の同一性で見分ける */
   inflight: { since: number } | null;
@@ -136,9 +136,13 @@ export function createNewProfileCounter(deps: NewProfileCounterDeps): NewProfile
     if (d.inflight === mine) d.inflight = null; // タイムアウトの後に新しい報告が始まっていたら触らない
     const until = res?.exhaustedUntil ?? null;
     if (until !== null) {
-      // 尽きた: 印を立てる。効いている印は早い値で縮めない。切れていたときだけ印を立てた時刻を記録する
-      if (stopped(d, now)) d.stoppedUntil = Math.max(d.stoppedUntil, until);
-      else {
+      // 尽きた: 印を立てる。効いている印は早い値で縮めない。
+      // 効いている印を伸ばすときは、印を立てた時刻もこの報告を始めた時刻まで進める(この報告より前に始めてタイムアウトした
+      // 報告の遅い null で、DO がいま尽きたと言っている印を外さないため)。切れていたときは応答の時刻を記録する
+      if (stopped(d, now)) {
+        d.stoppedUntil = Math.max(d.stoppedUntil, until);
+        d.markedAt = Math.max(d.markedAt, startedAt);
+      } else {
         d.stoppedUntil = until;
         d.markedAt = now;
       }

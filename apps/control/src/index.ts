@@ -6,7 +6,9 @@ import { app } from "./app-routes";
 import { stripTrustedHeaders } from "./trusted-headers";
 
 // ルートの登録は app-routes.ts(Node のスクリプトが読めるよう cloudflare:workers に依存させない。plan12 K7)。
-// テストは `import { app } from "../src/index"` で読むので再 export する
+// テストは `import { app } from "../src/index"` で読むので再 export する。
+// binding で向けてよい入口は ControlBff だけ。app には何も binding で向けない(公開の入口が通す stripTrustedHeaders を通らず、
+// 送り手が付けた x-wtt-client-ip をそのまま信用してしまうため)
 export { app };
 
 /**

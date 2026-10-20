@@ -1,7 +1,7 @@
 import type { EventBody, SiteSettings } from "@wtt/core";
 import type { Env } from "./env";
 import { newProfileCounterFor } from "./new-profile-counter";
-import { profileStub } from "./profile";
+import { profileStub, readRecordGoalOut } from "./profile";
 import { forgetResults } from "./results";
 import { loadActiveVersion, loadConfig } from "./store";
 
@@ -49,7 +49,8 @@ export async function handleEvent(
   const counter = budget ? newProfileCounterFor(env) : null;
   const allowCreate = counter && budget ? counter.canCreate(siteId, budget, Date.now(), waitUntil) : true;
   try {
-    const { created } = await profileStub(env, siteId, visitorId).recordGoal(goalId, settings.retentionDays, Math.floor(Date.now() / 1000), allowCreate);
+    // deploy の切り替わりの間は古い DO の形(値なし)が返りうるので readRecordGoalOut で読む
+    const { created } = readRecordGoalOut(await profileStub(env, siteId, visitorId).recordGoal(goalId, settings.retentionDays, Math.floor(Date.now() / 1000), allowCreate));
     if (counter && budget && allowCreate) counter.record(siteId, budget, created ? "created" : "not_created", Date.now(), waitUntil);
     return "recorded"; // 予算が尽きた後の新しい ID(保存していない)も同じ 204
   } catch (e) {

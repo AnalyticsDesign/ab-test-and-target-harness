@@ -24,8 +24,13 @@ describe("saveErrorMessage", () => {
   });
 
   // plan12 K5 / K6: 古い管理画面は 3 段の保存の途中で 426 になり得る。凍結と逆に、再読み込みを案内する(入力は消える)
+  // hint は control の CLIENT_TOO_OLD_HINT(apps/control/src/client-version.ts)と同じ文。本物の hint で、案内が重ならないことを確かめる
+  const realHint =
+    "管理画面ならページを再読み込みしてください(未保存の入力は消えるので、必要なら控えてから)。API を直接呼ぶクライアントは /openapi.json を読み直してから再試行してください";
+  const tooOld = new ApiClientError(426, "client_too_old", { message: "管理画面が古い版です", hint: realHint });
+  const count = (text: string, part: string) => text.split(part).length - 1;
+
   it("partly saved and 426 client_too_old: tell to reload and that unsaved input is lost, not 'save again later'", () => {
-    const tooOld = new ApiClientError(426, "client_too_old", { message: "管理画面が古い版です", hint: "管理画面ならページを再読み込みしてください" });
     const text = saveErrorMessage(tooOld, true);
     expect(text).toContain("管理画面が古い版です");
     expect(text).toContain("一部は保存されています");
@@ -33,7 +38,17 @@ describe("saveErrorMessage", () => {
     expect(text).toContain("未保存の入力は消えます");
     expect(text).not.toContain("もう一度保存すると");
     expect(text).not.toContain("入力はそのまま残っています");
-    // 何も保存されていない 426 は封筒のまま
-    expect(saveErrorMessage(tooOld, false)).toBe("管理画面が古い版です 管理画面ならページを再読み込みしてください");
+    expect(text).not.toContain("メンテナンス");
+  });
+
+  // 最終レビュー: 封筒の hint(再読み込みの案内と API クライアント向けの文)に同じ案内を足して二重にしない
+  it("partly saved and 426: one reload advice, without the sentence for API clients", () => {
+    const text = saveErrorMessage(tooOld, true);
+    expect(count(text, "再読み込み")).toBe(1);
+    expect(count(text, "未保存の入力は消え")).toBe(1);
+    expect(text).not.toContain("API を直接呼ぶクライアント");
+    expect(text).not.toContain("/openapi.json");
+    // 何も保存されていない 426 は封筒のまま(ほかの画面のエラーと同じ出し方)
+    expect(saveErrorMessage(tooOld, false)).toBe(`管理画面が古い版です ${realHint}`);
   });
 });

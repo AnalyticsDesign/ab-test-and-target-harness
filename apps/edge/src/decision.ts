@@ -1,7 +1,7 @@
 import { decide, experimentsForUrl, patternsForUrl, type CompiledConfig, type DecisionBody, type DecisionResponse, type PageContext, type SiteSettings } from "@wtt/core";
 import type { Env } from "./env";
 import { newProfileCounterFor } from "./new-profile-counter";
-import { profileStub } from "./profile";
+import { profileStub, readDecideOut } from "./profile";
 
 const MAX_BODY_BYTES = 4096; // spec §6.4 / §9.5
 
@@ -89,7 +89,8 @@ export async function evaluateDecision(
   const counter = budget ? newProfileCounterFor(env) : null;
   const allowCreate = counter && budget ? counter.canCreate(siteId, budget, Date.now(), waitUntil) : true;
   try {
-    const { results, created } = await profileStub(env, siteId, visitorId).decide({
+    // deploy の切り替わりの間は古い DO の形(配列)が返りうるので readDecideOut で読む
+    const out = await profileStub(env, siteId, visitorId).decide({
       retentionDays: settings.retentionDays,
       patternKeys: Object.keys(config.patterns),
       matchedPatterns,
@@ -99,6 +100,7 @@ export async function evaluateDecision(
       ...(config.timezone !== undefined ? { timezone: config.timezone } : {}),
       allowCreate,
     });
+    const { results, created } = readDecideOut(out);
     if (counter && budget && allowCreate) counter.record(siteId, budget, created ? "created" : "not_created", Date.now(), waitUntil);
     return toResponse(results);
   } catch (e) {

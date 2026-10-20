@@ -149,6 +149,21 @@ export class VisitorProfile extends DurableObject<Env> {
   }
 }
 
+export type ProfileDecideOut = { results: Array<{ experimentId: string; variantId: string }>; created: boolean };
+
+/**
+ * plan12 の前の DO は decide が配列、recordGoal が値なしを返した。deploy の切り替わりの間は新しい Worker が古い DO を呼ぶことが
+ * あるので、古い形も読む(created は false = 数えない側。予算は認可ではないので、その間の少ない数え漏れは許す)。
+ * 古い Worker が新しい DO を呼ぶ側は直せない(切り替わりの間だけ decide が失敗しうる)
+ */
+export function readDecideOut(out: unknown): ProfileDecideOut {
+  if (Array.isArray(out)) return { results: out as ProfileDecideOut["results"], created: false };
+  return out as ProfileDecideOut;
+}
+export function readRecordGoalOut(out: unknown): { created: boolean } {
+  return out !== null && typeof out === "object" && "created" in out ? { created: (out as { created: unknown }).created === true } : { created: false };
+}
+
 /** spec §8.1: 1 訪問者 1 Site = 1 DO。名前に siteId を含めるので Site をまたいで Profile は混ざらない(cross_site_profile_isolation) */
 export function profileStub(env: Env, siteId: string, visitorId: string): DurableObjectStub<VisitorProfile> {
   return env.VISITOR_PROFILE.get(env.VISITOR_PROFILE.idFromName(`${siteId}:${visitorId}`));

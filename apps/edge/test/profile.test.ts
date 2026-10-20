@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:workers";
 import { runDurableObjectAlarm, runInDurableObject, reset } from "cloudflare:test";
 import { generateVisitorId, inTraffic, type Experiment, type PageContext } from "@wtt/core";
-import { PROFILE_KEY, profileStub, type ProfileDecideInput, type ProfileRecord, type VisitorProfile } from "../src/profile";
+import { PROFILE_KEY, profileStub, readDecideOut, readRecordGoalOut, type ProfileDecideInput, type ProfileRecord, type VisitorProfile } from "../src/profile";
 
 const DAY = 86400;
 const ctx: PageContext = { url: "https://site.example/pricing", query: {}, device: "desktop", referrer: "" };
@@ -211,5 +211,19 @@ describe("VisitorProfile alarm (spec §8.3、決定 11)", () => {
     expect(await readProfile(stub)).toBeUndefined();
     expect(await runInDurableObject(stub, (_i, state) => state.storage.getAlarm())).toBeNull();
     expect(await runDurableObjectAlarm(stub)).toBe(false); // 2 回目は走らない
+  });
+});
+
+// 最終レビュー: deploy の切り替わりの間は、古い Worker と新しい DO(またはその逆)が組むことがある。
+// 新しい Worker は古い DO の戻り値の形(decide = 配列、recordGoal = 値なし)も読めること
+describe("Profile の DO の戻り値の古い形", () => {
+  it("decide の配列は results として読み、created は false(数えない側)", () => {
+    const results = [{ experimentId: "exp_001", variantId: "vA" }];
+    expect(readDecideOut(results)).toEqual({ results, created: false });
+    expect(readDecideOut({ results, created: true })).toEqual({ results, created: true });
+  });
+  it("recordGoal の値なしは created: false として読む", () => {
+    expect(readRecordGoalOut(undefined)).toEqual({ created: false });
+    expect(readRecordGoalOut({ created: true })).toEqual({ created: true });
   });
 });

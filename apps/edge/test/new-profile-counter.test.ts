@@ -471,6 +471,36 @@ describe("止まりの印と聞き直し(plan12 K9・SDD の着手時の改め (
     expect(h.can("s1", raised)).toBe(true);
   });
 
+  it("印を伸ばした応答より前に始めた報告の遅い null では、伸ばした印を外さない", async () => {
+    const h = new Harness();
+    h.record("s1", PAID, "created"); // 報告 A
+    h.calls[0]!.resolve(until(H1)); // 印を立てる(立てた時刻 = T0)
+    await settle();
+    expect(h.can("s1", PAID)).toBe(false);
+    // 上限を上げた後の聞き直し B(印を立てた後に始めた)。B は返らずタイムアウトする
+    const raised: NewProfileBudget = { perDay: 1000 };
+    h.t = T0 + NEW_PROFILE_RECHECK_MS;
+    expect(h.can("s1", raised)).toBe(false);
+    const b = h.last();
+    // 次の聞き直し C は尽きたを返し、効いている印を伸ばす
+    h.t += NEW_PROFILE_RECHECK_MS;
+    expect(h.can("s1", raised)).toBe(false);
+    const c = h.last();
+    expect(c).not.toBe(b);
+    c.resolve(until(MIDNIGHT));
+    await settle();
+    // B の遅い null は C より前に始めた報告の応答なので、DO がいま尽きたと言っている印を外さない
+    b.resolve(NULL);
+    await settle();
+    expect(h.can("s1", raised)).toBe(false);
+    // C の後に始めた聞き直しの null は外す
+    h.t += NEW_PROFILE_RECHECK_MS;
+    expect(h.can("s1", raised)).toBe(false);
+    h.last().resolve(NULL);
+    await settle();
+    expect(h.can("s1", raised)).toBe(true);
+  });
+
   it("lowered_limit_is_judged_by_the_budget_do", async () => {
     const prefix = crypto.randomUUID();
     // その日の前の時間帯に 55 件(日の数はすでに 50 以上)
