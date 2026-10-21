@@ -133,7 +133,7 @@ export function reasonsOf(values, c) {
       ? "タグを入れるサイトのドメインを Cloudflare で管理しているので、サイトと同じホストで動かす(WAF・キャッシュ・Safari 対策が使える)"
       : c.edge_address === "custom-domain"
         ? "タグを入れるサイトのドメインは Cloudflare に無いが、Cloudflare に置ける別のドメインがあるので、そのドメインで動かす(WAF・キャッシュが使える。Safari 対策の Mode B は使えない)"
-        : "タグを入れるサイトのドメインを Cloudflare で管理していないので、Cloudflare が用意するアドレス(*.workers.dev)で動かす(後からドメインに移せる)",
+        : "タグを入れるサイトのドメインを Cloudflare で管理していないので、Cloudflare が用意するアドレス(*.workers.dev)で動かす。後からサイトのドメインを、導入した Cloudflare アカウントに移せば、そのドメインでの動作に切り替えられる(デプロイガイド 2.8)",
   ];
   // アカウントの入れ替えの理由は、提示の確認の段落(render.mjs の accountChangeNote)に書く
   if (accountIsPaid(values)) r.push("このアカウントは既に Workers Paid なので、Paid として扱う");

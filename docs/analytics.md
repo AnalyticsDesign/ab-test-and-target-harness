@@ -345,7 +345,7 @@ SELECT
 
 ## 6. GA4 Data API の 2 本
 
-`analytics-recipe` の `ga4` には、そのまま送れる runReport リクエストが 2 本入る。`url` に `body` をそのまま POST する(プロパティは URL に入っているので、足すのは認証ヘッダだけ)。
+`analytics-recipe` の `ga4` には、そのまま送れる runReport リクエストが 2 本入る。`url` に `body` をそのまま POST する(プロパティは URL に入っているので、足すのは認証ヘッダーだけ)。
 
 | キー | 何が出るか | dimensions | metrics | dimensionFilter |
 |---|---|---|---|---|

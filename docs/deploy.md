@@ -21,10 +21,10 @@ AB Test and Target Harness を運用者自身の Cloudflare アカウントへ�
 
 ## 手で導入する最短の手順
 
-この手順は、設置サイトのゾーンに edge を置く構成のもの。ほかの構成では、次の節の手順を本文で読み、最短の手順の該当する手順をそれに置き換える:
+この手順は、設置サイトのゾーンに edge を置く構成のもの。ほかの構成では、次に挙げる節の手順を本文で読み、最短の手順の該当する手順をそれに置き換える:
 
-- 別のドメインに置く構成(`edge_address: custom-domain`): 0.4 のログインの後の確認の 4(ゾーンが有効になっているか)、0.5 の 2(`CF_TOKEN` が要る。DNS Read を含む)、2.3・2.4・2.9 (3) の `custom-domain` のときの手順、3.4 の `AB_EDGE_ORIGIN`(`https://<edge のホスト>`)、5 節(`<設置タグのホスト>` = edge のホスト)と、1 節の制約 (3)
-- `*.workers.dev` の構成(`edge_address: workers-dev`): 2.3・2.4・2.9 (3)・3.4 の `workers-dev` のときの手順、5 節(`<設置タグのホスト>` = `wtt-static` の workers.dev のホスト)と、1 節の制約 (3)
+- 別のドメインに置く構成(`edge_address: custom-domain`): 0.4 のログインの後の確認の 4(ゾーンが有効になっているか)、0.5 の 2(`CF_TOKEN` が要る。DNS Read を含む)、2.3・2.4・2.9 (3)(4) の `custom-domain` のときの手順、3.4 の `AB_EDGE_ORIGIN`(`https://<edge のホスト>`)、5 節(`<設置タグのホスト>` = edge のホスト)と、1 節の制約 (3)
+- `*.workers.dev` の構成(`edge_address: workers-dev`): 2.3・2.4・2.9 (3)(4)・3.4 の `workers-dev` のときの手順、5 節(`<設置タグのホスト>` = `wtt-static` の workers.dev のホスト)と、1 節の制約 (3)
 
 人が手で既定の構成(0.1 の表)を導入するための、いちばん短い手順。コマンドはすべて 0〜5 節にあるものと同じで、`pnpm docs:check` が一致を検査する。ここには確認を 1 行ずつと、期待と違ったときに読む先だけを添えた。AI エージェントに任せる場合、エージェントはここを使わず 0 節から読む(README のプロンプトのとおり)。
 
@@ -41,6 +41,7 @@ AB Test and Target Harness を運用者自身の Cloudflare アカウントへ�
 |---|---|---|
 | `<設置ホスト>` | タグを置くサイトのホスト名(例 `www.example.com`) | 設置サイト |
 | `<ゾーン名>` | そのホストの Cloudflare のゾーン(例 `example.com`) | ダッシュボードのゾーンの一覧 |
+| `<edge のホスト>` | 別のドメインに置く構成のときだけ。edge と設置タグを置く別のドメインのホスト(例 `ab.example.net`)。この構成では `<ゾーン名>` はこのホストのゾーン(例 `example.net`) | 0.2 の E2c |
 | `<Account ID>` | Cloudflare のアカウント ID(32 桁) | 手順 4 の `wrangler whoami` |
 | `<アカウントのサブドメイン>` | workers.dev のサブドメイン(例 `quiet-river-1a2b`) | 手順 5 の最初のコマンド |
 | `<control URL>` | `https://wtt-control.<アカウントのサブドメイン>.workers.dev` | 上から決まる。Google に登録するリダイレクト URI の元 |
@@ -239,7 +240,7 @@ pnpm -C apps/control exec wrangler d1 create wtt-control </dev/null   # 2.2 と�
 **12. 画像の置き場を決める**(3.2)
 
 - **R2 を使わない**: `apps/control/wrangler.jsonc` の `r2_buckets` の行を削除し、手順 14 の `AB_ASSET_PUBLIC_BASE` を書かない。画像アップロードと IMAGE の変更が無効になるだけで、ほかは同じ(3.2 の「`none` のとき」)
-- **R2 を使う**: ダッシュボードの Storage & databases(ストレージとデータベース)→ R2 Object Storage(R2 オブジェクトストレージ)で有効化する。支払い方法の登録を求められることがあるが、無料枠内なら請求は無い。次にバケットを作り、公開用のドメイン(例 `wtt-assets.<ゾーン名>`)をつなぐ:
+- **R2 を使う**: ダッシュボードの Storage & databases(ストレージとデータベース)→ R2 Object Storage(R2 オブジェクトストレージ)で有効化する。支払い方法の登録を求められることがあるが、無料枠内なら請求は無い。次にバケットを作り、公開用のドメインをつなぐ。公開用のドメインは、Cloudflare に追加した自分のゾーンのホストにする(例 `wtt-assets.<ゾーン名>`)。ゾーンを持たない構成では、R2 用にドメインを 1 つ追加するか、下の `dev-assets` を使う:
 
 ```bash
 pnpm -C apps/control exec wrangler r2 bucket create wtt-assets </dev/null   # 2.2 と同じく、設定ファイルへの追記は非対話なので行わない
@@ -891,7 +892,7 @@ admin のリクエストの数え方:
 | | ゾーンの Route(既定) | 別のドメイン(Custom Domain) | `*.workers.dev` |
 |---|---|---|---|
 | ゾーンの WAF Rate Limiting Rule(2.7) | 作れる | 作れる(別のドメインのゾーンに作る) | 作れない。Worker の起動前に捨てる仕組みが無いので、無料枠の日次上限(10 万リクエスト)を 1 台の機械から数分で使い切られうる。使い切ると当日は edge も control も止まる。上限はアカウント単位 |
-| ゾーンの Cache Rule(2.6) | 作る。設置タグのファイルのブラウザキャッシュの設定が上書きされないようにする、念のための設定 | 作る(別のドメインのゾーンに、条件のホストを `<edge のホスト>` にして作る) | 作れない(ゾーンが無い)。設置タグのファイルのヘッダ(60 秒)は配信専用の Worker が付けるので、変更されずに適用される |
+| ゾーンの Cache Rule(2.6) | 作る。設置タグのファイルのブラウザキャッシュの設定が上書きされないようにする、念のための設定 | 作る(別のドメインのゾーンに、条件のホストを `<edge のホスト>` にして作る) | 作れない(ゾーンが無い)。設置タグのファイルのヘッダー(60 秒)は配信専用の Worker が付けるので、変更されずに適用される |
 | Mode B(サーバー発行 Cookie) | 使える | 使えない(ページのホストに `/__ab/*` を置けないため。Safari 対策は Mode A か Mode C) | 使えない |
 | タグと設置サイト | 同一オリジン | 別オリジン。サイトの `allowedOrigins` にページの origin が要る(サイトを作ると `https://<ドメイン>` が入る。ページのホストが複数なら足す)。サイトが CSP を出していれば `script-src` と `connect-src` に `<edge のホスト>` を足す(設置タグと edge が同じホストなので 1 つ) | 別オリジン。サイトが CSP を出していれば `script-src` に `wtt-static` のホスト、`connect-src` に edge のホストを足す |
 
@@ -1106,11 +1107,13 @@ pnpm -C apps/edge exec wrangler deploy
 
 確認: `route` では、出力の末尾に `Deployed wtt-edge triggers` と Route が 1 本(`/v1/*`。Mode B があればその分も)並べば OK。`workers-dev` では triggers に `https://wtt-edge.<アカウントのサブドメイン>.workers.dev` が 1 行出る。この URL が edge の公開 origin で、3.4 の `AB_EDGE_ORIGIN` に使う(設置タグの `src` のホストは 2.9 の `wtt-static` のアドレス)。
 
+`route` では、確認の `curl` を設置ホストに送る(`workers-dev` では 2.3 のとおり workers.dev の URL に読み替える。`custom-domain` はこの下):
+
 ```bash
 curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "https://<設置ホスト>/v1/sites/probe/decision"   # 期待: 404 text/plain(Worker の応答。サイト本体の 404 ページ(text/html)ではない)
 ```
 
-期待と違うとき: `text/html` が返る → Route が適用されていない。`zone_name` / ホスト名 / `wrangler deploy` の出力の triggers を見比べる。
+期待と違うとき(`route`): `text/html` が返る → Route が適用されていない。`zone_name` / ホスト名 / `wrangler deploy` の出力の triggers を見比べる。
 
 `custom-domain` では、triggers に `<edge のホスト> (custom domain)` が出ること。確認の `curl` は edge のホストに送る:
 
@@ -1134,7 +1137,7 @@ curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "https://<edge のホ�
 
 ところがゾーンの Browser Cache TTL 設定は、エッジキャッシュに当たった応答の `Cache-Control` を設定値で上書きする場合がある。この設定が 4 時間を既定とするプランもある。上書きされると、戻り訪問者のブラウザが公開後も最大 4 時間ぶん古い config を使い続ける。
 
-実機で確かめたところ、配信専用の Worker の応答は上書きされなかった。ただしゾーンの設定やプランで変わりうるので、念のための保険として `/s/*` だけを Cache Rule で切り離し、配信ファイルのヘッダを尊重させておく。ゾーン全体の Browser Cache TTL を変える案は、サイト本体の静的アセットのキャッシュ挙動まで変わるので採らない。
+実機で確かめたところ、配信専用の Worker の応答は上書きされなかった。ただしゾーンの設定やプランで変わりうるので、念のための保険として `/s/*` だけを Cache Rule で切り離し、配信ファイルのヘッダーを尊重させておく。ゾーン全体の Browser Cache TTL を変える案は、サイト本体の静的アセットのキャッシュ挙動まで変わるので採らない。
 
 **設定値**(API・ダッシュボード共通)
 
@@ -1209,7 +1212,7 @@ curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/http_r
 
 #### 確認(API・ダッシュボード共通)
 
-この確認は、サイトを作って初回公開した後(5 節のスモーク)でないと 404 になる。ルールはここで作り、ヘッダ確認は 5 節のスモークの直後に行う。
+この確認は、サイトを作って初回公開した後(5 節のスモーク)でないと 404 になる。ルールはここで作り、ヘッダー確認は 5 節のスモークの直後に行う。
 
 ```bash
 curl -sSI "https://<設置タグのホスト>/s/<siteId>.js" | grep -iE 'cache-control|cf-cache-status'
@@ -1310,7 +1313,7 @@ IP with NAT support は Cloudflare の画面の名前で、日本語の表示は
 - 値は Free でも `requests_per_period` で変えられる。変えたら、binding の値が 2.3 の規則の値以上かを確かめる(下回っていれば 2.3 の規則の値に上げる)
 - 自社オフィスなど既知の送信元は、式に `and not ip.src in { <IP> }` を足して除外できる。公開の直後に社内から何度も開いて確かめるなど、自分たちの確認作業が遮断されないようにするために使う。レート制限ルールの式で送信元の IP を使えるのは、ゾーンが Business 以上のとき(Free の式で使えるのは URI Path など)。除外は WAF だけに適用され、edge の binding はその送信元も 1 つの IP からの合計で数える。除外した送信元からの合計が binding の上限(既定 1000 回 / 10 秒)を超えうるなら、binding をその合計まで上げる(2.3)
 - `needsProfile: false`(履歴の条件も割当の固定も使わない)のサイトは decision を送らない。`/event` も、結果を記録しないサイトなら送らないので、この上限に触れない。結果を記録するサイトは、テストの参加(訪問者 × テストで初回)と目標の達成(訪問者 × 目標で初回)を `/event` に送る(ページビューごとではない)
-- プランごとの違い: Free は 1 本・期間 10 秒・IP 単位だけ。Pro は 2 本・期間 1 分まで。Business は 5 本・期間 10 分まで・IP with NAT support も使える。Cookie・ヘッダ単位で数えられるのは Enterprise だけ
+- プランごとの違い: Free は 1 本・期間 10 秒・IP 単位だけ。Pro は 2 本・期間 1 分まで。Business は 5 本・期間 10 分まで・IP with NAT support も使える。Cookie・ヘッダー単位で数えられるのは Enterprise だけ
 
 429 は本文で判別する。`error code: 1015` は Cloudflare の遮断で、上の確認が検出するのはこの遮断。edge の binding が返す平文の 429 `rate limited` とは、本文で区別する。
 
@@ -1772,7 +1775,7 @@ curl -s https://<設置タグのホスト>/s/<siteId>.js | head -c 400
 curl -sSI "https://<設置タグのホスト>/s/<siteId>.js" | grep -iE 'cache-control|cf-cache-status'
 ```
 
-確認 3(配信専用の Worker のヘッダ): 設置タグのファイルで 200 を得た後に `curl -sSI "https://<設置タグのホスト>/s/<siteId>.js" | grep -i x-content-type-options` が `nosniff` を返すこと。これが配信専用の Worker が付けたヘッダの証拠になる。
+確認 3(配信専用の Worker のヘッダー): 設置タグのファイルで 200 を得た後に `curl -sSI "https://<設置タグのホスト>/s/<siteId>.js" | grep -i x-content-type-options` が `nosniff` を返すこと。これが配信専用の Worker が付けたヘッダーの証拠になる。
 
 確認 4(画像。`asset_public_base` が `none` 以外のときだけ): 管理画面から画像を 1 枚アップロードし、応答の URL を取得して 200 を確認する。`dev-assets` なら URL は `<control URL>/dev-assets/...`。
 
@@ -2325,13 +2328,13 @@ Zero Trust(Free で 50 ユーザーまで)の Access アプリケーション(Se
 
 ## 9. 稼働の確認
 
-### (a) 設置タグのファイルの応答ヘッダ
+### (a) 設置タグのファイルの応答ヘッダー
 
 ```bash
 curl -sI https://<設置タグのホスト>/s/<siteId>.js | grep -i -e content-type -e cache-control -e nosniff
 ```
 
-`content-type: text/javascript; charset=utf-8`、`cache-control: public, max-age=60`、`x-content-type-options: nosniff` の 3 つが返ること(配信専用の Worker の応答。ヘッダは `wtt-static` の `_headers` が付ける)。`<設置タグのホスト>` は 2.9 の (4) のとおり。`max-age` が 60 でなければ 2.6 の Cache Rule を確認する。
+`content-type: text/javascript; charset=utf-8`、`cache-control: public, max-age=60`、`x-content-type-options: nosniff` の 3 つが返ること(配信専用の Worker の応答。ヘッダーは `wtt-static` の `_headers` が付ける)。`<設置タグのホスト>` は 2.9 の (4) のとおり。`max-age` が 60 でなければ 2.6 の Cache Rule を確認する。
 
 ### (b) Workers の指標(GraphQL Analytics API)
 
@@ -2350,7 +2353,7 @@ echo "${#CF_ZONE_ID}"   # 期待: 32
 ```
 
 ```bash
-# CF_ANALYTICS_TOKEN: Account Analytics: Read + Zone Analytics: Read のみのトークン / CF_ACCOUNT_ID: pnpm -C apps/control exec wrangler whoami の Account ID / CF_ZONE_ID: 設置ゾーンの ID
+# CF_ANALYTICS_TOKEN: Account Analytics: Read + Zone Analytics: Read のみのトークン / CF_ACCOUNT_ID: pnpm -C apps/control exec wrangler whoami の Account ID / CF_ZONE_ID: zone_name のゾーンの ID
 # 半開区間 [SINCE, UNTIL)。UNTIL を過ぎた実時刻になってから実行する
 G=https://api.cloudflare.com/client/v4/graphql; H=(-H "Authorization: Bearer $CF_ANALYTICS_TOKEN" -H 'content-type: application/json')
 SINCE=<開始 UTC> UNTIL=<終了 UTC>
@@ -2556,6 +2559,6 @@ pnpm -C apps/control exec wrangler kv namespace list | jq '[.[] | select(.title 
 curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置タグのホスト>/s/<siteId>.js"   # 期待: route は設置サイト自身の応答(404 など)。custom-domain は名前を引けずに失敗するか、ゾーンのほかのレコードの先の応答。200 の JS が返るなら `wtt-static` の Route が残っている
 ```
 
-`<設置タグのホスト>` は 2.9 の (4) のとおり。`custom-domain` では DNS レコードが無くなるので、最後の `curl` が名前を引けずに失敗する(`Could not resolve host`)のが期待。ゾーンにワイルドカードのレコード(`*.example.net` など)があると名前は引けて、そのレコードの先のサーバーの応答が返る。その場合も、200 の JS でなければ消えている。`workers-dev` では最後の `curl` を飛ばす(無効にした後の workers.dev の応答は Cloudflare が保証していない)。
+`<設置タグのホスト>` は 2.9 の (4) のとおり。`custom-domain` では DNS レコードが無くなるので、最後の `curl` が名前を引けずに失敗する(`Could not resolve host`)のが期待。ゾーンにワイルドカードのレコード(`*.example.net` など)があると名前は引けて、そのレコードの先のサーバーの応答が返る。その場合も、200 の JS でなければ消えている。`workers-dev` では最後の `curl` は行わない。workers.dev を無効にした後にどんな応答が返るかを、Cloudflare は保証していないため。
 
 Free プランの料金はリソースを消した時点で止まる(Workers Paid にしていた場合、プランの解約はダッシュボードの Compute(コンピュート)→ Workers plans(Workers のプラン)から)。

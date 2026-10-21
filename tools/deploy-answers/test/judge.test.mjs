@@ -79,7 +79,8 @@ test("既存の Paid のアカウント × ドメインなし → 推奨・最�
   assert.equal(vr.cloudflare_account, "separate");
   assert.match(tasksOf(vr, r)[0], /Free の Cloudflare アカウントを新しく作る/);
   // 入れ替えの理由は提示の確認の段落に書くので、理由の一覧には出さない
-  assert.ok(!has(reasonsOf(vr, r), /アカウント/));
+  // (workers.dev の理由の文は「導入した Cloudflare アカウントに移せば」を含むので、入れ替えの理由の言い回しだけを見る)
+  assert.ok(!has(reasonsOf(vr, r), /新しく.*アカウント|アカウントが変わる|既存のアカウント|同じアカウント/));
   assert.ok(!has(reasonsOf(vr, r), /Paid として扱う/));
   assert.ok(!has(notesOf(vr, r), /Free のアカウントを別に作り/));
   assert.ok(!has(billingOf(r), /そのまま課金/));
@@ -202,9 +203,9 @@ test("A/B テストだけなら、無料枠を使い切られても出し分け�
 // 決定 64 (3): 別のドメインに edge を載せる構成(edge_address: custom-domain)
 const custom = { ...base, site_on_cloudflare: "no", edge_host: "ab.example.net" };
 
-test("E2 = no × edge_host: none の提示は、E2c を足す前の E2 = no の出力(fixture)と 1 文字も違わない", () => {
+test("E2 = no × edge_host: none の提示は、E2c を足す前の E2 = no の出力(fixture。その後に直した文は fixture にも写してある)と 1 文字も違わない", () => {
   const v = { ...base, site_on_cloudflare: "no", edge_host: "none" };
-  const before = readFileSync(new URL("./fixtures/e2-no-before-7u.md", import.meta.url), "utf8");
+  const before = readFileSync(new URL("./fixtures/e2-no-before-custom-domain.md", import.meta.url), "utf8");
   assert.equal(renderProposals(v, recommend(v), LIGHTEST), before);
 });
 

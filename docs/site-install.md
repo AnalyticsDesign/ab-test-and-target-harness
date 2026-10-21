@@ -378,7 +378,7 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 | allowlist 方式(ホストの列挙だけで nonce なし) | 作る inline の `<script>` / `<style>` が通らない。`'unsafe-inline'` を足せば通るが推奨しない — nonce 方式への移行を勧める(他社ツールや GTM も同じ案内をしている) |
 | Trusted Types の強制(`require-trusted-types-for 'script'`) | **非対応**。HTML(`innerHTML` による挿入そのものが拒否される。`<script>` の有無を問わない)と CUSTOM_JS は動かない。TEXT / IMAGE / HIDE / ATTRIBUTE / CSS は動く(`<style>` の `textContent` は Trusted Types の対象外)。失敗はその変更だけに閉じる |
 
-**設置タグや edge が設置サイトと別オリジンの構成**(`*.workers.dev` や別ドメインで公開している)では、`connect-src` に edge のホストを足す(decision / event の送信先)。結果を記録する場合も、テストの参加と目標の達成を同じ edge の `/event` に送るので、`connect-src` に edge のホストが要る(足さないと送信がブラウザで止まり、ツールの側では失敗として数えられない)。設置タグの `script-src` には、設置タグを配るホスト(配信専用の Worker)を allowlist 方式のサイトだけ足す(nonce 方式なら設置タグの nonce で通る)。同一オリジンの構成(設置サイトのゾーンの Route)では不要。
+**設置タグや edge が設置サイトと別オリジンの構成**(`*.workers.dev` や別のドメインで公開している)では、`connect-src` に edge のホストを足す(decision / event の送信先)。結果を記録する場合も、テストの参加と目標の達成を同じ edge の `/event` に送るので、`connect-src` に edge のホストが要る(足さないと送信がブラウザで止まり、ツールの側では失敗として数えられない)。設置タグの `script-src` には、設置タグを配るホスト(配信専用の Worker)を allowlist 方式のサイトだけ足す(nonce 方式なら設置タグの nonce で通る)。同一オリジンの構成(設置サイトのゾーンの Route)では不要。
 
 別のドメインに置く構成では、設置タグと edge が同じ `<edge のホスト>`(例 `ab.example.net`)にあるので、足すホストはこの 1 つ(`connect-src` と、allowlist 方式なら `script-src`)。`*.workers.dev` の構成では、`connect-src` に edge のホスト(`wtt-edge.<アカウントのサブドメイン>.workers.dev`)、`script-src` に配信専用の Worker のホスト(`wtt-static.<アカウントのサブドメイン>.workers.dev`)と、2 つに分かれる。どちらの別オリジンの構成でも、サイトの `allowedOrigins` にページの origin が要り([2 節](#2-サイトを作る))、Mode B は使えない([8 節](#8-mode-c-と-mode-b))。
 
@@ -388,7 +388,7 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 
 **CUSTOM_JS だけのパターンがブロックされると、処理群だけ Exposure が出ず、対照群は出るので、比較の母数が片側に偏る(SRM)。** 同じ偏りは、Trusted Types 下の HTML の変更や、`html` / `head` / `body` を対象にした `position: replace`(仕様上スキップされる)でも起きる。**コードの変更を含むエクスペリエンスは、開始直後に必ず対象ページを Chrome で開き、Console に CSP 違反が無いことと、両群で `ab_exposure` が出ることを確認し、違反があればすぐ一時停止する**([運用ガイド 5 節](operations.md#5-開始直後のチェック))。
 
-補足: `script-src-elem` があればそちらが優先される。複数の CSP ヘッダがある場合はすべてを満たす必要がある。`'strict-dynamic'` は Safari 15.4 以降。HTML 内の外部 `src` スクリプトは、`'strict-dynamic'` なら動的な追加として許可されるが、allowlist 方式ではそのホストの許可が要る。
+補足: `script-src-elem` があればそちらが優先される。複数の CSP ヘッダーがある場合はすべてを満たす必要がある。`'strict-dynamic'` は Safari 15.4 以降。HTML 内の外部 `src` スクリプトは、`'strict-dynamic'` なら動的な追加として許可されるが、allowlist 方式ではそのホストの許可が要る。
 
 公開前の下書きを実際のページで見る手順(プレビュー)は[運用ガイド 3 節](operations.md#3-下書きプレビュー)。
 
