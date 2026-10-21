@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { bucketOf } from "@wtt/core";
 import { findVisitor, foldDataLayer, presetVisitor, readDataLayer } from "./helpers";
 

@@ -1,4 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { findVisitor, presetVisitor, readDataLayer } from "./helpers";
 
 type W = Window & { __wttRuns?: number; __wttJsRuns?: number; __wttInert?: number; __cspViolations?: number };

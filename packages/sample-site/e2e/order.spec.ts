@@ -1,4 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { findVisitor, presetVisitor } from "./helpers";
 
 // D9 ①(設計書 §3.2)の K1 の持ち越し: パーソナライズ S(並びで前)とテスト T(並びで後 = 優先が高い)が同じ #cta の文言を変える。

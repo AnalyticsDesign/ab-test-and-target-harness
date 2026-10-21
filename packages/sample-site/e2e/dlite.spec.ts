@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { randomUUID } from "node:crypto";
 import { uuidToVisitorId } from "@wtt/core";
 import { findVisitor, presetVisitor, readDataLayer } from "./helpers";

@@ -1,4 +1,5 @@
-import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+import type { BrowserContext, Page } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { readDataLayer } from "./helpers";
 
 /** Mode C(BYOID): サイト Cookie から派生する ID。撤回 → 再許可で同じ ID に戻る(決定 31)ので forget の効果を直接観測できる */
@@ -11,6 +12,11 @@ async function consent(page: Page, granted: boolean): Promise<void> {
 }
 const isEvent = (r: import("@playwright/test").Request, kind: string) =>
   r.url().includes("/event") && r.method() === "POST" && String(r.postData()).includes(`"type":"${kind}"`);
+/** ページを開き、decision の応答を受けてから 200 を確かめる。200 を待ち条件に入れると、429 などのときに 30 秒の時間切れになって原因が見えない(backlog B80) */
+async function gotoWithDecision(page: Page, path: string): Promise<void> {
+  const [res] = await Promise.all([page.waitForResponse((r) => r.url().includes("/decision")), page.goto(path)]);
+  expect(res.status()).toBe(200);
+}
 
 test("visited_targeting_applies_after_pattern_page_visit", async ({ context, page }) => {
   await presetSiteUser(context, uid());
@@ -48,7 +54,7 @@ test("pageview_and_click_goals_reach_datalayer_and_event_endpoint", async ({ con
 
 test("forget_on_revoke_deletes_profile", async ({ context, page }) => {
   await presetSiteUser(context, uid());
-  await Promise.all([page.waitForResponse((r) => r.url().includes("/decision") && r.status() === 200), page.goto("/profile-pricing.html")]);
+  await gotoWithDecision(page, "/profile-pricing.html");
   await page.goto("/profile.html");
   await expect(page.locator(".hero-title")).toHaveText("visited B"); // 履歴あり
   const [forgetRes] = await Promise.all([
@@ -69,8 +75,8 @@ test("forget_on_revoke_deletes_profile", async ({ context, page }) => {
 
 test("forget_disabled_keeps_profile_until_retention", async ({ context, page }) => {
   await presetSiteUser(context, uid());
-  await Promise.all([page.waitForResponse((r) => r.url().includes("/decision") && r.status() === 200), page.goto("/profile-keep-pricing.html")]);
-  await Promise.all([page.waitForResponse((r) => r.url().includes("/decision") && r.status() === 200), page.goto("/profile-keep.html")]);
+  await gotoWithDecision(page, "/profile-keep-pricing.html");
+  await gotoWithDecision(page, "/profile-keep.html");
   await expect(page.locator(".hero-title")).toHaveText("visited B");
   const events: string[] = [];
   page.on("request", (r) => { if (r.url().includes("/event")) events.push(String(r.postData())); });

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { findVisitor, presetVisitor, readDataLayer } from "./helpers";
 
 test("mode A secure cookie works on http://localhost (smoke — 落ちたら環境要因を先に疑う)", async ({ context, page }) => {

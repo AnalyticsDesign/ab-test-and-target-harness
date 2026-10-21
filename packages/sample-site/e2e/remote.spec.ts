@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { findVisitor, presetVisitor, readDataLayer } from "./helpers";
 
 test("needsProfile site posts decision with visitor id and context (spec §9.1)", async ({ context, page }) => {

@@ -1,4 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { deriveExternalUuid } from "@wtt/core";
 import { readFileSync } from "node:fs";
 import { readDataLayer } from "./helpers";

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { bucketOf, hashByoidValue } from "@wtt/core";
 
 const SESSION = "sess-e2e-001";

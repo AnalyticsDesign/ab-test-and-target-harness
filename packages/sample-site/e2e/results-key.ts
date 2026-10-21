@@ -9,7 +9,8 @@ export const E2E_RESULTS_VISITOR_KEY = "d3R0LWUyZS1yZXN1bHRzLXZpc2l0b3Ita2V5LTAw
  * 結果の E2E(results.spec.ts)用の edge の状態の置き場(apps/edge からの相対)。ほかの spec の edge と分ける理由は 2 つ:
  * - D-lite の Site は host で引くが、wrangler dev は Worker から見える host を localhost に固定する(wrangler.jsonc の dev.host)ので、
  *   1 つの状態に D-lite の Site を 1 つしか置けない(demo-dlite が使っている)
- * - 結果のイベントの POST が、ほかの spec と同じ IP あたりのレート制限を使い切らないように(backlog B80 を悪化させない)
+ * - 結果のイベントの POST が、ほかの spec と同じ IP あたりのレート制限を使い切らないように(ローカルではすべての要求が同じ IP の鍵で数えられる。
+ *   上限が 20 req / 10 秒だったころは、並列実行の合計がこれを超えて 429 になっていた = backlog B80 の原因。429 は fixtures.ts が失敗の文言に出す)
  */
 export const RESULTS_EDGE_PERSIST = ".wrangler/state-results";
 

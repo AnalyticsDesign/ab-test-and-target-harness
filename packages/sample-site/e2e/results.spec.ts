@@ -1,4 +1,5 @@
-import { test, expect, type Page, type Request, type Response } from "@playwright/test";
+import type { Page, Request, Response } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { freshVisitor, presetVisitor, queryResults, visitorKeySql } from "./helpers";
 import { RESULTS_ORIGIN } from "./results-key";
 

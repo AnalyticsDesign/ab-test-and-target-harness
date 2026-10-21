@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { test, expect, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { bakeBootstrap, kvKeys, type CompiledConfig, type SiteSettings } from "@wtt/core";
 import { PREVIEW_SOURCE, RUNTIME_SOURCE } from "@wtt/runtime/source";
 import { readDataLayer } from "./helpers";
