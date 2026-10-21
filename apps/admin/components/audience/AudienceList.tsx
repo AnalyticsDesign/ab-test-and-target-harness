@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import { audienceMatches } from "@/lib/audience-filter";
 import { dslHasHistory, makeNames, summarizeDsl } from "@/lib/conditions";
 import type { Audience, Goal } from "@/lib/types";
 import { LocalTime } from "../LocalTime";
@@ -14,10 +15,7 @@ export function AudienceList({ wid, siteId, audiences, goals, canEdit }: { wid: 
   const base = `/w/${wid}/sites/${siteId}/audiences`;
   const rows = audiences
     .map((a) => ({ a, summary: summarizeDsl(a.definition, names) }))
-    .filter(({ a, summary }) => {
-      const q = query.trim().toLowerCase();
-      return !q || a.name.toLowerCase().includes(q) || a.id.includes(q) || summary.toLowerCase().includes(q);
-    });
+    .filter(({ a, summary }) => audienceMatches(a, summary, query));
   return (
     <div>
       <PageHeader

@@ -89,6 +89,48 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     await expect(page.getByTestId("audience-json")).toContainText('"min": 2');
   });
 
+  test("import_list_is_searchable_and_reports_the_copy_in_place(B58・B59)", async ({ page }) => {
+    await login(page);
+    await openSite(page, SITE_AUD.name);
+    await newAudience(page, "Import search");
+    // B59: 既存のオーディエンスが多くても探せるよう、取り込みの一覧は検索で絞れる(一覧の画面と同じ規則)
+    const rail = page.getByRole("complementary", { name: "条件の部品" });
+    const search = rail.getByRole("searchbox", { name: "取り込むオーディエンスを絞り込む" });
+    await search.fill("no-such-audience");
+    await expect(rail.getByRole("button", { name: /^Pricing visitors/ })).toHaveCount(0);
+    await expect(rail.getByText("この条件に一致するオーディエンスはありません")).toBeVisible();
+    await search.fill("PRICING");
+    await rail.getByRole("button", { name: /^Pricing visitors/ }).click();
+    // B58: 取り込んだことはトーストではなく、取り込みの節の中に出す
+    await expect(rail.getByRole("status")).toContainText("「Pricing visitors」の条件をコピーして取り込みました");
+    await expect(page.getByTestId("save-state")).toHaveText("未保存の変更あり");
+  });
+
+  test("save_bar_reports_saved_even_when_control_normalizes_and_discard_restores(B58)", async ({ page }) => {
+    await login(page);
+    await openSite(page, SITE_AUD.name);
+    await newAudience(page, "Host case");
+    await chip(page, "ページのホスト").click();
+    await rows(page).nth(0).getByLabel("値").fill("www.example.com");
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(page).toHaveURL(/\/audiences\/aud_host_case$/);
+    await waitForHydration(page);
+    await expect(page.getByTestId("save-state")).toHaveText("変更はありません");
+    // control はホストを小文字にして保存する。応答の値にそろえるので、保存の後に「未保存の変更あり」が残らない
+    await rows(page).nth(0).getByLabel("値").fill("SHOP.Example.COM");
+    await expect(page.getByTestId("save-state")).toHaveText("未保存の変更あり");
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(page.getByTestId("save-state")).toHaveText("保存しました。次の公開で反映されます");
+    await expect(rows(page).nth(0).getByLabel("値")).toHaveValue("shop.example.com");
+    await expect(page.getByRole("button", { name: "破棄" })).toBeDisabled();
+    // 破棄は保存済みの値に戻す
+    await page.getByLabel("名前", { exact: true }).fill("Host case (draft)");
+    await expect(page.getByTestId("save-state")).toHaveText("未保存の変更あり");
+    await page.getByRole("button", { name: "破棄" }).click();
+    await expect(page.getByLabel("名前", { exact: true })).toHaveValue("Host case");
+    await expect(page.getByTestId("save-state")).toHaveText("変更はありません");
+  });
+
   test("period_days_left_empty_blocks_save(日数の欄を空にしても期間の指定は消えず、保存のリクエストを送らない)", async ({ page }) => {
     await login(page);
     await openSite(page, SITE_AUD.name);
@@ -198,10 +240,22 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     await page.getByRole("link", { name: "Pricing visitors" }).click();
     await rows(page).nth(0).getByLabel("回数").fill("3");
     await rows(page).nth(0).getByLabel("値").fill("/plans/"); // ページの一致を変える = 公開中の /pricing/ の条件は次の公開で数えるのをやめる
+    await expect(page.getByTestId("save-state")).toHaveText("未保存の変更あり");
+    // B58: 確認は確認のモーダル(決まり 2.5)。キャンセルなら送らない。保存の成功は下の保存の帯の文字で知らせる(トーストは使わない)
+    let patched = 0;
+    page.on("request", (r) => {
+      if (r.method() === "PATCH" && r.url().includes(`/api/control/sites/${SITE_AUD.id}/audiences/aud_pricing_visitors`)) patched += 1;
+    });
+    const confirmSave = page.getByRole("alertdialog", { name: "オーディエンスを保存しますか?" });
     await page.getByRole("button", { name: "保存", exact: true }).click();
-    await expect(page.getByRole("alert").filter({ hasText: "実行中のエクスペリエンス 1 件の配信対象が変わります" })).toBeVisible();
-    await page.getByRole("button", { name: "保存する" }).click();
-    await expect(page.getByRole("status").filter({ hasText: "保存しました" })).toBeVisible();
+    await expect(confirmSave).toContainText("実行中のエクスペリエンス 1 件の配信対象が変わります");
+    await confirmSave.getByRole("button", { name: "キャンセル" }).click();
+    await expect(confirmSave).toHaveCount(0);
+    expect(patched).toBe(0);
+    await expect(page.getByTestId("save-state")).toHaveText("未保存の変更あり");
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await confirmSave.getByRole("button", { name: "保存する" }).click();
+    await expect(page.getByTestId("save-state")).toHaveText("保存しました。次の公開で反映されます");
 
     // Publish の確認画面: オーディエンスの変更で配信対象が変わるエクスペリエンスを「変更あり」として出す
     await openPublish(page);

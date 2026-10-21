@@ -13,6 +13,7 @@ export default async function AudiencePage({ params }: { params: Promise<{ wid: 
   const site = (await loadSite(sid)).data;
   const audiences = (await controlFetch<Audience[]>(`/sites/${sid}/audiences`)).data;
   const goals = (await controlFetch<Goal[]>(`/sites/${sid}/goals`)).data;
-  // key を付けない: 保存後の router.refresh() で作り直すと「保存しました」の通知が消える。画面の木は保存した値と同じなので作り直す必要が無い
+  // key を付けない: 保存後の router.refresh() で作り直すと、保存の帯の「保存しました」が消える。画面の木は保存した値と同じなので作り直す必要が無い
+  // (未保存かどうかは、refresh で届いた保存済みの値と今の値を比べて決める。AudienceBuilder の dirty)
   return <AudienceBuilder wid={wid} siteId={sid} audience={res.data} audiences={audiences} goals={goals} site={site} canEdit={ws.role !== "viewer"} />;
 }
