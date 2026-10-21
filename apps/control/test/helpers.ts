@@ -401,6 +401,50 @@ export function beforeD1Batch(db: D1Database, hook: () => Promise<unknown>): D1D
 }
 
 /**
+ * B112: `sql` が `sqlPattern` に合う最初の文の実行(all / first / run / raw)の直前に、`hook` を 1 回だけ走らせる D1 ラッパ。
+ * 判定の照会とその後の処理のあいだに別の要求(セッションの削除など)が割り込んだ状態を作る。
+ * `bind` で包み直しても効く(`pausingD1Insert` と同じ包み方。kysely-d1 は prepare().bind().all() で流す)。
+ * `ran()` = 差し込みが実際に走ったか(パターンが当たらずに素通りしたテストを、偶然の成功にしないため)
+ */
+export function beforeD1Query(db: D1Database, sqlPattern: RegExp, hook: () => Promise<unknown>): { db: D1Database; ran(): boolean } {
+  let used = false;
+  let ran = false;
+  const hooked = (stmt: D1PreparedStatement): D1PreparedStatement =>
+    new Proxy(stmt, {
+      get(s, p) {
+        if (p === "run" || p === "first" || p === "all" || p === "raw") {
+          const f = Reflect.get(s, p) as (...a: unknown[]) => Promise<unknown>;
+          return async (...args: unknown[]) => {
+            if (!ran) {
+              ran = true;
+              await hook();
+            }
+            return f.apply(s, args);
+          };
+        }
+        if (p === "bind") return (...args: unknown[]) => hooked(s.bind(...args));
+        const x = Reflect.get(s, p);
+        return typeof x === "function" ? x.bind(s) : x;
+      },
+    });
+  const wrapped = new Proxy(db, {
+    get(target, prop) {
+      const v = Reflect.get(target, prop);
+      if (prop === "prepare") {
+        return (sqlText: string) => {
+          const stmt = target.prepare(sqlText);
+          if (used || !sqlPattern.test(sqlText)) return stmt;
+          used = true;
+          return hooked(stmt);
+        };
+      }
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  }) as D1Database;
+  return { db: wrapped, ran: () => ran };
+}
+
+/**
  * plan12 K13: `insert into "<table>"` の最初の 1 回を、テストが離すまで止める D1 ラッパ(並行した要求の順を作る)。
  * - at: "before" = 本物の insert を出す前で止める / "after" = insert が終わった後、呼び出し元(Better Auth の adapter)へ返す前で止める
  * - reached = 止まった所に着いたら解ける。release() で先へ進める
@@ -612,6 +656,37 @@ export async function googleSignIn(
   const exchanged = await call("POST", "/auth/handoff/exchange", { body: { code } });
   expect(exchanged.status).toBe(200);
   return { token: (await json<{ token: string }>(exchanged)).token, location };
+}
+
+/** B112: 非常口のパスワードで登録・ログインするテスト用の共通パスワード(break-glass 系のテストが共有する) */
+export const BREAK_GLASS_PASSWORD = "password-for-sweep-1";
+
+/**
+ * B112: Bearer(`set-auth-token` など。署名つきの Cookie 値 `<token>.<signature>` で、URL エンコードされていることもある)から
+ * session 表の token 列の値を取り出す。Bearer の値そのものは token 列と一致しないので、session の行を引くときは必ずこれを通す
+ */
+export function sessionTokenOf(bearer: string): string {
+  return decodeURIComponent(bearer).split(".")[0]!;
+}
+
+/**
+ * 非常口を開いて、招待からパスワードで登録する(`/sign-up/email`)。
+ * 登録で張られたセッションの Bearer も返す(招待の受諾のレスポンスの token)
+ */
+export async function joinWithPassword(owner: { token: string; workspaceId: string }, role: "editor" | "viewer" = "editor"): Promise<{ email: string; userId: string; token: string }> {
+  const email = uniqueEmail("pw");
+  const inv = await json<{ id: string }>(await call("POST", `/workspaces/${owner.workspaceId}/invitations`, { token: owner.token, body: { email, role } }));
+  const acc = await call("POST", `/invitations/${inv.id}/accept`, { body: { name: "Pw", password: BREAK_GLASS_PASSWORD }, envOverride: BREAK_GLASS });
+  expect(acc.status).toBe(200);
+  const { userId, token } = await json<{ userId: string; token: string }>(acc);
+  return { email, userId, token };
+}
+
+/** 非常口を開いてパスワードでログインする(`/sign-in/email`)。セッションの Bearer を返す */
+export async function signInWithPassword(email: string): Promise<string> {
+  const res = await call("POST", "/auth/sign-in/email", { body: { email, password: BREAK_GLASS_PASSWORD }, headers: { origin: "http://localhost:3000" }, envOverride: BREAK_GLASS });
+  expect(res.status).toBe(200);
+  return res.headers.get("set-auth-token")!;
 }
 
 /** POST /setup の Request(セットアップトークン付き) */

@@ -13,8 +13,12 @@ export type SessionUser = { id: string; email: string; name: string };
  * `roleCap` = この要求が API キー経由のときの権限の上限(backlog B33 / 決定 48)。セッション経由と上限なしの鍵は null。
  * `keyScope` = この要求が API キー経由のときの範囲(backlog B42。フル / 1 つのワークスペース)。セッション経由は null。
  * 判定に使うのは `roles.ts` だけ(認可の集約)
+ * `sessionId` = セッション経由の要求のセッションの id(B112: 鍵の発行の口がセッションの作り方を引く)。API キー経由は null
  */
-export type AppEnv = { Bindings: Env; Variables: { auth: Auth; db: Db; user: SessionUser; roleCap: Role | null; keyScope: KeyScope | null } };
+export type AppEnv = {
+  Bindings: Env;
+  Variables: { auth: Auth; db: Db; user: SessionUser; roleCap: Role | null; keyScope: KeyScope | null; sessionId: string | null };
+};
 
 export function createApp(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -106,9 +110,10 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
   // plugins/api-key で確認。版を上げるときはここを再確認する)ので、そこから上限を引く。行が無い(認証は通ったのに消えている =
   // 想定外)ときは「上限なし」に倒さず 401 で断る。metadata が NULL の既存の鍵だけが「上限なし」。
   // 見張り: 版上げ後に「すべての API キーが 401 になる」なら、まずここ(session.id の意味が変わった)を疑う
+  const isApiKeyRequest = Boolean(apiKeyFromHeaders(c.req.raw.headers));
   let roleCap: Role | null = null;
   let keyScope: KeyScope | null = null;
-  if (apiKeyFromHeaders(c.req.raw.headers)) {
+  if (isApiKeyRequest) {
     // B42(brief K15・K14): 失効の正(apikey_revocations)と、持ち主がいまシステム管理者かを、鍵の行と 1 回で引く
     const row = await c
       .get("db")
@@ -138,5 +143,7 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
   }
   c.set("roleCap", roleCap);
   c.set("keyScope", keyScope);
+  // B112: 鍵の要求では session.id が apikey の行の id(上の B33 のコメント)なので、セッションの id としては入れない
+  c.set("sessionId", isApiKeyRequest ? null : session.session.id);
   await next();
 });

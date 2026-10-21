@@ -52,7 +52,7 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 | `GET /capabilities` | 認証のみ | この導入で使える機能 `{ imageUpload, edgeOrigin, tagOrigin, edgeOnWorkersDev, passwordLogin, resultsStore, writeFreeze }`(R2 と公開ベースの有無、edge の公開 origin、設置タグを配る origin、パスワードログインが開いているか、計測用 D1(`RESULTS_DB`)の binding があるか、書き込みの凍結の状態) |
 | `GET /me` | 認証のみ | 現在のセッション(または API キー)の持ち主 |
 | `GET /me/api-keys` | 認証のみ | 自分の API キー一覧(平文は含まない) |
-| `POST /me/api-keys` | 認証のみ | API キーを発行(平文はこの応答限り)。範囲 `workspaceId` は必須(`null` = フルはシステム管理者のみ) |
+| `POST /me/api-keys` | 認証のみ | API キーを発行(平文はこの応答限り)。範囲 `workspaceId` は必須(`null` = フルはシステム管理者のみ)。非常用のパスワードログインのセッションからは 403 `password_session` |
 | `DELETE /me/api-keys/:kid` | 認証のみ | API キーを失効(他人の鍵は 404) |
 
 ### Workspace / Member / 招待
@@ -169,6 +169,10 @@ R2 のキーは `sites/<sid>/experiments/<eid>/<assetId>.<ext>`。IMAGE Change �
 
     pnpm -C apps/control d1:migrate:local   # migrations/ をローカル D1 に適用
     pnpm -C apps/control dev                # wrangler dev(http://localhost:8788)
+
+非常用のパスワードログインのセッションからは API キーを発行できない(403 `password_session`)。Google の設定が無い手元の開発でキーの発行を試すときは、ローカルの D1 だけで、セッションの経路の印を書き換える(ローカルでの動作確認用。本番では使わない):
+
+    pnpm -C apps/control exec wrangler d1 execute wtt-control --local --command "update session set \"loginMethod\" = 'google' where \"userId\" = (select id from \"user\" where email = '<メールアドレス>')"
 
 `dev` は control とデプロイ専用の Worker(`apps/deployer`)を同じプロセスで動かす(`wrangler.jsonc` の `services` の DEPLOYER は、別のプロセスだと届かず、公開のたびに設置タグの配信が `pending` のまま残る)。
 デプロイ専用の Worker の向き先は `apps/admin/e2e/deployer.wrangler.jsonc` の偽の Cloudflare API(`127.0.0.1:8791`)で、本物の Cloudflare API には届かない。

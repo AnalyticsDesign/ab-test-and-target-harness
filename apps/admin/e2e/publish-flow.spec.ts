@@ -26,6 +26,7 @@ import {
   createExperiment,
   createSite,
   login,
+  markSessionsAsGoogle,
   openSite,
   openWorkspace,
   setOwnerPassword,
@@ -195,20 +196,33 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await page.goto("/w/me/api-keys");
     await waitForHydration(page);
     const issueBtn = page.getByRole("button", { name: "発行する" });
-    await expect(issueBtn).toBeDisabled();
-    await expect(page.getByText("名前を入れてください", { exact: true })).toBeVisible();
-    await page.fill('input[name="name"]', "e2e-revoke-me");
-    // 範囲: システム管理者には「すべてのワークスペース」とワークスペースが出るので、選ぶまで発行できない
-    await expect(page.getByText("範囲を選んでください", { exact: true })).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "権限", exact: true })).toHaveAttribute("aria-disabled", "true");
-    await pick(page, "範囲", new RegExp(`^${WORKSPACE_NAME}`));
-    await expect(page.getByText("権限を選んでください", { exact: true })).toBeVisible(); // 既定は未選択
-    await pick(page, "権限", /^閲覧者/);
-    // B43: 有効期限は必須・既定は未選択。選ぶと実際の期限の日時が横に出る
-    await expect(page.getByText("有効期限を選んでください", { exact: true })).toBeVisible();
-    await pick(page, "有効期限", /^1 日/);
-    await expect(page.getByTestId("expiry-preview")).toHaveText(/^\d{1,2}\/\d{1,2} \d{2}:\d{2} まで$/);
-    await issueBtn.click();
+    // 名前・範囲・権限・有効期限を入れて発行を押す(パスワードのセッションでの 403 と、印を書き換えた後の成功で共用する。
+    // 再読み込みでフォームは空に戻る = IssueKeyForm は名前が空、権限・期限が未選択で始まるので、途中の案内は 2 回とも同じに出る)
+    const fillAndIssue = async () => {
+      await expect(issueBtn).toBeDisabled();
+      await expect(page.getByText("名前を入れてください", { exact: true })).toBeVisible();
+      await page.fill('input[name="name"]', "e2e-revoke-me");
+      // 範囲: システム管理者には「すべてのワークスペース」とワークスペースが出るので、選ぶまで発行できない
+      await expect(page.getByText("範囲を選んでください", { exact: true })).toBeVisible();
+      await expect(page.getByRole("combobox", { name: "権限", exact: true })).toHaveAttribute("aria-disabled", "true");
+      await pick(page, "範囲", new RegExp(`^${WORKSPACE_NAME}`));
+      await expect(page.getByText("権限を選んでください", { exact: true })).toBeVisible(); // 既定は未選択
+      await pick(page, "権限", /^閲覧者/);
+      // B43: 有効期限は必須・既定は未選択。選ぶと実際の期限の日時が横に出る
+      await expect(page.getByText("有効期限を選んでください", { exact: true })).toBeVisible();
+      await pick(page, "有効期限", /^1 日/);
+      await expect(page.getByTestId("expiry-preview")).toHaveText(/^\d{1,2}\/\d{1,2} \d{2}:\d{2} まで$/);
+      await issueBtn.click();
+    };
+    // B112: 非常用のパスワードログインのセッション(E2E のログインはこれ)では発行できない。エラーの表示に理由が出て、結果カードは出ない
+    await fillAndIssue();
+    await expect(appAlert(page).filter({ hasText: "非常用のパスワードログインでは API キーを発行できません" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "API キーを発行しました" })).toHaveCount(0);
+    // セッションの印を Google に書き換えると発行できる(E2E は Google を呼べないので印だけ変える)
+    markSessionsAsGoogle();
+    await page.reload();
+    await waitForHydration(page);
+    await fillAndIssue();
     // 結果が発行カードの場所に出て、見出しにフォーカスが移る
     await expect(page.getByRole("heading", { name: "API キーを発行しました" })).toBeFocused();
     await expect(page.getByTestId("issued-key")).toContainText(/wtt_/);
@@ -571,6 +585,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
 
   test("logout revokes the control session, not just the browser cookie", async ({ page, context }) => {
     await login(page);
+    markSessionsAsGoogle(); // B112: 下でキーを発行する(パスワードのセッションからは発行できない)
     const session = (await context.cookies()).find((c) => c.name === "wtt_session");
     expect(session).toBeTruthy();
 

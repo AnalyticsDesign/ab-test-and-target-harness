@@ -4,6 +4,7 @@ import { z } from "zod";
 import { keyExpiresAt, unusableSince } from "../api-key-expiry";
 import { requireSession, type AppEnv } from "../app";
 import { API_KEY_PREFIX, ROLES } from "../auth";
+import { PASSWORD_SESSION_KEY_HINT, passwordSessionVerdict } from "../break-glass";
 import type { Db } from "../db";
 import { ApiError, validationFailed } from "../errors";
 import { errorResponses } from "../openapi";
@@ -190,7 +191,7 @@ apiKeyRoutes.post(
   "/me/api-keys",
   describeRoute({
     tags: ["api-keys"],
-    summary: `API キーを発行(平文はこの応答限り。接頭辞 ${API_KEY_PREFIX}。セッションのみ)`,
+    summary: `API キーを発行(平文はこの応答限り。接頭辞 ${API_KEY_PREFIX}。セッションのみ)。非常用のパスワードログインのセッションでは発行できない(403 \`password_session\`)`,
     responses: {
       201: { description: "発行した API キー", content: { "application/json": { schema: resolver(CreatedApiKeySchema) } } },
       ...errorResponses(400, 401, 403, 404, 422),
@@ -201,6 +202,14 @@ apiKeyRoutes.post(
   }),
   async (c) => {
     const body = c.req.valid("json");
+    // B112: 非常口を閉じても、パスワードのセッションで作った鍵は残る(漏れたパスワードで入った人が鍵を作って居座れる)。
+    // だからパスワードのセッションでは発行させず、Google でログインし直してもらう。範囲・上限の判定より前に断る
+    const sessionId = c.get("sessionId");
+    // 鍵の要求は session-only.ts が先に 403 にするので、ここで null は想定外(== null で undefined も拾う)
+    if (sessionId == null) throw new ApiError(401, "unauthorized");
+    const verdict = await passwordSessionVerdict(c.get("db"), sessionId);
+    if (verdict === "password") throw new ApiError(403, "password_session", { hint: PASSWORD_SESSION_KEY_HINT });
+    if (verdict === "gone") throw new ApiError(401, "unauthorized");
     const roleCap = body.roleCap ?? null;
     // B42 / B33: 範囲と上限の可否は roles.ts(フルはシステム管理者だけ・ワークスペースはメンバーだけ・上限はその範囲での Role 以下)
     await assertCanIssueKey(c, body.workspaceId, roleCap);
@@ -214,10 +223,19 @@ apiKeyRoutes.post(
       ...(roleCap ? { roleCap } : {}),
       expiresAt,
     };
-    const k = await c.get("auth").api.createApiKey({
-      body: { name: body.name, metadata },
-      headers: c.req.raw.headers,
-    });
+    // B112: 判定の後にセッションが消えた(ログアウト・非常口の掃除とのすれ違い)とき、Better Auth 1.4.21 の createApiKey は
+    // APIError(statusCode 401、UNAUTHORIZED_OR_INVALID_SESSION)を投げる(test/api-keys.test.ts の session_gone_after_verdict_is_401 で確認)。
+    // 500 に落とさず 401 にそろえる。それ以外は今までどおり上げる
+    const k = await c
+      .get("auth")
+      .api.createApiKey({
+        body: { name: body.name, metadata },
+        headers: c.req.raw.headers,
+      })
+      .catch((e: unknown) => {
+        if ((e as { statusCode?: number } | null)?.statusCode === 401) throw new ApiError(401, "unauthorized");
+        throw e;
+      });
     const names = await workspaceNames(c.get("db"), scope.kind === "workspace" ? [scope.workspaceId] : []);
     return c.json({ id: k.id, key: k.key, name: k.name, roleCap: roleCapFromMetadata(metadataText(k.metadata)), expiresAt, ...scopeView(scope, names) }, 201);
   },

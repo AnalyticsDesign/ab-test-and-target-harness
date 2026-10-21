@@ -1,5 +1,17 @@
+import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { call, json, setupOwner, inviteAndJoin } from "./helpers";
+import {
+  beforeD1Query,
+  call,
+  expectEnvelope,
+  googleSignIn,
+  inviteAndJoin,
+  joinWithPassword,
+  json,
+  sessionTokenOf,
+  setupOwner,
+  signInWithPassword,
+} from "./helpers";
 
 describe("api keys (decision 34, spec §13.3)", () => {
   it("api_key_inherits_user_role_and_revoked_key_is_401", async () => {
@@ -131,4 +143,87 @@ describe("api keys (decision 34, spec §13.3)", () => {
     const listed = await json<Array<{ id: string; revokedAt: number | null }>>(await call("GET", "/me/api-keys", { token: owner.token }));
     expect(listed.find((k) => k.id === made.id)?.revokedAt).toBeNull();
   });
+});
+
+// B112: 非常口を閉じても、パスワードのセッションで作った鍵は残る。だから鍵の発行はパスワードのセッションでは断る(一覧・失効はできる)
+describe("password session cannot issue api keys (B112)", () => {
+  const issue = (token: string, workspaceId: string, envOverride?: { DB: D1Database }) =>
+    call("POST", "/me/api-keys", { token, body: { name: "b112", workspaceId }, ...(envOverride ? { envOverride } : {}) });
+  const keyCount = async (userId: string): Promise<number> =>
+    Number((await env.DB.prepare(`select count(*) as n from apikey where "userId" = ?`).bind(userId).first<{ n: number }>())?.n ?? -1);
+  const expectPasswordSession = async (res: Response) => {
+    expect(res.status).toBe(403);
+    const body = await expectEnvelope(res);
+    expect(body.error).toBe("password_session");
+    expect(String(body.hint)).toContain("Google");
+  };
+
+  it("password_session_cannot_issue_api_key", async () => {
+    const owner = await setupOwner();
+    const pw = await joinWithPassword(owner);
+    await expectPasswordSession(await issue(pw.token, owner.workspaceId)); // 登録(/sign-up/email)のセッション
+    await expectPasswordSession(await issue(await signInWithPassword(pw.email), owner.workspaceId)); // /sign-in/email のセッション
+    expect(await keyCount(pw.userId)).toBe(0);
+  }, 20_000);
+
+  it("google_session_of_password_holder_can_issue_api_key", async () => {
+    const owner = await setupOwner();
+    const pw = await joinWithPassword(owner);
+    const { token } = await googleSignIn(pw.email);
+    expect((await issue(token!, owner.workspaceId)).status).toBe(201);
+  }, 20_000);
+
+  it("unmarked_session_of_password_holder_cannot_issue_api_key", async () => {
+    const owner = await setupOwner();
+    const pw = await joinWithPassword(owner);
+    const bearer = await signInWithPassword(pw.email);
+    // 印なし(B112 より前に作られたセッション・経路が分からないセッション)にする。行を確かに 1 つ書き換えたことを先に確かめる
+    const updated = await env.DB.prepare(`update session set "loginMethod" = null where token = ?`).bind(sessionTokenOf(bearer)).run();
+    expect(updated.meta.changes).toBe(1);
+    const row = await env.DB.prepare(`select "loginMethod" as m from session where token = ?`).bind(sessionTokenOf(bearer)).first<{ m: string | null }>();
+    expect(row).not.toBeNull();
+    expect(row!.m).toBeNull();
+    // 印なし + パスワードの記録あり = 断る(fail-closed)
+    await expectPasswordSession(await issue(bearer, owner.workspaceId));
+    // 印なし + パスワードの記録なし = 通る
+    await env.DB.prepare(`delete from account where "providerId" = 'credential' and "userId" = ?`).bind(pw.userId).run();
+    expect((await issue(bearer, owner.workspaceId)).status).toBe(201);
+  }, 20_000);
+
+  it("session_gone_before_issue_is_401", async () => {
+    const owner = await setupOwner();
+    // 判定の照会の直前にセッションを消す(判定の SQL の固有の別名に合わせる。Better Auth の照会は loginMethod の列を名指ししうるので、
+    // 列名に合わせると認証より前に消えてしまい、別の理由の 401 で通ってしまう)
+    const hooked = beforeD1Query(env.DB, /b112_login_method/, () => env.DB.prepare("delete from session where token = ?").bind(sessionTokenOf(owner.token)).run());
+    const res = await issue(owner.token, owner.workspaceId, { DB: hooked.db });
+    expect(hooked.ran()).toBe(true);
+    expect(res.status).toBe(401);
+    expect((await expectEnvelope(res)).error).toBe("unauthorized");
+    expect(await keyCount(owner.userId)).toBe(0);
+  }, 20_000);
+
+  it("session_gone_after_verdict_is_401", async () => {
+    const owner = await setupOwner();
+    // 判定の後・createApiKey の前(assertCanIssueKey のロールの照会。kysely の組み立てた形に合わせ、Better Auth の照会には合わない)にセッションを消す。
+    // requireSession のセッション経路は member を照会しないので、この照会が最初に当たるのは判定の後。よって 401 は createApiKey の写し(APIError → unauthorized)から来る
+    // Better Auth の createApiKey がセッションの無いことを APIError(statusCode 401)で断るのを 401 unauthorized に写す(500 に落とさない)
+    const hooked = beforeD1Query(env.DB, /^select "role" from "member"/, () => env.DB.prepare("delete from session where token = ?").bind(sessionTokenOf(owner.token)).run());
+    const res = await issue(owner.token, owner.workspaceId, { DB: hooked.db });
+    expect(hooked.ran()).toBe(true);
+    expect(res.status).toBe(401);
+    expect((await expectEnvelope(res)).error).toBe("unauthorized");
+    expect(await keyCount(owner.userId)).toBe(0);
+  }, 20_000);
+
+  it("password_session_can_list_and_revoke_own_keys", async () => {
+    const owner = await setupOwner();
+    const pw = await joinWithPassword(owner);
+    const { token: google } = await googleSignIn(pw.email);
+    const made = await json<{ id: string }>(await issue(google!, owner.workspaceId));
+    const password = await signInWithPassword(pw.email);
+    const listed = await call("GET", "/me/api-keys", { token: password });
+    expect(listed.status).toBe(200);
+    expect((await json<Array<{ id: string }>>(listed)).map((k) => k.id)).toContain(made.id);
+    expect((await call("DELETE", `/me/api-keys/${made.id}`, { token: password })).status).toBe(204);
+  }, 20_000);
 });

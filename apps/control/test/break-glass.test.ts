@@ -1,5 +1,7 @@
+import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { AUTH_RATE_LIMIT, BREAK_GLASS, alignToWindow, call, expectEnvelope, inviteAndJoin, json, setupOwner, uniqueEmail } from "./helpers";
+import { loginMethodOf } from "../src/auth";
+import { AUTH_RATE_LIMIT, BREAK_GLASS, alignToWindow, call, expectEnvelope, googleSignIn, inviteAndJoin, joinWithPassword, json, sessionTokenOf, setupOwner, signInWithPassword, uniqueEmail } from "./helpers";
 
 const ORIGIN = { origin: "http://localhost:3000" };
 const open = { envOverride: BREAK_GLASS };
@@ -92,4 +94,30 @@ describe("break-glass (決定 46 (2)(3))", () => {
     expect(statuses.slice(0, AUTH_RATE_LIMIT).every((s) => s === 404)).toBe(true);
     expect(statuses[AUTH_RATE_LIMIT]).toBe(429);
   }, 25_000); // 窓の待ち(最大 10 秒)+ 31 回
+});
+
+// B112: セッションに「どの経路で作ったか」の印(session.loginMethod)を残す。パスワードのセッションからの鍵の発行を断る材料になる
+describe("session login method (B112)", () => {
+  it("login_method_of_is_fail_closed", () => {
+    // パスワード / Google と分かる経路だけに印を付け、それ以外(path が取れない・似た名前の経路)は「分からない」= null
+    for (const path of [undefined, "/change-password", "/sign-in/social", "/callbackfoo"]) expect(loginMethodOf(path), String(path)).toBeNull();
+    expect(loginMethodOf("/callback/google")).toBe("google");
+    expect(loginMethodOf("/sign-in/email")).toBe("password");
+    expect(loginMethodOf("/sign-up/email")).toBe("password");
+  });
+
+  /** Bearer のセッションの loginMethod を引く。行が 1 つ取れたことも確かめる */
+  const methodOf = async (bearer: string): Promise<string | null> => {
+    const row = await env.DB.prepare(`select "loginMethod" as m from session where token = ?`).bind(sessionTokenOf(bearer)).first<{ m: string | null }>();
+    expect(row, "session row").not.toBeNull();
+    return row!.m;
+  };
+
+  it("session_records_login_method", async () => {
+    const owner = await setupOwner();
+    const pw = await joinWithPassword(owner);
+    expect(await methodOf(pw.token)).toBe("password"); // 登録(/sign-up/email)のセッション
+    expect(await methodOf(await signInWithPassword(pw.email))).toBe("password"); // /sign-in/email
+    expect(await methodOf((await googleSignIn(pw.email)).token!)).toBe("google"); // /callback/google
+  }, 20_000);
 });

@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { call, choosePrimaryGoal, createExperiment, createSite, fakeResultsBudget, json, RESULTS_STORE, setupOwner } from "./helpers";
+import { call, choosePrimaryGoal, createExperiment, createSite, fakeResultsBudget, joinWithPassword, json, RESULTS_STORE, setupOwner } from "./helpers";
 
 /**
  * 利用者(エージェント・運用者)に見える文字列に、非公開の開発記録への参照を出さない。
@@ -81,6 +81,13 @@ describe("public strings carry no private design references", () => {
     const mode = await call("POST", `/sites/${sid}/experiments/exp_dup_single/duplicate`, { token, body: { mode: "variant", variantId: "b" } });
     expect(mode.status).toBe(422);
     noPrivateRef("duplicate_mode_not_allowed", JSON.stringify(await json(mode)));
+    // B112: 非常用のパスワードログインのセッションからの API キーの発行(パスワードのセッションは非常口を開いた env で作る)
+    const pw = await joinWithPassword({ token, workspaceId });
+    const pwKey = await call("POST", "/me/api-keys", { token: pw.token, body: { name: "pw", workspaceId } });
+    expect(pwKey.status).toBe(403);
+    const pwKeyBody = await json(pwKey);
+    expect(pwKeyBody.error).toBe("password_session");
+    noPrivateRef("password_session", JSON.stringify(pwKeyBody));
     // D9 ②: 計測用 D1 が無い導入で結果の記録を有効にしようとした
     const store = await call("PATCH", `/sites/${sid}`, { token, body: { resultsEnabled: true } });
     expect(store.status).toBe(409);
@@ -171,5 +178,5 @@ describe("public strings carry no private design references", () => {
     const tooOldBody = await json(tooOld);
     expect(tooOldBody.error).toBe("client_too_old");
     noPrivateRef("client_too_old", JSON.stringify(tooOldBody));
-  });
+  }, 20_000);
 });

@@ -31,6 +31,7 @@ export const DEFAULT_MESSAGES: Record<string, string> = {
   google_not_configured: "Google ログインが設定されていません",
   invalid_handoff: "ログインの引き継ぎコードが無効か期限切れです",
   password_login_disabled: "パスワードでのログインは無効です",
+  password_session: "非常用のパスワードログインでは API キーを発行できません",
   workspace_create_failed: "ワークスペースを作れませんでした",
   last_workspace: "最後のワークスペースは削除できません",
   workspace_has_running_experiments: "配信中のエクスペリエンスがあります",

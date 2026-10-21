@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { API_CONTRACT_VERSION, CLIENT_VERSION_HEADER } from "@wtt/core";
@@ -105,7 +107,9 @@ export const HERO_TEXT = "E2E から書き換え";
  *
  * 決定 46: E2E は Google を呼べないので、control を break-glass を開いた状態(`BREAK_GLASS_TOKEN`)で起動し、
  * 非常用のパスワード欄から入る。**閉じた状態(本番の既定)の画面は E2E では通らない** — 出し分けは
- * `test/login-view.test.ts` / `test/capabilities.test.ts` が固定し、実画面は本番切り替えの確認項目で見る
+ * `test/login-view.test.ts` / `test/capabilities.test.ts` が固定し、実画面は本番切り替えの確認項目で見る。
+ * パスワードのセッションからは API キーを発行できない(B112)。鍵の発行を確かめるテストは、ログインの後に
+ * `markSessionsAsGoogle()` で印を書き換える
  */
 export async function login(page: Page, email = OWNER_EMAIL, password = PASSWORD): Promise<void> {
   await page.goto("/login");
@@ -114,6 +118,19 @@ export async function login(page: Page, email = OWNER_EMAIL, password = PASSWORD
   await page.click('button[type="submit"]');
   // login() の最後の 1 行: 着地はホーム(/w。参加の数に関わらず自動では移らない。決定 54 (8))
   await expect(page).toHaveURL(/\/w(\/[^/]+)?$/);
+}
+
+/** control のディレクトリ(wrangler d1 execute をここで流す。write-freeze.spec.ts と同じ求め方) */
+const controlDir = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../control");
+
+/**
+ * B112: その人のセッションを「Google で作った」印に書き換える(control はパスワードのセッションからの API キーの発行を 403 で断る。
+ * E2E は Google を呼べないので、パスワードでログインした後に印だけ変えて発行の画面を確かめる)。
+ * 動いている wrangler dev と同じ sqlite(--local・E2E の状態ディレクトリ)に書く。write-freeze.spec.ts の d1() と同じ流し方
+ */
+export function markSessionsAsGoogle(email: string = OWNER_EMAIL): void {
+  const sql = `update session set "loginMethod" = 'google' where "userId" = (select id from "user" where email = '${email.replace(/'/g, "''")}')`;
+  execFileSync("pnpm", ["exec", "wrangler", "d1", "execute", "wtt-control", "--local", "--persist-to", ".e2e-state", "--command", sql], { cwd: controlDir, stdio: "pipe" });
 }
 
 /** 非常口の手順そのもの: reset-link → パスワード設定。以後 login() が使う PASSWORD になる */

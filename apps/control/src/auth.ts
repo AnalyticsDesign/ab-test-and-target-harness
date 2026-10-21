@@ -55,6 +55,19 @@ export function carriesApiKey(headers: Headers | null | undefined): boolean {
 /** 決定 46: Google の OAuth クライアントが両方そろっているか */
 export const googleConfigured = (env: Env): boolean => Boolean(env.AB_GOOGLE_CLIENT_ID?.trim() && env.AB_GOOGLE_CLIENT_SECRET?.trim());
 
+/** B112: セッションを作った経路。D1 の session."loginMethod" に入る値(NULL = 分からない) */
+export type LoginMethod = "password" | "google";
+
+/**
+ * B112: endpoint の path(basePath の /auth を含まない。Google の戻りは `/callback/:id`)から、セッションを作った経路を決める。
+ * パスワード = /sign-in/email・/sign-up/email、Google = /callback/ で始まる経路。それ以外・path が取れないときは null(= 分からない)
+ */
+export function loginMethodOf(path: string | undefined): LoginMethod | null {
+  if (path === "/sign-in/email" || path === "/sign-up/email") return "password";
+  if (path?.startsWith("/callback/")) return "google";
+  return null;
+}
+
 function buildAuth(env: Env) {
   const db = getDb(env);
   const orgCount = async () => {
@@ -110,6 +123,10 @@ function buildAuth(env: Env) {
       // R13: フックで落とし損ねた場合の保険
       encryptOAuthTokens: true,
     },
+    session: {
+      // B112: セッションの作り方の印(migrations/0018)。input: false = 要求の body から書かせない(値は下の create.before が決める)
+      additionalFields: { loginMethod: { type: "string", required: false, input: false } },
+    },
     databaseHooks: {
       user: {
         create: {
@@ -135,8 +152,13 @@ function buildAuth(env: Env) {
            * それ以外 — OAuth callback も /sign-in/email も、文脈が取れない呼び出しも — は検査する(fail-closed)
            */
           before: async (session, ctx) => {
-            if (ctx?.path === "/sign-up/email") return;
+            // B112: どの経路で作ったセッションかの印。作った時に決まって変わらないので、後から非常口の掃除とすれ違わない。
+            // null は「分からない」(経路が取れない・想定外の経路)で、鍵の発行の口がパスワードの記録の有無で判定する(fail-closed)。
+            // before が返した data は Better Auth が書く値に混ぜる(additionalFields の input: false は要求の body からの入力を止めるだけ)
+            const data = { ...session, loginMethod: loginMethodOf(ctx?.path) };
+            if (ctx?.path === "/sign-up/email") return { data };
             if (!(await hasAccess(db, session.userId))) throw new APIError("FORBIDDEN", { message: "not_invited" });
+            return { data };
           },
           /**
            * plan12 K13(r4 CX-High-2): パスワードの経路(sign-in/email・sign-up/email)で作ったセッションは、保存した後に

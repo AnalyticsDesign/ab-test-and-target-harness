@@ -3,14 +3,13 @@ import { describe, expect, it } from "vitest";
 import { breakGlassSweep } from "../src/cron/break-glass-sweep";
 import { runCron } from "../src/cron/runner";
 import type { Env } from "../src/env";
-import { BREAK_GLASS, call, googleSignIn, inviteAndJoin, json, pausingD1Insert, setupOwner, testEnv, uniqueEmail } from "./helpers";
+import { BREAK_GLASS, BREAK_GLASS_PASSWORD as PASSWORD, call, googleSignIn, inviteAndJoin, joinWithPassword, json, pausingD1Insert, setupOwner, signInWithPassword, testEnv } from "./helpers";
 
 // plan12 K13(決定 63 (9)・(13)(h)): 非常口が閉じている間、パスワードの記録とその持ち主のセッションを 15 分ごとに消す
 
 const ORIGIN = { origin: "http://localhost:3000" };
 const open = { envOverride: BREAK_GLASS };
 const OPEN_ENV = { ...testEnv, ...BREAK_GLASS } as Env;
-const PASSWORD = "password-for-sweep-1";
 /** パスワードの hash と Google の往復を何度も通すので、全体を流す負荷の下では既定の 5 秒を超えうる */
 const TIMEOUT = 20_000;
 
@@ -21,23 +20,6 @@ const credentialOf = (userId: string) => count(`select count(*) as n from accoun
 /** 1 回の実行(非常口の開け閉めは env の AB_BREAK_GLASS_TOKEN の有無) */
 const sweep = (e: Env = testEnv) => runCron(e, Date.now(), [breakGlassSweep]);
 const meStatus = async (token: string) => (await call("GET", "/me", { token })).status;
-
-/** 非常口を開いて、招待からパスワードで登録する(`/sign-up/email`)。登録で張られたセッションのトークンも返す */
-async function joinWithPassword(owner: { token: string; workspaceId: string }, role: "editor" | "viewer" = "editor") {
-  const email = uniqueEmail("pw");
-  const inv = await json<{ id: string }>(await call("POST", `/workspaces/${owner.workspaceId}/invitations`, { token: owner.token, body: { email, role } }));
-  const acc = await call("POST", `/invitations/${inv.id}/accept`, { body: { name: "Pw", password: PASSWORD }, ...open });
-  expect(acc.status).toBe(200);
-  const userId = (await json<{ userId: string }>(acc)).userId;
-  return { email, userId };
-}
-
-/** 非常口を開いてパスワードでログインする(`/sign-in/email`) */
-async function signInWithPassword(email: string): Promise<string> {
-  const res = await call("POST", "/auth/sign-in/email", { body: { email, password: PASSWORD }, headers: ORIGIN, ...open });
-  expect(res.status).toBe(200);
-  return res.headers.get("set-auth-token")!;
-}
 
 describe("break-glass sweep (plan12 K13)", () => {
   it("break_glass_sweep_removes_passwords_and_password_sessions_when_closed", async () => {
