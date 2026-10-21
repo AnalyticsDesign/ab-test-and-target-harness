@@ -31,7 +31,7 @@ AB Test and Target Harness を運用者自身の Cloudflare アカウントへ�
 ここで動かす構成と、外れるときに読む先:
 
 - 設置サイトのドメインが Cloudflare のゾーンにあり、DNS がプロキシ(オレンジの雲)になっている。edge と設置タグはそのゾーンの Workers Route で公開する(`<設置ホスト>/v1/*`・`/s/*`)。別のドメインに置く構成と `*.workers.dev` の構成で読む先は、上の 2 つの箇条
-- control と管理画面は `*.workers.dev` のアドレスで公開する。自分のドメインに置くなら 3.6・4.2
+- control と管理画面は `*.workers.dev` のアドレスで公開する。自分のドメインに置くなら 3.6・4.2・7.1(このときは 0.5 の 2 のトークンも要る)
 - 画像のアップロードに R2 を使う。使わない構成も手順 12 で選べる
 - ゾーンの Cache Rule(2.6)と WAF Rate Limiting Rule(2.7)は推奨の保護設定で、動いた後に足せる。ここでは作らない。作るときは 0.5 の 2 のトークンが要る。Mode B(サーバー発行 Cookie)のサイトを置くなら 2.7 は必須。WAF を作らないので、edge の Rate Limiting binding の値は手順 8 で 200 にする(後から 2.7 で WAF を作ったら、2.3 の規則で書き直す)
 
@@ -110,7 +110,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/subdomain" 
 ```bash
 GOOGLE_CLIENT_ID=<クライアント ID>          # 秘密ではないが受け渡しをまとめるためここに書く。3.4 の vars に入る
 GOOGLE_CLIENT_SECRET=<クライアント シークレット>
-CF_TOKEN=<Cloudflare API トークン>          # route・custom-domain のとき
+CF_TOKEN=<Cloudflare API トークン>          # route・custom-domain のとき、または control・管理画面を自分のドメインに置くとき
 CF_DEPLOY_TOKEN=<配信ファイルのデプロイ用トークン>   # どの構成でも要る
 CF_USAGE_TOKEN=<使用状況の表示用トークン>   # どの構成でも要る
 ```
@@ -125,7 +125,7 @@ CF_USAGE_TOKEN=<使用状況の表示用トークン>   # どの構成でも要�
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 { [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ]; } && echo google=ok || echo google=missing   # missing なら人に記入を頼み直す(この先で空の値を登録しない)
-[ -n "$CF_TOKEN" ] && echo cf_token=present || echo cf_token=missing   # edge_address が route か custom-domain なら present が期待(workers-dev では missing でよい)
+[ -n "$CF_TOKEN" ] && echo cf_token=present || echo cf_token=missing   # edge_address が route か custom-domain、または control_address か admin_address が custom なら present が期待(それ以外は missing でよい)
 [ -z "$CF_TOKEN" ] || curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_TOKEN" | jq -r .result.status   # 期待: active
 [ -n "$CF_DEPLOY_TOKEN" ] && echo cf_deploy_token=present || echo cf_deploy_token=missing   # 期待: present(どの構成でも要る。missing なら人に頼み直す)
 [ -z "$CF_DEPLOY_TOKEN" ] || curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_DEPLOY_TOKEN" | jq -r .result.status   # 期待: active
@@ -377,7 +377,7 @@ curl -s https://<設置タグのホスト>/s/<siteId>.js | head -c 400
 |---|---|
 | Google Cloud で OAuth クライアントを作り、ID とシークレットを伝える。リダイレクト URI もこのとき登録する | 初回のみ。0.5 で一度に |
 | 別のドメインを導入に使うアカウントに追加する(そのドメインのネームサーバーを Cloudflare に切り替える) | `edge_address: custom-domain` で、まだ追加していないとき。0.4 のログインの後の確認で分かる |
-| ゾーンの設定用の Cloudflare API トークン(Cache Rules / WAF / Zone Read / DNS Read、期限 = 翌日、ゾーン限定)を発行して伝える | ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のとき。0.5 で一度に。失効は期限切れに任せる |
+| ゾーンの設定用の Cloudflare API トークン(Cache Rules / WAF / Zone Read / DNS Read、期限 = 翌日、ゾーン限定)を発行して伝える | ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のときと、control か管理画面を自分のドメインに置くとき(`control_address` か `admin_address` が `custom`)。0.5 で一度に。失効は期限切れに任せる |
 | 配信ファイルのデプロイ用トークンと使用状況の表示用トークンを発行して伝える。権限は前者が Workers Scripts の Edit のみ、後者が Account Analytics の Read のみ。どちらもアカウント単位で、期限なし | 初回のみ(どの構成でも)。0.5 で一度に |
 | R2 の有効化 | 初回のみ。`code: 10042` が出たとき |
 | ダッシュボードで Workers Paid に切り替える | `plan: paid` で、アカウントがまだ Free のとき。0.5 で一度に |
@@ -492,10 +492,10 @@ node tools/deploy-answers/cli.mjs; echo "exit=$?"   # 期待: exit=0、「## 指
 | `edge_address` | 2.3(`route` なら Route、`custom-domain` なら Custom Domain、`workers-dev` なら `workers_dev: true`)、2.4 の確認 URL、2.6 / 2.7(`route` と `custom-domain` では行い、`workers-dev` では飛ばす)、3.4 `AB_EDGE_ORIGIN`(`custom-domain` なら `https://<edge_host>`)、5 節のスモーク |
 | `asset_public_base` / `asset_max_mb` | 3.2、3.4。`dev-assets` は 3.5 の初回 deploy で control の URL が分かった後に `<control URL>/dev-assets` に展開して `AB_ASSET_PUBLIC_BASE` に書く(literal のまま書かない)。none なら 3.2 の R2 の手順を飛ばし、3.4 の AB_ASSET_PUBLIC_BASE を書かない。`auto` は 0.4 のログインの後の確認で `https://wtt-assets.<zone_name>` に展開される |
 | `release_tag` | 0.3 |
-| `control_address` / `control_host` | 3.4 `AB_CONTROL_URL`、3.6、7.1 |
+| `control_address` / `control_host` | 0.5 の 2(`custom` ならゾーンの設定用トークンを作り、`control_host` のゾーンを含める)、3.4 `AB_CONTROL_URL`、3.6、7.1 |
 | `control_protection` | 7 節 |
 | `edge_waf_rate_limit` / `edge_waf_requests_per_10s` | 2.3(Rate Limiting binding)、2.7 |
-| `admin_address` / `admin_host` | 3.4 `AB_ADMIN_URL`、4.2 |
+| `admin_address` / `admin_host` | 0.5 の 2(`custom` ならゾーンの設定用トークンを作り、`admin_host` のゾーンを含める)、3.4 `AB_ADMIN_URL`、4.2 |
 | `dlite_hosts` | 2.3 の `/__ab/*` Route |
 | `owner_email` / `workspace_name` | 5 節の初回セットアップ(`POST /setup`)。`owner_email` はログインに使う Google アカウントと同じメールアドレス。`workspace_name` は質問の表に無く、0.5 の人への依頼で一緒に聞いて書く |
 | `usage_visibility` | 5 節の初回セットアップ(`POST /setup` の `usageVisibility`)。使用状況を見られる人(`members` / `instance_admins`)。省略 = `members` |
@@ -790,11 +790,11 @@ fi
 - (a) シークレットを足して、古いものを消す: Clients(クライアント)の一覧でクライアントの名前を押して詳細を開く。Client secrets(クライアント シークレット)の Add secret(日本語の表示でも英語のまま)で新しいシークレットを作り、その行のコピーのアイコンで値をコピーして `deploy-secrets.env` に書く。画面を離れるとコピーできなくなる。次に、古いシークレットの行で Disable(無効にする)を押してから、ごみ箱のアイコンで削除する。無効にする前は削除できない。1 つのクライアントに置けるシークレットは 2 つまで
 - (b) クライアントを作り直す: Clients(クライアント)の一覧でそのクライアントにチェックを入れ、Delete(削除)を押す。表の Clients(クライアント)の行から作り直す(リダイレクト URI も登録し直す)。消したクライアントは、30 日以内なら Restore deleted OAuth clients(削除した OAuth クライアントを復元)で戻せる
 
-2. **ゾーンの設定用の Cloudflare API トークン**(ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のときだけ。`workers-dev` では不要)
+2. **ゾーンの設定用の Cloudflare API トークン**(ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のときと、control か管理画面を自分のドメインに置くとき(`control_address` か `admin_address` が `custom`)だけ。どれにも当たらなければ不要)
    - 画面: My Profile(マイ プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)→ Custom token(カスタム トークン)の Get started(始める)
    - Token name(トークン名)= `wtt-setup-<識別子>`
-   - Permissions(権限)= Zone(ゾーン)→ Cache Rules → Edit(編集)、Zone(ゾーン)→ Zone WAF(ゾーン WAF)→ Edit(編集)、Zone(ゾーン)→ Zone(ゾーン)→ Read(読み取り)、Zone(ゾーン)→ DNS → Read(読み取り)。DNS の読み取りは、`custom-domain` の 2.3 でホストが空いていることを確かめるのに使う
-   - Zone Resources(ゾーン リソース)= 対象ゾーンに限定。設置サイトのゾーンに置く構成(`route`)では設置サイトのゾーン、別のドメインに置く構成(`custom-domain`)では `edge_host` のゾーン(`zone_name`)
+   - Permissions(権限)= Zone(ゾーン)→ Cache Rules → Edit(編集)、Zone(ゾーン)→ Zone WAF(ゾーン WAF)→ Edit(編集)、Zone(ゾーン)→ Zone(ゾーン)→ Read(読み取り)、Zone(ゾーン)→ DNS → Read(読み取り)。DNS の読み取りは、ホストが空いていることを確かめるのに使う(`custom-domain` の 2.3、管理画面の 4.2、control の 7.1)
+   - Zone Resources(ゾーン リソース)= 対象ゾーンに限定。設置サイトのゾーンに置く構成(`route`)では設置サイトのゾーン、別のドメインに置く構成(`custom-domain`)では `edge_host` のゾーン(`zone_name`)。`control_host`・`admin_host` を置くゾーンがこれと違えば、そのゾーンも足す(Include(含める)の行を増やす)。`workers-dev` の構成で control か管理画面を自分のドメインに置くときは、`control_host`・`admin_host` のゾーンだけにする。`control_host`・`admin_host` のゾーンの名前は、依頼文を出す前にエージェントが確かめる: ホストの末尾から候補の名前(`admin.example.co.jp` なら `example.co.jp`・`co.jp`)を作り、`wrangler login` の資格情報で `GET /zones?name=<候補>` を引いて、導入先のアカウントの有効なゾーンが返った名前にする
    - 期限 = 翌日。TTL の Select time range(時間範囲を選択)の終了日で指定する。失効の手間をなくすため。導入が翌日までに終わらなければ発行し直す
    - Continue to summary(概要に進む)で内容を確かめて作成し、値を `CF_TOKEN=` に書く
 3. **配信ファイルのデプロイ用トークン**(どの構成でも要る)
@@ -824,7 +824,7 @@ fi
 ```bash
 GOOGLE_CLIENT_ID=<クライアント ID>          # 秘密ではないが受け渡しをまとめるためここに書く。3.4 の vars に入る
 GOOGLE_CLIENT_SECRET=<クライアント シークレット>
-CF_TOKEN=<Cloudflare API トークン>          # route・custom-domain のとき
+CF_TOKEN=<Cloudflare API トークン>          # route・custom-domain のとき、または control・管理画面を自分のドメインに置くとき
 CF_DEPLOY_TOKEN=<配信ファイルのデプロイ用トークン>   # どの構成でも要る
 CF_USAGE_TOKEN=<使用状況の表示用トークン>   # どの構成でも要る
 ```
@@ -834,14 +834,14 @@ CF_USAGE_TOKEN=<使用状況の表示用トークン>   # どの構成でも要�
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 { [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ]; } && echo google=ok || echo google=missing   # missing なら人に記入を頼み直す(この先で空の値を登録しない)
-[ -n "$CF_TOKEN" ] && echo cf_token=present || echo cf_token=missing   # edge_address が route か custom-domain なら present が期待(workers-dev では missing でよい)
+[ -n "$CF_TOKEN" ] && echo cf_token=present || echo cf_token=missing   # edge_address が route か custom-domain、または control_address か admin_address が custom なら present が期待(それ以外は missing でよい)
 [ -z "$CF_TOKEN" ] || curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_TOKEN" | jq -r .result.status   # 期待: active
 [ -n "$CF_DEPLOY_TOKEN" ] && echo cf_deploy_token=present || echo cf_deploy_token=missing   # 期待: present(どの構成でも要る。missing なら人に頼み直す)
 [ -z "$CF_DEPLOY_TOKEN" ] || curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_DEPLOY_TOKEN" | jq -r .result.status   # 期待: active
 [ -n "$CF_USAGE_TOKEN" ] && echo cf_usage_token=present || echo cf_usage_token=missing   # 期待: present(missing なら人に頼み直す)
 ```
 
-導入が終わったら(5 節の後)`rm deploy-secrets.env` を実行する。`CF_TOKEN` は期限切れで無効になるので失効の操作は要らない。`CF_DEPLOY_TOKEN` と `CF_USAGE_TOKEN` は期限が無く、それぞれデプロイ専用の Worker と control の secret として使い続ける。失効は撤去のときに行う(10.4)。
+導入が終わったら(5 節の後)`rm deploy-secrets.env` を実行する。`CF_TOKEN` は期限切れで無効になるので失効の操作は要らない。導入の後に control か管理画面を自分のドメインに移すときは、4.2・7.1 の空きの確認のために作業用のトークンを作り直す。0.5 の手順で `deploy-secrets.env` を `CF_TOKEN=` の行だけで作り直し、そのホストのゾーンに限った Zone(ゾーン)→ Zone(ゾーン)→ Read(読み取り)と Zone(ゾーン)→ DNS → Read(読み取り)のトークン(期限 = 翌日)を人に作ってもらって書く。確認が済んだらファイルを消す。`CF_DEPLOY_TOKEN` と `CF_USAGE_TOKEN` は期限が無く、それぞれデプロイ専用の Worker と control の secret として使い続ける。失効は撤去のときに行う(10.4)。
 
 ## 1. 前提と全体像
 
@@ -1280,7 +1280,7 @@ echo "hit=$HIT"   # 期待: hit=1
 - hit=0 かつ API の読み戻し(上の entrypoint GET)にルールが無い → 作成に失敗している
 - hit=0 かつルールはある → 判定不能(反映待ち・検出遅延・送信量不足)。1 分後に再実行し、それでも hit=0 なら人に報告する
 
-`CF_TOKEN` の用は 2.7 までで終わる。期限切れで無効になるので、失効の操作は要らない。`deploy-secrets.env` は 3.3 / 3.4 でも使うので、消すのは 5 節の後。
+edge の設定での `CF_TOKEN` の用は 2.7 までで終わる(control か管理画面を自分のドメインに置くなら、7.1・4.2 の空きの確認でも使う)。期限切れで無効になるので、失効の操作は要らない。`deploy-secrets.env` は 3.3 / 3.4 でも使うので、消すのは 5 節の後。
 
 #### 代替: ダッシュボードで作る
 
@@ -1616,9 +1616,31 @@ control は `*.workers.dev` のままでも動く(ゾーンのキャッシュや
 - `workers-dev`(既定): `apps/admin/wrangler.jsonc` は何も書き換えない。URL は `https://wtt-admin.<アカウントのサブドメイン>.workers.dev`(サブドメインは control と同じ)。以下の `custom` の手順は行わない
 - `custom`: 自分のドメインに置く(DNS レコードと証明書は wrangler が作る。ゾーンが Cloudflare にあること)
 
-自分のドメインに置く利点: 招待・リセットリンクが `https://admin.<運用者ドメイン>/...` になる / ゾーンの WAF と Cloudflare Access(4.5)を掛けられる。後から `workers-dev` → `custom` に切り替えるときも、下と同じ編集をして admin を再デプロイ → 3.4 の `AB_ADMIN_URL` を新 URL にして control を再デプロイすればよい(ユーザー・API キー・公開履歴は引き続き使える)。
+自分のドメインに置く利点: 招待・リセットリンクが `https://admin.<運用者ドメイン>/...` になる / ゾーンの WAF と Cloudflare Access(4.5)を掛けられる。後から `workers-dev` → `custom` に切り替えるときも、下の (0) の確認(作業用のトークンを作り直す。0.5 の最後の段落)と (1) の編集をして admin を再デプロイ → 3.4 の `AB_ADMIN_URL` を新 URL にして control を再デプロイすればよい(ユーザー・API キー・公開履歴は引き続き使える)。
 
 **`custom` のとき**(ここから 4.3 の前までは `custom` を選んだ場合だけ。`workers-dev` なら 4.3 へ):
+
+**(0) 先に、`<admin_host>` が空いていることを API で確かめる。** 非対話で実行した `wrangler deploy` は、Custom Domain を作るときに、同じ名前の既存の DNS レコードと、ほかの Worker への割り当てを確認なしに上書きするため(2.3 の `custom-domain` のときと同じ確認)。既にこのホストに管理画面を置いていて、デプロイし直すだけのときは行わない(自分の割り当てがあるので `n` が 1 になる)。
+
+```bash
+set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
+HOST=<admin_host>               # 例 admin.example.com
+ZONE=<そのホストのゾーン名>      # 0.5 の 2 で確かめたゾーン(例 example.com)
+T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
+AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+ZID=$(curl -sS "https://api.cloudflare.com/client/v4/zones?name=$ZONE" -H "Authorization: Bearer $CF_TOKEN" | jq -r '.result[0].id')
+echo "ZID=$ZID"   # 期待: 32 桁の ID(null なら、ZONE の名前が違うか、CF_TOKEN の対象のゾーンに入っていない)
+
+# 1. 同じ名前の DNS レコードが無い(CF_TOKEN の DNS Read を使う)
+curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/dns_records?name=$HOST" -H "Authorization: Bearer $CF_TOKEN" | jq '{ok: .success, n: (.result | length)}'   # 期待: {"ok": true, "n": 0}
+# 2. ほかの Worker の Custom Domain に使われていない(wrangler login の資格情報を使う)
+curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hostname=$HOST" -H "Authorization: Bearer $T" | jq '{ok: .success, n: (.result | length)}'   # 期待: {"ok": true, "n": 0}
+```
+
+期待と違うとき:
+
+- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に Zone → DNS → Read が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 の 2)
+- `n` が 1 以上 → そのホストは使われている。別のホストにする(`admin_host` を変える)か、使っていないことを人に確かめてから人に消してもらう。消した後に、このブロックをやり直す
 
 **(1) `apps/admin/wrangler.jsonc` を編集する。** `workers_dev` と `dev` は**既存の行を置き換え**、`preview_urls` と `routes` は**足す**(同じキーを二重に書くと後ろの行が勝ち、`host: localhost` が失われる)。
 
@@ -2103,7 +2125,7 @@ Workers 内の Rate Limiting binding は本番で実効していなかった実�
 | (2) ゾーンの WAF Rate Limiting Rules | 小規模チームの標準 | control をカスタムドメインに置く(7.1)。Free のゾーンでは、同じゾーンのほかのサイトが control と同じパスを使っていないこと(7.2) | なし |
 | (3) Cloudflare Access(単独または (2) と併用) | 外部エージェントに API を呼び出させる、到達自体を絞りたい | カスタムドメイン(7.1)。エージェントはサービストークンを付ける | なし |
 
-3 つは互いに干渉しない。(1) で始めて後から (2)(3) へ移るコストは小さい(7.1 の作業 + `AB_CONTROL_URL` の差し替えだけで、ユーザー・API キー・公開履歴は引き続き使える。招待 / リセットのリンクは `AB_ADMIN_URL` 側なので影響しない)。
+3 つは互いに干渉しない。(1) で始めて後から (2)(3) へ移るコストは小さい(7.1 の作業(ホストの空きの確認のための作業用のトークンの作り直しを含む。0.5 の最後の段落)+ `AB_CONTROL_URL` の差し替えだけで、ユーザー・API キー・公開履歴は引き続き使える。招待 / リセットのリンクは `AB_ADMIN_URL` 側なので影響しない)。
 
 ### 7.0 (1) 何もしない
 
@@ -2121,7 +2143,29 @@ Workers 内の Rate Limiting binding は本番で実効していなかった実�
 
 ### 7.1 (2)(3) の共通前提: control をカスタムドメインに載せる
 
-`apps/control/wrangler.jsonc` に `workers_dev` / `preview_urls`(どちらも `false`)と `routes` を**足し**、既存の `dev` の行を下の `dev` で**置き換えて**(同じキーを二重に書くと後ろの行が勝つ)再デプロイする。DNS レコードと証明書は wrangler が自動で作る。
+先に、`control.<運用者ドメイン>`(`control_host`)が空いていることを API で確かめる。非対話で実行した `wrangler deploy` は、Custom Domain を作るときに、同じ名前の既存の DNS レコードと、ほかの Worker への割り当てを確認なしに上書きするため(2.3 の `custom-domain` のときと同じ確認)。既にこのホストに control を置いていて、デプロイし直すだけのときは行わない(自分の割り当てがあるので `n` が 1 になる)。
+
+```bash
+set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
+HOST=<control_host>             # 例 control.example.com
+ZONE=<そのホストのゾーン名>      # 0.5 の 2 で確かめたゾーン(例 example.com)
+T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
+AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+ZID=$(curl -sS "https://api.cloudflare.com/client/v4/zones?name=$ZONE" -H "Authorization: Bearer $CF_TOKEN" | jq -r '.result[0].id')
+echo "ZID=$ZID"   # 期待: 32 桁の ID(null なら、ZONE の名前が違うか、CF_TOKEN の対象のゾーンに入っていない)
+
+# 1. 同じ名前の DNS レコードが無い(CF_TOKEN の DNS Read を使う)
+curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/dns_records?name=$HOST" -H "Authorization: Bearer $CF_TOKEN" | jq '{ok: .success, n: (.result | length)}'   # 期待: {"ok": true, "n": 0}
+# 2. ほかの Worker の Custom Domain に使われていない(wrangler login の資格情報を使う)
+curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hostname=$HOST" -H "Authorization: Bearer $T" | jq '{ok: .success, n: (.result | length)}'   # 期待: {"ok": true, "n": 0}
+```
+
+期待と違うとき:
+
+- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に Zone → DNS → Read が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 の 2)
+- `n` が 1 以上 → そのホストは使われている。別のホストにする(`control_host` を変える)か、使っていないことを人に確かめてから人に消してもらう。消した後に、このブロックをやり直す
+
+確かめたら、`apps/control/wrangler.jsonc` に `workers_dev` / `preview_urls`(どちらも `false`)と `routes` を**足し**、既存の `dev` の行を下の `dev` で**置き換えて**(同じキーを二重に書くと後ろの行が勝つ)再デプロイする。DNS レコードと証明書は wrangler が自動で作る。
 
 `workers_dev` / `preview_urls` を `false` にしないと `https://wtt-control.<アカウントのサブドメイン>.workers.dev` と Preview URL が開いたままになり、(2)(3) の防御を迂回できる。
 
