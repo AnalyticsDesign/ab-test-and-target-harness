@@ -580,7 +580,7 @@ openssl version            # 乱数の生成に使う
 **【人が行う】** 最初に一度 `wrangler login`(ブラウザ OAuth)を済ませる。コマンドはエージェントが実行し、人はブラウザに出る Cloudflare の画面で「Allow」を押すだけにする。
 
 - エージェントは実行の前に「これからブラウザに Cloudflare の許可の画面が出るので、導入するアカウントでログインして Allow を押してほしい」と伝える
-- `wrangler login` は許可を待つあいだ終わらないので、エージェントのコマンドの時間制限を 10 分以上にするか、バックグラウンドで実行して終わるのを待つ
+- `wrangler login` はバックグラウンドで実行し、出力に出る URL をすぐ人に示す。ブラウザが自動で開いても、人が見ている画面とは限らないため。wrangler は許可を待つ時間に上限を持ち、許可が届かないまま過ぎると `Timed out waiting for authorization code` で終わる
 
 ```bash
 pnpm -C apps/control exec wrangler login
@@ -589,6 +589,7 @@ pnpm -C apps/control exec wrangler login
 期待と違うとき:
 
 - ブラウザが自動で開かない → 出力に出る URL を人に示して開いてもらう。許可の後の戻り先はこの PC の `localhost` なので、同じ PC のブラウザで開く
+- `Timed out waiting for authorization code` で終わった → 許可が間に合わなかった。資格情報は保存されていないので、同じコマンドをやり直す。URL は実行のたびに変わるので、新しい出力の URL を示す
 - エージェントの環境で実行できない(待ち受けが届かない・コマンドが打ち切られる)→ 0 節の「人に実行してもらうコマンドの示し方」の形で人に示す。リポジトリ直下で実行する Git Bash 用と PowerShell 用の 2 行にする
 
 終わったら `pnpm -C apps/control exec wrangler whoami` でアカウント名と Account ID が出ることを確認する。エージェントはこの確認から再開する。
@@ -644,7 +645,7 @@ if [ -z "$HOST" ]; then echo "HOST is empty: set install_host (route) or edge_ho
 期待と違うとき:
 
 - `HOST is empty` → `HOST` に `install_host`(`custom-domain` では `edge_host`)を入れてやり直す。空のままでは `zone: not found` と区別できないため、ここで作業を中断する
-- `zone: not found` → そのドメインはこのアカウントで有効になっていない。別のアカウントにあるか、まだ Cloudflare に追加していないか、追加してもネームサーバーの切り替えが済んでいない。作業を中断して人に報告する。`route` では 0.2 の E2 を聞き直す。`custom-domain` では、次の順に進める。ドメインを使わずに始めるなら、下段の構成の行と `accepted` を消して、0.2 の 2 からやり直す
+- `zone: not found` → そのドメインはこのアカウントで有効になっていない。別のアカウントにあるか、まだ Cloudflare に追加していないか、追加してもネームサーバーの切り替えが済んでいない。作業を中断して人に報告する。`route` では 0.2 の E2 を聞き直す。`custom-domain` では、次の順に進める。ドメインを使わずに始めるなら、0.2 の E2c を `none` に答え直し、下段の構成の行と `accepted` を消して、0.2 の 2 からやり直す
   - 2 は有効なゾーンだけを引くので、ドメインを追加してネームサーバーの切り替えの反映を待っているゾーンも、ここでは `not found` になる。そこで、導入に使うアカウントに追加したドメインを人に聞く。`edge_host` が属するゾーンの名前で、例えば `ab.example.net` なら `example.net`。まだ追加していないと答えたら、下の 4 の (i) を示す
   - 聞いたゾーンの名前を下の 4 のブロックの `ZONE` に入れて実行する。4 はゾーンの状態で絞らずに引くので、反映待ちとゾーンが無いことを見分けられる
   - `zone status: pending` と `zone status: not found` → 4 の「期待と違うとき」のとおりに進める
@@ -677,9 +678,9 @@ fi
 
 - `ZONE is empty` → `ZONE` に `zone_name`(2 から来たときは人に聞いたゾーンの名前)を入れてやり直す
 - `zone status: unknown (API error)` → 確かめられなかったので先へ進まない(1. の「期待と違うとき」と同じ)
-- `zone status: pending` → ドメインは追加してあるが、ネームサーバーの切り替えがまだ反映されていない。作業を中断して人に報告し、切り替えが済んだか(ドメインの登録事業者の画面で、Cloudflare が示したネームサーバーにしたか)を確かめてもらう。反映には時間がかかることがあるので、済んでいれば待ってからやり直す。`zone_name` が `auto` のままなら 2 から、`zone_name` が書いてあればこのブロックからやり直す
+- `zone status: pending` → ドメインは追加してあるが、ネームサーバーの切り替えがまだ反映されていない。作業を中断して人に報告し、切り替えが済んだか(ドメインの登録事業者の画面で、Cloudflare が示したネームサーバーにしたか)を確かめてもらう。反映には時間がかかることがあるので、済んでいれば待ってからやり直す。`zone_name` か `asset_public_base` に `auto` が残っていれば 2 から、どちらにも残っていなければこのブロックからやり直す
 - `zone status: not found`(または `active` と `pending` 以外)→ 作業を中断し、**【人に依頼】** 次の 2 通りを示して選んでもらう
-  - (i) そのドメインをまだ Cloudflare に追加していない: 導入に使うアカウントのダッシュボードでドメインを追加し(Add a domain。日本語の表示は未確認)、表示されたネームサーバーを、ドメインの登録事業者の画面で設定する。設定が済んだら、`zone_name` が `auto` のままなら 2 から、`zone_name` が書いてあればこのブロックからやり直す
+  - (i) そのドメインをまだ Cloudflare に追加していない: 導入に使うアカウントのダッシュボードでドメインを追加し(Add a domain。日本語の表示は未確認)、表示されたネームサーバーを、ドメインの登録事業者の画面で設定する。設定が済んだら、`zone_name` か `asset_public_base` に `auto` が残っていれば 2 から、どちらにも残っていなければこのブロックからやり直す
   - (ii) そのドメインをほかの Cloudflare アカウントで使っている: 移さない。ネームサーバーを切り替えると、そのドメインで動いているほかのサービスに影響するため。別のドメインを選ぶか、`*.workers.dev` の構成にする。どちらも 0.2 の E2c を答え直し(`*.workers.dev` にするなら `none`)、下段の構成の行と `accepted` を消して、0.2 の 2 から検査スクリプトをやり直す
 
 ### 0.5 人に用意してもらうもの(一度に集める)
@@ -816,7 +817,7 @@ fi
 
 - ワークスペース = 管理画面でサイトとメンバーをまとめる単位。名前は管理画面のサイドバーに出る。後から変えられる。例: 会社名・チーム名・サイト名
 - 答えを `workspace_name` の行の `#` を外して書く(5 節の `POST /setup` で使う)
-- 決めないと答えたときだけ、既定の名前にする。設置サイトのゾーンに置く構成(`edge_address: route`)ではゾーン名(`zone_name`。例 `example.com`)、別のドメインに置く構成(`custom-domain`)とドメインなしの構成(`workers-dev`)では `My Workspace`。別のドメインのゾーン名は、サイトの名前にならないため
+- 決めないと答えたときだけ、既定の名前にする。設置サイトのゾーンに置く構成(`edge_address: route`)ではゾーン名(`zone_name`。例 `example.com`)、別のドメインに置く構成(`custom-domain`)とドメインなしの構成(`workers-dev`)では `Default Workspace`。別のドメインのゾーン名は、サイトの名前にならないため
 
 `deploy-secrets.env` の形(要る行だけ):
 
@@ -928,7 +929,7 @@ pnpm runtime:build
 pnpm -C apps/control exec wrangler kv namespace create wtt-config </dev/null   # </dev/null = 「設定ファイルに追記するか」の問いを非対話にして、追記しない(id は下の手順で書く)
 ```
 
-出力の `id = "…"` の 32 桁を控え、**`apps/edge/wrangler.jsonc` と `apps/control/wrangler.jsonc` の両方**の `kv_namespaces[0].id` に書く。control が公開で書き、edge が読む同じ namespace なので、片方だけだと edge が config を見つけられない。
+出力の `"id": "…"` の 32 桁を控え、**`apps/edge/wrangler.jsonc` と `apps/control/wrangler.jsonc` の両方**の `kv_namespaces[0].id` に書く。control が公開で書き、edge が読む同じ namespace なので、片方だけだと edge が config を見つけられない。
 
 **リソースを作るコマンドの共通の注意**(2.2・3.1・3.2): `Would you like Wrangler to add it on your behalf?` と聞かれたら **No**。設定ファイルは手で書く(Yes にすると別名の binding が追加される)。確認で binding(`kv_namespaces` / `d1_databases` / `r2_buckets`)が 1 件だけであることを見る。
 
@@ -1099,7 +1100,7 @@ pnpm -C apps/edge exec wrangler deploy
 
 補足:
 
-- 初回は Durable Objects の migration(`wrangler.jsonc` の `migrations[].tag`。`v1` = `VisitorProfile`、`v2` = 結果の記録の `ResultsBudget`・`ResultsHealth`。どれも `new_sqlite_classes`)を wrangler が自動で適用する。以後、クラス名を変えない限り tag は増やさない
+- 初回は Durable Objects の migration(`wrangler.jsonc` の `migrations[].tag`。`v1` = `VisitorProfile`、`v2` = 結果の記録の `ResultsBudget`・`ResultsHealth`、`v3` = 新しい訪問者の記録の上限の `NewProfileBudget`。どれも `new_sqlite_classes`)を wrangler が自動で適用する。以後、クラス名を変えない限り tag は増やさない
 - 2.2 の計測用のデータベースの `database_id` が仮の ID のままならデプロイしない(2.2 の確認)
 - Rate Limiting binding は wrangler 4.36 以上が必要。`namespace_id` はアカウント内で一意な整数文字列
 
@@ -2468,7 +2469,7 @@ pnpm -C apps/deployer exec wrangler delete                    # wtt-deployer。s
 
 それぞれ `y` で確認する。期待: `Successfully deleted <name>`。DO を持つ edge で `--force` を求められたら、付けて再実行する(edge の Durable Object を参照する control は先に消してある)。
 
-`custom-domain` の構成では、edge の Custom Domain が作った DNS レコード(`<edge のホスト>`)も Custom Domain と一緒に消える。消えたことを DNS の一覧で確かめる。**【人に依頼】** ダッシュボードの対象ゾーンの DNS → Records(レコード)に `<edge のホスト>` の行が無いこと。残っていれば、そのレコードを消してもらう。
+`custom-domain` の構成では、edge の Custom Domain を消した後に、`<edge のホスト>` の DNS レコードが残っていないことを確かめる。API で確かめるなら 2.3 のホストの空きの確認の 1(`CF_TOKEN` が期限切れなら使えない)で `n` が 0。**【人に依頼】** ダッシュボードで確かめるなら、対象ゾーンの DNS → Records(レコード)に `<edge のホスト>` の行が無いこと。残っていれば、そのレコードを消してもらう。
 
 3. データを消す:
 
@@ -2491,7 +2492,7 @@ curl -sS -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RI
 
 期待: `"success": true`。ゾーンに他のルールがある場合、ruleset 自体は消さない(entrypoint を DELETE すると他のルールも消える)。ダッシュボードで消すなら、対象ゾーンの Caching → Cache Rules / Security(セキュリティ)→ Security rules(セキュリティ ルール)の該当行。
 
-`custom-domain` の構成で、別のドメインのゾーンとアカウントを残すときは、Custom Domain のために発行された証明書も片づける。この証明書は Custom Domain を消しても残る。**【人に依頼】** ダッシュボードの対象ゾーンの SSL/TLS → Edge Certificates(日本語の表示は未確認)で `<edge のホスト>` の証明書を探し、そのゾーンのほかのホストで使っていないことを確かめてから消してもらう。
+`custom-domain` の構成で、別のドメインのゾーンとアカウントを残すときは、Custom Domain のために発行された証明書が残っていれば片づける。この証明書は Custom Domain を消しても残る。ただし、ゾーンの既定の証明書(Universal SSL)が `<edge のホスト>` を含むとき(例 `*.example.net` が `ab.example.net` を含む)は、別の証明書が発行されず、片づけるものが無いことがある。**【人に依頼】** ダッシュボードの対象ゾーンの SSL/TLS → Edge Certificates(日本語の表示は未確認)で `<edge のホスト>` だけを対象にした証明書を探し、あれば、そのゾーンのほかのホストで使っていないことを確かめてから消してもらう。
 
 5. 外部の資格情報を片づける(**【人に依頼】**):
 
@@ -2508,9 +2509,9 @@ curl -sS -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RI
 ```bash
 pnpm -C apps/control exec wrangler d1 list --json | jq '[.[] | select(.name | startswith("wtt-"))] | length'   # 期待: 0
 pnpm -C apps/control exec wrangler kv namespace list | jq '[.[] | select(.title | endswith("wtt-config"))] | length'   # 期待: 0
-curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置タグのホスト>/s/<siteId>.js"   # 期待: route は設置サイト自身の応答(404 など)。custom-domain は名前を引けずに失敗する。200 の JS が返るなら `wtt-static` の Route が残っている
+curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置タグのホスト>/s/<siteId>.js"   # 期待: route は設置サイト自身の応答(404 など)。custom-domain は名前を引けずに失敗するか、ゾーンのほかのレコードの先の応答。200 の JS が返るなら `wtt-static` の Route が残っている
 ```
 
-`<設置タグのホスト>` は 2.9 の (4) のとおり。`custom-domain` では DNS レコードが無くなるので、最後の `curl` が名前を引けずに失敗する(`Could not resolve host`)のが期待。`workers-dev` では最後の `curl` を飛ばす(無効にした後の workers.dev の応答は Cloudflare が保証していない)。
+`<設置タグのホスト>` は 2.9 の (4) のとおり。`custom-domain` では DNS レコードが無くなるので、最後の `curl` が名前を引けずに失敗する(`Could not resolve host`)のが期待。ゾーンにワイルドカードのレコード(`*.example.net` など)があると名前は引けて、そのレコードの先のサーバーの応答が返る。その場合も、200 の JS でなければ消えている。`workers-dev` では最後の `curl` を飛ばす(無効にした後の workers.dev の応答は Cloudflare が保証していない)。
 
 Free プランの料金はリソースを消した時点で止まる(Workers Paid にしていた場合、プランの解約はダッシュボードの Compute(コンピュート)→ Workers plans(Workers のプラン)から)。

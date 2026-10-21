@@ -454,7 +454,7 @@ Cloudflare の Free プランには日次の上限があり(アカウント単�
 | D1 の行の読み取り・書き込み | control と管理画面のすべて(閲覧・ログイン・API キーの認証・使用状況の表示を含む。D1 のクエリが失敗する)・テストの結果の記録 | edge の配信(配信は D1 を使わない)・サイトの元の表示 |
 | KV の書き込み(1,000 / 日) | 公開(配る設定の書き込み) | 配信中の設定・管理画面での保存 |
 
-訪問者のブラウザには、失敗したリクエストのたびに Console に `Failed to load resource …` が 1 行ずつ出ます。対象は `/v1/*`・`/__ab/*` を使うサイトの判定と送信です。表示は元のまま壊れません。使用状況が開けないときは、上の「Cloudflare を直接見る」手順で確かめます。上限を超えたときの動きには、Worker を通さずオリジンへ流す fail open と、Cloudflare の 1027 を返す fail closed があり、本製品は fail closed を前提にしています(fail open ではオリジンの応答はサイトごとに違い、訪問者の ID を含む送信がオリジンに届くため)。この動きは設定ファイルでは持てません。Custom Domain と `*.workers.dev` には選ぶ項目が無く、上限を超えると 1027 を返します。edge を別のドメインに置く構成では、edge は Custom Domain なので 1027 になります。
+訪問者のブラウザには、失敗したリクエストのたびに Console に `Failed to load resource …` が 1 行ずつ出ます。対象は `/v1/*`・`/__ab/*` を使うサイトの判定と送信です。表示は元のまま壊れません。使用状況が開けないときは、上の「Cloudflare を直接見る」手順で確かめます。上限を超えたときの動きには、Worker を通さずオリジンへ流す fail open と、Cloudflare の 1027 を返す fail closed があり、本製品は fail closed を前提にしています(fail open ではオリジンの応答はサイトごとに違い、訪問者の ID を含む送信がオリジンに届くため)。この動きは設定ファイルでは持てません。`wrangler deploy` と配信専用の Worker の設定のスクリプトが作る Route は fail closed になります(実機で確かめました)。ダッシュボードでこの Route の動きを fail open に変えないでください。Custom Domain と `*.workers.dev` には選ぶ項目が無く、上限を超えると 1027 を返します。edge を別のドメインに置く構成では、edge は Custom Domain なので 1027 になります。
 
 ### Cloudflare を直接見るクエリの例
 
