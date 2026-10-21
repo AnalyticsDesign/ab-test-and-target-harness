@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/control";
-import { loadSites, loadWorkspaces } from "@/lib/loaders";
+import { loadSites, loadWorkspaces, requireSummary } from "@/lib/loaders";
 import { canManage, roleLabel } from "@/lib/roles";
 import type { Site } from "@/lib/types";
 import { NewSiteDisclosure } from "@/components/NewSiteDisclosure";
@@ -16,6 +16,9 @@ export default async function WorkspacePage({ params }: { params: Promise<{ wid:
   const sites = await loadSites(wid);
   if (!ws || sites.status !== 200) notFound();
   const canAdmin = canManage(ws.role);
+  // B102: Free の 1 日の上限はアカウント全体で、この導入のすべてのサイトが分け合うので、新しいサイトのフォームで知らせる。
+  // 数えるのは呼ぶ人に見えるサイト(全ワークスペース)。概要は上の loadWorkspaces と同じ結果(取れなければ既に画面全体のエラー)
+  const visibleSites = (await requireSummary()).reduce((n, w) => n + w.sites.length, 0);
   const meta = (
     <>
       {ws.name} · <span className="badge">{roleLabel(ws.role)}</span>
@@ -26,7 +29,7 @@ export default async function WorkspacePage({ params }: { params: Promise<{ wid:
       <TopBar crumbs={[{ label: ws.name, href: `/w/${wid}` }, { label: "サイト一覧" }]} />
       <Content>
         {canAdmin ? (
-          <NewSiteDisclosure workspaceId={wid} defaultOpen={sites.data.length === 0} title="サイト一覧" meta={meta} />
+          <NewSiteDisclosure workspaceId={wid} defaultOpen={sites.data.length === 0} title="サイト一覧" meta={meta} visibleSites={visibleSites} />
         ) : (
           <>
             <PageHeader title="サイト一覧" meta={meta} />

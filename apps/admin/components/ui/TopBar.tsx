@@ -8,7 +8,7 @@ export type PublishState = { href: string; activeVersion: number | null; hasUnpu
 
 /**
  * 上部バー(決定 54 (2)(8))。パンくずの先頭は必ず「ホーム」(ホームの画面ではリンクにしない)。crumbs には「ホーム」を含めずに渡す。
- * サイトの中では「サイト ID」の印・画面名・配信中の版・未公開の編集・公開のボタン。公開は確認画面へのリンクで、管理者未満は無効 + title
+ * サイトの中では「サイト ID」の印・画面名・配信中の版・未公開の編集・公開のボタン。公開は確認画面へのリンクで、管理者未満は無効 + 理由の文
  */
 export function TopBar({ crumbs, publish }: { crumbs: Array<{ label: string; href?: string }>; publish?: PublishState }) {
   const all = [{ label: "ホーム", href: crumbs.length > 0 ? "/w" : undefined }, ...crumbs];
@@ -24,8 +24,7 @@ export function TopBar({ crumbs, publish }: { crumbs: Array<{ label: string; hre
         {publish ? (
           <>
             <span className="badge mono">サイト ID: {publish.siteId}</span>
-            <span className={styles.sep}>/</span>
-            <Crumb />
+            <Crumb sepClassName={styles.sep} />
           </>
         ) : null}
       </div>
@@ -39,10 +38,14 @@ export function TopBar({ crumbs, publish }: { crumbs: Array<{ label: string; hre
               公開
             </Link>
           ) : (
-            <button type="button" className="btn" disabled title="公開は管理者以上が行います" data-testid="topbar-publish" data-variant="disabled">
-              <Icon name="upload" />
-              公開
-            </button>
+            <>
+              {/* 押せない理由は見える文で添える(決まり 2.6。title だけではキーボード・タッチ・読み上げに届かない)。ボタンの左に置く(2.3) */}
+              <span id="topbar-publish-reason">公開は管理者以上が行います</span>
+              <button type="button" className="btn" disabled aria-describedby="topbar-publish-reason" data-testid="topbar-publish" data-variant="disabled">
+                <Icon name="upload" />
+                公開
+              </button>
+            </>
           )}
         </div>
       ) : null}

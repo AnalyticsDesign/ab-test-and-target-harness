@@ -1,18 +1,30 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, describeError, fieldErrors } from "@/lib/client";
-import type { Site } from "@/lib/types";
+import type { Site, UsageSettingsView } from "@/lib/types";
+import { sharedFreeLimitNotice } from "@/lib/usage";
 import { Field } from "./Field";
 import { ErrorBox } from "./ErrorBox";
 import { SubmitButton } from "./SubmitButton";
 import { Picker } from "./ui/Picker";
 
-export function SiteCreateForm({ workspaceId }: { workspaceId: string }) {
+export function SiteCreateForm({ workspaceId, visibleSites }: { workspaceId: string; visibleSites: number }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [mode, setMode] = useState("A");
   const [consent, setConsent] = useState("implicit");
+  // B102: プラン(使用状況の設定)を読む。読めない(403 = 使用状況を見られない人)・失敗は null のまま = 注意を出さない
+  const [usageSettings, setUsageSettings] = useState<UsageSettingsView | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api<UsageSettingsView>("GET", "/usage/settings")
+      .then((s) => alive && setUsageSettings(s))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
   return (
     <form
       className="card"
@@ -38,6 +50,16 @@ export function SiteCreateForm({ workspaceId }: { workspaceId: string }) {
       }}
     >
       <h2>新しいサイト</h2>
+      {sharedFreeLimitNotice(usageSettings, visibleSites) ? (
+        <div className="banner-note" data-testid="free-shared-limit-note">
+          <span>
+            Cloudflare の Free の 1 日の上限(Workers のリクエスト 10 万など)はアカウント全体のもので、この導入のすべてのサイト(と同じアカウントのほかの Worker)が分け合います。あなたが見られるサイトは、いま {visibleSites} 個あります。新しいサイトを足すと、1 サイトあたりの余裕が減ります。
+            {/* ホームの使用状況の節は、取得が設定済みのときだけ(システム管理者以外にも)出る(lib/usage.ts の summaryView) */}
+            {usageSettings?.configured ? "使用量はホームの「使用状況」で確かめられます。" : ""}
+            目安は運用ガイドの「1 日の予算と止まったときの見え方」にあります
+          </span>
+        </div>
+      ) : null}
       <Field label="名前" error={fields.name}>
         <input name="name" required />
       </Field>

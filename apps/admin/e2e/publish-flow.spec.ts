@@ -477,6 +477,9 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     // その refresh を挟んでもアラートが残っている
     await expect(appAlert(page)).toContainText("公開に失敗しました");
     await expect(appAlert(page)).toContainText("config_too_large");
+    // B31 ③: 一覧の「未反映」の下に、本番の状態を見える文で出す(title だけにしない)。一度も公開していないので「まだ公開していません」
+    await page.getByRole("banner").getByRole("link", { name: SITE_FAILED.name }).click();
+    await expect(page.getByTestId(`experiment-pending-${EXPERIMENT_FAILED.id}`)).toHaveText("まだ公開していません");
   });
 
   test("pausing an experiment removes it from the edge bootstrap", async ({ page }) => {

@@ -3,14 +3,14 @@ import { controlFetch, requireUser } from "@/lib/control";
 import { loadSite, loadWorkspaces } from "@/lib/loaders";
 import type { Experiment, PublishRow } from "@/lib/types";
 import { STATUS_FILTERS } from "@/lib/experiment-filter";
-import { readParam } from "@/lib/url-state";
+import { pickParam } from "@/lib/url-state";
 import { ExperimentList } from "@/components/ExperimentList";
 import { LocalTime } from "@/components/LocalTime";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Icon } from "@/components/ui/Icon";
 
 /** Site 概要 = 実験の一覧 + 作成リンク + 公開状況の要約(Site ナビ・未公開バナーは親の layout.tsx が担う) */
-export default async function SitePage({ params, searchParams }: { params: Promise<{ wid: string; sid: string }>; searchParams: Promise<{ status?: string }> }) {
+export default async function SitePage({ params, searchParams }: { params: Promise<{ wid: string; sid: string }>; searchParams: Promise<{ status?: string | string[] }> }) {
   await requireUser();
   const { wid, sid } = await params;
   const ws = (await loadWorkspaces()).find((w) => w.id === wid);
@@ -19,7 +19,7 @@ export default async function SitePage({ params, searchParams }: { params: Promi
   const publishes = (await controlFetch<PublishRow[]>(`/sites/${sid}/publishes`)).data;
   const canEdit = ws?.role !== "viewer";
   const canPublish = ws?.role === "owner" || ws?.role === "admin";
-  const initialFilter = readParam(`?status=${(await searchParams).status ?? ""}`, "status", STATUS_FILTERS, "all");
+  const initialFilter = pickParam((await searchParams).status, STATUS_FILTERS, "all");
   // publishes の行は activate に成功した記録として `active` のまま残り続ける(status では絞れない。review 指摘)。
   // 「いま配信中」の行は site.activeVersion と version が一致する 1 行だけ
   const latest = publishes.find((p) => p.version === site.activeVersion);

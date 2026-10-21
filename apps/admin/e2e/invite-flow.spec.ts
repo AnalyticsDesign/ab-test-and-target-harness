@@ -88,6 +88,10 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await expect(editor.getByRole("button", { name: "保存(下書き)" })).toBeVisible();
   await expect(editor.getByText("開始・一時停止・終了(本番化)は管理者以上が行います")).toBeVisible();
   await expect(editor.getByRole("button", { name: "一時停止" })).toHaveCount(0);
+  // B31 ②: 上部バーの「公開」は押せず、理由は見える文で添える(title だけにしない)。ボタンはその文を説明として指す
+  await expect(editor.locator("#topbar-publish-reason")).toHaveText("公開は管理者以上が行います");
+  await expect(editor.getByTestId("topbar-publish")).toBeDisabled();
+  await expect(editor.getByTestId("topbar-publish")).toHaveAttribute("aria-describedby", "topbar-publish-reason");
 
   // UI の出し分けに頼らず、BFF 経由で直接叩いても 403(spec §13.2)
   const res = await editor.request.post(`/api/control/sites/${SITE.id}/experiments/${EXPERIMENT.id}/status`, { headers: controlHeaders(), data: { status: "running" } });

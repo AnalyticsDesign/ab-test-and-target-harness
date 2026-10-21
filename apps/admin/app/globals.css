@@ -5,9 +5,10 @@
   --text: #1d1d1b; --muted: #6e6d68; --faint: #9a9994;
   --accent: #2d62c8; --accent-text: #fff; --accent-soft: #e8eefa;
   --nav-active: #e6e6e2;
-  --ok: #2f8a55; --ok-soft: #e5f3ea;
-  --warn: #a86a12; --warn-soft: #fbf0dc;
-  --gray: #7a7974; --gray-soft: #efefec;
+  /* 状態色は 12px の文字に使うので、*-soft の背景との比を 4.5:1 以上に保つ(2026-10-21 に ok・warn・gray を暗くした。test/contrast.test.ts) */
+  --ok: #29794b; --ok-soft: #e5f3ea;
+  --warn: #996010; --warn-soft: #fbf0dc;
+  --gray: #6b6a66; --gray-soft: #efefec;
   --danger: #c23a30; --danger-soft: #fbeae8;
   --code-bg: #f6f6f4; --code-key: #8a3fb0; --code-str: #2f7a45; --code-cmt: #8a8983;
   --shadow: 0 8px 24px rgb(0 0 0 / 0.12);

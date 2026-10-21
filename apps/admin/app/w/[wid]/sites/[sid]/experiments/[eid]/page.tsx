@@ -5,7 +5,7 @@ import { tabsFor } from "@/lib/experiment-draft";
 import type { PlanView } from "@/lib/evaluation-plan";
 import { STATUS_JA, STATUS_TONE } from "@/lib/experiment-filter";
 import { KIND_JA } from "@/lib/experiment-kind";
-import { readParam } from "@/lib/url-state";
+import { pickParam } from "@/lib/url-state";
 import type { Audience, Experiment, Goal } from "@/lib/types";
 import { ExperimentEditor } from "@/components/ExperimentEditor";
 import { StatusButtons } from "@/components/StatusButtons";
@@ -13,7 +13,7 @@ import { DuplicateButton } from "@/components/experiment/DuplicateButton";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPill } from "@/components/ui/StatusPill";
 
-export default async function ExperimentPage({ params, searchParams }: { params: Promise<{ wid: string; sid: string; eid: string }>; searchParams: Promise<{ tab?: string; variant?: string }> }) {
+export default async function ExperimentPage({ params, searchParams }: { params: Promise<{ wid: string; sid: string; eid: string }>; searchParams: Promise<{ tab?: string | string[]; variant?: string | string[] }> }) {
   await requireUser();
   const { wid, sid, eid } = await params;
   const ws = (await loadWorkspaces()).find((w) => w.id === wid);
@@ -35,8 +35,9 @@ export default async function ExperimentPage({ params, searchParams }: { params:
   // 中に入れると status 変更が updated_at を進めて本体ごと作り直し、Publish の結果メッセージ
   // (とりわけ失敗時のアラート)が読まれる前に消えるため
   const sp = await searchParams;
-  const initialTab = readParam(`?tab=${sp.tab ?? ""}`, "tab", tabsFor(exp.data.kind), "overview");
-  const initialVariant = exp.data.variants?.some((v) => v.id === sp.variant) ? sp.variant! : null;
+  const initialTab = pickParam(sp.tab, tabsFor(exp.data.kind), "overview");
+  const variantParam = Array.isArray(sp.variant) ? sp.variant[0] : sp.variant;
+  const initialVariant = exp.data.variants?.some((v) => v.id === variantParam) ? variantParam! : null;
   return (
     <div>
       <PageHeader

@@ -468,7 +468,8 @@ describe("POST /api/session/setup", () => {
     const res = await setup(post("http://admin.test/api/session/setup", {
       body: JSON.stringify({ setupToken: "s3cret", email: "a@example.com", name: "A", workspaceName: "W" }),
     }));
-    await expect(res.json()).resolves.toEqual({ workspaceId: "ws1" }); // userId も返さない
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({}); // 画面は成否しか見ないので、workspaceId も userId も返さない(B23 ⑧)
     const { url, init, headers } = lastCall();
     expect(url).toBe(`${CONTROL}/setup`);
     expect(headers.get("x-setup-token")).toBe("s3cret");

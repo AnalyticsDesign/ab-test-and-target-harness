@@ -1,6 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { CodeBlock } from "@/components/ui/CodeBlock";
 import { Field } from "@/components/Field";
 import { ErrorBox } from "@/components/ErrorBox";
 import { SubmitButton } from "@/components/SubmitButton";
@@ -26,6 +27,9 @@ export function AcceptInviteForm({
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 招待のリンク(メールが違うときに、ログアウトの前に控えてもらう)。origin はブラウザでしか分からないので描画の後に作る
+  const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  useEffect(() => setInviteUrl(`${window.location.origin}/invite/${encodeURIComponent(id)}`), [id]);
   async function accept(body: Record<string, unknown>) {
     setBusy(true);
     setError(null);
@@ -96,6 +100,12 @@ export function AcceptInviteForm({
             ログイン中のアカウント({signedInEmail})のメールアドレスが招待({email})と一致しません。いったんログアウトし、招待されたメールアドレスの
             Google アカウントでログインしてください
           </p>
+          {/* ログアウトの後はログインの画面に移り、この招待の画面には戻らない(B22 ①)。ログアウトの動きは変えず、
+              先にリンクを控えてもらい、開き直した招待の画面の「Google でログインして参加」(next 付き)から入ってもらう */}
+          <p className="muted">
+            ログアウトするとログインの画面に移り、この画面には戻りません。先に下の招待のリンクを控え、ログアウトの後にそのリンクを開いて「Google でログインして参加」から、招待されたメールアドレスでログインしてください
+          </p>
+          {inviteUrl ? <CodeBlock code={inviteUrl} label="招待のリンクをコピー" /> : null}
           <form action="/api/session/logout" method="post">
             <button className="btn">ログアウト</button>
           </form>

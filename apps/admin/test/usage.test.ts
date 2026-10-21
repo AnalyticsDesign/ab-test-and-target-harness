@@ -1,7 +1,22 @@
 // apps/admin/test/usage.test.ts
 import { describe, expect, it } from "vitest";
-import { amountHeader, formatAmount, usageSections, paidNote, formatPercent, settingsLine, showsReference, statusLabel, statusTone, summaryView, topResources, usageFailure, usageRows } from "@/lib/usage";
+import { amountHeader, formatAmount, usageSections, paidNote, formatPercent, settingsLine, showsReference, sharedFreeLimitNotice, statusLabel, statusTone, summaryView, topResources, usageFailure, usageRows } from "@/lib/usage";
 import type { UsageReport, UsageResource } from "@/lib/types";
+
+// B102: 新しいサイトのフォームの注意(Free の 1 日の上限はすべてのサイトで分け合う)
+describe("sharedFreeLimitNotice", () => {
+  it("Free で、既にサイトがあるときだけ出す", () => {
+    expect(sharedFreeLimitNotice({ cloudflarePlan: "free" }, 1)).toBe(true);
+    expect(sharedFreeLimitNotice({ cloudflarePlan: "free" }, 3)).toBe(true);
+    // 呼ぶ人に見えるサイトが 0 なら出さない(ほかのワークスペースにだけサイトがある場合も、呼ぶ人からは分け合う相手が見えないので出さない)
+    expect(sharedFreeLimitNotice({ cloudflarePlan: "free" }, 0)).toBe(false);
+    expect(sharedFreeLimitNotice({ cloudflarePlan: "paid" }, 3)).toBe(false);
+  });
+
+  it("プランを読めない(使用状況をシステム管理者だけにした導入の 403・読み込み中)ときは出さない", () => {
+    expect(sharedFreeLimitNotice(null, 3)).toBe(false);
+  });
+});
 
 // backlog D10 / brief K5・K13、plan K25: 使用状況の表示の判断(純関数)
 const r = (id: string, over: Partial<UsageResource> = {}): UsageResource => ({

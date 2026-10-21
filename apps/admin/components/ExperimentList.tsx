@@ -70,9 +70,15 @@ export function ExperimentList({ wid, sid, experiments, canPublish, initialFilte
                     {e.publishedStatus === e.status ? (
                       <span className="muted">反映済み</span>
                     ) : (
-                      <StatusPill tone="warn" title={`公開が失敗したか、まだ公開していません。${pending}${canPublish ? " → 公開で再試行" : ""}`}>
-                        未反映
-                      </StatusPill>
+                      <>
+                        <StatusPill tone="warn" title={`公開が失敗したか、まだ公開していません。${pending}${canPublish ? " → 公開で再試行" : ""}`}>
+                          未反映
+                        </StatusPill>
+                        {/* B31 ③: 本番がどうなっているかは見える文でも出す(title はマウスを重ねたときだけで、キーボード・タッチでは読めない) */}
+                        <div className="muted" data-testid={`experiment-pending-${e.id}`}>
+                          {e.publishedStatus ? `本番は${STATUS_JA[e.publishedStatus]}のまま` : "まだ公開していません"}
+                        </div>
+                      </>
                     )}
                   </td>
                   <td>

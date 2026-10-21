@@ -19,7 +19,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           Google でログイン
         </a>
       ) : (
-        <p className="error-box">Google ログインが設定されていません。control に OAuth クライアントを設定してください</p>
+        <ErrorBox message="Google ログインが設定されていません。control に OAuth クライアントを設定してください" />
       )}
       <p className="muted">
         招待されたメールアドレスの Google アカウントでログインします。初回セットアップは <a href="/setup">/setup</a>

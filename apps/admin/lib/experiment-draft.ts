@@ -28,7 +28,7 @@ export type Draft = {
 export type TabProps = { draft: Draft; set: <K extends keyof Draft>(key: K, value: Draft[K]) => void; ro: boolean };
 
 /**
- * タブの内部の ID(表示は「基本設定」/「パターン」/「評価計画」/「結果」)。B77 K16: 外部計測のタブは基本設定の下部のカードに移した。古い ?tab=analytics は readParam の既定で overview に落ちる。
+ * タブの内部の ID(表示は「基本設定」/「パターン」/「評価計画」/「結果」)。B77 K16: 外部計測のタブは基本設定の下部のカードに移した。古い ?tab=analytics は pickParam の既定で overview に落ちる。
  * plan(評価計画)と results(結果)はテストだけ(D9 ③ Task 14・15。パーソナライズでは呼び出し側が overview に落とす = tabsFor)。
  * 結果は下書きでは押せない(「開始後に表示されます」。設計書 §10)
  */

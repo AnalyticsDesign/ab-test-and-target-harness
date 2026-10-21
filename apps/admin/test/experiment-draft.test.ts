@@ -45,7 +45,7 @@ describe("experiment draft", () => {
     expect(failedTab("patch", "analytics")).toBe("overview"); // B77 K16: 外部計測は基本設定タブの下部のカード
     expect(failedTab("variants", "0")).toBe("variants");
     expect(failedTab("changes", "payload")).toBe("variants");
-    expect(EDITOR_TABS).toEqual(["overview", "variants", "plan", "results"]); // ?tab=analytics は readParam の既定で基本設定に落ちる
+    expect(EDITOR_TABS).toEqual(["overview", "variants", "plan", "results"]); // ?tab=analytics は pickParam の既定で基本設定に落ちる
     // D9 ③ Task 14・15: 評価計画と結果のタブはテストだけ(パーソナライズの ?tab=plan / ?tab=results は基本設定に落ちる)
     expect(tabsFor("test")).toEqual(["overview", "variants", "plan", "results"]);
     expect(tabsFor("single")).toEqual(["overview", "variants"]);

@@ -138,6 +138,8 @@ export async function setOwnerPassword(request: APIRequestContext): Promise<void
   const link = await request.post(`${CONTROL_URL}/break-glass/reset-link`, { data: { token: BREAK_GLASS_TOKEN, email: OWNER_EMAIL } });
   expect(link.status()).toBe(200);
   const token = new URL(((await link.json()) as { url: string }).url).searchParams.get("token");
+  // token が無いまま送ると reset-password の 400 で落ち、原因が読みにくい。ここで止めて理由を出す(B23 ⑧)
+  expect(token, "break-glass/reset-link の URL に token が無い").toBeTruthy();
   const reset = await request.post(`${CONTROL_URL}/auth/reset-password`, { data: { token, newPassword: PASSWORD }, headers: { origin: ADMIN_URL } });
   expect(reset.status()).toBe(200);
 }

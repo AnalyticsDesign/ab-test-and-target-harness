@@ -28,6 +28,16 @@ export function settingsLine(s: UsageSettings): string {
   return `見られる人: ${who} · プラン: ${plan}`;
 }
 
+/**
+ * B102: 新しいサイトのフォームに「Free の 1 日の上限(アカウント全体)はすべてのサイトで分け合う」の注意を出すか。
+ * settings が null = プランを読めない(使用状況を見られる人をシステム管理者だけにした導入の 403・読み込み中)で、出さない。
+ * siteCount は呼ぶ人に見えるサイトの数(GET /workspaces/summary)で、導入全体の数ではない(画面の文も「見られるサイト」と書く)。
+ * 止めはしない(小さいサイトを Free で複数回すのは正しい使い方)
+ */
+export function sharedFreeLimitNotice(settings: Pick<UsageSettings, "cloudflarePlan"> | null, siteCount: number): boolean {
+  return settings?.cloudflarePlan === "free" && siteCount > 0;
+}
+
 const LABELS: Record<UsageStatus, string> = {
   ok: "余裕あり",
   warning: "注意",

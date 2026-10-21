@@ -27,7 +27,7 @@ export function IssuedCard({
   /** 控え損ねないための注意。目立つ色で出す */
   notice: string;
   code: string;
-  copyLabel: string;
+  copyLabel: `${string}コピー`;
   closeLabel: string;
   onClose: () => void;
 }) {

@@ -9,7 +9,7 @@ import { PageHeader } from "./ui/PageHeader";
  * 見出しごとこの client component が持つのは、開閉の状態を持ちながらボタンを PageHeader の actions に置くため
  * (ほかの画面と同じく、主操作は見出しの右)。Site が 1 つも無いときは最初から開いておく
  */
-export function NewSiteDisclosure({ workspaceId, defaultOpen, title, meta }: { workspaceId: string; defaultOpen: boolean; title: ReactNode; meta?: ReactNode }) {
+export function NewSiteDisclosure({ workspaceId, defaultOpen, title, meta, visibleSites }: { workspaceId: string; defaultOpen: boolean; title: ReactNode; meta?: ReactNode; visibleSites: number }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <>
@@ -23,7 +23,7 @@ export function NewSiteDisclosure({ workspaceId, defaultOpen, title, meta }: { w
           </button>
         }
       />
-      {open ? <SiteCreateForm workspaceId={workspaceId} /> : null}
+      {open ? <SiteCreateForm workspaceId={workspaceId} visibleSites={visibleSites} /> : null}
     </>
   );
 }

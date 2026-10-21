@@ -2,7 +2,7 @@ import { controlRequest, controlUnreachable, forwardedFrom, originHeader, requir
 
 /**
  * 初回セットアップ(spec §13.3)。フォームの `setupToken` は header `x-setup-token` に移して control に渡す。
- * 応答からは画面が使う `workspaceId` だけを返す。セッションは作らない(OWNER は続けて Google でログインする)
+ * 成功の応答は空(画面は成否しか見ない。control の応答の中身は返さない)。セッションは作らない(OWNER は続けて Google でログインする)
  */
 export async function POST(req: Request): Promise<Response> {
   const noOrigin = requireOrigin(req);
@@ -16,7 +16,6 @@ export async function POST(req: Request): Promise<Response> {
     ...forwardedFrom(req),
   });
   if (!res) return controlUnreachable();
-  const data = (await res.json().catch(() => ({}))) as { workspaceId?: string };
-  if (!res.ok) return Response.json(data, { status: res.status }); // control の封筒をそのまま返す
-  return Response.json({ workspaceId: data.workspaceId });
+  if (!res.ok) return Response.json(await res.json().catch(() => ({})), { status: res.status }); // control の封筒をそのまま返す
+  return Response.json({});
 }

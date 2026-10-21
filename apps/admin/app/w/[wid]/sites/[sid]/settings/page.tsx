@@ -3,12 +3,12 @@ import { controlFetch, requireUser } from "@/lib/control";
 import { countExperimentsForResults } from "@/lib/results-settings";
 import type { Experiment } from "@/lib/types";
 import { loadCapabilities, loadSite, loadWorkspaces } from "@/lib/loaders";
-import { readParam } from "@/lib/url-state";
+import { pickParam } from "@/lib/url-state";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SECTION_IDS } from "@/components/settings/sections";
 import { SiteSettingsForm } from "@/components/settings/SiteSettingsForm";
 
-export default async function SettingsPage({ params, searchParams }: { params: Promise<{ wid: string; sid: string }>; searchParams: Promise<{ section?: string }> }) {
+export default async function SettingsPage({ params, searchParams }: { params: Promise<{ wid: string; sid: string }>; searchParams: Promise<{ section?: string | string[] }> }) {
   await requireUser();
   const { wid, sid } = await params;
   const site = await loadSite(sid);
@@ -18,7 +18,7 @@ export default async function SettingsPage({ params, searchParams }: { params: P
   // 結果の記録を切り替えるときの確認に使う件数。一覧が取れなければ 0 件(確認を出さないだけで、保存の可否は control が決める)
   const list = await controlFetch<Experiment[]>(`/sites/${sid}/experiments`);
   const counts = countExperimentsForResults(list.status === 200 ? list.data : []);
-  const initialSection = readParam(`?section=${(await searchParams).section ?? ""}`, "section", SECTION_IDS, "general");
+  const initialSection = pickParam((await searchParams).section, SECTION_IDS, "general");
   return (
     <div>
       <PageHeader title="設定" meta={site.data.name} />
