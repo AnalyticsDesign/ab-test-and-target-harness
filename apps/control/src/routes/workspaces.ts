@@ -350,7 +350,7 @@ workspaceRoutes.patch(
     ]);
     if ((upd?.meta.changes ?? 0) === 0) {
       if (await isInstanceAdmin(db, target.userId)) {
-        throw new ApiError(409, "instance_admin_member", { hint: "システム管理者から外すときは、ユーザーメニュー →「設定」→「システム管理者」から行ってください(API では DELETE /instance-admins/:userId)" });
+        throw new ApiError(409, "instance_admin_member", { hint: "システム管理者から外すときは、管理画面の左メニューの下の「設定」→「システム管理者」から行ってください(API では DELETE /instance-admins/:userId)" });
       }
       throw new ApiError(409, "last_owner", { message: "最後のオーナーは変更できません", hint: "先に別のメンバーをオーナーにしてください" });
     }
@@ -380,7 +380,7 @@ workspaceRoutes.delete(
       and (role != 'owner' or (select count(*) from member m2 where m2."organizationId" = ${wid} and m2.role = 'owner') > 1)`.execute(db);
     if (Number(del.numAffectedRows ?? 0) === 0) {
       if (await isInstanceAdmin(db, target.userId)) {
-        throw new ApiError(409, "instance_admin_member", { hint: "システム管理者から外すときは、ユーザーメニュー →「設定」→「システム管理者」から行ってください(API では DELETE /instance-admins/:userId)" });
+        throw new ApiError(409, "instance_admin_member", { hint: "システム管理者から外すときは、管理画面の左メニューの下の「設定」→「システム管理者」から行ってください(API では DELETE /instance-admins/:userId)" });
       }
       throw new ApiError(409, "last_owner", { message: "最後のオーナーは外せません", hint: "先に別のメンバーをオーナーにしてください" });
     }

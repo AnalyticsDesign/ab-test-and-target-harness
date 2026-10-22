@@ -39,7 +39,7 @@ test("the version banner follows /capabilities: incompatible (red) → outdated 
   await expect(banner).toHaveAttribute("data-kind", "incompatible");
   await expect(banner).toHaveClass(/banner-warn/);
   await expect(banner).toContainText("管理画面の新しい版があります。この画面のままでは保存できません。ページを再読み込みしてください(未保存の入力は消えます)");
-  await page.getByRole("link", { name: "設定" }).click();
+  await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "設定", exact: true }).click();
   await expect(banner).toBeVisible();
 
   // 新しい版はあるが書き込みは通る: 控えめな帯

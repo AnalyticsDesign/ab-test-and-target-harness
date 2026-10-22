@@ -27,6 +27,8 @@ const PATHS = {
   left: <path d="M10 3.5L5.5 8l4.5 4.5" />,
   right: <path d="M6 3.5L10.5 8 6 12.5" />,
   info: (<><circle cx="8" cy="8" r="6.5" /><path d="M8 7.2v4" /><circle cx="8" cy="4.9" r=".6" /></>),
+  // 小さな丸。設定のメニューで「危険な操作」だけ歯車と区別する印
+  dot: <circle cx="8" cy="8" r="2.4" />,
   gauge: (<><path d="M2.5 11.5a5.5 5.5 0 1 1 11 0" /><path d="M8 11.5l2.6-3.6" /></>),
 } satisfies Record<string, ReactNode>;
 

@@ -218,7 +218,7 @@ export function applySitePatch(row: SiteRow, patch: SitePatch, nowMs: number): {
     // 同上(invalid_analytics と同じ理由で validationFailed() 経由に変更。review r2 finding 2)
     const err = validationFailed(parsed.error, "invalid_settings");
     err.extra.hint = parsed.error.issues[0]?.message;
-    err.extra.message = "サイトの設定が不正です";
+    err.extra.message = "サイト設定が不正です";
     return { next, error: err };
   }
   return { next };

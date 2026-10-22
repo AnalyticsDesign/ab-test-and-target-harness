@@ -43,7 +43,7 @@ test("the banner follows freeze and thaw without a reload; a save shows the reas
   await refocus(page);
   await expect(banner).toContainText("メンテナンス中のため、変更は保存できません。理由: E2E の更新");
   await expect(banner).toContainText("再開の見込み: "); // 時刻の表記はブラウザのタイムゾーンで変わるので、項目があることだけを見る
-  await page.getByRole("link", { name: "設定" }).click();
+  await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "設定", exact: true }).click();
   await expect(banner).toBeVisible(); // 別のページでも出る
   await page.getByTestId("section-external").click();
   await waitForHydration(page);

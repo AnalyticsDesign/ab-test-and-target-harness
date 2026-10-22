@@ -247,7 +247,7 @@ describe("results purge queue and forget (D9 ③ K6・K12)", () => {
     expect(res.status).toBe(409);
     const body = await expectEnvelope(res);
     expect(body.error).toBe("invalid_transition");
-    expect(body.hint).toBe("状態かサイトの設定が変わりました。画面を読み込み直してください");
+    expect(body.hint).toBe("状態かサイト設定が変わりました。画面を読み込み直してください");
     const row = await experimentRow(sid, "exp_cas");
     expect(row.status).toBe("draft");
     expect(row.run_id).toBeNull();

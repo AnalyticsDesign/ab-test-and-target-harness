@@ -183,7 +183,7 @@ siteRoutes.patch(
   "/sites/:sid",
   describeRoute({
     tags: ["sites"],
-    summary: "サイトの設定を更新(管理者以上)。訪問者 ID / 外部計測の名前は設置タグの配信ファイルを作り直して反映するので、公開は不要。タイムゾーンと結果の記録の切り替えは次の公開で効く",
+    summary: "サイト設定を更新(管理者以上)。訪問者 ID / 外部計測の名前は設置タグの配信ファイルを作り直して反映するので、公開は不要。タイムゾーンと結果の記録の切り替えは次の公開で効く",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "更新後のサイト", content: { "application/json": { schema: resolver(SiteJsonSchema) } } },

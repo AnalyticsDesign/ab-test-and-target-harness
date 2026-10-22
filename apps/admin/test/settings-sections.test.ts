@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SECTIONS, firstInvalidSection, sectionOfField } from "@/components/settings/sections";
+import { SECTIONS, fieldKeysFor, firstInvalidSection, sectionOfField } from "@/components/settings/sections";
 
 describe("settings sections", () => {
   it("lists the submenu in the designed order, with headings that match the current names", () => {
@@ -30,5 +30,22 @@ describe("settings sections", () => {
     expect(firstInvalidSection(["uuidCookieName", "analytics.exposure.event", "ga4PropertyId"])).toBe("identity");
     expect(firstInvalidSection(["ga4PropertyId", "name"])).toBe("external");
     expect(firstInvalidSection([])).toBe("general");
+  });
+  // B31 ④: 欄を変えたら、その欄のエラーだけを消す(同じ節の別の欄のエラーは残す)
+  it("clears_field_errors_by_input_name", () => {
+    const analytics = fieldKeysFor("analytics.exposure.event");
+    expect(analytics("analytics.exposure.event")).toBe(true);
+    expect(analytics("exposure.event")).toBe(true); // invalid_analytics は analytics. が付かない
+    expect(analytics("exposure.keys")).toBe(false);
+    expect(analytics("analytics.conversion.event")).toBe(false);
+    const byoid = fieldKeysFor("byoidCookie");
+    expect(byoid("byoidCookie")).toBe(true);
+    expect(byoid("idSource")).toBe(true); // 参照する Cookie 名の欄のエラーは idSource で返る
+    expect(byoid("visitorCookieName")).toBe(false);
+    const origins = fieldKeysFor("allowedOrigins");
+    expect(origins("allowedOrigins")).toBe(true);
+    expect(origins("allowedOrigins.0")).toBe(true); // 配列の添字
+    expect(origins("domain")).toBe(false);
+    expect(origins("allowedOriginsX")).toBe(false);
   });
 });

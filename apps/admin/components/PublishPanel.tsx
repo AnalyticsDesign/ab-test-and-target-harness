@@ -60,7 +60,7 @@ export function PublishPanel({ wid, site, preview, canPublish }: { wid: string; 
             </section>
           ))}
           <h2>サイト全体の変更</h2>
-          {preview.siteLevelChanged ? <p><span className="badge badge-warn">サイトの設定・目標・オーディエンスの変更あり</span></p> : <p className="muted">ありません</p>}
+          {preview.siteLevelChanged ? <p><span className="badge badge-warn">サイト設定・目標・オーディエンスの変更あり</span></p> : <p className="muted">ありません</p>}
           <h2>オーディエンスの変更</h2>
           {preview.audienceChanges.length === 0 ? <p className="muted">ありません</p> : null}
           {preview.audienceChanges.map((a) => (

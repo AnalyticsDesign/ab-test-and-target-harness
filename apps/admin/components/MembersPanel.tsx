@@ -19,7 +19,7 @@ import { Picker } from "./ui/Picker";
 /** 招待のロールの説明(ロール名は roleLabel) */
 const ROLE_HINT: Record<Role, string> = {
   owner: "サイトの削除まで",
-  admin: "サイトの設定・公開・メンバーの管理",
+  admin: "サイト設定・公開・メンバーの管理",
   editor: "エクスペリエンスの作成・編集(コードの変更を含む。公開はできない)",
   viewer: "閲覧のみ",
 };
@@ -44,6 +44,7 @@ export function MembersPanel({
   invitations,
   canIssueResetLink,
   amInstanceAdmin,
+  scopeText,
 }: {
   workspaceId: string;
   myRole: Role;
@@ -52,6 +53,8 @@ export function MembersPanel({
   invitations: Invitation[];
   canIssueResetLink: boolean;
   amInstanceAdmin: boolean;
+  /** ロールが効く範囲の 1 文(lib/member-scope.ts)。PageHeader の下の 1 か所だけに出す */
+  scopeText: string;
 }) {
   const router = useRouter();
   const ask = useConfirm();
@@ -106,6 +109,7 @@ export function MembersPanel({
   return (
     <div>
       <PageHeader title="メンバー" />
+      <p className="muted" data-testid="member-scope">{scopeText}</p>
       <ErrorBox message={error} />
       <div className="card-flush has-menu">
         <table data-testid="members">

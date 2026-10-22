@@ -26,7 +26,11 @@ const BANNED: Array<{ re: RegExp; use: string }> = [
   { re: /Persistent Assignment/, use: "割当の固定" },
   { re: /\b(?:Exposure|Conversion)\b/, use: "露出 / コンバージョン" },
   { re: /\b(?:Site|Variant|Change|Workspace) ID/, use: "サイト ID / パターン ID / 変更の ID" },
-  { re: /ユーザーメニュー(?:の| ?→ ?)「(?:API キー|システム管理者|新しいワークスペース|ドラッグ)/, use: "ユーザーメニュー →「設定」→ …(r1 CL-Medium-2)" },
+  // B60: 設定系の入口は左メニューの下の「設定」1 つ(ユーザーメニューには置かない)。「ユーザーメニュー →「設定」→ …」の旧い言い方も、「設定」を飛ばした言い方も当てる
+  { re: /ユーザーメニュー(?:の| ?→ ?)「(?:API キー|システム管理者|新しいワークスペース|ドラッグ)/, use: "左メニューの下の「設定」→「API キー」の形で書く" },
+  { re: /ユーザーメニュー(?:の| ?→ ?)「設定」/, use: "左メニューの下の「設定」→ …" },
+  // B60: 画面の名前は「サイト設定」(「サイトの設定」とは書かない)
+  { re: /サイトの設定/, use: "サイト設定" },
   // 英語の語の直後に日本語・「・( が続く = 画面の文の中で使っている(例: 「Site 一覧」「Variant を追加」「Stop(終了」)
   { re: /\b(?:Workspace|Site|Variant|Change|Goal|Member|Role|Experiment|Publish|Analytics|Identity|Mode|Start|Pause|Resume|Stop)\s?(?=[ぁ-んァ-ヶ一-龠「(])/u, use: "用語表の日本語" },
   // JSX のテキストやラベルに単独で置いた英語の語
@@ -155,6 +159,9 @@ describe("screen strings follow the glossary (backlog B35)", () => {
       "権限の上限",
       "フル(すべてのワークスペース)",
       "ユーザーメニューの「API キー」から",
+      "ユーザーメニューの「設定」→「API キー」から", // B60: 設定の入口は左メニューの下
+      "ユーザーメニュー →「設定」→「システム管理者」から",
+      "サイトの設定が不正です", // B60: 画面の名前は「サイト設定」
       "導入パターンの選び方(docs/install-patterns.md)",
       "ロールバック操作は Phase 2(履歴の config は…)",
       "Mode B と BYOID は MVP では併用できません",
@@ -180,6 +187,9 @@ describe("screen strings follow the glossary (backlog B35)", () => {
       "if (a.length > 0 && b < 2) return null;",
       "<p>GA4 のプロパティ ID と Google アカウント</p>",
       "<p>オーナー / 管理者 / 編集者 / 閲覧者</p>",
+      "<p>自分のキーの発行は、左メニューの下の「設定」→「API キー」から行います。</p>",
+      "<p>サイト設定が不正です</p>",
+      '<PageHeader title="サイト設定" meta={site.data.name} />',
       "<span>{roleLabel(role)}</span>",
       "export function ChangeEditor({ change }: Props) {",
       "      パターンを追加",
@@ -240,6 +250,7 @@ describe("screen strings follow the glossary (backlog B35)", () => {
       "エクスペリエンス名",
       "エクスペリエンス情報を追加",
       "出力される内容",
+      "サイト設定", // B60: 画面の見出し(旧「サイトの設定」)
     ];
     const screen = DIRS.flatMap(files)
       .map((file) => stripComments(readFileSync(path.join(ROOT, file), "utf8")))

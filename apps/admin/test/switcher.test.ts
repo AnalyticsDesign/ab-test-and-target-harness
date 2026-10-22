@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { popoverPosition, searchContexts } from "@/lib/switcher";
+import { dropdownPosition, popoverPosition, searchContexts } from "@/lib/switcher";
 import type { WorkspaceSummary } from "@/lib/types";
 
 const ws: WorkspaceSummary[] = [
@@ -25,6 +25,11 @@ describe("searchContexts (B35)", () => {
   it("returns an empty list when nothing matches", () => {
     expect(searchContexts(ws, "存在しない")).toEqual([]);
   });
+  it("builds site hrefs with the given function and keeps workspace hrefs (B60: 設定の中の切り替え)", () => {
+    const toSettings = (wid: string, sid: string) => `/w/${wid}/sites/${sid}/settings`;
+    expect(searchContexts(ws, "PRODUCT", toSettings)[0]!.href).toBe("/w/w1/sites/site_prod/settings");
+    expect(searchContexts(ws, "マーケ", toSettings)[0]!.href).toBe("/w/w1");
+  });
 });
 
 describe("popoverPosition (B35 / r1 CX-Medium-4)", () => {
@@ -48,5 +53,21 @@ describe("popoverPosition (B35 / r1 CX-Medium-4)", () => {
   });
   it("still leaves an operable height in a tiny viewport (top at the margin, the rest is the list)", () => {
     expect(popoverPosition(anchor, { width: 400, height: 120 })).toEqual({ top: 16, left: 12, width: 372, maxHeight: 88 });
+  });
+});
+
+describe("dropdownPosition (B60: 上部バーの版の札の一覧)", () => {
+  const chip = { top: 12, right: 520, bottom: 40, left: 420 };
+  it("opens below the anchor, aligned to its left edge", () => {
+    expect(dropdownPosition(chip, { width: 1280, height: 800 }, 340)).toEqual({ top: 46, left: 420, width: 340, maxHeight: 738 });
+  });
+  it("shifts left so that the panel ends 16px before the right edge", () => {
+    expect(dropdownPosition({ ...chip, left: 700, right: 800 }, { width: 900, height: 700 }, 340)).toEqual({ top: 46, left: 544, width: 340, maxHeight: 638 });
+  });
+  it("narrows the panel to the viewport and keeps 16px on the left (a very narrow viewport)", () => {
+    expect(dropdownPosition({ ...chip, left: 100, right: 200 }, { width: 300, height: 700 }, 340)).toEqual({ top: 46, left: 16, width: 268, maxHeight: 638 });
+  });
+  it("never returns a negative height", () => {
+    expect(dropdownPosition({ ...chip, top: 700, bottom: 740 }, { width: 1280, height: 720 }, 340).maxHeight).toBe(0);
   });
 });

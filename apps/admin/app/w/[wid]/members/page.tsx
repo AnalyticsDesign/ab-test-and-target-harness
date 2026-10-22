@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { controlFetch, requireUser } from "@/lib/control";
-import { loadCapabilities, loadWorkspaces } from "@/lib/loaders";
+import { loadCapabilities, loadWorkspaces, requireSummary } from "@/lib/loaders";
+import { memberScopeText } from "@/lib/member-scope";
 import { shouldShowResetLink } from "@/lib/capabilities";
 import { canManage } from "@/lib/roles";
 import type { Invitation, Member } from "@/lib/types";
@@ -31,6 +32,9 @@ export default async function MembersPage({ params }: { params: Promise<{ wid: s
   ]);
   // 決定 46: パスワードログインが閉じていればリセットリンクは発行できない(control が 409)ので、ボタン自体を出さない
   const caps = await loadCapabilities();
+  // ロールが効く範囲(同じワークスペースのサイト名)。layout と同じ summary を共有する(React の cache で control への要求は増えない)
+  // 取れなかったときは例外で画面全体のエラーにする(空の一覧にすると「まだサイトがありません」と偽の文を出してしまう)
+  const siteNames = ((await requireSummary()).find((w) => w.id === wid)?.sites ?? []).map((s) => s.name);
   return (
     <>
       <TopBar crumbs={crumbs} />
@@ -43,6 +47,7 @@ export default async function MembersPage({ params }: { params: Promise<{ wid: s
           invitations={invitations.filter((i) => i.status === "pending")}
           canIssueResetLink={shouldShowResetLink(caps)}
           amInstanceAdmin={me.instanceAdmin === true}
+          scopeText={memberScopeText(siteNames)}
         />
       </Content>
     </>

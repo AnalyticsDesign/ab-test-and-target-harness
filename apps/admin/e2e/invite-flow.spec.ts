@@ -1,5 +1,5 @@
 import { test, expect, type Request } from "@playwright/test";
-import { ADMIN_URL, EXPERIMENT, OWNER_EMAIL, PASSWORD, SITE, WORKSPACE_NAME, controlHeaders, login, openWorkspace, pick, waitForHydration } from "./fixtures";
+import { ADMIN_URL, EXPERIMENT, OWNER_EMAIL, PASSWORD, SITE, WORKSPACE_NAME, controlHeaders, login, openMembers, openSettings, openWorkspace, pick, waitForHydration } from "./fixtures";
 
 /**
  * 招待で入った EDITOR の境界(spec §13.2 決定 13)。
@@ -11,8 +11,7 @@ import { ADMIN_URL, EXPERIMENT, OWNER_EMAIL, PASSWORD, SITE, WORKSPACE_NAME, con
  */
 test("invited editor can edit but cannot publish; the API refuses status changes with 403", async ({ browser, page }) => {
   await login(page);
-  await openWorkspace(page);
-  await page.getByRole("link", { name: "メンバー", exact: true }).click(); // 「メンバーの API キー」と区別する
+  await openMembers(page);
   await page.fill('input[name="email"]', "editor@e2e.example");
   await pick(page, "ロール", /^編集者/);
   await page.getByRole("button", { name: "招待リンクを発行" }).click();
@@ -81,6 +80,12 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await editor.getByRole("button", { name: "参加する" }).click();
   await expect(editor).toHaveURL(/\/w\/[^/]+$/);
 
+  // B60 Task 8: 編集者(管理者未満)のホームのカードには「メンバー」が出ない(数もリンクも)
+  await editor.goto("/w");
+  const editorCard = editor.getByTestId("workspace-card");
+  await expect(editorCard.getByRole("link", { name: SITE.name })).toBeVisible();
+  await expect(editorCard.getByRole("link", { name: /メンバー/ })).toHaveCount(0);
+  await expect(editorCard).not.toContainText("メンバー");
   await editor.getByRole("link", { name: SITE.name }).click();
   await editor.getByRole("link", { name: EXPERIMENT.name }).click();
   // 編集はできる(Code Change を含む下書きは EDITOR の権限)が、Start / Pause / Stop は出ない。
@@ -92,18 +97,55 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await expect(editor.locator("#topbar-publish-reason")).toHaveText("公開は管理者以上が行います");
   await expect(editor.getByTestId("topbar-publish")).toBeDisabled();
   await expect(editor.getByTestId("topbar-publish")).toHaveAttribute("aria-describedby", "topbar-publish-reason");
+  // B60 D6: 狭い幅(900px)でも上部バーのパンくずと右側(版の札・理由の文・公開)が重ならない。縮むのはパンくずの側で、
+  // 右端が右側の左端を越えず、パンくずの中身も箱からはみ出さない(各項目が省略表示で縮む)。
+  // 編集者は理由の文が付くぶん右側が最も広いので、ここで見る
+  {
+    const viewport = editor.viewportSize()!;
+    await editor.setViewportSize({ width: 900, height: 700 });
+    const crumbs = editor.getByTestId("topbar-crumbs");
+    const crumbsBox = (await crumbs.boundingBox())!;
+    const stateBox = (await editor.getByTestId("topbar-state").boundingBox())!;
+    expect(crumbsBox.x + crumbsBox.width).toBeLessThanOrEqual(stateBox.x);
+    expect(await crumbs.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    // 版の札の一覧は、本文列(overflow: hidden)に切られず画面の内側に開き、左端は本文列より左へ出ない。開くとフォーカスは一覧へ移る
+    await editor.getByTestId("version-chip").click();
+    const recent = editor.getByTestId("version-popover");
+    await expect(recent).toBeFocused();
+    await expect(recent).toHaveAccessibleName("直近の公開");
+    await expect(recent.locator('[data-testid^="recent-publish-"]').first()).toBeVisible(); // 中身が描かれてから測る
+    const popBox = (await recent.boundingBox())!;
+    expect(popBox.x).toBeGreaterThanOrEqual(crumbsBox.x);
+    expect(popBox.y).toBeGreaterThanOrEqual(0);
+    expect(popBox.x + popBox.width).toBeLessThanOrEqual(900);
+    expect(popBox.y + popBox.height).toBeLessThanOrEqual(700);
+    await editor.keyboard.press("Escape");
+    await expect(recent).toHaveCount(0);
+    await editor.setViewportSize(viewport);
+  }
 
   // UI の出し分けに頼らず、BFF 経由で直接叩いても 403(spec §13.2)
   const res = await editor.request.post(`/api/control/sites/${SITE.id}/experiments/${EXPERIMENT.id}/status`, { headers: controlHeaders(), data: { status: "running" } });
   expect(res.status()).toBe(403);
   expect(await res.json()).toMatchObject({ error: "forbidden", required: "admin" });
 
-  // 決定 54 (7): ユーザーメニュー = 設定 / ログアウト。システム管理者でない人の設定には「システム」の節が出ず、API でも作れない
-  // 編集者はこの時点でサイトの中(サイドバーにもサイトの「設定」がある)にいるので、ユーザーメニューの中に絞って押す
-  await editor.getByTestId("user-menu").locator("summary").click();
-  await editor.getByTestId("user-menu").getByRole("link", { name: "設定" }).click();
+  // B60: 名前のメニューはログアウトだけ(設定の入口は左メニューの最下部の「設定」1 つ)
+  const editorMenu = editor.getByTestId("user-menu");
+  await editorMenu.locator("summary").click();
+  await expect(editorMenu.getByRole("button", { name: "ログアウト" })).toBeVisible();
+  await expect(editorMenu.getByRole("link", { name: "設定" })).toHaveCount(0);
+  await editorMenu.locator("summary").click(); // 閉じる(開いたままだと下の操作に重なる)
+  // 決定 54 (7)・B60: 編集者はこの時点でサイトの中にいるので、「設定」はサイト設定の一般を開く。
+  // 設定のメニューは「サイト設定」と「個人」の節。管理者未満には「ワークスペース」の節を見出しごと出さず(B60 Q2)、
+  // システム管理者でない人には「システム」の節が出ない。API でもワークスペースを作れない
+  await openSettings(editor);
+  await expect(editor).toHaveURL(new RegExp(`/sites/${SITE.id}/settings$`));
   const editorNav = editor.getByRole("navigation", { name: "メインメニュー" });
-  await expect(editorNav.getByRole("link", { name: "API キー" })).toBeVisible();
+  // 見出しは役割を持たない文字なので getByText で見る(パンくずにも「サイト設定」が出るので、メニューの中に絞る)
+  await expect(editorNav.getByText("サイト設定", { exact: true })).toBeVisible();
+  await expect(editorNav.getByText("個人", { exact: true })).toBeVisible();
+  await expect(editorNav.getByText("ワークスペース", { exact: true })).toHaveCount(0);
+  await expect(editorNav.getByRole("link", { name: "API キー", exact: true })).toBeVisible();
   await expect(editorNav.getByRole("link", { name: "画面表示" })).toBeVisible();
   await expect(editorNav.getByRole("link", { name: "システム管理者" })).toHaveCount(0);
   await expect(editorNav.getByRole("link", { name: "ワークスペース", exact: true })).toHaveCount(0);
@@ -115,8 +157,7 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   expect(await unnamed.json()).toMatchObject({ error: "client_too_old", clientVersion: 0 });
 
   // B45: ロールは選んだ瞬間に反映されるので確認を挟む。キャンセルなら変わらない →「変更する」で変わる(この後の流れのため編集者に戻す)
-  await openWorkspace(page);
-  await page.getByRole("link", { name: "メンバー", exact: true }).click();
+  await openMembers(page);
   await waitForHydration(page);
   const edRow = page.getByTestId("members").getByRole("row").filter({ hasText: "editor@e2e.example" });
   const roleDialog = page.getByRole("alertdialog", { name: "Ed のロールを変更しますか?" });
@@ -141,9 +182,8 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await expect(edRow.getByRole("combobox")).toContainText("編集者");
 
   // B36: オーナー(= 初回セットアップの人 = システム管理者)が editor をシステム管理者にする → メンバー画面に印 → 外す。
-  // ログイン済みのこの流れに相乗りする(sign-in の予算を増やさない。fixtures.ts の内訳参照)
-  await page.getByTestId("user-menu").locator("summary").click();
-  await page.getByTestId("user-menu").getByRole("link", { name: "設定" }).click();
+  // ログイン済みのこの流れに相乗りする(sign-in の予算を増やさない。fixtures.ts の内訳参照)。
+  // オーナーはこの時点でメンバーの画面(設定の中)にいて、設定のメニューに「システム」の節が出ているので、そこから押す
   await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "システム管理者" }).click();
   await expect(page).toHaveURL(/\/w\/me\/instance-admins$/);
   const adminRows = page.getByTestId("instance-admins").getByRole("row");
@@ -156,17 +196,15 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await page.getByRole("button", { name: "システム管理者にする" }).click();
   await expect(adminRows.filter({ hasText: "editor@e2e.example" })).toHaveCount(1);
 
-  await openWorkspace(page);
-  await page.getByRole("link", { name: "メンバー", exact: true }).click(); // 「メンバーの API キー」と区別する
+  await openMembers(page);
   const edMember = page.getByTestId("members").getByRole("row").filter({ hasText: "editor@e2e.example" });
   await expect(edMember).toContainText("システム管理者");
   await expect(edMember.getByRole("combobox")).toBeDisabled();
   await expect(edMember.getByRole("button", { name: "外す" })).toHaveCount(0);
 
-  // B46: editor が自分のブラウザで自分を外す。開く経路は上の決定 54 (7) と同じ(ユーザーメニュー →「設定」→「システム管理者」)
+  // B46: editor が自分のブラウザで自分を外す。開く経路は左メニューの最下部の「設定」→「システム管理者」
   await editor.goto("/w"); // 昇格の後に開き直す(設定のメニューに「システム管理者」が出る)
-  await editor.getByTestId("user-menu").locator("summary").click();
-  await editor.getByTestId("user-menu").getByRole("link", { name: "設定" }).click();
+  await openSettings(editor);
   await editor.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "システム管理者" }).click();
   await expect(editor).toHaveURL(/\/w\/me\/instance-admins$/);
   await editor.getByTestId("instance-admins").getByRole("row").filter({ hasText: "editor@e2e.example" }).getByRole("button", { name: "システム管理者から外す" }).click();
@@ -179,15 +217,13 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await openWorkspace(editor);
   await expect(editor.getByRole("link", { name: SITE.name })).toBeVisible();
   // オーナーの画面でも、editor の行は編集者に戻り、システム管理者の一覧から消えている
-  await openWorkspace(page);
-  await page.getByRole("link", { name: "メンバー", exact: true }).click();
+  await openMembers(page);
   await expect(page.getByTestId("members").getByRole("row").filter({ hasText: "editor@e2e.example" }).getByRole("combobox")).toContainText("編集者");
   await page.goto(`${ADMIN_URL}/w/me/instance-admins`);
   await expect(adminRows.filter({ hasText: "editor@e2e.example" })).toHaveCount(0);
 
-  // B46 K11 / K12: もう一度 editor をシステム管理者にし(上の昇格と同じ手順)、チェックボックスで元のロールに戻さず完全に外す
-  await page.getByTestId("user-menu").locator("summary").click();
-  await page.getByTestId("user-menu").getByRole("link", { name: "設定" }).click();
+  // B46 K11 / K12: もう一度 editor をシステム管理者にし(上の昇格と同じ手順)、チェックボックスで元のロールに戻さず完全に外す。
+  // オーナーはこの時点でシステム管理者の画面(設定の中)にいるので、設定のメニューの「システム管理者」から開き直す
   await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "システム管理者" }).click();
   await expect(page).toHaveURL(/\/w\/me\/instance-admins$/);
   await page.getByRole("combobox", { name: "追加するメンバー" }).click();
@@ -204,14 +240,21 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await fullDialog.getByRole("button", { name: "すべてから外す" }).click();
   await expect(adminRows.filter({ hasText: "editor@e2e.example" })).toHaveCount(0);
   // 元のロールにも戻らない = オーナーのメンバー画面に editor の行が無い
-  await openWorkspace(page);
-  await page.getByRole("link", { name: "メンバー", exact: true }).click();
+  await openMembers(page);
   await expect(page.getByTestId("members").getByRole("row").filter({ hasText: "editor@e2e.example" })).toHaveCount(0);
   // 最後の 1 人は API でも外せない
   const me = (await (await page.request.get(`${ADMIN_URL}/api/control/me`, { headers: controlHeaders() })).json()) as { id: string };
   expect((await page.request.delete(`${ADMIN_URL}/api/control/instance-admins/${me.id}`, { headers: controlHeaders() })).status()).toBe(409);
 
   // 決定 54 (10): 設定 > ワークスペース。ホームの「新しいワークスペース」から作成の欄へ → 作る → 削除の確認で名前を打ち込んで消す
+  await page.goto(`${ADMIN_URL}/w`);
+  await waitForHydration(page);
+  // B60 Task 8: オーナー(管理者以上)のホームのカードの「メンバー N」は、メンバーの画面へのリンク。
+  // 画面には、ロールが効く範囲(このワークスペースのサイト)の 1 文が PageHeader の下に 1 か所だけ出る
+  await page.getByTestId("workspace-card").getByRole("link", { name: /メンバー \d+/ }).click();
+  await expect(page).toHaveURL(/\/w\/[^/]+\/members$/);
+  await expect(page.getByTestId("member-scope")).toContainText("すべてに効きます");
+  await expect(page.getByText(/ロールはこのワークスペース/)).toHaveCount(1);
   await page.goto(`${ADMIN_URL}/w`);
   await waitForHydration(page);
   await page.getByRole("link", { name: "新しいワークスペース" }).click();
@@ -224,6 +267,12 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await page.locator('form#new input[name="name"]').fill("E2E Temp");
   await page.getByRole("button", { name: "作成" }).click();
   await expect(page).toHaveURL(/\/w\/[^/]+$/);
+  // B60 Task 2: 外枠(サイドバー)は /w の layout 1 か所。作った直後の画面のサイドバーの切り替えの枠に、新しいワークスペースが出る
+  // (外枠で最初に読んだ summary には無いワークスペース。[wid] の layout の SummarySync が新しい summary に差し替えるので出る。
+  // 作成の後は全画面の遷移でもあるが、router.push でもこの確認は SummarySync で通る。作成の直後に相乗りしてログインは増やさない)
+  await expect(
+    page.getByRole("navigation", { name: "メインメニュー" }).getByRole("button", { name: /^ワークスペースとサイトの切り替え: E2E Temp \// }),
+  ).toBeVisible();
   const tempId = page.url().match(/\/w\/([^/]+)$/)![1]!;
   await page.goto(`${ADMIN_URL}/w/me/workspaces`);
   await waitForHydration(page);

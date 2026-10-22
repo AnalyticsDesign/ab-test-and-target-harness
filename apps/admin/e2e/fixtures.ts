@@ -162,6 +162,30 @@ export async function openWorkspace(page: Page): Promise<void> {
 }
 
 /**
+ * 左メニューの最下部の「設定」を押して設定を開く(B60)。行き先は開いた場所で変わる(サイト = サイト設定の一般、
+ * 管理者以上のワークスペース = メンバー、ほか = 個人の API キー)ので、URL ではなく「設定」が選択中になったことを待つ。
+ * メインメニューに絞り exact にする(getByRole の name は部分一致で、「サイト設定」などと取り違えないため)。
+ *
+ * 前提: 設定の外の画面にいること。設定の中では「設定」が最初から選択中なので、押した後の確認が何も確かめずに通ってしまう。
+ * それを見落とさないよう、押す前に選択中でないことを確かめる(設定の中で別の画面へ移るときは、設定のメニューの項目を押す)
+ */
+export async function openSettings(page: Page): Promise<void> {
+  const link = page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "設定", exact: true });
+  await expect(link, "openSettings は設定の外の画面から呼ぶ").not.toHaveAttribute("aria-current", /.*/);
+  await link.click();
+  await expect(link).toHaveAttribute("aria-current", "page");
+}
+
+/** WORKSPACE_NAME のメンバーの画面を開く(ワークスペースのトップ →「設定」→ 設定のメニューの「メンバー」)。管理者以上のログインで使う */
+export async function openMembers(page: Page): Promise<void> {
+  await openWorkspace(page);
+  await openSettings(page);
+  // exact: 「メンバーの API キー」と区別する
+  await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "メンバー", exact: true }).click();
+  await expect(page).toHaveURL(/\/w\/[^/]+\/members$/);
+}
+
+/**
  * ログイン後の Workspace 画面から Site を作る(名前 / ドメイン / Site ID を指定)。
  *
  * D9 ③: E2E の control には計測用のデータベース(RESULTS_DB)があるので、新しい Site は結果を記録する設定で作られる
@@ -179,7 +203,8 @@ export async function createSite(page: Page, site: { id: string; name: string },
   await page.fill('input[name="id"]', site.id);
   await page.click('button[type="submit"]');
   await expect(page).toHaveURL(new RegExp(`/sites/${site.id}$`));
-  await expect(page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "設定" })).toBeVisible(); // SITE ナビが出ている = Site 一覧が更新された
+  // SITE ナビが出ている = Site 一覧が更新された(最下部の「設定」はどこにでもあるので、サイトの印にならない。サイトのメニューの項目を見る)
+  await expect(page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "エクスペリエンス", exact: true })).toBeVisible();
   if (opts.results !== true) {
     const status = await page.evaluate(async ([id, h]) => {
       const r = await fetch(`/api/control/sites/${id}`, { method: "PATCH", headers: { "content-type": "application/json", ...h }, body: JSON.stringify({ resultsEnabled: false }) });

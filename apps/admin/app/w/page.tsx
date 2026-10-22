@@ -1,8 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/control";
 import { requireSummary } from "@/lib/loaders";
-import { AppShell, Content } from "@/components/ui/AppShell";
-import { Sidebar } from "@/components/ui/Sidebar";
+import { Content } from "@/components/ui/AppShell";
 import { TopBar } from "@/components/ui/TopBar";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { WorkspaceCards } from "@/components/home/WorkspaceCards";
@@ -11,13 +10,13 @@ import { UsageSummary } from "@/components/usage/UsageSummary";
 /**
  * ホーム(決定 54 (8))。参加しているワークスペースが 1 つでも自動で移らず、ログイン後は必ずここに来る。
  * 中身 = ワークスペースごとのカード。システム管理者には「新しいワークスペース」(設定 > ワークスペースの作成の欄へ)。
- * summary が取れなければ画面全体のエラー(requireSummary が例外にする)。使用状況(D10)の要約はワークスペースの節の下(クライアントで読む)
+ * 外枠(サイドバー)は app/w/layout.tsx が描く。summary が取れなければ画面全体のエラー(requireSummary が例外にする)。使用状況(D10)の要約はワークスペースの節の下(クライアントで読む)
  */
 export default async function HomePage() {
   const user = await requireUser();
   const workspaces = await requireSummary();
   return (
-    <AppShell sidebar={<Sidebar user={user} workspaces={[]} />}>
+    <>
       <TopBar crumbs={[]} />
       <Content>
         <PageHeader title="ホーム" />
@@ -45,6 +44,6 @@ export default async function HomePage() {
         )}
         <UsageSummary instanceAdmin={user.instanceAdmin === true} />
       </Content>
-    </AppShell>
+    </>
   );
 }

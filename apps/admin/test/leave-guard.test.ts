@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { guardedHref, isLogoutSubmit } from "@/lib/leave-guard";
+import { guardedHref, isLogoutSubmit, isPlainLeftClick } from "@/lib/leave-guard";
 
 const click = (over: Partial<Parameters<typeof guardedHref>[0]> = {}) => ({ button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false, ...over });
 const a = (href: string, over: { target?: string; hasDownload?: boolean } = {}) => ({ href, target: "", hasDownload: false, ...over });
@@ -19,6 +19,15 @@ describe("guardedHref (B35 / 決定 54 (11))", () => {
     expect(guardedHref(click(), a(`${ORIGIN}/file`, { hasDownload: true }), ORIGIN)).toBeNull();
     expect(guardedHref(click(), null, ORIGIN)).toBeNull();
     expect(guardedHref(click({ defaultPrevented: true }), a(`${ORIGIN}/w`), ORIGIN)).toBeNull();
+  });
+});
+
+describe("isPlainLeftClick (B60)", () => {
+  it("is_plain_left_click_only_without_modifiers", () => {
+    expect(isPlainLeftClick(click())).toBe(true);
+    for (const k of ["metaKey", "ctrlKey", "shiftKey", "altKey"] as const) expect(isPlainLeftClick(click({ [k]: true }))).toBe(false);
+    expect(isPlainLeftClick(click({ button: 1 }))).toBe(false);
+    expect(isPlainLeftClick(click({ defaultPrevented: true }))).toBe(false);
   });
 });
 

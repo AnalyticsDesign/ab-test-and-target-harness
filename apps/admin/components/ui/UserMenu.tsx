@@ -1,21 +1,16 @@
 "use client";
-import { useRef } from "react";
-import Link from "next/link";
 import type { SessionUser } from "@/lib/types";
 import { Icon } from "./Icon";
 import styles from "./Sidebar.module.css";
 
 /**
- * ユーザーメニュー = 設定 / ログアウト(決定 54 (7))。caption = ワークスペース・サイトではそこでのロール、ホームと設定ではメール(K19)。
- * ログアウトは今までと同じ POST のフォーム。リンクを押したら閉じる(サイドバーは遷移をまたいで残る)
+ * 名前のメニュー = ログアウトだけ(B60。設定の入口は左メニューの最下部の「設定」1 つにまとめた)。
+ * caption = ワークスペース・サイトではそこでのロール、ホームと設定ではメール(K19)。
+ * ログアウトは今までと同じ POST のフォーム(離脱の確認で取り消したときは、確認の側がこの details を閉じる)
  */
 export function UserMenu({ user, caption }: { user: SessionUser; caption: string }) {
-  const ref = useRef<HTMLDetailsElement>(null);
-  const close = () => {
-    if (ref.current) ref.current.open = false;
-  };
   return (
-    <details ref={ref} className={styles.switcher} data-testid="user-menu">
+    <details className={styles.switcher} data-testid="user-menu">
       <summary className={styles.switcherSummary}>
         <span className={styles.switcherText}>
           <span className={styles.current}>{user.name}</span>
@@ -24,11 +19,6 @@ export function UserMenu({ user, caption }: { user: SessionUser; caption: string
         <Icon name="chevrons" />
       </summary>
       <div className={`${styles.pop} ${styles.popUp}`}>
-        <Link href="/w/me/api-keys" className={styles.popItem} onClick={close}>
-          <Icon name="gear" size={14} />
-          設定
-        </Link>
-        <div className={styles.popSep} />
         <form action="/api/session/logout" method="post">
           <button className={styles.popItem} style={{ width: "100%", textAlign: "left", border: 0, background: "none", font: "inherit", cursor: "pointer" }}>
             <Icon name="logout" size={14} />

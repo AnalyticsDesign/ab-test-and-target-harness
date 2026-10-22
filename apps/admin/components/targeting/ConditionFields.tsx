@@ -57,7 +57,7 @@ function PeriodField({ within, lead, unit, retentionDays, onChange, disabled }: 
             ))}
           </span>
           <span className={over ? styles.noteError : styles.note}>
-            {over ? `⚠ 訪問者データの保存期間(${retentionDays} 日)を超えています。${retentionDays} 日以下にしてください(長い期間を使うには、サイトの設定で保存期間を延ばします)` : `訪問者データの保存期間(${retentionDays} 日)まで指定できます`}
+            {over ? `⚠ 訪問者データの保存期間(${retentionDays} 日)を超えています。${retentionDays} 日以下にしてください(長い期間を使うには、サイト設定で保存期間を延ばします)` : `訪問者データの保存期間(${retentionDays} 日)まで指定できます`}
           </span>
         </>
       ) : null}

@@ -21,8 +21,9 @@ export default async function SettingsPage({ params, searchParams }: { params: P
   const initialSection = pickParam((await searchParams).section, SECTION_IDS, "general");
   return (
     <div>
-      <PageHeader title="設定" meta={site.data.name} />
-      <SiteSettingsForm site={site.data} canAdmin={ws.role === "owner" || ws.role === "admin"} canDelete={ws.role === "owner"} tagOrigin={caps.tagOrigin} initialSection={initialSection} resultsStore={caps.resultsStore} edgeOrigin={caps.edgeOrigin} runningTests={counts.runningTests} runningRecordedTests={counts.runningRecordedTests} />
+      <PageHeader title="サイト設定" meta={site.data.name} />
+      {/* key: 別のサイトの設定へ移る(設定のメニューの切り替えの枠など)と、同じ部品が使い回されて前のサイトの入力の state が残るので、サイトごとに作り直す */}
+      <SiteSettingsForm key={site.data.id} site={site.data} canAdmin={ws.role === "owner" || ws.role === "admin"} canDelete={ws.role === "owner"} tagOrigin={caps.tagOrigin} initialSection={initialSection} resultsStore={caps.resultsStore} edgeOrigin={caps.edgeOrigin} runningTests={counts.runningTests} runningRecordedTests={counts.runningRecordedTests} />
     </div>
   );
 }

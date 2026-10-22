@@ -15,7 +15,13 @@ export function WorkspaceCards({ workspaces }: { workspaces: WorkspaceSummary[] 
           </div>
           <span className="muted">
             サイト {w.sites.length}
-            {w.memberCount !== null ? ` · メンバー ${w.memberCount}` : null /* K22: 管理者以上だけ */}
+            {/* K22: 管理者以上だけ。メンバーは設定の奥にあるので、カードから直接開けるようにする(B60) */}
+            {w.memberCount !== null ? (
+              <>
+                {" · "}
+                <Link href={`/w/${w.id}/members`}>メンバー {w.memberCount}</Link>
+              </>
+            ) : null}
           </span>
           {w.sites.length === 0 ? (
             <span className="muted">まだサイトはありません</span>

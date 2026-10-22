@@ -3,6 +3,11 @@
 .crumbs { display: flex; align-items: center; gap: 8px; min-width: 0; margin-right: auto; color: var(--muted); }
 .crumbs a { color: var(--muted); }
 .crumbs > :last-child { color: var(--text); font-weight: 500; }
-.sep { color: var(--faint); }
-.state { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+/* B60 D6: 幅が足りないときはパンくずの各項目(長いサイト名のリンク・「サイト ID」の印など)を省略表示にして縮める。
+   区切りだけは縮めない(区切りが消えると名前の境目が読めない)。「サイト ID」の印も縮める: 編集者の右側(理由の文が付く)は広く、
+   900px の幅では印を縮めないとパンくずが右側へはみ出す(E2E で確認)。全文はサイト設定の画面で読める */
+.crumbs > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sep { flex-shrink: 0; color: var(--faint); }
+/* 右側(版の札・未公開の編集・公開)は縮めない。縮むのはパンくずの側。overflow は付けない(版の札の一覧が切れる) */
+.state { flex-shrink: 0; display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 .unpublished { color: var(--warn); font-weight: 500; }

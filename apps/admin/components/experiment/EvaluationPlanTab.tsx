@@ -171,7 +171,7 @@ function PlanBody({ wid, siteId, experimentId, status, canEdit, view, form, onFo
           <span className="row">
             {notRecording.canEnable ? (
               <a className="btn btn-sm" href={`/w/${wid}/sites/${siteId}/settings`}>
-                サイトの設定で有効にする
+                サイト設定で有効にする
               </a>
             ) : null}
             <HelpTip helpKey="enable" label="有効にするときの注意" />

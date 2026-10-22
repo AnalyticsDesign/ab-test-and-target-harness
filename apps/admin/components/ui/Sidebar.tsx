@@ -1,80 +1,70 @@
 "use client";
+import type { MouseEvent } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { SessionUser, WorkspaceSummary } from "@/lib/types";
-import { SETTINGS_NAV, SITE_NAV, activeSegment, sidebarContext } from "@/lib/nav";
-import { canManage, roleLabel } from "@/lib/roles";
+import type { SessionUser } from "@/lib/types";
+import { SITE_NAV, activeSegment, originOfPath, resolveOrigin, settingsEntryHref, sidebarContext, type SettingsOrigin } from "@/lib/nav";
+import { isPlainLeftClick } from "@/lib/leave-guard";
+import { roleLabel } from "@/lib/roles";
+import { setSettingsSection } from "@/lib/settings-section";
 import { ContextSwitcher } from "./ContextSwitcher";
-import { Icon, type IconName } from "./Icon";
+import { NavItem } from "./NavItem";
+import { SettingsSidebar } from "./SettingsSidebar";
+import { useSettingsOrigin } from "./SettingsOrigin";
 import { UserMenu } from "./UserMenu";
 import styles from "./Sidebar.module.css";
 
-function Item({ href, icon, label, current, prefetch }: { href: string; icon: IconName; label: string; current: boolean; prefetch?: false }) {
-  return (
-    // prefetch は false のときだけ渡す(未指定 = フレームワークの既定のまま)
-    <Link href={href} prefetch={prefetch} className={styles.item} aria-current={current ? "page" : undefined}>
-      <Icon name={icon} />
-      {label}
-    </Link>
-  );
-}
-
 /**
- * 決定 54 (2)(6)(8)(9)。中身は URL の文脈(lib/nav.ts の sidebarContext)で切り替える:
- * ホーム = ロゴ + 「ホーム」/ ワークスペース = 切替 + サイト一覧・メンバー・メンバーの API キー(後ろ 2 つは管理者以上)/
- * サイト = 切替 + サイトの画面(節の見出しは出さない)/ 設定 = 「ホームに戻る」+ 個人・システムの節(決定 54 (7))
+ * 決定 54 (2)(8)(9)・B60。中身は URL の文脈(lib/nav.ts の sidebarContext)で切り替える:
+ * ホーム = ロゴ + 「ホーム」/ ワークスペース = ロゴ + 切替 + サイト一覧 / サイト = ロゴ + 切替 + サイトの画面(節の見出しは出さない)/
+ * 設定の画面(サイト設定・メンバー・メンバーの API キー・`/w/me/*`)= 設定のメニュー(SettingsSidebar)。
+ * どの文脈でも最下部に「設定」(設定系の入口はここ 1 つ)と名前のメニューを置く。
+ * 切替の一覧(summary)と設定を開いた場所の記憶は、外枠の SettingsOriginProvider から読む(外枠は app/w/layout.tsx の 1 か所)
  */
-export function Sidebar({ user, workspaces }: { user: SessionUser; workspaces: WorkspaceSummary[] }) {
+export function Sidebar({ user }: { user: SessionUser }) {
   const pathname = usePathname();
+  const { remembered, workspaces } = useSettingsOrigin();
   const ctx = sidebarContext(pathname);
+  const instanceAdmin = user.instanceAdmin === true;
   const ws = ctx.kind === "workspace" || ctx.kind === "site" ? (workspaces.find((w) => w.id === ctx.wid) ?? null) : null;
   const active = activeSegment(pathname);
-  if (ctx.kind === "settings") {
-    // 設定(決定 54 (7)): 先頭に「ホームに戻る」、見出し「設定」、節「個人」と「システム」(システム管理者だけ)
-    const items = (section: "personal" | "system") =>
-      SETTINGS_NAV.filter((n) => n.section === section).map((n) => <Item key={n.href} href={n.href} icon={n.icon} label={n.label} current={pathname === n.href} prefetch={n.prefetch} />);
-    return (
-      <nav className={styles.side} aria-label="メインメニュー">
-        <Link href="/w" className={styles.back}>
-          <Icon name="left" size={14} />
-          ホームに戻る
-        </Link>
-        <div className={styles.sideTitle}>設定</div>
-        <div className={styles.section}>個人</div>
-        {items("personal")}
-        {user.instanceAdmin ? (
-          <>
-            <div className={styles.section}>システム</div>
-            {items("system")}
-          </>
-        ) : null}
-        <div className={styles.spacer} />
-        <UserMenu user={user} caption={user.email} />
-      </nav>
-    );
-  }
+  // 最下部の「設定」の行き先 = 今の場所から開いたときの設定のメニューの最初の項目。
+  // 設定の外では今の画面の階層(originOfPath。設定の外で null になる画面は無いので、?? は型のための保険)。
+  // 設定の中では今のメニューの起点(記憶)にそろえ、押すとそのメニューの先頭へ移る(メニューの形は変わらない)。
+  // 開いた場所は provider が pathname の変化から覚えるので、押したときには何も書かない
+  // (離脱の確認は capture でクリックを止めるので、onClick に頼ると確認の後の移動で覚えそこねる)
+  const entryOrigin: SettingsOrigin = ctx.kind === "settings" ? resolveOrigin(ctx.page, remembered).origin : (originOfPath(pathname) ?? { kind: "home" });
+  const entryHref = settingsEntryHref(entryOrigin, { workspaces, instanceAdmin });
+  // サイト設定の画面では、行き先は今と同じ画面の一般の節(起点がこのサイトなので、メニューの先頭 = 一般)。
+  // 節のリンクと同じく、ルーターを通さず store と URL だけを変える(同じ pathname への push では store が今の節のまま残り、
+  // URL は一般なのに表示は別の節、と食い違うため)。行き先が今の画面でないとき(summary にサイトが無く先頭が別の項目)はふつうに移る。
+  // 未保存の入力があるときは、フォームの離脱の確認(document の capture)が先に受けて節を切り替えるので、ここまで届かない
+  const entryIsSameSettings = ctx.kind === "settings" && ctx.page.kind === "site" && entryHref === pathname;
+  const onEntryClick = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (!entryIsSameSettings || !isPlainLeftClick(e)) return;
+    e.preventDefault();
+    setSettingsSection("general");
+  };
   return (
     <nav className={styles.side} aria-label="メインメニュー">
-      <Link href="/w" className={styles.logo}>
-        AB Test and Target Harness
-      </Link>
-      {ws ? <ContextSwitcher workspaces={workspaces} wid={ws.id} sid={ctx.kind === "site" ? ctx.sid : null} /> : null}
-      {ctx.kind === "home" ? <Item href="/w" icon="home" label="ホーム" current /> : null}
-      {ws && ctx.kind === "workspace" ? (
+      {ctx.kind === "settings" ? (
+        <SettingsSidebar page={ctx.page} instanceAdmin={instanceAdmin} />
+      ) : (
         <>
-          <Item href={`/w/${ws.id}`} icon="grid" label="サイト一覧" current={pathname === `/w/${ws.id}`} />
-          {canManage(ws.role) ? (
-            <>
-              <Item href={`/w/${ws.id}/members`} icon="users" label="メンバー" current={pathname === `/w/${ws.id}/members`} />
-              <Item href={`/w/${ws.id}/api-keys`} icon="key" label="メンバーの API キー" current={pathname === `/w/${ws.id}/api-keys`} />
-            </>
-          ) : null}
+          <Link href="/w" className={styles.logo}>
+            AB Test and Target Harness
+          </Link>
+          {ws ? <ContextSwitcher workspaces={workspaces} wid={ws.id} sid={ctx.kind === "site" ? ctx.sid : null} /> : null}
+          {ctx.kind === "home" ? <NavItem href="/w" icon="home" label="ホーム" current /> : null}
+          {ws && ctx.kind === "workspace" ? <NavItem href={`/w/${ws.id}`} icon="grid" label="サイト一覧" current={pathname === `/w/${ws.id}`} /> : null}
+          {ws && ctx.kind === "site"
+            ? SITE_NAV.map((n) => <NavItem key={n.segment} href={`/w/${ws.id}/sites/${ctx.sid}${n.segment ? `/${n.segment}` : ""}`} icon={n.icon} label={n.label} current={active === n.segment} />)
+            : null}
         </>
-      ) : null}
-      {ws && ctx.kind === "site"
-        ? SITE_NAV.map((n) => <Item key={n.segment} href={`/w/${ws.id}/sites/${ctx.sid}${n.segment ? `/${n.segment}` : ""}`} icon={n.icon} label={n.label} current={active === n.segment} />)
-        : null}
+      )}
       <div className={styles.spacer} />
+      <NavItem href={entryHref} icon="gear" label="設定" current={ctx.kind === "settings"} onClick={onEntryClick} />
+      {/* caption = ワークスペース・サイトではそこでのロール、ホームと設定ではメール(K19) */}
       <UserMenu user={user} caption={ws ? roleLabel(ws.role) : user.email} />
     </nav>
   );

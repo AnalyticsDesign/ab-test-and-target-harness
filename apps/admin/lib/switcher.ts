@@ -3,15 +3,21 @@ import type { WorkspaceSummary } from "./types";
 
 export type ContextHit = { href: string; label: string; sub: string };
 
-/** 空の検索語は結果なし(2 列の表示に戻す)。移り先は表示の文字列ではなく ID から作る(名前に「›」があっても壊れない) */
-export function searchContexts(workspaces: WorkspaceSummary[], query: string): ContextHit[] {
+/** サイトの選択肢の行き先の既定 = サイトのトップ */
+export const siteTopHref = (wid: string, sid: string): string => `/w/${wid}/sites/${sid}`;
+
+/**
+ * 空の検索語は結果なし(2 列の表示に戻す)。移り先は表示の文字列ではなく ID から作る(名前に「›」があっても壊れない)。
+ * siteHref はサイトの結果の行き先(B60: 設定のメニューの枠ではサイト設定へ)。ワークスペースの結果はどちらでもワークスペースのトップ
+ */
+export function searchContexts(workspaces: WorkspaceSummary[], query: string, siteHref: (wid: string, sid: string) => string = siteTopHref): ContextHit[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const hits: ContextHit[] = [];
   for (const w of workspaces) {
     if (w.name.toLowerCase().includes(q)) hits.push({ href: `/w/${w.id}`, label: w.name, sub: `ワークスペース · サイト ${w.sites.length}` });
     for (const s of w.sites) {
-      if (`${s.name} ${s.domain} ${s.id}`.toLowerCase().includes(q)) hits.push({ href: `/w/${w.id}/sites/${s.id}`, label: `${w.name} › ${s.name}`, sub: s.domain });
+      if (`${s.name} ${s.domain} ${s.id}`.toLowerCase().includes(q)) hits.push({ href: siteHref(w.id, s.id), label: `${w.name} › ${s.name}`, sub: s.domain });
     }
   }
   return hits;
@@ -40,4 +46,23 @@ export function popoverPosition(
   const width = Math.max(0, Math.min(MAX_WIDTH, viewport.width - MARGIN - left));
   const maxHeight = Math.max(0, viewport.height - MARGIN - top);
   return { top, left, width, maxHeight };
+}
+
+/**
+ * 上部バーの版の札の一覧の位置と大きさ(B60。position: fixed の座標)。札の下に、札の左端にそろえて開く。
+ * popoverPosition はサイドバーの枠の右へ開く形なので、上部バーの右寄りにある札には使えない(右に場所が無い)。
+ * fixed にするのは、本文列(AppShell の .col)の overflow: hidden で一覧が切れないようにするため。
+ * 左端にそろえるのは、札がパンくずの右にあるので一覧が本文列の内側に収まるため(右端にそろえると、狭い幅でサイドバーへはみ出す)。
+ * 右端は画面の端から 16px の内側に収め(収まらなければ左へずらす)、画面が一覧より狭ければ幅を縮める。高さは札の下から画面の下端の 16px 手前まで
+ */
+export function dropdownPosition(
+  anchor: { top: number; right: number; bottom: number; left: number },
+  viewport: { width: number; height: number },
+  width: number,
+): { top: number; left: number; width: number; maxHeight: number } {
+  const w = Math.max(0, Math.min(width, viewport.width - MARGIN * 2));
+  const left = Math.max(MARGIN, Math.min(anchor.left, viewport.width - MARGIN - w));
+  const top = anchor.bottom + 6;
+  const maxHeight = Math.max(0, viewport.height - MARGIN - top);
+  return { top, left, width: w, maxHeight };
 }

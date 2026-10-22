@@ -21,9 +21,18 @@ export function withParam(href: string, key: string, value: string | null): stri
   return `${path}${q ? `?${q}` : ""}${hash}`;
 }
 
+/**
+ * replaceParam が URL を書き換えた直後に window へ出すイベントの名前(B60)。
+ * vinext(1.0.0-beta.10)は、ルーターが持つ history.state のまま replaceState すると購読者(usePathname / useSearchParams)に知らせない。
+ * そのため、URL の search を覚えておきたい側(設定を開いた場所の記憶 = components/ui/SettingsOrigin.tsx)は、このイベントで location を読み直す。
+ * ルーターの内部の挙動に頼らないために、書く側で知らせる
+ */
+export const URL_PARAM_EVENT = "wtt:urlparam";
+
 /** ブラウザ専用。サーバーで呼ばれても何もしない */
 export function replaceParam(key: string, value: string | null): void {
   if (typeof window === "undefined") return;
   const next = withParam(`${window.location.pathname}${window.location.search}${window.location.hash}`, key, value);
   window.history.replaceState(window.history.state, "", next);
+  window.dispatchEvent(new Event(URL_PARAM_EVENT));
 }

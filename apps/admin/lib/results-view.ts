@@ -245,7 +245,7 @@ export function resultsView(report: ResultsResponse, ctx: ResultsViewContext): R
     callouts.push({ tone: "warn", text: `前に計算した速報を表示しています${when}。${staleReason(str(stale, "reason"))}` });
   }
   if (report.collection === "site_disabled") {
-    callouts.push({ tone: "warn", text: "サイトの設定で結果の記録を無効にしています。無効の間は参加と CV を記録しません(止めていた時間は収集の停止に数えます)", helpKey: "collection-stops" });
+    callouts.push({ tone: "warn", text: "サイト設定で結果の記録を無効にしています。無効の間は参加と CV を記録しません(止めていた時間は収集の停止に数えます)", helpKey: "collection-stops" });
   }
   for (const n of notesOf("min_count_not_met")) {
     callouts.push({ tone: "info", text: `${nameOf(str(n, "variantId"))}: CV の件数が少なすぎるため判定しません(目安: 比べる 2 つのパターンのそれぞれで、CV の見込みが 10 件以上)。${SMALL_N_MISMATCH}`, helpKey: "verdicts" });
@@ -583,7 +583,7 @@ function emptyReason(report: ResultsResponse, noteOf: (key: string) => Note | un
   if (report.collection === "not_recorded" || noteOf("not_recorded")) {
     return {
       title: "このテストは結果を記録せずに開始しました",
-      body: "結果はツール上に残りません。後から結果の記録を有効にしても、このテストの結果は記録されません。結果を見たいときは、サイトの設定で「結果を記録する」を有効にしてから、複製して開始し直してください",
+      body: "結果はツール上に残りません。後から結果の記録を有効にしても、このテストの結果は記録されません。結果を見たいときは、サイト設定で「結果を記録する」を有効にしてから、複製して開始し直してください",
       helpKey: "enable",
     };
   }

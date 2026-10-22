@@ -242,7 +242,7 @@ export function draftEvaluationEstimate(a: { minDays: number; maxWeeks: number; 
   return { days: Math.max(a.minDays, reach), text: `各パターンが ${fmt(a.target)} 人に達した日(見込み)に判定します` };
 }
 
-/** 結果を記録しないサイトの上部の警告。canEnable = サイトの設定で有効にする導線を出すか(導入に計測用のデータベースが無ければ出さない) */
+/** 結果を記録しないサイトの上部の警告。canEnable = サイト設定で有効にする導線を出すか(導入に計測用のデータベースが無ければ出さない) */
 export function notRecordingNotice(resultsStore: boolean): { title: string; body: string; canEnable: boolean } {
   return resultsStore
     ? {

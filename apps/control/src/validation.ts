@@ -209,7 +209,7 @@ export function withinDaysError(n: number, max: number, path: Array<string | num
     path,
     max,
     message: `期間(${n} 日)が訪問者データの保存期間(${max} 日)を超えています`,
-    hint: `${max} 日以下にしてください。長い期間を使うには、サイトの設定で保存期間を延ばします`,
+    hint: `${max} 日以下にしてください。長い期間を使うには、サイト設定で保存期間を延ばします`,
   });
 }
 

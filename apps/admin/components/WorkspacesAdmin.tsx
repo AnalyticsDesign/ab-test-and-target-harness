@@ -1,7 +1,6 @@
 "use client";
 import { Fragment, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { api, describeError } from "@/lib/client";
 import { deleteBlocked, runningIn } from "@/lib/workspaces";
 import type { WorkspaceSummary } from "@/lib/types";
@@ -13,7 +12,6 @@ import { WorkspaceCreateForm } from "./WorkspaceForms";
  * ゴミ箱は無いので「元に戻せません」と書く
  */
 export function WorkspacesAdmin({ workspaces, focusNew }: { workspaces: WorkspaceSummary[]; focusNew: boolean }) {
-  const router = useRouter();
   const [deleting, setDeleting] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
@@ -25,7 +23,9 @@ export function WorkspacesAdmin({ workspaces, focusNew }: { workspaces: Workspac
       await api("DELETE", `/workspaces/${w.id}`);
       setDeleting(null);
       setTyped("");
-      router.refresh();
+      // クライアントの再取得(router.refresh)は共有 layout(サイドバーの切り替えの一覧)を確実には描き直さない
+      // (このバージョンの Next.js/vinext で実測)ため、全画面で読み直す
+      window.location.reload();
     } catch (e) {
       // 押せる状態から削除するまでの間に誰かが開始した等。サーバーの 409 の文をその行に出す(Review Focus 3)
       setError({ id: w.id, message: describeError(e) });

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { roleLabel } from "@/lib/roles";
-import { popoverPosition, searchContexts } from "@/lib/switcher";
+import { popoverPosition, searchContexts, siteTopHref } from "@/lib/switcher";
 import type { WorkspaceSummary } from "@/lib/types";
 import { Icon } from "./Icon";
 import styles from "./Sidebar.module.css";
@@ -11,9 +11,22 @@ import styles from "./Sidebar.module.css";
 /**
  * ワークスペースとサイトの切替(決定 54 (9)。GA4 のアカウント・プロパティの切替に倣う)。サイドバーの上端に 1 つの枠を常に出し、
  * 押すとサイドバーの右(幅 760px 未満は下)に開く: 上に検索欄、その下に 2 列(左 = ワークスペース、右 = 左で選んだワークスペースのサイト)。
- * 検索中は「ワークスペース › サイト」の 1 列。閉じる = Esc(枠へフォーカスを戻す)・外側のクリック・画面の移動・画面の大きさの変化
+ * 検索中は「ワークスペース › サイト」の 1 列。閉じる = Esc(枠へフォーカスを戻す)・外側のクリック・画面の移動・画面の大きさの変化。
+ *
+ * siteHref(任意。B60): サイトの選択肢(右の列と検索の結果)の行き先。渡さないとき(普段のメニュー)はサイトのトップ。
+ * 設定のメニューは同じ節のサイト設定へ移すのに使う。「一覧」と検索の結果のワークスペースはどちらでも今どおり(設定から出る)
  */
-export function ContextSwitcher({ workspaces, wid, sid }: { workspaces: WorkspaceSummary[]; wid: string; sid: string | null }) {
+export function ContextSwitcher({
+  workspaces,
+  wid,
+  sid,
+  siteHref = siteTopHref,
+}: {
+  workspaces: WorkspaceSummary[];
+  wid: string;
+  sid: string | null;
+  siteHref?: (wid: string, sid: string) => string;
+}) {
   const pathname = usePathname();
   const ws = workspaces.find((w) => w.id === wid) ?? null;
   const site = sid && ws ? (ws.sites.find((s) => s.id === sid) ?? null) : null;
@@ -64,7 +77,7 @@ export function ContextSwitcher({ workspaces, wid, sid }: { workspaces: Workspac
     setOpen(true);
   }
   const picked = workspaces.find((w) => w.id === pickedId) ?? ws;
-  const hits = searchContexts(workspaces, query);
+  const hits = searchContexts(workspaces, query, siteHref);
   const siteLabel = site ? site.name : "サイト一覧";
   return (
     <div>
@@ -135,7 +148,7 @@ export function ContextSwitcher({ workspaces, wid, sid }: { workspaces: Workspac
                 </h3>
                 {picked.sites.length === 0 ? <div className={styles.ctxEmpty}>このワークスペースにはサイトがありません</div> : null}
                 {picked.sites.map((s) => (
-                  <Link key={s.id} href={`/w/${picked.id}/sites/${s.id}`} className={styles.ctxOpt} aria-current={s.id === sid && picked.id === ws.id ? "true" : undefined}>
+                  <Link key={s.id} href={siteHref(picked.id, s.id)} className={styles.ctxOpt} aria-current={s.id === sid && picked.id === ws.id ? "true" : undefined}>
                     <span>{s.name}</span>
                     <small>{s.domain}</small>
                   </Link>

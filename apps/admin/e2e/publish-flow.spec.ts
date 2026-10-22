@@ -27,10 +27,12 @@ import {
   createSite,
   login,
   markSessionsAsGoogle,
+  openSettings,
   openSite,
   openWorkspace,
   setOwnerPassword,
 } from "./fixtures";
+import type { PublishRow } from "../lib/types";
 
 /**
  * 初回セットアップから「control の Publish が edge の bootstrap に現れる」までを実際のブラウザで通す。
@@ -78,10 +80,13 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await page.goto("/w");
     await openWorkspace(page);
 
-    // 画面表示(決定 54 (7)): ユーザーメニュー →「設定」→ 左ナビ「画面表示」。ダークを選ぶ → 再読み込み後も残る → システムに戻す
-    // 「設定」はサイトの中のサイドバーにもあるので、ユーザーメニューの中に絞って押す
-    await page.getByTestId("user-menu").locator("summary").click();
-    await page.getByTestId("user-menu").getByRole("link", { name: "設定" }).click();
+    // 画面表示(決定 54 (7)・B60): ワークスペースのトップから左メニューの最下部の「設定」→ 設定のメニューの「API キー」→「画面表示」。
+    // ダークを選ぶ → 再読み込み後も残る → システムに戻す。
+    // 管理者以上がワークスペースから開くと、設定のメニューの先頭(メンバー)に着く
+    await openSettings(page);
+    await expect(page).toHaveURL(/\/w\/[^/]+\/members$/);
+    // exact: 「メンバーの API キー」と区別する
+    await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "API キー", exact: true }).click();
     await expect(page).toHaveURL(/\/w\/me\/api-keys$/);
     await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "画面表示" }).click();
     await expect(page).toHaveURL(/\/w\/me\/display$/);
@@ -119,6 +124,20 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await expect(page).toHaveURL(new RegExp(`/sites/${SITE_UNPUBLISHED.id}$`));
     await expect(switcher).toHaveCount(0); // 移ったら閉じる
     await page.keyboard.press("Escape");
+    // B60: 一度も公開していないサイトの版の札は「未公開」(緑の点なし)。開くと「まだ公開していません」
+    {
+      const chip = page.getByTestId("version-chip");
+      await expect(chip).toHaveAccessibleName("未公開。公開履歴を開く");
+      await expect(chip).toHaveText("未公開");
+      await chip.click();
+      const recent = page.getByTestId("version-popover");
+      await expect(recent).toHaveAccessibleName("直近の公開");
+      await expect(recent).toContainText("まだ公開していません");
+      await expect(recent.getByRole("link", { name: "すべての公開履歴 →" })).toHaveAttribute("href", new RegExp(`/sites/${SITE_UNPUBLISHED.id}/history$`));
+      await page.keyboard.press("Escape");
+      await expect(recent).toHaveCount(0);
+      await expect(chip).toBeFocused(); // Esc は札へフォーカスを戻す
+    }
     // 2 列: 左 = ワークスペース、右 = サイト。「一覧」はホーム / サイト一覧へ
     await nav.getByRole("button", { name: /^ワークスペースとサイトの切り替え/ }).click();
     await expect(switcher.getByRole("link", { name: "ワークスペース一覧" })).toHaveAttribute("href", "/w");
@@ -129,7 +148,9 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await page.getByRole("link", { name: SITE.name }).click();
     await expect(page.getByText(`サイト ID: ${SITE.id}`)).toBeVisible(); // パンくずのラベル
     await expect(page.getByTestId("topbar-publish")).toHaveAttribute("data-variant", "primary"); // 一度も公開していないサイトは、作成直後から「未公開の編集あり」
-    await page.getByRole("link", { name: "設定" }).click();
+    // 最下部の「設定」。サイトから開くとサイト設定の一般へ
+    await openSettings(page);
+    await expect(page).toHaveURL(new RegExp(`/sites/${SITE.id}/settings$`));
     // B35 / r1 CX-Medium-1・r2 CX-Medium-1: プルダウンを 1 つだけ変えても「未保存の変更あり」になり、保存して再読み込みしても残る。
     // 1 つずつ、変更の無い状態から確かめる(先に別の欄を変えて dirty にしておくと、確かめたい欄の setDirty が欠けても通ってしまう)
     const saveState = page.getByTestId("save-state");
@@ -163,6 +184,8 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await expect(saveState).toHaveText("変更はありません");
     await pick(page, "導入の形", /^B: サーバー発行 Cookie/);
     await expect(saveState).toHaveText("未保存の変更あり");
+    // B60: 未保存のまま再読み込みすると beforeunload の確認が出る(受けないと再読み込みが止まる)。受けて捨てる
+    page.once("dialog", (d) => void d.accept());
     await page.reload();
     await waitForHydration(page); // 次の節の切替(React の onClick)の前に
     await expect(page.getByRole("combobox", { name: "導入の形", exact: true })).toContainText("A: JS Cookie");
@@ -190,6 +213,140 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     // 導入タグ: フォームの外。コピー用のコード枠に Site ID が入っている
     await page.getByTestId("section-tag").click();
     await expect(page.getByTestId("code-block")).toContainText(`/s/${SITE.id}.js`);
+    // B60 B123: モードとドメインの横のリンクで、変える節へ移る(同じ画面のまま URL の ?section= が変わる)
+    await page.getByRole("link", { name: "訪問者 ID で変える" }).click();
+    await expect(page).toHaveURL(/[?&]section=identity/);
+    await expect(page.getByRole("combobox", { name: "導入の形", exact: true })).toBeVisible();
+    await page.getByTestId("section-tag").click();
+    await page.getByRole("link", { name: "一般で変える" }).click();
+    await expect(page).not.toHaveURL(/section=/);
+    await expect(page.locator('textarea[name="allowedOrigins"]')).toBeVisible();
+    await page.getByTestId("section-tag").click();
+    await expect(page.getByTestId("code-block")).toBeVisible();
+
+    // B60 A10: フォームに入らない節(導入タグ)では保存の帯を出さない。一般の節に戻すと出る。
+    // 戻すのは最下部の「設定」(行き先は同じ画面の一般の節)。ルーターで同じ画面へ移らず節だけを切り替えるので、
+    // 表示と URL がそろって一般になる(URL だけ一般で表示が導入タグのまま、にならない)
+    const settingsUrl = page.url().replace(/[?#].*$/, "");
+    await expect(saveState).toHaveCount(0);
+    await nav.getByRole("link", { name: "設定", exact: true }).click();
+    await expect(saveState).toBeVisible();
+    await expect(page.locator('input[name="domain"]')).toBeVisible();
+    await expect(page.getByTestId("code-block")).toHaveCount(0);
+    await expect(page).toHaveURL(settingsUrl);
+    await expect(page.getByTestId("section-general")).toHaveAttribute("aria-current", "page");
+    // B60 B31 ⑥: 節の見出しは SECTIONS の heading(文字は今のまま)
+    await page.getByTestId("section-external").click();
+    await expect(page.getByRole("heading", { name: "分析(外部 ID)", level: 2 })).toBeVisible();
+    // B60 離脱の確認: 未保存のまま設定のメニューのサイト設定の節(と最下部の「設定」= 同じ画面の一般)で節を移っても確認は出ない
+    // (入力はフォームに残る)。サイト設定の外の画面へ移ろうとすると確認が出て、キャンセルなら同じ URL に残り、「保存せずに移動」で移る
+    await page.getByTestId("section-general").click();
+    await chooseTz("America/New_York");
+    await expect(saveState).toHaveText("未保存の変更あり");
+    await page.getByTestId("section-identity").click();
+    await expect(page).toHaveURL(`${settingsUrl}?section=identity`);
+    await nav.getByRole("link", { name: "設定", exact: true }).click();
+    await expect(page.getByTestId("section-general")).toHaveAttribute("aria-current", "page");
+    const settingsLeave = page.getByRole("alertdialog", { name: "サイト設定の変更を保存していません" });
+    await expect(settingsLeave).toHaveCount(0);
+    await expect(tzCombo()).toHaveValue("America/New_York");
+    await expect(page).toHaveURL(settingsUrl);
+    // 設定のメニューの「メンバー」(サイト設定の外の画面)は確認が出る。キャンセルなら残り、入力も残る
+    await nav.getByRole("link", { name: "メンバー", exact: true }).click();
+    await expect(settingsLeave).toBeVisible();
+    await settingsLeave.getByRole("button", { name: "キャンセル" }).click();
+    await expect(settingsLeave).toBeHidden();
+    await expect(page).toHaveURL(settingsUrl);
+    await expect(tzCombo()).toHaveValue("America/New_York");
+    // B60: 別の画面へ移るのは「戻る」も同じ(再読み込みの後なので、戻り先はサイトのトップ)
+    const backLink = nav.getByRole("link", { name: /^戻る/ });
+    await backLink.click();
+    await expect(settingsLeave).toBeVisible();
+    await settingsLeave.getByRole("button", { name: "キャンセル" }).click();
+    await expect(settingsLeave).toBeHidden();
+    await expect(page).toHaveURL(settingsUrl);
+    await expect(tzCombo()).toHaveValue("America/New_York"); // 入力は残る
+    await backLink.click();
+    await settingsLeave.getByRole("button", { name: "保存せずに移動" }).click();
+    await expect(page).toHaveURL(new RegExp(`/sites/${SITE.id}$`));
+    // 存在しない節は一般の節で開く
+    await page.goto(`${settingsUrl}?section=bogus`);
+    await waitForHydration(page);
+    await expect(page.locator('input[name="domain"]')).toBeVisible();
+    // 再描画で節が戻らない: ?section=tag で開いてから一般の節へ切り替え、入力する(入力で再描画される)。
+    // 入力の後も、保存の後(router.refresh)も一般の節のまま(initialSection の入れ直しで導入タグへ戻らない)。
+    // 1 字打って消す(同じ値の fill は入力のイベントを出さない)。名前は元のまま保存し、変更の無い状態で次へ進む
+    await page.goto(`${settingsUrl}?section=tag`);
+    await waitForHydration(page);
+    await expect(page.getByTestId("code-block")).toBeVisible();
+    await page.getByTestId("section-general").click();
+    const siteName = page.locator('input[name="name"]');
+    await siteName.press("End");
+    await siteName.press("x");
+    await siteName.press("Backspace");
+    await expect(siteName).toHaveValue(SITE.name);
+    await expect(saveState).toHaveText("未保存の変更あり");
+    await expect(page.locator('input[name="domain"]')).toBeVisible();
+    await expect(page.getByTestId("code-block")).toHaveCount(0);
+    await page.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("保存しました")).toBeVisible();
+    await expect(page.locator('input[name="domain"]')).toBeVisible();
+    await expect(page.getByTestId("code-block")).toHaveCount(0);
+
+    // B60 Task 5(ユーザーの決定 5): 設定のメニューの切り替えの枠でサイトを選ぶと、サイト設定の画面では同じ節のまま別のサイトへ移る。
+    // 変更の無い状態(上で保存済み)から始める(未保存だと離脱の確認が挟まる)
+    const switcherButton = nav.getByRole("button", { name: /^ワークスペースとサイトの切り替え/ });
+    await page.getByTestId("section-tag").click();
+    await switcherButton.click();
+    await switcher.getByRole("link", { name: new RegExp(`^${SITE_UNPUBLISHED.name}`) }).click();
+    await expect(page).toHaveURL(new RegExp(`/sites/${SITE_UNPUBLISHED.id}/settings\\?section=tag$`));
+    await expect(page.getByTestId("code-block")).toContainText(`/s/${SITE_UNPUBLISHED.id}.js`);
+    // 見ているのは「サイトを切り替えたあと、前のサイトの値が残らない」という見えるふるまい(key による再マウントそのものの証明ではない。
+    // App Router が [sid] 配下を作り直す場合もある)。名前の欄は制御されない input(defaultValue)で、前提は上で SITE の欄に
+    // 1 字打って消して DOM の入力済みフラグを立てていること(保存は form.reset() をしない)。作り直されないと SITE の名前が残って落ちる
+    // ので、この確認はその手順より後に置く。隠れた節の欄でも値は読めるので、節を切り替える前に見る
+    await expect(page.locator('input[name="name"]')).toHaveValue(SITE_UNPUBLISHED.name);
+    // 同じ値を、一般の節へ切り替えた後(欄が見える状態)でも見る: 節の切り替えで前の値に戻らない
+    await page.getByTestId("section-general").click();
+    await expect(page.locator('input[name="name"]')).toHaveValue(SITE_UNPUBLISHED.name);
+    // サイト設定の外の設定の画面(個人の「API キー」)からは、選んだサイトのサイト設定の一般へ。
+    // 設定のメニューの中のリンクで移る(page.goto の読み込み直しでは開いた場所がホームに戻り、枠が出ない)
+    await nav.getByRole("link", { name: "API キー", exact: true }).click();
+    await expect(page).toHaveURL(/\/w\/me\/api-keys$/);
+    await switcherButton.click();
+    await switcher.getByRole("link", { name: new RegExp(`^${SITE.name}`) }).click();
+    await expect(page).toHaveURL(new RegExp(`/sites/${SITE.id}/settings$`));
+    const switchedHeading = nav.getByText("サイト設定", { exact: true });
+    await expect(switchedHeading.locator("..")).toContainText(SITE.name);
+    await expect(page.locator('input[name="name"]')).toHaveValue(SITE.name);
+    // 普段のメニュー(エクスペリエンスの画面)の枠のサイトは、今どおりサイトのトップを指す(検索の結果からの移動は上の B35 の確認が見ている)
+    await nav.getByRole("link", { name: /^戻る/ }).click();
+    await expect(page).toHaveURL(new RegExp(`/sites/${SITE.id}$`));
+    await switcherButton.click();
+    await expect(switcher.getByRole("link", { name: new RegExp(`^${SITE_UNPUBLISHED.name}`) })).toHaveAttribute("href", new RegExp(`/w/[^/]+/sites/${SITE_UNPUBLISHED.id}$`));
+    await switcher.getByRole("link", { name: new RegExp(`^${SITE_UNPUBLISHED.name}`) }).click();
+    await expect(page).toHaveURL(new RegExp(`/sites/${SITE_UNPUBLISHED.id}$`));
+
+    // B60 Task 8: 空の一覧から導入タグへ(遠くなる導線を埋める)。SITE_UNPUBLISHED はエクスペリエンスが 0 件。
+    // 設定の中の節(外部計測の名前)から「戻る」でクライアント遷移して一覧へ戻り、そこから導入タグを開く。
+    // 前の画面の節(naming)が残らず、再読み込みなしで導入タグの節が開く
+    const emptyListPath = new URL(page.url()).pathname;
+    await openSettings(page);
+    await page.getByTestId("section-naming").click();
+    await expect(page.getByTestId("section-naming")).toHaveAttribute("aria-current", "page");
+    await nav.getByRole("link", { name: /^戻る/ }).click();
+    await expect(page).toHaveURL(new RegExp(`/sites/${SITE_UNPUBLISHED.id}$`));
+    await expect(page.getByText("エクスペリエンスはまだありません")).toBeVisible();
+    await page.getByTestId("empty-install-tag").click();
+    await expect(page).toHaveURL(new RegExp(`/sites/${SITE_UNPUBLISHED.id}/settings\\?section=tag$`));
+    await expect(page.getByTestId("code-block")).toContainText(`/s/${SITE_UNPUBLISHED.id}.js`);
+    await expect(page.getByRole("heading", { name: "導入タグ", level: 2 })).toBeVisible();
+    await expect(page.getByTestId("section-tag")).toHaveAttribute("aria-current", "page");
+    await expect(page.getByTestId("section-naming")).not.toHaveAttribute("aria-current", /.*/); // 前の画面の節が残らない
+    // 「戻る」は押す前の一覧を指す
+    await expect(nav.getByRole("link", { name: /^戻る/ })).toHaveAttribute("href", emptyListPath);
+    await nav.getByRole("link", { name: /^戻る/ }).click();
+    await expect(page).toHaveURL(new RegExp(`/sites/${SITE_UNPUBLISHED.id}$`));
 
     // B14 / B42 / 決定 54 (11): 発行フォーム → 結果の置き換え → 移動時の確認 → 失効済みへ移る(サインイン予算を増やさないためこのテストに相乗り)
     const wid = page.url().match(/\/w\/([^/]+)\//)![1]!;
@@ -387,18 +544,99 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await expect(page.getByTestId("save-state")).toHaveText("変更はありません");
     await expect(appAlert(page)).toHaveCount(0);
 
+    // B60: 設定を開いた場所の記憶。下書きのテストの画面に相乗りする(sign-in の予算を増やさない)
+    await test.step("settings menu remembers where it was opened", async () => {
+      const nav = page.getByRole("navigation", { name: "メインメニュー" });
+      const backLink = nav.getByRole("link", { name: /^戻る/ });
+      // 評価計画のタブで未保存の入力を作る(タブは replaceParam で URL の search に写る)
+      await page.getByRole("tab", { name: "評価計画" }).click();
+      await expect(page).toHaveURL(/[?&]tab=plan(&|$)/);
+      await page.getByRole("spinbutton", { name: "最大期間", exact: true }).fill("9");
+      const opened = new URL(page.url());
+      const experimentHref = `${opened.pathname}${opened.search}`;
+      // 最下部の「設定」は離脱の確認に止められ(onClick は走らない)、「保存せずに移動」の後に移る。
+      // それでも provider は画面の移動から開いた場所を覚え、「戻る」は search まで含めた元の画面を指す。
+      // openSettings は押した直後に選択中を待つので、確認を挟むここでは使わない
+      await nav.getByRole("link", { name: "設定", exact: true }).click();
+      const leave = page.getByRole("alertdialog", { name: "評価計画の変更を保存していません" });
+      await leave.getByRole("button", { name: "保存せずに移動" }).click();
+      await expect(page).toHaveURL(new RegExp(`/sites/${SITE.id}/settings$`));
+      await expect(backLink).toHaveAttribute("href", experimentHref);
+      // サイトから開いたので、メニューの先頭は「サイト設定」の節(見出しの下の行にサイト名。切り替えの枠にもサイト名が出るので、見出しの塊で見る)
+      const siteGroupHeading = nav.getByText("サイト設定", { exact: true });
+      await expect(siteGroupHeading).toBeVisible();
+      await expect(siteGroupHeading.locator("..")).toContainText(SITE.name);
+      // 同じメニューの中で「メンバー」へ移っても、メニューの形(サイト設定の節)と戻り先は変わらない。
+      // サイト設定の画面にいないので、サイト設定の項目はどれも選択中にならない
+      await nav.getByRole("link", { name: "メンバー", exact: true }).click();
+      await expect(page).toHaveURL(/\/w\/[^/]+\/members$/);
+      await expect(siteGroupHeading).toBeVisible();
+      await expect(nav.locator('[data-testid^="section-"]')).toHaveCount(6); // オーナーには危険な操作も出る
+      await expect(nav.locator('[data-testid^="section-"][aria-current]')).toHaveCount(0);
+      await expect(backLink).toHaveAttribute("href", experimentHref);
+      // 「戻る」で設定を開く前の画面(評価計画のタブ)へ
+      await backLink.click();
+      await expect.poll(() => {
+        const u = new URL(page.url());
+        return `${u.pathname}${u.search}`;
+      }).toBe(experimentHref);
+      await expect(page.getByRole("tab", { name: "評価計画" })).toHaveAttribute("aria-selected", "true");
+    });
+    await page.getByRole("tab", { name: "パターン" }).click(); // 以降の手順は元のタブのまま
+
     // Start は必ず自動 Publish を伴う(spec §13.8 / 決定 17)
     const started = await changeStatus(page, SITE.id, EXPERIMENT.id, /^開始/);
     expect(started.publish).toMatchObject({ ok: true, version: 1 });
     await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "running");
     await expect(page.getByTestId("status-banner")).toHaveAttribute("data-published-status", "running");
 
-    // 公開履歴は独立した画面。いま配信中の 1 行は activeVersion で決まる
-    await page.getByRole("link", { name: "公開履歴" }).click();
+    // B60: 公開履歴は左メニューに無く、上部バーの版の札から開く。札を押すと直近の公開が開き、いま配信中の 1 行は activeVersion で決まる
+    await expect(page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "公開履歴", exact: true })).toHaveCount(0);
+    const chip = page.getByTestId("version-chip");
+    const recent = page.getByTestId("version-popover");
+    const publishesPath = `**/api/control/sites/${SITE.id}/publishes`;
+    await expect(chip).toHaveAccessibleName("配信中 v1。公開履歴を開く"); // Start 後の router.refresh() で上部バーも v1 になる
+    await test.step("version chip shows recent publishes and load failures", async () => {
+      // 取得の失敗(HTTP 500)は状態コードを添えた文。Esc で閉じて開き直すと読み直す
+      await page.route(publishesPath, (r) => (r.request().method() === "GET" ? r.fulfill({ status: 500, json: { error: "internal" } }) : r.continue()));
+      await chip.click();
+      await expect(recent).toContainText("公開履歴を取得できませんでした(HTTP 500)");
+      await expect(recent.locator('[data-testid^="recent-publish-"]')).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await expect(recent).toHaveCount(0);
+      await page.unroute(publishesPath);
+      await chip.click();
+      await expect(recent.getByTestId("recent-publish-1")).toContainText("配信中");
+      await expect(recent).not.toContainText("取得できませんでした");
+      await page.keyboard.press("Escape");
+      // 失敗した公開の行は「失敗」の赤い札(エラーの文は一覧に出さない)。control の応答を差し替えて見る
+      const at = Date.UTC(2026, 9, 20, 8, 40);
+      const rows: PublishRow[] = [
+        { version: 2, status: "failed", createdAt: at, activatedAt: null, needsProfile: null, error: "e2e_failed_reason", publishedBy: { id: "u1", name: OWNER_NAME } },
+        { version: 1, status: "active", createdAt: at - 60_000, activatedAt: at - 60_000, needsProfile: false, error: null, publishedBy: { id: "u1", name: OWNER_NAME } },
+      ];
+      await page.route(publishesPath, (r) => (r.request().method() === "GET" ? r.fulfill({ status: 200, json: rows }) : r.continue()));
+      await chip.click();
+      const failedRow = recent.getByTestId("recent-publish-2");
+      await expect(failedRow).toContainText("失敗");
+      await expect(failedRow).toContainText(OWNER_NAME);
+      await expect(failedRow.getByText("失敗", { exact: true })).toHaveAttribute("style", /color: var\(--danger\)/);
+      await expect(recent).not.toContainText("e2e_failed_reason");
+      await expect(recent.getByTestId("recent-publish-1")).toContainText("配信中");
+      await page.keyboard.press("Escape");
+      await expect(recent).toHaveCount(0);
+      await page.unroute(publishesPath);
+    });
+    // 「すべての公開履歴 →」で公開履歴の画面へ(移ったら閉じる)
+    await chip.click();
+    await expect(recent.getByTestId("recent-publish-1")).toContainText("配信中");
+    await recent.getByRole("link", { name: "すべての公開履歴 →" }).click();
+    await expect(page).toHaveURL(new RegExp(`/sites/${SITE.id}/history$`));
+    await expect(recent).toHaveCount(0);
     await expect(page.getByTestId("publish-row-1")).toContainText("配信中");
     // Publish の確認画面: 変更が無くても開ける。上部バーの Publish は副ボタンに戻っている。
     // この secondary は Start 後に StatusButtons が呼ぶ「同じ経路での router.refresh()」の結果でしかありえない:
-    // ここまでの 2 回の遷移(公開履歴のリンクと上部バーの Publish リンク)はどちらもクライアント遷移で、
+    // ここまでの 2 回の遷移(版の札から開いた「すべての公開履歴」のリンクと上部バーの Publish リンク)はどちらもクライアント遷移で、
     // 共有の Site layout を描き直さない。つまり同じ経路の refresh は共有 layout を確かに取り直す、という実地の証拠になっている
     await page.getByTestId("topbar-publish").click();
     await expect(page.getByRole("heading", { name: "公開", exact: true })).toBeVisible();
@@ -424,6 +662,24 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     // B77: 名前は訪問者に届けない。dataLayer の名前は外部計測の指定 ?? ID なので、指定の無い b はパターン ID のまま(exposurePayloads)
     expect(body).toContain('"variantName":"b"');
     expect(body).not.toContain('"name":');
+
+    // B60: 開いた場所は画面の中の state だけに持つので、再読み込みすると今の画面から決まる縮んだ形になる
+    // (メンバーの画面 = ワークスペースから開いた形。「サイト設定」の節は消え、「戻る」はワークスペースのトップへ)
+    await test.step("settings menu shrinks on reload", async () => {
+      const nav = page.getByRole("navigation", { name: "メインメニュー" });
+      const wid = page.url().match(/\/w\/([^/]+)\//)![1]!;
+      await waitForHydration(page); // 直前の実験の作成は全画面の遷移で終わる
+      await openSettings(page);
+      await expect(page).toHaveURL(new RegExp(`/sites/${SITE.id}/settings$`));
+      await nav.getByRole("link", { name: "メンバー", exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`/w/${wid}/members$`));
+      await expect(nav.getByText("サイト設定", { exact: true })).toBeVisible();
+      await page.reload();
+      await waitForHydration(page);
+      await expect(nav.getByRole("link", { name: "メンバー", exact: true })).toHaveAttribute("aria-current", "page"); // 描き終わってから無いことを見る
+      await expect(nav.getByText("サイト設定", { exact: true })).toHaveCount(0);
+      await expect(nav.getByRole("link", { name: /^戻る/ })).toHaveAttribute("href", `/w/${wid}`);
+    });
   });
 
   test("attribute_not_allowed shows a Japanese message and the HTML switch hint", async ({ page }) => {

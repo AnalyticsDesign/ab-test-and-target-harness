@@ -77,7 +77,7 @@ function GoalAnalyticsFields({
         ) : null}
         {note ? <span className={styles.note}>{note}</span> : null}
       </AnalyticsSection>
-      <AnalyticsSection output title="出力される内容" tipLabel="出力される内容の補足" tip="この目標を達成したときに dataLayer に送る内容です。キー名はサイトの設定(外部計測の名前)の値です">
+      <AnalyticsSection output title="出力される内容" tipLabel="出力される内容の補足" tip="この目標を達成したときに dataLayer に送る内容です。キー名はサイト設定(外部計測の名前)の値です">
         <DataLayerPreview extraKey={names.extraKey} lines={conversionPreview(names, { goalId, goalName })} />
       </AnalyticsSection>
     </div>

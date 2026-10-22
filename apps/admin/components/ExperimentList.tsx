@@ -13,7 +13,17 @@ import { StatusPill } from "./ui/StatusPill";
 /** 状態の pill = Desired(status)。「本番」列 = Published(publishedStatus)との差。initialFilter はサーバーが ?status= から読んで渡す */
 export function ExperimentList({ wid, sid, experiments, canPublish, initialFilter }: { wid: string; sid: string; experiments: Experiment[]; canPublish: boolean; initialFilter: StatusFilter }) {
   const [filter, setFilter] = useState<StatusFilter>(initialFilter);
-  if (experiments.length === 0) return <p className="muted">エクスペリエンスはまだありません</p>;
+  if (experiments.length === 0) {
+    // 設定の入口が左メニューの最下部の 1 つになり、導入タグは設定の奥になった。最初の一歩(ページへタグを貼る)を空の一覧から直接開けるようにする
+    return (
+      <p className="muted">
+        エクスペリエンスはまだありません。最初に、サイトのページへ導入タグを貼ります。{" "}
+        <Link href={`/w/${wid}/sites/${sid}/settings?section=tag`} data-testid="empty-install-tag">
+          導入タグを開く
+        </Link>
+      </p>
+    );
+  }
   const counts = countByFilter(experiments);
   const shown = filterExperiments(experiments, filter);
   return (

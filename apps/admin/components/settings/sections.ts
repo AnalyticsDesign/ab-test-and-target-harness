@@ -25,6 +25,21 @@ export function sectionOfField(name: string): SectionId {
 }
 
 /**
+ * B31 ④: 欄を変えたときに消すエラーのキーを判定する関数。入力欄の name と、control の 422 の fields のキーは 1 対 1 ではないので、ここで対応を持つ:
+ * - analytics の欄は、422 の種類によって `analytics.` が付く形と付かない形の両方で返る(SiteSettingsForm の analyticsError と同じ理由)
+ * - 「参照する Cookie 名」(byoidCookie)は送るときに idSource にまとめるので、エラーは idSource で返る
+ * - 配列の欄(allowedOrigins・hosts)は要素ごとに `name.0` の形で返ることがある
+ * 節ごとではなく欄ごとに消す: 節ごとに消すと、同じ節に残っている別の欄のエラーまで消えるため
+ */
+export function fieldKeysFor(name: string): (key: string) => boolean {
+  const exact = new Set([name]);
+  if (name.startsWith("analytics.")) exact.add(name.slice("analytics.".length));
+  if (name === "byoidCookie") exact.add("idSource");
+  const indexed = `${name}.`;
+  return (key) => exact.has(key) || key.startsWith(indexed);
+}
+
+/**
  * ブラウザの検証は不正な欄**すべて**に invalid を飛ばしてから、**最初の 1 つ**にフォーカスして吹き出しを出す。
  * 開く節はその最初の欄の節(invalid は DOM の順に飛ぶので、集めた名前の先頭)
  */
