@@ -25,7 +25,7 @@ import { toStatement, type Db, type ExperimentRow, type SiteRow, type Tables, ty
 import { copyChangesQuery, copyPlanQuery, copyVariantsQuery, duplicateExperimentRow, insertExperimentQuery, retiredIds } from "../duplicate";
 import { ApiError, notFound, validationFailed } from "../errors";
 import { assertStartable, capacityWarning, fixPlanStatement, loadPlan, type LoadedPlan } from "../evaluation-plan";
-import { SLUG_RE } from "../ids";
+import { isReservedId, reservedIdMessage, SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
 import { publicPublishResult, publishSite, type PublishResult } from "../publish";
 import { rewriteCollectUntil } from "../results/collect-until";
@@ -88,13 +88,15 @@ const KIND_DESCRIPTION =
   "種別。test = テスト(2 つ以上のパターンに訪問者を振り分けて比べる)、single = パーソナライズ(パターン 1 つ・重み 100。振り分けず、条件に合う訪問者全員に表示する)。作成後は変えられない(変えたいときは複製する)";
 const Kind = z.enum(EXPERIMENT_KINDS).describe(KIND_DESCRIPTION);
 
-// new は管理画面の新規作成の画面(/experiments/new)と重なるので予約する(オーディエンスと同じ。B37)。作成と複製の入力だけを見るので、既存の行には効かない
-const ExperimentId = z
+/** constructor など Object.prototype の名前は、設置タグが配る設定を ID で引くときに取り違えるので使わせない(B136。パターン・目標と共通) */
+const NotReservedId = z
   .string()
-  .regex(SLUG_RE)
-  .refine((v) => v !== "new", { message: "new は新規作成の画面と重なるので ID に使えません" });
+  .regex(SLUG_RE, { abort: true }) // 形が違えば予約の検査は出さない(issue を 1 件にする。目標の else if と同じ)
+  .refine((v) => !isReservedId(v), { error: (iss) => reservedIdMessage(String(iss.input)) });
+// new は管理画面の新規作成の画面(/experiments/new)と重なるので予約する(オーディエンスと同じ。B37)。作成と複製の入力だけを見るので、既存の行には効かない
+const ExperimentId = NotReservedId.refine((v) => v !== "new", { message: "new は新規作成の画面と重なるので ID に使えません" });
 const ExperimentCreate = z.strictObject({
-  id: ExperimentId.describe("サイト内で一意。作成後は変えられない。new は使えない"),
+  id: ExperimentId.describe("サイト内で一意。作成後は変えられない。new と constructor は使えない"),
   name: ExperimentName,
   kind: Kind.default("test"),
   urlMatch: PageMatchInputSchema,
@@ -123,7 +125,7 @@ const ExperimentPatch = z.strictObject({
 const VariantsPut = z
   .array(
     z.strictObject({
-      id: z.string().regex(SLUG_RE),
+      id: NotReservedId.describe("パターン ID。constructor は使えない"),
       name: z.string().min(1),
       weight: z.number().int().min(0).max(100),
       analytics: VariantAnalyticsRequestSchema.nullable().optional().describe(ANALYTICS_REQUEST_DESCRIPTION),
@@ -284,7 +286,7 @@ const DuplicateBody = z
       "same = 同じ内容(種別・すべてのパターンと設定。テストは評価計画も初期値として写す)の下書き。variant = 選んだパターンだけを表示するパーソナライズの下書き(配信率 100%・割当の固定 off)。variant の変更は、テストで実際に配信していた中身(配信を確かめた定義。終了したテストは終了の直前のもの)を写し、保存したが公開していない編集は入れない。配信を確かめた定義が無ければ保存済みの変更を写す",
     ),
     variantId: z.string().optional().describe("mode が variant のとき必須。表示するパターンの ID"),
-    id: ExperimentId.optional().describe("新しいエクスペリエンス ID。省略時は <元の ID>-copy、-copy-2 … の空いているもの。new は使えない"),
+    id: ExperimentId.optional().describe("新しいエクスペリエンス ID。省略時は <元の ID>-copy、-copy-2 … の空いているもの。new と constructor は使えない"),
     name: ExperimentName.optional().describe("省略時は「<元の名前> のコピー」または「<元の名前>(<パターン名> だけを表示)」"),
   })
   .refine((b) => b.mode !== "variant" || b.variantId !== undefined, { message: "variantId is required when mode is variant", path: ["variantId"] });

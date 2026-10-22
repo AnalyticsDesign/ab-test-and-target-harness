@@ -25,7 +25,7 @@ export function ExperimentCreateForm({ wid, sid }: { wid: string; sid: string })
         e.preventDefault();
         setError(null);
         const fd = new FormData(e.currentTarget);
-        // B37: new は新規作成の画面と重なるので使えない(control も 422)。送る前に日本語で止める
+        // B37: new は新規作成の画面と重なるので使えない。B136: constructor も使えない(どちらも control が 422)。送る前に日本語で止める
         const idProblem = experimentIdProblem(String(fd.get("id") ?? ""));
         setIdError(idProblem);
         if (idProblem) return;

@@ -11,5 +11,10 @@ export function slugIdProblem(id: string): string | null {
   return id === "new" ? "new は新規作成の画面と重なるので ID に使えません" : null;
 }
 
-/** エクスペリエンスの ID(作成・複製)の確認(B37) */
-export const experimentIdProblem = slugIdProblem;
+/**
+ * エクスペリエンスの ID(作成・複製)の確認(B37)。constructor など Object.prototype の名前は、設置タグが配る設定を ID で引くときに
+ * 取り違えるので使えない(control の ids.ts の isReservedId と同じ規則・同じ文言。B136)
+ */
+export function experimentIdProblem(id: string): string | null {
+  return slugIdProblem(id) ?? (Object.hasOwn(Object.prototype, id) ? `${id} は JavaScript で特別な意味を持つ名前なので ID に使えません` : null);
+}

@@ -5,7 +5,7 @@ import { GoalAnalyticsRequestSchema, GoalAnalyticsSchema, GoalInputSchema, targe
 import { requireSession, type AppEnv } from "../app";
 import type { Db } from "../db";
 import { ApiError, notFound, validationFailed } from "../errors";
-import { SLUG_RE } from "../ids";
+import { isReservedId, reservedIdMessage, SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
 import { loadSite } from "../roles";
 import { goalJson } from "../serialize";
@@ -29,6 +29,8 @@ const GoalCreate = z
   ])
   .superRefine((v, ctx) => {
     if (!SLUG_RE.test(v.id)) ctx.addIssue({ code: "custom", path: ["id"], message: "id must match slug rule" });
+    // constructor など Object.prototype の名前は、設置タグが配る設定を目標 ID で引くときに取り違えるので使わせない(B136)
+    else if (isReservedId(v.id)) ctx.addIssue({ code: "custom", path: ["id"], message: reservedIdMessage(v.id) });
   });
 const GoalPatch = z.strictObject({ name: z.string().min(1).optional(), config: z.unknown().optional(), analytics: GoalAnalyticsRequest.optional() });
 
