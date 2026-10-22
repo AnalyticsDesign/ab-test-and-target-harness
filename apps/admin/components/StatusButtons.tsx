@@ -5,7 +5,7 @@ import { useConfirm } from "@/components/ConfirmProvider";
 import { api, describeError } from "@/lib/client";
 import { STATUS_JA } from "@/lib/experiment-filter";
 import { comparisonsOf, type PlanView } from "@/lib/evaluation-plan";
-import { loadStartOverlaps, startBlocker, startConfirmFor, startWarnings, type StartPlan } from "@/lib/start-confirm";
+import { loadStartPreview, pauseConfirm, SITE_PUBLISH_NOTE, startBlocker, startConfirmFor, startWarnings, type StartPlan } from "@/lib/start-confirm";
 import type { StopMessage } from "@/lib/stop-dialog";
 import type { Experiment, Goal, PublishPreview, Status, StatusResult } from "@/lib/types";
 import { StopDialog, StopNotices } from "./experiment/StopDialog";
@@ -103,9 +103,35 @@ export function StatusButtons({
             try {
               if (
                 n.danger &&
-                !(await ask({ title: "エクスペリエンスを終了しますか?", body: "終了したエクスペリエンスは再開できません。もう一度行うときは複製して作ります", confirmLabel: "終了する" }))
+                !(await ask({
+                  title: "エクスペリエンスを終了しますか?",
+                  body: (
+                    <>
+                      <p>終了したエクスペリエンスは再開できません。もう一度行うときは複製して作ります</p>
+                      <p className="muted">{SITE_PUBLISH_NOTE}</p>
+                    </>
+                  ),
+                  confirmLabel: "終了する",
+                  tone: "danger",
+                }))
               )
                 return;
+              // B107: 一時停止は押し間違えると配信がすぐ止まるので確認する(再開できるので主ボタンの色)
+              if (n.to === "paused") {
+                const c = pauseConfirm();
+                const ok = await ask({
+                  title: c.title,
+                  body: (
+                    <>
+                      <p>{c.lead}</p>
+                      <p className="muted">{c.sitePublish}</p>
+                    </>
+                  ),
+                  confirmLabel: c.confirmLabel,
+                  tone: "primary",
+                });
+                if (!ok) return;
+              }
               // 決定 51(設計書 §3.3): 下書きの開始・一時停止中の再開で、同じ要素を変える配信中のエクスペリエンスがあれば、どちらが優先されるかを確認に出す。
               // 取得に失敗したら確認なしで進める(警告は開始・再開を止めない)。
               // B77 K20: 下書きの開始では、保存済みのパターンのうち重み 0 のものも同じ確認に入れる(開始後は重みを直せない。再開では出さない)
@@ -115,8 +141,9 @@ export function StatusButtons({
                 const starting = experiment.status === "draft";
                 setMsg(null);
                 setWarnings([]);
-                const [overlaps, start] = await Promise.all([
-                  loadStartOverlaps(() => api<PublishPreview>("GET", `/sites/${siteId}/publish-preview?starting=${encodeURIComponent(experiment.id)}`)),
+                // B66 b: 下見で、ほかに未公開の変更があるか(状態の変更で一緒に本番に出る)も見る。あれば確認を出してそのことを言う
+                const [{ overlaps, othersUnpublished }, start] = await Promise.all([
+                  loadStartPreview(experiment.id, () => api<PublishPreview>("GET", `/sites/${siteId}/publish-preview?starting=${encodeURIComponent(experiment.id)}`)),
                   starting && experiment.kind === "test" ? loadStartPlan(siteId, experiment, recording, goals) : Promise.resolve(undefined),
                 ]);
                 const blocked = start ? startBlocker(start) : null;
@@ -129,6 +156,7 @@ export function StatusButtons({
                   starting ? "開始" : "再開",
                   starting ? (experiment.variants ?? []).filter((v) => v.weight === 0).map((v) => v.name) : [],
                   start,
+                  othersUnpublished,
                 );
                 if (
                   confirm &&
@@ -156,6 +184,7 @@ export function StatusButtons({
                           </dl>
                         ) : null}
                         {confirm.note ? <p className="muted">{confirm.note}</p> : null}
+                        <p className="muted">{confirm.sitePublish}</p>
                       </>
                     ),
                     confirmLabel: confirm.confirmLabel,

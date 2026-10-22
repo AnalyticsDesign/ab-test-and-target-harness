@@ -1,4 +1,4 @@
-import { duplicateName, type DuplicateMode } from "@wtt/core";
+import { duplicateIdCandidates, duplicateName, type DuplicateMode } from "@wtt/core";
 import type { PickerOption } from "@/components/ui/Picker";
 import type { ResultsResponse } from "./results-view";
 import { STATE_LABEL } from "./result-format";
@@ -9,7 +9,20 @@ import type { Experiment } from "./types";
  * 決定 51(設計書 §4.2): 複製の画面の状態。結果(テストの結果の API の応答)があれば、初期値・プルダウンの補足・注意に判定を使う(D9 ③ Task 16)。
  * 結果が無い(下書き・パーソナライズ・読めなかった)ときは、プルダウンにパターン名と変更の件数だけを出す
  */
-export type DuplicateState = { mode: DuplicateMode; variantId: string | null; name: string; nameEdited: boolean };
+export type DuplicateState = {
+  mode: DuplicateMode;
+  variantId: string | null;
+  name: string;
+  nameEdited: boolean;
+  /**
+   * B103: 新しいエクスペリエンス ID。初期値(idDefault)は control の候補の先頭(<元の ID>-copy。64 字に収める)。
+   * 初期値と違うときだけ送る(送らなければ control が空いている -copy・-copy-2 … を使う)
+   */
+  id: string;
+  idDefault: string;
+  /** B103: 外部計測のエクスペリエンス名。元に上書きがあるときだけ欄を出す(無ければ null)。元の値から始める */
+  analyticsName: string | null;
+};
 
 type Report = ResultsResponse | null | undefined;
 
@@ -38,8 +51,11 @@ export function duplicateVariantModeIssue(e: Experiment): string | null {
 export function initialDuplicateState(e: Experiment, report?: Report): DuplicateState {
   const choices = selectable(e);
   const adopted = report?.adoption?.variantId ?? null;
+  // B103: ID と外部計測のエクスペリエンス名(複製は外部計測の指定をそのまま写すので、上書きがあれば元と同じ名前で出る)
+  const idDefault = duplicateIdCandidates(e.id, 1)[0]!;
+  const extra = { id: idDefault, idDefault, analyticsName: e.analytics?.overrides?.experimentName ?? null };
   if (adopted !== null && choices.some((v) => v.id === adopted) && effectiveMode(e, "variant") === "variant") {
-    return { mode: "variant", variantId: adopted, name: nameFor(e, "variant", adopted), nameEdited: false };
+    return { mode: "variant", variantId: adopted, name: nameFor(e, "variant", adopted), nameEdited: false, ...extra };
   }
   let variantId = choices[0]?.id ?? null;
   if (report) {
@@ -52,7 +68,37 @@ export function initialDuplicateState(e: Experiment, report?: Report): Duplicate
     }
     if (best) variantId = best.id;
   }
-  return { mode: "same", variantId, name: nameFor(e, "same", variantId), nameEdited: false };
+  return { mode: "same", variantId, name: nameFor(e, "same", variantId), nameEdited: false, ...extra };
+}
+
+export function withId(s: DuplicateState, id: string): DuplicateState {
+  return { ...s, id };
+}
+
+/** 送る ID(初期値のままなら送らない) */
+export const duplicateIdEdited = (s: DuplicateState) => s.id !== s.idDefault;
+
+export function withAnalyticsName(s: DuplicateState, analyticsName: string): DuplicateState {
+  return { ...s, analyticsName };
+}
+
+/** B103: 外部計測のエクスペリエンス名が元と同じか(同じなら画面は「元と同じ名前で dataLayer に出ます」と注意する。止めはしない) */
+export function duplicateAnalyticsSameAsSource(e: Experiment, s: DuplicateState): boolean {
+  const source = e.analytics?.overrides?.experimentName;
+  // 前後の空白だけの違いは同じとみなす(触っていないのに名前を変えて送らない)
+  return source !== undefined && s.analyticsName !== null && s.analyticsName.trim() === source.trim();
+}
+
+/**
+ * B103: 複製の後に送る 2 回目の要求(PATCH …/experiments/:eid の body)。外部計測の名前を変えたときだけ。
+ * 複製は元の外部計測を丸ごと写すので、元の値(extra を含む)の名前だけを差し替えて送る(PATCH の analytics は丸ごと置き換え)。
+ * 空にしたら上書きを外す(dataLayer には新しいエクスペリエンス ID が出る)。変えていなければ null(送らない)
+ */
+export function duplicateAnalyticsPatch(e: Experiment, s: DuplicateState): { analytics: NonNullable<Experiment["analytics"]> } | null {
+  if (s.analyticsName === null || !e.analytics || duplicateAnalyticsSameAsSource(e, s)) return null;
+  const { experimentName: _drop, ...restOverrides } = e.analytics.overrides ?? {};
+  const name = s.analyticsName.trim();
+  return { analytics: { ...e.analytics, overrides: name ? { ...restOverrides, experimentName: name } : restOverrides } };
 }
 
 export function withMode(e: Experiment, s: DuplicateState, mode: DuplicateMode): DuplicateState {
@@ -119,8 +165,9 @@ export function duplicateNotes(e: Experiment, s: DuplicateState, report?: Report
  * 送る body。「選んだパターンだけを表示」でパターンが選ばれていないときは黙って「同じ内容」に変えず、例外にする
  * (withMode と initialDuplicateState がこの状態を作らないので、届くのは呼び出し側の誤りだけ)
  */
-export function duplicateBody(s: DuplicateState): { mode: DuplicateMode; variantId?: string; name: string } {
-  if (s.mode !== "variant") return { mode: "same", name: s.name };
+export function duplicateBody(s: DuplicateState): { mode: DuplicateMode; variantId?: string; id?: string; name: string } {
+  const id = duplicateIdEdited(s) ? { id: s.id } : {}; // B103: 初期値から変えたときだけ送る
+  if (s.mode !== "variant") return { mode: "same", ...id, name: s.name };
   if (s.variantId === null) throw new Error("表示するパターンを選んでください");
-  return { mode: "variant", variantId: s.variantId, name: s.name };
+  return { mode: "variant", variantId: s.variantId, ...id, name: s.name };
 }

@@ -73,6 +73,19 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
   test("audience_builder_creates_audience_with_history_conditions", async ({ page }) => {
     await login(page);
     await createSite(page, SITE_AUD);
+    // B66 c: 目標が 0 件のサイトで目標の条件を置くと、空の一覧ではなく、目標の画面への案内を出す
+    await newAudience(page, "No goals yet");
+    await chip(page, "目標・コンバージョン").click();
+    await expect(page.getByTestId("no-goals")).toContainText("目標がまだありません");
+    // 目標の画面は新しいタブで開き(未保存の入力を消さない)、作った後は「目標を読み直す」で一覧だけを読み直す
+    const goalsLink = page.getByTestId("no-goals").getByRole("link", { name: "目標の画面(新しいタブ)" });
+    await expect(goalsLink).toHaveAttribute("href", new RegExp(`/sites/${SITE_AUD.id}/goals$`));
+    await expect(goalsLink).toHaveAttribute("target", "_blank");
+    expect((await page.request.post(`/api/control/sites/${SITE_AUD.id}/goals`, { headers: controlHeaders(), data: { id: "g_tmp", name: "仮の目標", type: "CUSTOM", config: {} } })).status()).toBe(201);
+    await page.getByTestId("no-goals").getByRole("button", { name: "目標を読み直す" }).click();
+    await expect(page.getByTestId("no-goals")).toHaveCount(0);
+    await expect(page.getByLabel("名前", { exact: true })).toHaveValue("No goals yet"); // 入力は残る
+    expect((await page.request.delete(`/api/control/sites/${SITE_AUD.id}/goals/g_tmp`, { headers: controlHeaders() })).status()).toBe(204);
     // Goal は BFF 経由の API で作る(Goal の画面は今回の対象外)
     expect((await page.request.post(`/api/control/sites/${SITE_AUD.id}/goals`, { headers: controlHeaders(), data: { id: "g_lead", name: "資料請求", type: "CUSTOM", config: {} } })).status()).toBe(201);
     await newAudience(page, "Pricing visitors");

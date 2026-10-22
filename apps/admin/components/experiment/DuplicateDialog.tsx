@@ -1,13 +1,19 @@
 "use client";
-import { useState } from "react";
+import { useId, useState } from "react";
+import { analyticsValueErrors } from "@/lib/analytics-values";
 import { api, describeError } from "@/lib/client";
-import { duplicateBody, duplicateNotes, duplicateVariantModeIssue, duplicateVariantOptions, initialDuplicateState, withMode, withName, withVariant, type DuplicateState } from "@/lib/duplicate";
+import {
+  duplicateAnalyticsPatch, duplicateAnalyticsSameAsSource, duplicateBody, duplicateIdEdited, duplicateNotes, duplicateVariantModeIssue, duplicateVariantOptions, initialDuplicateState, withAnalyticsName, withId, withMode, withName, withVariant,
+  type DuplicateState,
+} from "@/lib/duplicate";
 import type { ResultsResponse } from "@/lib/results-view";
+import { experimentIdProblem } from "@/lib/slug-id";
 import type { Experiment } from "@/lib/types";
 import { useNow } from "../LocalTime";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Picker } from "../ui/Picker";
 import { ErrorBox } from "../ErrorBox";
+import { ExperimentIdField } from "./ExperimentIdField";
 
 /**
  * 決定 51(設計書 §4.2、モックの複製の画面): 見出しの「複製」から開く。元は変わらず、下書きを作って新しいエクスペリエンスの概要へ移る。
@@ -41,6 +47,16 @@ export function DuplicateDialog({
   const notes = duplicateNotes(experiment, s, report, now);
   // B77: 変更のあるパターンが無い(オリジナルだけの)テストは「選んだパターンだけを表示」を選べない。理由を選択肢の下に出す
   const variantModeIssue = duplicateVariantModeIssue(experiment);
+  // B103: ID は初期値から変えたときだけ検査して送る(変えなければ control が空いている -copy・-copy-2 … を使う)
+  const idProblem = duplicateIdEdited(s) ? experimentIdProblem(s.id) : null;
+  // 変えていない元の値は検査しない(古い値で複製を止めない。保存済みの値を prev に渡す = 編集画面と同じ規則)
+  const nameProblem =
+    s.analyticsName === null ? null : (analyticsValueErrors({ overrides: { experimentName: s.analyticsName } }, experiment.analytics ?? null, [])[0]?.message ?? null);
+  const sameAnalyticsName = duplicateAnalyticsSameAsSource(experiment, s);
+  const nameInput = useId();
+  const nameHint = useId();
+  const nameError = useId();
+  const nameSame = useId();
   return (
     <ConfirmDialog
       open={open}
@@ -49,21 +65,37 @@ export function DuplicateDialog({
       cancelLabel="戻る"
       tone="primary"
       dismissOnBackdrop={false}
-      confirmDisabled={busy || s.name.trim() === ""}
+      confirmDisabled={busy || s.name.trim() === "" || idProblem !== null || nameProblem !== null}
       onCancel={() => {
         if (!busy) onClose();
       }}
       onConfirm={async () => {
         setBusy(true);
         setError(null);
+        let created: Pick<Experiment, "id" | "analytics">;
         try {
-          const created = await api<{ id: string }>("POST", `/sites/${siteId}/experiments/${experiment.id}/duplicate`, duplicateBody(s));
-          // 上部バーの「未公開の編集あり」を描き直すため全画面の遷移(作成の画面と同じ理由)
-          window.location.assign(`/w/${wid}/sites/${siteId}/experiments/${created.id}`);
+          created = await api<Pick<Experiment, "id" | "analytics">>("POST", `/sites/${siteId}/experiments/${experiment.id}/duplicate`, duplicateBody(s));
         } catch (e) {
           setError(describeError(e));
           setBusy(false);
+          return;
         }
+        // B103: 外部計測の名前を変えたときだけ 2 回目の要求で直す(複製は元の外部計測を丸ごと写すため)。
+        // 失敗しても複製はできている(下書きなので配信されない)ので、移った先で知らせて直してもらう
+        let analyticsFailed = false;
+        // 土台は複製の応答の外部計測(画面を開いた後に元の extra が直されていても、複製が写した新しい値を保つ。PATCH は丸ごと置き換えのため)
+        const patch = duplicateAnalyticsPatch({ ...experiment, analytics: created.analytics }, s);
+        if (patch) {
+          try {
+            await api("PATCH", `/sites/${siteId}/experiments/${created.id}`, patch);
+          } catch {
+            analyticsFailed = true;
+          }
+        }
+        // 上部バーの「未公開の編集あり」を描き直すため全画面の遷移(作成の画面と同じ理由)。
+        // B108: 移った先の見た目が元とほぼ同じで反応が無いように見えるので、作成したことを知らせる印を付ける(移った先で URL から消す)
+        const q = analyticsFailed ? "?duplicated=1&analyticsFailed=1" : "?duplicated=1";
+        window.location.assign(`/w/${wid}/sites/${siteId}/experiments/${created.id}${q}`);
       }}
     >
       <p className="muted">元のエクスペリエンスは変わりません。新しいエクスペリエンスは下書きで作られ、開始するまでサイトには表示されません。</p>
@@ -104,10 +136,48 @@ export function DuplicateDialog({
           </div>
         </div>
       )}
+      <ExperimentIdField
+        value={s.id}
+        onChange={(v) => setS(withId(s, v))}
+        error={idProblem}
+        disabled={busy}
+        extraHint="変えなければ、既に使われているときは -copy-2・-copy-3 … の空いているものになります(作った ID は移った先の見出しの下に出ます)"
+      />
       <label className="field">
         <span className="field-label">名前(100 字以内)</span>
         <input value={s.name} maxLength={100} onChange={(e) => setS(withName(s, e.target.value))} />
       </label>
+      {/* B103: 元に外部計測のエクスペリエンス名の上書きがあるときだけ。複製はそれをそのまま写すので、元と同じ名前で dataLayer に出る */}
+      {s.analyticsName !== null ? (
+        <div className="field">
+          <label className="field-label" htmlFor={nameInput}>
+            外部計測のエクスペリエンス名
+          </label>
+          <input
+            id={nameInput}
+            value={s.analyticsName}
+            maxLength={100}
+            disabled={busy}
+            aria-invalid={nameProblem ? true : undefined}
+            aria-describedby={[nameHint, nameProblem ? nameError : null, sameAnalyticsName ? nameSame : null].filter(Boolean).join(" ")}
+            placeholder="空なら新しいエクスペリエンス ID を出力"
+            onChange={(e) => setS(withAnalyticsName(s, e.target.value))}
+          />
+          <span className="field-hint" id={nameHint}>
+            dataLayer に出すエクスペリエンス名(元の上書きを写しています)。空にすると新しいエクスペリエンス ID を出力します
+          </span>
+          {nameProblem ? (
+            <span className="field-error" role="alert" id={nameError}>
+              {nameProblem}
+            </span>
+          ) : null}
+          {sameAnalyticsName ? (
+            <span className="banner-warn" style={{ display: "block" }} data-testid="dup-same-analytics-name" id={nameSame}>
+              元と同じ名前で dataLayer に出ます。外部計測で元と見分けたいときは、名前を変えてください
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <ErrorBox message={error} />
     </ConfirmDialog>
   );

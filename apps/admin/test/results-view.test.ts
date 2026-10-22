@@ -365,7 +365,7 @@ describe("resultsView(D9 ③ Task 15)", () => {
         { id: "b", name: "B", weight: 50, original: false, description: "", analytics: null, changes: [{ id: "c1", type: "TEXT", selector: "#cta", payload: { text: "B" } }] },
       ],
     } as unknown as Experiment;
-    expect(adoptedDuplicateState(exp, "b")).toEqual({ mode: "variant", variantId: "b", name: "購入ボタンの文言テスト(B だけを表示)", nameEdited: false });
+    expect(adoptedDuplicateState(exp, "b")).toMatchObject({ mode: "variant", variantId: "b", name: "購入ボタンの文言テスト(B だけを表示)", nameEdited: false, id: "exp_buy-copy", idDefault: "exp_buy-copy" });
     expect(adoptedDuplicateState(exp, "a").variantId).toBe("b");
   });
 

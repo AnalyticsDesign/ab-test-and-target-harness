@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { normalizeRegexInput } from "@wtt/core";
 import type { Audience, Goal } from "@/lib/types";
 import { BROWSER_LABELS, DAY_LABELS, DEVICE_LABELS, HOST_OPS, OS_LABELS, PATH_OPS, QUERY_OPS, REF_OPS, URL_OPS, audienceItems, makeNames } from "@/lib/conditions";
@@ -10,7 +11,8 @@ import { Picker } from "../ui/Picker";
 import { RegexAssist } from "./RegexAssist";
 import styles from "./Targeting.module.css";
 
-export type RowCtx = { goals: Goal[]; audiences: Audience[]; retentionDays: number; timezone: string; allowAudience: boolean; disabled: boolean };
+/** goalsHref = 目標の画面(目標が 0 件のときの案内のリンク。B66 c) */
+export type RowCtx = { goals: Goal[]; goalsHref: string; audiences: Audience[]; retentionDays: number; timezone: string; allowAudience: boolean; disabled: boolean };
 
 const toggle = <T,>(list: T[], v: T): T[] => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 /** 数値の欄の値。空欄は NaN のまま持ち、小数も丸めない(整数かどうかは保存の前の確認が見る。不正な入力を別の値に変えない) */
@@ -80,6 +82,27 @@ function PageCondFields({ cond, onChange, disabled }: { cond: Extract<Cond, { ty
       <Picker label="一致の仕方" value={cond.op} disabled={disabled} options={ops} onChange={(op) => set({ ...cond, op })} />
       {regex && cond.type !== "url" ? <RegexAssist value={cond.value} part={cond.type} replaced={replaced} onApply={(v) => set({ ...cond, value: v })} /> : null}
     </>
+  );
+}
+
+/**
+ * B66 c: 目標が 0 件のときの案内。目標の画面は新しいタブで開く(この画面の未保存の入力を消さないため)。
+ * 作った後は「目標を読み直す」で、入力を残したまま目標の一覧だけを読み直す(router.refresh。編集の本体は作り直さない)
+ */
+function NoGoalsHint({ href }: { href: string }) {
+  const router = useRouter();
+  return (
+    <span className="field-hint" data-testid="no-goals">
+      目標がまだありません。
+      <a href={href} target="_blank" rel="noopener noreferrer">
+        目標の画面(新しいタブ)
+      </a>
+      で作ってから、
+      <button type="button" className="btn btn-sm" onClick={() => router.refresh()}>
+        目標を読み直す
+      </button>
+      を押してください。この画面の入力はそのまま残ります
+    </span>
   );
 }
 
@@ -168,7 +191,12 @@ export function ConditionFields({ cond, onChange, ctx }: { cond: Cond; onChange:
     case "goal":
       return (
         <>
-          <Picker label="目標" value={cond.goal || null} disabled={d} placeholder="目標を選ぶ" options={ctx.goals.map((g) => ({ value: g.id, label: g.name, hint: g.id }))} onChange={(goal) => onChange({ ...cond, goal })} />
+          {/* B66 c: 目標が 0 件だと選ぶ一覧が空になるだけなので、作る場所を案内する(目標はサイト単位で、目標の画面で作る) */}
+          {ctx.goals.length === 0 ? (
+            <NoGoalsHint href={ctx.goalsHref} />
+          ) : (
+            <Picker label="目標" value={cond.goal || null} disabled={d} placeholder="目標を選ぶ" options={ctx.goals.map((g) => ({ value: g.id, label: g.name, hint: g.id }))} onChange={(goal) => onChange({ ...cond, goal })} />
+          )}
           <Picker label="達成" value={cond.neg ? "didnt" : "did"} disabled={d} options={[{ value: "did", label: "を達成済み" }, { value: "didnt", label: "が未達成" }]} onChange={(v) => onChange({ ...cond, neg: v === "didnt" })} />
           <PeriodField within={cond.within} lead={cond.neg ? "過去" : "最後の達成が"} unit={cond.neg ? "日に" : "日以内"} retentionDays={ctx.retentionDays} disabled={d} onChange={(within) => onChange({ ...cond, within })} />
         </>

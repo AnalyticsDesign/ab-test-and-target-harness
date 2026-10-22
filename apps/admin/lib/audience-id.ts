@@ -1,5 +1,4 @@
-/** control の SLUG_RE(apps/control/src/ids.ts)と同じ規則。変えるときは両方を一緒に */
-const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+import { slugIdProblem } from "./slug-id";
 
 /**
  * オーディエンス ID の候補(plan ② P7)。名前の ASCII の英数字から aud_<スラッグ>(全角の英数字は NFKC で半角に)。英数字が無ければ aud_ + 乱数。
@@ -18,11 +17,7 @@ export function audienceIdCandidate(name: string, taken: string[], random: () =>
 }
 
 /**
- * 手で直した ID の保存の前の確認。空・control の SLUG_RE に合わない ID は control の 422(英語の診断)になる前に日本語で止める。
+ * 手で直した ID の保存の前の確認(規則はエクスペリエンスと共通の lib/slug-id.ts)。
  * new は新規作成の画面(/audiences/new)と重なるので使えない(control も 422。plan ② P19)。候補 ID は aud_ で始まるので重ならない
  */
-export function audienceIdProblem(id: string): string | null {
-  if (id === "") return "ID を入力してください";
-  if (!SLUG_RE.test(id)) return "ID は英小文字・数字で始まり、英小文字・数字・_・- のみ、64 文字以内で入力してください";
-  return id === "new" ? "new は新規作成の画面と重なるので ID に使えません" : null;
-}
+export const audienceIdProblem = slugIdProblem;

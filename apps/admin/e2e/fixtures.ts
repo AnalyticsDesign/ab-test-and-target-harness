@@ -225,12 +225,12 @@ export async function changeStatus(page: Page, siteId: string, experimentId: str
   // 文字列は完全一致: サイドバーの切替の枠の名前にサイト名が入る(例「E2E Pause Site」が「Pause」に部分一致する)
   await page.getByRole("button", typeof button === "string" ? { name: button, exact: true } : { name: button }).click();
   // D9 ③: 下書きのテストの開始は必ず確認のモーダルを出す(結果を記録しない Site では「開始しますか?」と記録しない文)。
-  // パーソナライズの開始・一時停止・再開は重なりが無ければ確認を出さないので、要求とモーダルのどちらが先に来るかで分ける。
+  // パーソナライズの開始・再開は重なりが無ければ確認を出さないので、要求とモーダルのどちらが先に来るかで分ける(一時停止は必ず確認する。B107)。
   // 画面が要求を送らずに止めたとき(評価計画の目標が無い開始など。新しい role="alert" が出る)は、60 秒待たずに名前の付いたエラーで落とす
-  const dialog = page.getByRole("alertdialog", { name: /^(開始|再開)/ });
+  const dialog = page.getByRole("alertdialog", { name: /^(開始|再開|一時停止)/ });
   const first = await firstOf(page, done, dialog, before);
   if (first.kind === "dialog") {
-    await dialog.getByRole("button", { name: /^(開始|再開)する$/ }).click();
+    await dialog.getByRole("button", { name: /^(開始|再開|一時停止)する$/ }).click();
     const second = await firstOf(page, done, null, before);
     if (second.kind === "alert") throw new Error(`changeStatus: the screen stopped after the confirmation without sending the status request: ${second.text}`);
   } else if (first.kind === "alert") {

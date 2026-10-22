@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ResultsResponse } from "@/lib/results-view";
-import { duplicateBody, duplicateNotes, duplicateVariantModeIssue, duplicateVariantOptions, initialDuplicateState, withMode, withName, withVariant } from "@/lib/duplicate";
+import {
+  duplicateAnalyticsPatch, duplicateAnalyticsSameAsSource, duplicateBody, duplicateNotes, duplicateVariantModeIssue, duplicateVariantOptions, initialDuplicateState, withAnalyticsName, withId, withMode, withName, withVariant,
+} from "@/lib/duplicate";
 import type { Experiment } from "@/lib/types";
 
 const TEXT = { id: "c1", type: "TEXT", selector: "#cta", payload: { text: "B" } };
@@ -18,7 +20,49 @@ const EXP = {
 
 describe("duplicate dialog state (決定 51、設計書 §4.2)", () => {
   it("starts with the same mode and the first pattern that is not the original selected (B77)", () => {
-    expect(initialDuplicateState(EXP)).toEqual({ mode: "same", variantId: "b", name: "購入ボタンの文言テスト のコピー", nameEdited: false });
+    expect(initialDuplicateState(EXP)).toEqual({ mode: "same", variantId: "b", name: "購入ボタンの文言テスト のコピー", nameEdited: false, id: "exp_buy-copy", idDefault: "exp_buy-copy", analyticsName: null });
+  });
+
+  // B103: 複製の画面で ID と外部計測のエクスペリエンス名を指定する
+  it("ID は <元の ID>-copy から始め、直したときだけ送る(直さなければ control が空いている -copy・-copy-2 … を使う)", () => {
+    const s = initialDuplicateState(EXP);
+    expect(duplicateBody(s)).toEqual({ mode: "same", name: "購入ボタンの文言テスト のコピー" });
+    const edited = withId(s, "exp_buy_v2");
+    expect(edited).toMatchObject({ id: "exp_buy_v2", idDefault: "exp_buy-copy" });
+    expect(duplicateBody(edited)).toEqual({ mode: "same", id: "exp_buy_v2", name: "購入ボタンの文言テスト のコピー" });
+    expect(duplicateBody(withMode(EXP, edited, "variant"))).toMatchObject({ mode: "variant", variantId: "b", id: "exp_buy_v2" });
+    // 初期値に打ち直したら送らない(送ると -copy が使われているときに 409 になる。送らなければ control が空いているものを選ぶ)
+    expect(duplicateBody(withId(edited, "exp_buy-copy"))).toEqual({ mode: "same", name: "購入ボタンの文言テスト のコピー" });
+  });
+
+  it("ID の初期値は control と同じ候補の先頭(長い ID でも 64 字に収める)", () => {
+    const long = { ...EXP, id: "e".repeat(62) } as Experiment;
+    const s = initialDuplicateState(long);
+    expect(s.id.length).toBeLessThanOrEqual(64);
+    expect(s.id.endsWith("-copy")).toBe(true);
+  });
+
+  it("前後の空白だけが違う名前は、元と同じとみなす(触っていないのに名前を変えない)", () => {
+    const spaced = { ...EXP, analytics: { overrides: { experimentName: "buy " } } } as Experiment;
+    const s = initialDuplicateState(spaced);
+    expect(duplicateAnalyticsSameAsSource(spaced, s)).toBe(true);
+    expect(duplicateAnalyticsPatch(spaced, s)).toBeNull();
+  });
+
+  it("外部計測のエクスペリエンス名は、元に上書きがあるときだけ欄を出し、元の値から始める", () => {
+    const withOverride = { ...EXP, analytics: { overrides: { experimentName: "buy_copy" }, extra: { team: "growth" } } } as Experiment;
+    const s = initialDuplicateState(withOverride);
+    expect(s.analyticsName).toBe("buy_copy");
+    expect(initialDuplicateState(EXP).analyticsName).toBeNull(); // 上書きが無ければ欄を出さない(複製は ID を出す)
+    // 変えなければ 2 回目の要求を送らない(元と同じ名前のまま。画面は注意を出す)
+    expect(duplicateAnalyticsPatch(withOverride, s)).toBeNull();
+    expect(duplicateAnalyticsSameAsSource(withOverride, s)).toBe(true);
+    // 変えたら、元の外部計測(extra を含む)の名前だけを差し替えて送る
+    const renamed = withAnalyticsName(s, "buy_copy_v2");
+    expect(duplicateAnalyticsSameAsSource(withOverride, renamed)).toBe(false);
+    expect(duplicateAnalyticsPatch(withOverride, renamed)).toEqual({ analytics: { overrides: { experimentName: "buy_copy_v2" }, extra: { team: "growth" } } });
+    // 空にしたら上書きを外す(dataLayer には新しいエクスペリエンス ID が出る)
+    expect(duplicateAnalyticsPatch(withOverride, withAnalyticsName(s, "  "))).toEqual({ analytics: { overrides: {}, extra: { team: "growth" } } });
   });
 
   it("follows the mode and the pattern in the default name", () => {
@@ -89,7 +133,7 @@ describe("duplicate dialog with results (D9 ③)", () => {
   const TWO = { ...THREE, variants: THREE.variants!.slice(0, 2) } as Experiment;
 
   it("initial: the adopted pattern with the 'only the chosen pattern' mode", () => {
-    expect(initialDuplicateState(TWO, load("adopted"))).toEqual({ mode: "variant", variantId: "b", name: "購入ボタンの文言テスト(B(CTA 文言) だけを表示)", nameEdited: false });
+    expect(initialDuplicateState(TWO, load("adopted"))).toEqual({ mode: "variant", variantId: "b", name: "購入ボタンの文言テスト(B(CTA 文言) だけを表示)", nameEdited: false, id: "exp_buy-copy", idDefault: "exp_buy-copy", analyticsName: null });
   });
 
   it("initial: without an adoption, the non-baseline pattern with the highest probability of beating the baseline (same mode)", () => {

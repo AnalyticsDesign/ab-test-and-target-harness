@@ -489,6 +489,21 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await createSite(page, SITE_PAUSED);
     await createExperiment(page, EXPERIMENT_PAUSED);
     expect((await changeStatus(page, SITE_PAUSED.id, EXPERIMENT_PAUSED.id, /^開始/)).publish).toMatchObject({ ok: true, version: 1 });
+    // B107・B66 b: 一時停止は確認を挟み、サイト全体を公開することを言う。キャンセルなら状態の要求を送らない
+    let statusPosts = 0;
+    const countPosts = (r: Request) => {
+      if (r.method() === "POST" && r.url().includes(`/experiments/${EXPERIMENT_PAUSED.id}/status`)) statusPosts += 1;
+    };
+    page.on("request", countPosts);
+    await page.getByRole("button", { name: "一時停止", exact: true }).click();
+    const pauseDialog = page.getByRole("alertdialog", { name: "一時停止しますか?" });
+    await expect(pauseDialog).toContainText("訪問者への配信がすぐに止まります");
+    await expect(pauseDialog).toContainText("このサイト全体を公開します");
+    await pauseDialog.getByRole("button", { name: "キャンセル" }).click();
+    await expect(pauseDialog).toHaveCount(0);
+    page.off("request", countPosts);
+    expect(statusPosts).toBe(0);
+    await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "running");
     expect((await changeStatus(page, SITE_PAUSED.id, EXPERIMENT_PAUSED.id, "一時停止")).publish).toMatchObject({ ok: true, version: 2 });
     await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "paused");
     await expect(page.getByTestId("status-banner")).toHaveAttribute("data-published-status", "paused");

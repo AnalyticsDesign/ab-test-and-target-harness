@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { api, describeError } from "@/lib/client";
 import type { ResultsResponse } from "@/lib/results-view";
+import { SITE_PUBLISH_NOTE } from "@/lib/start-confirm";
 import { ADOPTION_NOTE_MAX, selectionNotes, stopDialogState, stopDuplicateName, stopDuplicateOption, stopView, submitStop, type StopMessage, type StopMode } from "@/lib/stop-dialog";
 import type { Experiment } from "@/lib/types";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -165,6 +166,8 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
           <span className="field-hint">{dup.hint}</span>
         </div>
       ) : null}
+      {/* B66 b: 終了も状態の変更なので、サイト全体を公開する(採用を記録し直すだけのときは公開しない) */}
+      {mode === "stop" ? <p className="muted">{SITE_PUBLISH_NOTE}</p> : null}
       <ErrorBox message={error} />
     </ConfirmDialog>
   );

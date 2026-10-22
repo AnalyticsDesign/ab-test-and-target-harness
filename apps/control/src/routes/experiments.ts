@@ -88,8 +88,13 @@ const KIND_DESCRIPTION =
   "種別。test = テスト(2 つ以上のパターンに訪問者を振り分けて比べる)、single = パーソナライズ(パターン 1 つ・重み 100。振り分けず、条件に合う訪問者全員に表示する)。作成後は変えられない(変えたいときは複製する)";
 const Kind = z.enum(EXPERIMENT_KINDS).describe(KIND_DESCRIPTION);
 
+// new は管理画面の新規作成の画面(/experiments/new)と重なるので予約する(オーディエンスと同じ。B37)。作成と複製の入力だけを見るので、既存の行には効かない
+const ExperimentId = z
+  .string()
+  .regex(SLUG_RE)
+  .refine((v) => v !== "new", { message: "new は新規作成の画面と重なるので ID に使えません" });
 const ExperimentCreate = z.strictObject({
-  id: z.string().regex(SLUG_RE),
+  id: ExperimentId.describe("サイト内で一意。作成後は変えられない。new は使えない"),
   name: ExperimentName,
   kind: Kind.default("test"),
   urlMatch: PageMatchInputSchema,
@@ -279,7 +284,7 @@ const DuplicateBody = z
       "same = 同じ内容(種別・すべてのパターンと設定。テストは評価計画も初期値として写す)の下書き。variant = 選んだパターンだけを表示するパーソナライズの下書き(配信率 100%・割当の固定 off)。variant の変更は、テストで実際に配信していた中身(配信を確かめた定義。終了したテストは終了の直前のもの)を写し、保存したが公開していない編集は入れない。配信を確かめた定義が無ければ保存済みの変更を写す",
     ),
     variantId: z.string().optional().describe("mode が variant のとき必須。表示するパターンの ID"),
-    id: z.string().regex(SLUG_RE).optional().describe("新しいエクスペリエンス ID。省略時は <元の ID>-copy、-copy-2 … の空いているもの"),
+    id: ExperimentId.optional().describe("新しいエクスペリエンス ID。省略時は <元の ID>-copy、-copy-2 … の空いているもの。new は使えない"),
     name: ExperimentName.optional().describe("省略時は「<元の名前> のコピー」または「<元の名前>(<パターン名> だけを表示)」"),
   })
   .refine((b) => b.mode !== "variant" || b.variantId !== undefined, { message: "variantId is required when mode is variant", path: ["variantId"] });

@@ -1,8 +1,40 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PLAN, type EvaluationPlan } from "@wtt/stats";
-import { loadStartOverlaps, startBlocker, startConfirmFor, startWarnings } from "@/lib/start-confirm";
+import { loadStartPreview, pauseConfirm, SITE_PUBLISH_NOTE, startBlocker, startConfirmFor, startWarnings } from "@/lib/start-confirm";
 
 const OV = { path: "experiments.t2", message: "「T2」は「T1」と同じ要素(#cta)を変えます。「T1」(先に開始・再開)が優先され、「T2」の効果は薄まって見えます", experimentIds: ["t2", "t1"] };
+
+// B107・B66 b: 一時停止にも確認を出す。状態の変更はサイト全体を公開するので、ほかのエクスペリエンスの保存済みの編集も一緒に出ることを確認の中で言う
+describe("pause confirmation and the site-wide publish note (B107・B66 b)", () => {
+  it("pauseConfirm: 一時停止はすぐ止まること・再開できること・サイト全体を公開することを言う", () => {
+    const c = pauseConfirm();
+    expect(c.title).toBe("一時停止しますか?");
+    expect(c.confirmLabel).toBe("一時停止する");
+    expect(c.lead).toContain("訪問者への配信がすぐに止まります");
+    expect(c.lead).toContain("再開できます");
+    expect(c.sitePublish).toBe(SITE_PUBLISH_NOTE);
+  });
+  it("開始・再開の確認にもサイト全体を公開する 1 文が入る", () => {
+    expect(startConfirmFor([OV])?.sitePublish).toBe(SITE_PUBLISH_NOTE);
+    expect(startConfirmFor([], "再開", ["C"])?.sitePublish).toBe(SITE_PUBLISH_NOTE);
+    expect(SITE_PUBLISH_NOTE).toContain("ほかのエクスペリエンス");
+  });
+  it("重なりも 0% も無い再開・パーソナライズの開始でも、ほかに未公開の編集があれば 1 文だけの確認を出す", () => {
+    expect(startConfirmFor([], "再開", [], undefined, false)).toBeNull();
+    expect(startConfirmFor([], "再開", [], undefined, true)).toEqual({ title: "再開しますか?", lead: "", items: [], confirmLabel: "再開する", sitePublish: SITE_PUBLISH_NOTE });
+  });
+  it("loadStartPreview: 自分以外の未公開の編集・オーディエンスの変更・サイト全体の変更を、ほかの未公開の変更として数える", async () => {
+    const base = { overlaps: [OV], experiments: [], audienceChanges: [], siteLevelChanged: false };
+    const self = { id: "t2" } as never;
+    const other = { id: "t9" } as never;
+    expect(await loadStartPreview("t2", () => Promise.resolve({ ...base, experiments: [self] } as never))).toEqual({ overlaps: [OV], othersUnpublished: false });
+    expect((await loadStartPreview("t2", () => Promise.resolve({ ...base, experiments: [self, other] } as never))).othersUnpublished).toBe(true);
+    expect((await loadStartPreview("t2", () => Promise.resolve({ ...base, audienceChanges: [{}] } as never))).othersUnpublished).toBe(true);
+    expect((await loadStartPreview("t2", () => Promise.resolve({ ...base, siteLevelChanged: true } as never))).othersUnpublished).toBe(true);
+    // 下見が取れなければ確認を出さずに進める(重なりの確認と同じ扱い)
+    expect(await loadStartPreview("t2", () => Promise.reject(new Error("network")))).toEqual({ overlaps: [], othersUnpublished: false });
+  });
+});
 
 describe("start confirmation for overlaps (決定 51、設計書 §3.3)", () => {
   it("asks nothing when there is no overlap", () => {
@@ -10,7 +42,7 @@ describe("start confirmation for overlaps (決定 51、設計書 §3.3)", () => 
     expect(startConfirmFor(undefined)).toBeNull();
   });
   it("lists the priority sentences when there is an overlap", () => {
-    expect(startConfirmFor([OV])).toEqual({ title: "開始しますか?", lead: "同じ要素を変える配信中のエクスペリエンスがあります。", items: [{ key: "t2|t1", message: OV.message }], confirmLabel: "開始する" });
+    expect(startConfirmFor([OV])).toEqual({ title: "開始しますか?", lead: "同じ要素を変える配信中のエクスペリエンスがあります。", items: [{ key: "t2|t1", message: OV.message }], confirmLabel: "開始する", sitePublish: SITE_PUBLISH_NOTE });
     expect(startConfirmFor([OV], "再開")).toMatchObject({ title: "再開しますか?", confirmLabel: "再開する" });
   });
   it("startConfirmFor: 0% だけでも確認する(B77 K20)", () => {
@@ -25,8 +57,8 @@ describe("start confirmation for overlaps (決定 51、設計書 §3.3)", () => 
     expect(new Set(c?.items.map((i) => i.key)).size).toBe(3);
   });
   it("starts without asking when the preview cannot be read", async () => {
-    expect(await loadStartOverlaps(() => Promise.reject(new Error("network")))).toEqual([]);
-    expect(await loadStartOverlaps(() => Promise.resolve({ overlaps: [OV] } as never))).toEqual([OV]);
+    expect((await loadStartPreview("t2", () => Promise.reject(new Error("network")))).overlaps).toEqual([]);
+    expect((await loadStartPreview("t2", () => Promise.resolve({ overlaps: [OV] } as never))).overlaps).toEqual([OV]);
   });
 });
 

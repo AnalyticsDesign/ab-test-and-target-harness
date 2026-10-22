@@ -30,8 +30,11 @@ export function OverviewTab({
   analyticsOpen,
   onAnalyticsOpen,
   lock,
+  goalsHref,
 }: TabProps & {
   memoRo: boolean;
+  /** 目標の画面(配信条件で目標が 0 件のときの案内のリンク。B66 c) */
+  goalsHref: string;
   goals: Goal[];
   audiences: Audience[];
   site: Pick<Site, "retentionDays" | "timezone"> & { analytics: AnalyticsSettings };
@@ -89,7 +92,7 @@ export function OverviewTab({
           </span>
         </Field>
         <h2>配信条件</h2>
-        <ExperimentTargeting value={draft.targeting} onChange={(v) => set("targeting", v)} ctx={{ goals, audiences, retentionDays: site.retentionDays, timezone: site.timezone, disabled: ro }} />
+        <ExperimentTargeting value={draft.targeting} onChange={(v) => set("targeting", v)} ctx={{ goals, goalsHref, audiences, retentionDays: site.retentionDays, timezone: site.timezone, disabled: ro }} />
       </section>
       <ExperimentAnalyticsCard
         experimentId={experimentId}

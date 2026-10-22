@@ -383,3 +383,18 @@ describe("複製の中身と評価計画(D9 ③)", () => {
     expect(await snapshotOf()).toEqual(before); // 元には何も書かない
   });
 });
+
+// B37: 管理画面は experiments/new を新規作成の画面にしているので、ID の new はエクスペリエンスでも予約する(オーディエンスと同じ 422 validation_failed)
+describe("experiment id `new` is reserved (B37)", () => {
+  it("作成と複製の ID に new を使うと 422 validation_failed(path は id)", async () => {
+    const { token, sid } = await sourceTest();
+    const created = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "new", name: "x", urlMatch: { op: "contains", value: "/" } } });
+    expect(created.status).toBe(422);
+    expect(await json(created)).toMatchObject({ error: "validation_failed", path: ["id"] });
+    const dup = await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token, body: { mode: "same", id: "new" } });
+    expect(dup.status).toBe(422);
+    expect(await json(dup)).toMatchObject({ error: "validation_failed", path: ["id"] });
+    // new を含むだけの ID は使える
+    expect((await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token, body: { mode: "same", id: "new-hero" } })).status).toBe(201);
+  });
+});

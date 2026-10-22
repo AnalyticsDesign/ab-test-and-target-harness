@@ -10,10 +10,11 @@ import type { Audience, Experiment, Goal } from "@/lib/types";
 import { ExperimentEditor } from "@/components/ExperimentEditor";
 import { StatusButtons } from "@/components/StatusButtons";
 import { DuplicateButton } from "@/components/experiment/DuplicateButton";
+import { DuplicatedNotice } from "@/components/experiment/DuplicatedNotice";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPill } from "@/components/ui/StatusPill";
 
-export default async function ExperimentPage({ params, searchParams }: { params: Promise<{ wid: string; sid: string; eid: string }>; searchParams: Promise<{ tab?: string | string[]; variant?: string | string[] }> }) {
+export default async function ExperimentPage({ params, searchParams }: { params: Promise<{ wid: string; sid: string; eid: string }>; searchParams: Promise<{ tab?: string | string[]; variant?: string | string[]; duplicated?: string | string[]; analyticsFailed?: string | string[] }> }) {
   await requireUser();
   const { wid, sid, eid } = await params;
   const ws = (await loadWorkspaces()).find((w) => w.id === wid);
@@ -38,6 +39,9 @@ export default async function ExperimentPage({ params, searchParams }: { params:
   const initialTab = pickParam(sp.tab, tabsFor(exp.data.kind), "overview");
   const variantParam = Array.isArray(sp.variant) ? sp.variant[0] : sp.variant;
   const initialVariant = exp.data.variants?.some((v) => v.id === variantParam) ? variantParam! : null;
+  // B108: 複製の画面から移ってきた印(DuplicatedNotice が URL から消す)
+  const duplicated = pickParam(sp.duplicated, ["1"], "") === "1";
+  const analyticsFailed = pickParam(sp.analyticsFailed, ["1"], "") === "1";
   return (
     <div>
       <PageHeader
@@ -57,6 +61,8 @@ export default async function ExperimentPage({ params, searchParams }: { params:
           </span>
         }
       />
+      {/* B108: 画面は PageHeader から始める(決まり 1.2)。作ったエクスペリエンスの ID は見出しの下に出ている */}
+      {duplicated ? <DuplicatedNotice analyticsFailed={analyticsFailed} /> : null}
       <p data-testid="status-banner" className="muted" data-status={exp.data.status} data-published-status={exp.data.publishedStatus ?? "none"}>
         状態: {STATUS_JA[exp.data.status]} / 本番: {exp.data.publishedStatus ? STATUS_JA[exp.data.publishedStatus] : "未反映"}。編集内容は「保存」で下書きに入ります。本番に出すには、画面の上部の「公開」を押します(管理者以上)。開始・一時停止・終了でも公開されますが、そのときはこのサイトのほかのエクスペリエンスの保存済みの下書きも一緒に本番に出ます
       </p>

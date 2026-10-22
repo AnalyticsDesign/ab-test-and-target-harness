@@ -68,7 +68,7 @@ export function AudienceBuilder({ wid, siteId, audience, audiences, goals, site,
   const id = audience ? audience.id : (manualId ?? (name.trim() ? audienceIdCandidate(name, taken, () => randomPart) : ""));
   const target = findNode(root, targetId)?.kind === "group" ? targetId : root.id;
   const clickTarget = alt ? target : root.id;
-  const ctx: RowCtx = { goals, audiences, retentionDays: site.retentionDays, timezone: site.timezone, allowAudience: false, disabled: !canEdit || busy };
+  const ctx: RowCtx = { goals, goalsHref: `/w/${wid}/sites/${siteId}/goals`, audiences, retentionDays: site.retentionDays, timezone: site.timezone, allowAudience: false, disabled: !canEdit || busy };
   const names = makeNames(goals, audiences);
   // 未保存の変更(B58): 保存済みの値(saved)と今の値を、保存される形(名前・メモ・DSL。新規の画面では手で直した ID も)で比べる。
   // 保存済みの側も同じ変換(audienceTreeFromDsl → toDsl)を通すので、触っていなければ一致する(開閉・ノードの id は DSL に出ない)

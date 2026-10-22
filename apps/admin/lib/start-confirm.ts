@@ -15,7 +15,25 @@ export type StartConfirm = {
   note?: string;
   /** 結果を記録しない開始の警告 */
   notice?: string;
+  /** 状態の変更はサイト全体を公開する、の 1 文(B66 b。開始・再開・一時停止の確認に必ず入れる) */
+  sitePublish: string;
 };
+
+/**
+ * B66 b: 状態の変更(開始・一時停止・再開・終了)は、このエクスペリエンスだけでなくサイト全体を公開する(control の publishSite)。
+ * そのため、ほかのエクスペリエンスの保存済みで未公開の編集も一緒に本番に出る。確認の中でそれを言う
+ */
+export const SITE_PUBLISH_NOTE = "状態を変えると、このサイト全体を公開します。このサイトのほかのエクスペリエンスに保存済みで未公開の編集があれば、それも一緒に本番に出ます";
+
+/** B107: 一時停止の確認。取り消せる操作(再開できる)なので、呼び出し側は主ボタンの色(tone primary)で出す */
+export function pauseConfirm(): Pick<StartConfirm, "title" | "lead" | "confirmLabel" | "sitePublish"> {
+  return {
+    title: "一時停止しますか?",
+    lead: "一時停止すると、このエクスペリエンスの訪問者への配信がすぐに止まります(再開できます)。",
+    confirmLabel: "一時停止する",
+    sitePublish: SITE_PUBLISH_NOTE,
+  };
+}
 
 /**
  * 下書きのテストの開始(D9 ③ Task 14)。recording = その Site が結果を記録するか(Site の設定が有効で、導入に計測用のデータベースがある。
@@ -56,9 +74,16 @@ function fixedItems(plan: EvaluationPlan, goalName: string | null, baselineName:
  * 0% を知らせるのは下書きの開始だけ(開始後は重みを直せないため)なので、再開では呼び出し側が渡さない。
  * start = 下書きのテストの開始だけ渡す(D9 ③)。渡したときは、重なりや 0% が無くても必ず確認する(固定する内容か、記録しない文を出す)
  */
-export function startConfirmFor(overlaps: Overlap[] | null | undefined, verb: "開始" | "再開" = "開始", zeroWeight: string[] = [], start?: StartPlan): StartConfirm | null {
+export function startConfirmFor(
+  overlaps: Overlap[] | null | undefined,
+  verb: "開始" | "再開" = "開始",
+  zeroWeight: string[] = [],
+  start?: StartPlan,
+  /** B66 b: このエクスペリエンスのほかに未公開の変更がある(状態の変更で一緒に本番に出る)。あれば、ほかに理由が無くても 1 文だけの確認を出す */
+  othersUnpublished = false,
+): StartConfirm | null {
   const ov = overlaps ?? [];
-  if (ov.length === 0 && zeroWeight.length === 0 && !start) return null;
+  if (ov.length === 0 && zeroWeight.length === 0 && !start && !othersUnpublished) return null;
   const items = [
     ...ov.map((o) => ({ key: o.experimentIds.join("|"), message: o.message })),
     // 名前は重なり得るので位置も key に入れる
@@ -72,6 +97,7 @@ export function startConfirmFor(overlaps: Overlap[] | null | undefined, verb: "�
     lead: ov.length > 0 ? "同じ要素を変える配信中のエクスペリエンスがあります。" : zeroWeight.length > 0 ? "重み 0% のパターンがあります。" : fallbackLead,
     items,
     confirmLabel: `${verb}する`,
+    sitePublish: SITE_PUBLISH_NOTE,
     ...(fixing && start.plan
       ? { fixed: fixedItems(start.plan, start.goalName, start.baselineName, start.comparisons ?? 1), note: "開始後も期間と人数を延ばす変更はできますが、変更は記録され、結果の画面に表示されます。" }
       : {}),
@@ -96,10 +122,16 @@ export function startWarnings(warnings: ReadonlyArray<{ path: string; message: s
 }
 
 /** 確認サマリの取得。失敗したら空(警告は開始を止めない) */
-export async function loadStartOverlaps(fetchPreview: () => Promise<PublishPreview>): Promise<Overlap[]> {
+/**
+ * 開始・再開の前の下見(B66 b)。重なりと、このエクスペリエンスのほかに未公開の変更があるか(ほかのエクスペリエンスの編集・
+ * オーディエンスの変更・サイト全体の設定の変更。状態の変更はサイト全体を公開するので一緒に本番に出る)。取れなければ確認を出さずに進める
+ */
+export async function loadStartPreview(selfId: string, fetchPreview: () => Promise<PublishPreview>): Promise<{ overlaps: Overlap[]; othersUnpublished: boolean }> {
   try {
-    return (await fetchPreview()).overlaps ?? [];
+    const p = await fetchPreview();
+    const othersUnpublished = (p.experiments ?? []).some((x) => x.id !== selfId) || (p.audienceChanges ?? []).length > 0 || p.siteLevelChanged === true;
+    return { overlaps: p.overlaps ?? [], othersUnpublished };
   } catch {
-    return [];
+    return { overlaps: [], othersUnpublished: false };
   }
 }

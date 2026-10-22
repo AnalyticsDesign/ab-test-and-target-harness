@@ -82,6 +82,72 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
     await expect(dialog).toBeHidden();
   });
 
+  test("duplicate_sets_id_and_analytics_name_and_reports_the_new_draft(B37・B103・B108)", async () => {
+    // 元に外部計測のエクスペリエンス名の上書きを付ける(複製はそれをそのまま写す)
+    expect(await control(page, "PATCH", `/sites/${SITE_KIND.id}/experiments/exp_e2e_src`, { analytics: { overrides: { experimentName: "e2e_source" } } })).toBe(200);
+    await openExperiment("exp_e2e_src");
+    await page.getByRole("button", { name: "複製" }).click();
+    const dialog = page.getByRole("alertdialog", { name: "複製して新しいエクスペリエンスを作ります" });
+    const create = dialog.getByRole("button", { name: "下書きを作成" });
+    // B103: ID の欄は <元の ID>-copy から。new は新規作成の画面と重なるので止める(B37)
+    const idInput = dialog.getByLabel("エクスペリエンス ID(スラッグ)");
+    await expect(idInput).toHaveValue("exp_e2e_src-copy");
+    await idInput.fill("new");
+    await expect(dialog.getByText("new は新規作成の画面と重なるので ID に使えません")).toBeVisible();
+    await expect(create).toBeDisabled();
+    await idInput.fill("exp_e2e_src_v2");
+    // B103: 外部計測の名前は元の値から始め、同じままなら注意する
+    const nameInput = dialog.getByLabel("外部計測のエクスペリエンス名");
+    await expect(nameInput).toHaveValue("e2e_source");
+    await expect(dialog.getByTestId("dup-same-analytics-name")).toBeVisible();
+    await nameInput.fill("e2e_source_v2");
+    await expect(dialog.getByTestId("dup-same-analytics-name")).toHaveCount(0);
+    await create.click();
+    // B108: 移った先で作成したことを知らせる。印は URL から消す(再読み込みで出し直さない)
+    await expect(page).toHaveURL(/\/experiments\/exp_e2e_src_v2$/);
+    await expect(page.getByTestId("duplicated-notice")).toContainText("複製して下書きを作りました");
+    const analytics = await page.evaluate(
+      async ([p, h]) => ((await (await fetch(`/api/control${p}`, { headers: h })).json()) as { analytics: unknown }).analytics,
+      [`/sites/${SITE_KIND.id}/experiments/exp_e2e_src_v2`, controlHeaders()] as const,
+    );
+    expect(analytics).toEqual({ overrides: { experimentName: "e2e_source_v2" } });
+    await page.reload();
+    await waitForHydration(page);
+    await expect(page.getByTestId("duplicated-notice")).toHaveCount(0);
+    // B37: 新規作成の画面でも new は送る前に止める
+    await page.goto(`${siteUrl}/experiments/new`);
+    await waitForHydration(page);
+    await page.fill('input[name="id"]', "new");
+    await page.fill('input[name="name"]', "Reserved id");
+    await page.fill('input[name="value"]', "/");
+    await page.getByRole("button", { name: /^作成/ }).click();
+    await expect(page.getByText("new は新規作成の画面と重なるので ID に使えません")).toBeVisible();
+    await expect(page).toHaveURL(/\/experiments\/new$/);
+  });
+
+  test("duplicate_reports_a_failed_analytics_name_update_on_the_new_draft(B103・B108)", async () => {
+    // ID は初期値(-copy)のまま。-copy は前のテストの複製で使われているので、control は空いている -copy-2 を使う
+    await openExperiment("exp_e2e_src");
+    await page.getByRole("button", { name: "複製" }).click();
+    const dialog = page.getByRole("alertdialog", { name: "複製して新しいエクスペリエンスを作ります" });
+    await dialog.getByLabel("外部計測のエクスペリエンス名").fill("e2e_source_v3");
+    // 2 回目の要求(外部計測の名前を直す PATCH)だけを失敗させる
+    const target = `**/api/control/sites/${SITE_KIND.id}/experiments/exp_e2e_src-copy-2`;
+    await page.route(target, (route) =>
+      route.request().method() === "PATCH" ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "internal", message: "injected" }) }) : route.continue(),
+    );
+    await dialog.getByRole("button", { name: "下書きを作成" }).click();
+    await expect(page).toHaveURL(/\/experiments\/exp_e2e_src-copy-2$/);
+    await page.unroute(target);
+    await expect(page.getByTestId("duplicated-notice")).toBeVisible();
+    const failed = page.locator("main").getByRole("alert").filter({ hasText: "外部計測のエクスペリエンス名を変えられませんでした" });
+    await expect(failed).toBeVisible();
+    // 帯を閉じても、失敗の知らせは残る
+    await page.getByTestId("duplicated-notice").getByRole("button", { name: "閉じる" }).click();
+    await expect(page.getByTestId("duplicated-notice")).toHaveCount(0);
+    await expect(failed).toBeVisible();
+  });
+
   test("start_overlap_confirmation_shows_priority_and_cancel_prevents_start", async () => {
     for (const id of ["exp_e2e_ov1", "exp_e2e_ov2"]) {
       expect(await control(page, "POST", `/sites/${SITE_KIND.id}/experiments`, { id, name: id, urlMatch: { op: "contains", value: "/" } })).toBe(201);

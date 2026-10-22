@@ -386,6 +386,7 @@ function ExperimentEditorBody({
             {...tabProps}
             memoRo={memoRo}
             goals={goals}
+            goalsHref={`/w/${wid}/sites/${site.id}/goals`}
             audiences={audiences}
             site={site}
             experimentId={experiment.id}
