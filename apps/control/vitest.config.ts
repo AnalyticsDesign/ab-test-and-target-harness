@@ -1,4 +1,5 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
@@ -98,6 +99,14 @@ export default defineConfig(async () => {
         },
       }),
     ],
-    test: { include: ["test/**/*.test.ts"], setupFiles: ["./test/apply-migrations.ts"] },
+    test: {
+      include: ["test/**/*.test.ts"],
+      setupFiles: ["./test/apply-migrations.ts"],
+      // backlog B132 ②: worker ごとに workerd が 1 本立ち、パスワードの hash(単独でも 3.6 秒かかるテストがある)が CPU を取り合う。
+      // 既定の 5 秒では、他の作業と重なって load が上がると時間切れになるので、上限を 15 秒に(個別の指定はそのまま優先される)。
+      // worker 数は既定(コア数 - 1)を 7 で頭打ちにして自分の負荷を少し下げる(10 コアで所要は変わらない。CI の 4 コアは既定の 3 のまま)
+      testTimeout: 15_000,
+      maxWorkers: Math.max(1, Math.min(7, availableParallelism() - 1)),
+    },
   };
 });

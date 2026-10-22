@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiClientError } from "@/lib/client";
 import { toChangeWire } from "@/lib/change-wire";
@@ -20,7 +20,7 @@ import { TabPanel, Tabs } from "./ui/Tabs";
 import { SaveBar } from "./ui/SaveBar";
 import { OverviewTab } from "./experiment/OverviewTab";
 import { VariantsTab } from "./experiment/VariantsTab";
-import { EvaluationPlanTab } from "./experiment/EvaluationPlanTab";
+import { EvaluationPlanTab, PLAN_SAVE_IDLE, type PlanSaveState } from "./experiment/EvaluationPlanTab";
 import { ResultsTab } from "./experiment/ResultsTab";
 import { StopDialog, StopNotices } from "./experiment/StopDialog";
 import type { ResultsResponse } from "@/lib/results-view";
@@ -72,6 +72,16 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
     setPlan((p) => syncPlanState(p, body.initialPlan));
   }
   const [planReason, setPlanReason] = useState("");
+  // 「評価計画を保存」の状態(保存中・エラー・保存しました)も外枠に置く(B132。理由は PlanSaveState の説明)。
+  // 本体ごと消していたころと同じく、タブを移ったときと状態(開始・一時停止・終了)が変わったときは結果の表示を消す。
+  // 保存中かどうかは、保存の処理が終わるまで残す
+  const [planSave, setPlanSave] = useState<PlanSaveState>(PLAN_SAVE_IDLE);
+  const clearPlanSave = () => setPlanSave((s) => (s.busy ? { ...PLAN_SAVE_IDLE, busy: true } : PLAN_SAVE_IDLE));
+  const [planSaveStatus, setPlanSaveStatus] = useState(body.experiment.status);
+  if (planSaveStatus !== body.experiment.status) {
+    setPlanSaveStatus(body.experiment.status);
+    clearPlanSave();
+  }
   // 評価計画に未保存の入力があれば、画面の中の移動と再読み込み・タブを閉じるを確認する
   const router = useRouter();
   const ask = useConfirm();
@@ -123,6 +133,7 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
       onTab={(t) => {
         setSwitchedIn(bodyKey);
         setTab(t);
+        clearPlanSave();
         replaceParam("tab", t === "overview" ? null : t);
       }}
       variant={variant}
@@ -139,6 +150,8 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
       onPlan={setPlan}
       planReason={planReason}
       onPlanReason={setPlanReason}
+      planSave={planSave}
+      onPlanSave={setPlanSave}
       onStop={canAdmin && stoppable ? (variantId, report) => {
         setStopNotices(null);
         setStop({ variantId, report });
@@ -150,11 +163,13 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
 
 function ExperimentEditorBody({
   site, experiment, goals, audiences, role, imageUpload, tab, onTab, variant, onVariant, onDiscard, animate, cardOpen, onCardOpen, wid, recording, resultsStore,
-  plan, onPlan, planReason, onPlanReason, onStop,
+  plan, onPlan, planReason, onPlanReason, planSave, onPlanSave, onStop,
 }: BodyProps & {
   tab: EditorTab; onTab: (t: EditorTab) => void; variant: string | null; onVariant: (id: string | null) => void; onDiscard: () => void; animate: boolean; cardOpen: Record<string, boolean>; onCardOpen: (key: string, open: boolean) => void;
   /** 評価計画の状態(外枠が持つ) */
   plan: { view: PlanView | null; form: PlanForm | null }; onPlan: (p: { view: PlanView | null; form: PlanForm | null }) => void; planReason: string; onPlanReason: (r: string) => void;
+  /** 評価計画の保存の状態(外枠が持つ) */
+  planSave: PlanSaveState; onPlanSave: Dispatch<SetStateAction<PlanSaveState>>;
   /** 結果のタブの帯から終了のモーダルを開く(管理者以上・実行中か一時停止中のテストだけ。外枠が渡す) */
   onStop?: (variantId: string | null, report: ResultsResponse) => void;
 }) {
@@ -415,6 +430,8 @@ function ExperimentEditorBody({
               onPlan({ view: v, form: planFormState(v) });
               onPlanReason("");
             }}
+            saveState={planSave}
+            onSaveState={onPlanSave}
             goals={goals}
             variants={experiment.variants ?? []}
             recording={recording}

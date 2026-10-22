@@ -1253,6 +1253,41 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
     expect(await env.DB.prepare("select count(*) as n from results_store_status").first()).toEqual({ n: 0 });
     expect(await env.DB.prepare("select count(*) as n from cron_job_runs").first()).toEqual({ n: 0 });
   });
+
+  test("B132: UTC 0 時の枠はどの日も tick 優先、00:15 の枠は daily 優先", () => {
+    // 1 日は 15 分の枠 96 個(偶数)で、epoch は UTC 0 時に始まるので、0 時の枠の番号はいつも 96 の倍数(偶数 = tick 優先)。
+    // results-daily(afterUtcHour 0)が due になる最初の回は、必ず tick 優先の枠になる
+    for (const day of ["2026-11-20", "2028-02-29", "2031-07-01"]) {
+      expect(isTickPrioritySlot(at(`${day}T00:00:00Z`))).toBe(true);
+      expect(isTickPrioritySlot(at(`${day}T00:15:00Z`))).toBe(false);
+    }
+  });
+
+  test("B132: UTC 0 時の回は tick 優先の枠で記録を作らず(continued)、評価時点の記録は次の 00:15 の回で作る", async () => {
+    const owner = await setupOwner();
+    const sid = await recordingSite(owner);
+    // tickSlot でずらさず、0 時ちょうどの時刻をそのまま使う(0 時の枠の配分を固定するため)
+    const T0 = at("2026-11-20T00:00:00Z");
+    // 0 時の時点で評価時点(開始の 14 日後 = T0 − 6 日)を過ぎた記録の対象。00:00 と 00:15 で同じ対象を使い、
+    // 00:00 に 0 行なのが「対象が無いから」ではなく配分によることを、00:15 で同じ対象から 1 行できることで確かめる
+    const runId = await dueTest(owner, sid, "exp_b132", T0 - 20 * DAY);
+    // 配分: 0 時の枠(tick 優先)の results-daily は 20 で、記録 1 件の見込み(SNAPSHOT_COST 21 + 位置の書き込み 1)に届かない。00:15 は 26
+    expect(allotQueries(CRON_JOBS, new Set(["results-daily"]), T0).get("results-daily")).toBe(20);
+    expect(allotQueries(CRON_JOBS, new Set(["results-daily"]), T0 + 15 * MIN).get("results-daily")).toBe(26);
+    // 配分は tick のジョブがあって決まるので、登録の全ジョブで走らせる(results-daily だけなら tick 優先の枠でも 26 になる)
+    const e = cronEnv(fakeResultsBudget(), fakeResultsHealth(), { RESULTS_DB: sizedResultsDb(() => 1_000) });
+    const daily = (r: Awaited<ReturnType<typeof runCron>>) => r.find((x) => x.job === "results-daily")?.outcome;
+    // (ii) 00:00 の回: 対象は残っている(continued = 続きあり。対象が無ければ ran になる)が、記録は作らない
+    expect(daily(await runCron(e, T0, CRON_JOBS))).toBe("continued");
+    expect(await snapshotRows(sid, "exp_b132")).toEqual([]);
+    expect(await jobRun("results-daily")).toBeNull();
+    // (iii) 00:15 の回(daily 優先の枠): 同じ対象の評価時点の記録を作り、その日の成功を記録する
+    const T1 = T0 + 15 * MIN;
+    expect(daily(await runCron(e, T1, CRON_JOBS))).toBe("ran");
+    const rows = await snapshotRows(sid, "exp_b132");
+    expect(rows.map((r) => [r.kind, r.run_id, r.computed_at])).toEqual([["evaluation", runId, T1]]);
+    expect(await jobRun("results-daily")).toBe("2026-11-20");
+  });
 });
 
 describe("fix round 1: 共有の関数・孤児の確かめ直し・打ち切り", () => {

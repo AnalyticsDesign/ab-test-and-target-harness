@@ -198,6 +198,20 @@ test.describe.serial("results flow (D9 ③)", () => {
   });
 
   test("unsaved_plan_input_survives_a_save_on_another_tab_and_guards_leaving", async () => {
+    // B132: メモの保存の後の router.refresh は、メモが変わったので本体(評価計画のタブを含む)を作り直す。この作り直しが
+    // 評価計画の保存の途中に届く場面を毎回作る(成り行きに任せると、作り直しと保存のどちらが先かが実行ごとに変わり、
+    // 「保存しました」が出ずに落ちる回があった)。メモの保存の refresh を止めておき、評価計画の PUT の途中で通す
+    let releaseRefresh!: () => void;
+    const refreshHeld = new Promise<void>((r) => (releaseRefresh = r));
+    let refreshSeen = false;
+    const isPageRefresh = (u: URL) => u.pathname.endsWith(`/experiments/${EXP.id}`) && u.searchParams.has("_rsc");
+    await page.route(isPageRefresh, async (route) => {
+      // 先読み(prefetch)は止めない。止めるのはメモの保存の後の最初の読み直しだけ
+      if (refreshSeen || route.request().headers()["next-router-prefetch"]) return route.continue();
+      refreshSeen = true;
+      await refreshHeld;
+      await route.continue();
+    });
     // 評価計画のタブで入力(未保存)→ 基本設定のタブでメモを保存 → 評価計画の入力が残っている
     await pick(page, "判定に使う目標", new RegExp(`^${GOAL.name}`));
     await page.getByRole("spinbutton", { name: "最大期間", exact: true }).fill("9");
@@ -217,11 +231,34 @@ test.describe.serial("results flow (D9 ③)", () => {
     await leave.getByRole("button", { name: "キャンセル" }).click();
     await expect(leave).toBeHidden();
     await expect(page).toHaveURL(new RegExp(`/experiments/${EXP.id}`));
-    // 評価計画を保存する
-    const put = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP.id}/evaluation-plan`) && r.request().method() === "PUT");
-    await page.getByRole("button", { name: "評価計画を保存" }).click();
-    expect((await put).status()).toBe(200);
-    await expect(page.getByRole("status").filter({ hasText: "保存しました" })).toBeVisible();
+    // 評価計画を保存する。PUT を止めている間にメモの保存の refresh を通し、本体が作り直されるのを待つ
+    // (作り直すと、メモが保存済みになって保存バーが「変更はありません」に変わる)
+    let releasePut!: () => void;
+    const putHeld = new Promise<void>((r) => (releasePut = r));
+    const isPlanPut = (u: URL) => u.pathname.endsWith(`/experiments/${EXP.id}/evaluation-plan`);
+    await page.route(isPlanPut, async (route) => {
+      if (route.request().method() === "PUT") await putHeld;
+      await route.continue();
+    });
+    try {
+      const put = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP.id}/evaluation-plan`) && r.request().method() === "PUT");
+      await page.getByRole("button", { name: "評価計画を保存" }).click();
+      await expect.poll(() => refreshSeen).toBe(true);
+      releaseRefresh();
+      await expect(page.getByTestId("save-state")).toHaveText("変更はありません");
+      // 作り直した後のタブでも保存中のまま(重ねて押せない)
+      await expect(page.getByRole("button", { name: "保存中…" })).toBeDisabled();
+      releasePut();
+      expect((await put).status()).toBe(200);
+      // 保存の結果は作り直した後のタブに出る
+      await expect(page.getByRole("status").filter({ hasText: "保存しました" })).toBeVisible();
+      await expect(page.getByTestId("plan-unsaved")).toHaveCount(0);
+    } finally {
+      releaseRefresh();
+      releasePut();
+      await page.unroute(isPageRefresh);
+      await page.unroute(isPlanPut);
+    }
   });
 
   test("start_shows_the_fixed_plan_and_starts", async () => {

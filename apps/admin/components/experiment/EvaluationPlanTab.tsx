@@ -1,5 +1,5 @@
 "use client";
-import { useState, type ReactNode } from "react";
+import { useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { api, describeError, fieldErrors } from "@/lib/client";
@@ -32,6 +32,15 @@ import styles from "./EvaluationPlanTab.module.css";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * 「評価計画を保存」の状態(保存中・エラー・保存しました)。入力の値と同じくエディタの外枠が持つ(B132)。
+ * エクスペリエンスのメモを保存した直後に評価計画を保存すると、メモの保存の router.refresh が評価計画の保存の途中に届き、
+ * 本体(このタブを含む)を作り直すことがある。タブの中に持つと、作り直した後のタブは保存中でもボタンを押せ、
+ * 保存の結果は作り直す前のタブ(もう画面に無い)に届いて表示されない
+ */
+export type PlanSaveState = { busy: boolean; error: string | null; serverFields: Record<string, string>; saved: boolean };
+export const PLAN_SAVE_IDLE: PlanSaveState = { busy: false, error: null, serverFields: {}, saved: false };
+
 type Props = {
   wid: string;
   siteId: string;
@@ -45,6 +54,9 @@ type Props = {
   reason: string;
   onReason: (r: string) => void;
   onSaved: (v: PlanView) => void;
+  /** 保存の状態(外枠が持つ。PlanSaveState の説明) */
+  saveState: PlanSaveState;
+  onSaveState: Dispatch<SetStateAction<PlanSaveState>>;
   goals: Goal[];
   /** 保存済みのパターン(基準の選択肢。保存していないパターンは control が受けない) */
   variants: Variant[];
@@ -58,7 +70,7 @@ type Props = {
 /**
  * 評価計画のタブ(D9 ③ Task 14、設計書 §5・§10、モック (a))。判定の基本 / 期間と人数(補助計算・時間の線)/ 判定の基準(詳細設定)。
  * 保存はこのタブの「評価計画を保存」(PUT …/evaluation-plan)。エクスペリエンスの下書きの保存とは別で、公開の対象にならない。
- * 入力の値はエディタの本体が持つ(タブを移っても失われない)。開始後は延ばす向きだけ、評価時点の後・終了・結果を記録しないで開始したテストは表示のみ
+ * 入力の値と保存の状態はエディタの外枠が持つ(タブを移っても、本体を作り直しても失われない)。開始後は延ばす向きだけ、評価時点の後・終了・結果を記録しないで開始したテストは表示のみ
  */
 export function EvaluationPlanTab(p: Props) {
   if (!p.view || !p.form) {
@@ -67,14 +79,13 @@ export function EvaluationPlanTab(p: Props) {
   return <PlanBody {...p} view={p.view} form={p.form} />;
 }
 
-function PlanBody({ wid, siteId, experimentId, status, canEdit, view, form, onForm, reason, onReason, onSaved, goals, variants, recording, resultsStore, timeZone }: Props & { view: PlanView; form: PlanForm }) {
+function PlanBody({ wid, siteId, experimentId, status, canEdit, view, form, onForm, reason, onReason, onSaved, saveState, onSaveState, goals, variants, recording, resultsStore, timeZone }: Props & { view: PlanView; form: PlanForm }) {
   const router = useRouter();
   const ask = useConfirm();
   const now = useNow();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [serverFields, setServerFields] = useState<Record<string, string>>({});
-  const [saved, setSaved] = useState(false);
+  const { busy, error, serverFields, saved } = saveState;
+  // 関数の形で更新する(保存の途中でこのタブが作り直されても、外枠の最新の状態に重ねる)
+  const patchSave = (p: Partial<PlanSaveState>) => onSaveState((s) => ({ ...s, ...p }));
   // 補助計算の入力(保存しない。モックの初期値)
   const [calc, setCalc] = useState({ cvr: "5", diff: "1", perDay: "250" });
 
@@ -88,7 +99,7 @@ function PlanBody({ wid, siteId, experimentId, status, canEdit, view, form, onFo
   const body = planPutBody(form, before, mode === "extend" ? reason : undefined);
   const dirty = Object.keys(body.plan).length > 0;
   const set = <K extends keyof PlanForm>(k: K, v: PlanForm[K]) => {
-    setSaved(false);
+    onSaveState((s) => (s.saved ? { ...s, saved: false } : s));
     onForm({ ...form, [k]: v });
   };
 
@@ -116,8 +127,7 @@ function PlanBody({ wid, siteId, experimentId, status, canEdit, view, form, onFo
   const anyError = Object.keys(typeErrors).length > 0 || Object.keys(extErrors).length > 0;
 
   async function save() {
-    setError(null);
-    setServerFields({});
+    patchSave({ error: null, serverFields: {} });
     if (anyError || !dirty) return;
     if (
       mode === "extend" &&
@@ -129,17 +139,16 @@ function PlanBody({ wid, siteId, experimentId, status, canEdit, view, form, onFo
       }))
     )
       return;
-    setBusy(true);
+    patchSave({ busy: true });
     try {
       const fresh = await api<PlanView>("PUT", `/sites/${siteId}/experiments/${experimentId}/evaluation-plan`, body);
       onSaved(fresh);
-      setSaved(true);
+      patchSave({ saved: true });
       router.refresh();
     } catch (e) {
-      setError(describeError(e));
-      setServerFields(fieldErrors(e));
+      patchSave({ error: describeError(e), serverFields: fieldErrors(e) });
     } finally {
-      setBusy(false);
+      patchSave({ busy: false });
     }
   }
 
