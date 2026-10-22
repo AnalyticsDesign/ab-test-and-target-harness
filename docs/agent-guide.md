@@ -187,6 +187,28 @@ const report = await page.evaluate(() => window.AB.getPreviewReport());
 - **注入は `addInitScript`(ページのどのスクリプトよりも先に走らせる)**。`page.evaluate` や `page.goto` の後に流し込むと DOM の適用が間に合いません。対象ページに**設置タグがあっても下書きが勝ちます** — runtime は 1 ページ 1 起動で、後から走った設置タグの bootstrap は何もしません(`window.AB` も上書きされません)
 - **CSP を出しているページでは設置タグを消さずに注入してください**。注入したコードには `document.currentScript` が無く nonce を取れないため、runtime は**設置タグの nonce を引き継いで** CSS / HTML の `<script>` / CUSTOM_JS を適用します。設置タグを外したページに注入すると、nonce が要るページでは適用がブロックされます
 
+**`getPreviewReport()` が空配列(`[]`)のとき**: プレビューの処理が動けば、`report` には指定したエクスペリエンスごとに必ず 1 行が入ります(ID の誤りやフラグメントの書式の誤りも、`error` 付きの行になります)。したがって空配列は、プレビューの処理がまだ始まっていないか、始められなかったことを表します。上の手順のように下書きの bootstrap を注入した場合は、プレビューの処理が bootstrap に含まれているので、この状態は読むのが早すぎたときか、下の 2. の `wtt: preview failed` が出たときにしか起きません。始められないことがあるのは、注入せずに、設置タグのあるページを `#__ab_preview=` 付きの URL で開いたとき(設置タグ経由のプレビュー)です。このとき設置タグは、プレビューの処理を設置タグと同じオリジンの別ファイル `/s/preview/<hash>.js` から読みます。読めなかったときは何も適用せず、元の表示のままにします。原因は次の順に確かめます。
+
+1. **読むのが早すぎないか**: 設置タグは別ファイルを、サイト設定の `decisionTimeoutMs`(`GET /sites/:sid` の応答にあります。300〜3000 ミリ秒)まで待ちます。ページの `load` の後にこの時間だけ待ってから、もう一度 `getPreviewReport()` を読んでください。まだ空なら、読み込めなかったと判断します
+2. **Console のメッセージ**: 読み込めなかったときは `wtt: preview unavailable`、読み込んだ後に処理が例外で止まったときは `wtt: preview failed` が出ます。どちらも `console.debug` なので、Chrome の DevTools ではログレベルで Verbose を表示しないと見えません。Playwright では `page.on("console", …)` で、`type()` が `debug` のメッセージとして受け取れます
+3. **別ファイルの HTTP ステータス**: 設置タグのファイル(`/s/<siteId>.js`)の中に、読みに行く別ファイルの URL(`/s/preview/` に続く 12 桁の 16 進数と `.js`)が書かれています。DevTools のネットワークの記録(または HAR)でこの URL への要求を探すか、次のように直接確かめます
+
+```bash
+TAG_HOST=www.example.com   # 設置タグを配っているホスト
+P=$(curl -sS "https://$TAG_HOST/s/$SID.js" | grep -o '/s/preview/[0-9a-f]*\.js' | head -n 1)
+if [ -n "$P" ]; then
+  curl -sS -o /dev/null -w '%{http_code}\n' "https://$TAG_HOST$P"   # 200 なら別ファイルはある
+else
+  echo "設置タグのファイルが取れていません(先に https://$TAG_HOST/s/$SID.js を確かめる)"
+fi
+```
+
+- **404**: 設置タグのファイルが指す別ファイルが、配信側にもうありません。配信側に残すプレビューの別ファイルは、ツールの更新のうち、プレビューの処理が変わった直近 2 回分のものだけです。ツールを更新した後は、1 時間ごとの定期処理が設置タグのファイルを順に作り直します。この作り直しがまだ済んでいないか、作り直しに失敗して、設置タグのファイルがツールの更新 2 回以上前のまま残っていると、404 になることがあります。公開し直すか、`POST /sites/:sid/static/redeploy`(管理者以上)で設置タグのファイルを作り直してください。応答の `staticDeploy` が `deployed` なら、1 分ほど待ってから開き直します。`pending` なら自動で再試行されるので、`GET /sites/:sid` の応答の `staticStale` が `false` になってから開き直します。`skipped` は、配信ファイルを更新する仕組みが設定されていないことを表します。このときは、下書きの bootstrap を注入する方法でプレビューしてください
+- **200 なのに読み込めない**: ページの CSP にブロックされたか(Console に CSP の違反のメッセージが出ます)、`decisionTimeoutMs` までに読み終わらなかったかです。CSP は `docs/site-install.md` の「10. コードの変更と CSP」を確かめ、時間切れなら通信環境を変えて試すか、`decisionTimeoutMs` を上げてください
+- **要求そのものが出ていない**: 2. の Console のメッセージと、設置タグのファイル(`/s/<siteId>.js`)そのものが読み込まれているかを確かめてください。DevTools のネットワークの記録で別ファイルへの要求が `(blocked:csp)` と表示されているときは、ページの CSP にブロックされています。上の「200 なのに読み込めない」の CSP の説明を見てください
+
+どの原因でも、上の手順で下書きの bootstrap を注入すれば、別ファイルを読まずにプレビューできます。
+
 ### レシピ 3: 結果を読む
 
 結果は 2 通りで読めます。管理画面の結果のタブと同じ数字(このツールが記録した参加と CV。結果を記録するサイトのテストだけ)と、GA4 / BigQuery で集計するためのクエリです。
@@ -256,7 +278,7 @@ curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/analytics-recipe" -
 
 返るのは**クエリ**であって数値ではありません。上の結果とは、参加者の数え方(このツールは対象の要素が表示された人、GA4 の `ab_exposure` は変更を適用できた人)と ID(このツールは訪問者 ID、GA4 は GA4 の ID)が違うので、数字は一致しません(`notes` にも入ります)。
 
-- `ga4.exposureByVariant` / `ga4.conversionsByGoal`: `{ "method": "POST", "url": "…/v1beta/properties/<id>:runReport", "body": { … } }`。**`url` に `body` をそのまま POST**してください(property は URL に入っています。認証ヘッダだけ足します)
+- `ga4.exposureByVariant` / `ga4.conversionsByGoal`: `{ "method": "POST", "url": "…/v1beta/properties/<id>:runReport", "body": { … } }`。**`url` に `body` をそのまま POST**してください(property は URL に入っています。認証ヘッダーだけ足します)
 - `bigquery.visitorCvrSql`(訪問者単位 = `user_pseudo_id`。既定)/ `bigquery.sessionCvrSql`(セッション単位)
 - **複数のパターンに露出した訪問者 / セッションは除外せず、期間内の初回露出のパターンに帰属させます**(intention-to-treat)。混在の規模は `bigquery.mixedExposureCountSql`(複数のパターンに露出した訪問者数 / セッション数)で確認してください
 - **同じ `event_timestamp` の露出**は GA4 export の batch 内順序列(`batch_page_id` / `batch_ordering_id` / `batch_event_index`)で並べて初回を決めます。**順序列も等しい場合は不定**です

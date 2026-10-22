@@ -4,7 +4,7 @@
  * 他人の `/api/session/oauth?code=…` を踏まされたブラウザにはこの Cookie が無い
  */
 export const FLOW_COOKIE = "wtt_oauth_flow";
-/** control の routes/oauth.ts の FLOW_RE と同じ式 */
+/** control の routes/oauth.ts の FLOW_RE と同じ式(両側の literal をテストで固定。B21) */
 export const FLOW_RE = /^[A-Za-z0-9_-]{16,64}$/;
 /** Google の認可画面で迷う時間を見て 10 分。SameSite=Lax は Google からの戻り(top-level の GET)には付く */
 export const flowCookie = (value: string, secure: boolean) =>

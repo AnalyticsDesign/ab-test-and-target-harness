@@ -96,7 +96,18 @@ const scopeView = (scope: KeyScope | null, names: Map<string, string>) => ({
   workspace: scope?.kind === "workspace" ? { id: scope.workspaceId, name: names.get(scope.workspaceId) ?? null } : null,
 });
 
-/** 時刻は epoch ミリ秒(Global Constraints) */
+/**
+ * 時刻は epoch ミリ秒(Global Constraints)。
+ * B23 ⑨: このファイルは Better Auth の apikey の行を D1 で直接読み書きするので、Better Auth(Kysely の D1 アダプター)の保存形式に依存する
+ * (db.ts の ApiKeyRow と同じ前提):
+ * - date 列(createdAt / expiresAt / lastRequest)= ISO 文字列。ここ(と app.ts の入口)で new Date() で読み、一覧の orderBy("apikey.createdAt") は
+ *   ISO 文字列が辞書順 = 時刻順に並ぶことに頼る。new Date() で読めない形に変わると、一覧の時刻が NaN(JSON では null)になり、
+ *   Better Auth の列の期限を使う鍵(B43 より前の鍵)は期限が "invalid" になって入口で 401 に倒れる。並び順も時刻順でなくなりうる
+ * - boolean 列(enabled)= 整数の 0 / 1。失効で書く `enabled = 0` はこの形を前提にする。形が変わると Better Auth 側では失効が効かなくなるが、
+ *   鍵を断る正は control の表の apikey_revocations(brief K15)なので、入口の 401 は保たれる
+ * - apikey_revocations.revoked_at は control の表で epoch ミリ秒。だから応答の revokedAt は epochMs を通さずそのまま返す
+ * 見張り: Better Auth の版を上げるときは、apikey の行を 1 件 select して、日付が ISO 文字列・enabled が 0 / 1 のままかを確かめる
+ */
 const epochMs = (v: string | number | Date | null | undefined): number | null => (v == null ? null : new Date(v).getTime());
 
 /**
@@ -253,6 +264,7 @@ apiKeyRoutes.delete(
     const userId = c.get("user").id;
     // brief K15: 失効の正は apikey_revocations(Better Auth の鍵の検証は行を丸ごと書き戻すので、enabled だけでは失効が消えうる)。
     // 所有者の確認と「まだ失効していない」は INSERT の条件で行う(他人の鍵・失効済みの鍵は存在を漏らさない 404)。enabled = 0 も書く
+    // (boolean = 整数の保存形式が前提。epochMs の上のコメント = B23 ⑨)
     const [inserted] = await c.env.DB.batch([
       c.env.DB.prepare(
         `insert into apikey_revocations (key_id, revoked_at, revoked_by)

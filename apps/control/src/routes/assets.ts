@@ -15,12 +15,13 @@ export const assetRoutes = new Hono<AppEnv>();
  * SVG は `<script>` を含みうる(= 配信ドメインでの XSS 経路になる)ので MVP では受けない。
  */
 const AVIF_BRANDS = new Set(["avif", "avis", "mif1", "msf1"]);
-const IMAGE_TYPES: Record<string, { ext: string; magic: (b: Uint8Array) => boolean }> = {
-  "image/png": { ext: "png", magic: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
-  "image/jpeg": { ext: "jpg", magic: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
-  "image/gif": { ext: "gif", magic: (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38 },
+const IMAGE_TYPES: Record<string, { ext: string; label: string; magic: (b: Uint8Array) => boolean }> = {
+  "image/png": { ext: "png", label: "PNG", magic: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
+  "image/jpeg": { ext: "jpg", label: "JPEG", magic: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  "image/gif": { ext: "gif", label: "GIF", magic: (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38 },
   "image/webp": {
     ext: "webp",
+    label: "WebP",
     magic: (b) => b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50,
   },
   // ISO-BMFF: 4 バイトの box size に続く `ftyp`、その次の 4 バイトが major brand。
@@ -28,6 +29,7 @@ const IMAGE_TYPES: Record<string, { ext: string; magic: (b: Uint8Array) => boole
   // brand まで確かめる(`avif` = 静止画、`avis` = シーケンス、`mif1` / `msf1` = AVIF が使う HEIF 系ブランド)
   "image/avif": {
     ext: "avif",
+    label: "AVIF",
     magic: (b) =>
       b[4] === 0x66 &&
       b[5] === 0x74 &&
@@ -38,6 +40,48 @@ const IMAGE_TYPES: Record<string, { ext: string; magic: (b: Uint8Array) => boole
 };
 /** 先頭バイトの判定に必要な最小長(WebP の `WEBP` が 8〜11 バイト目に来る) */
 const MAGIC_BYTES = 12;
+/** 先頭バイトから実際の形式を探す(受け付ける形式のどれでもない・短すぎるときは undefined) */
+const detectImageType = (head: Uint8Array): string | undefined =>
+  head.length < MAGIC_BYTES ? undefined : Object.keys(IMAGE_TYPES).find((mime) => IMAGE_TYPES[mime]!.magic(head));
+const SUPPORTED_LABELS = Object.values(IMAGE_TYPES).map((t) => t.label).join(" / ");
+
+/**
+ * 415 の封筒。backlog B66 / install_review W9: 中身が JPEG の `.png` で、対応形式を並べるだけの hint では原因が分からなかった。
+ * 中身が受け付ける画像で宣言と違うときは、実際の形式を伝える。
+ * - 宣言が受け付ける画像の種類(ブラウザは拡張子から宣言を決める)= 拡張子の不一致なので、合わせるべき拡張子を伝える
+ * - 宣言がそれ以外(空・`application/octet-stream`・`image/jpg` のような非標準の名前)= 拡張子は正しいことがある
+ *   (curl は .webp / .avif を application/octet-stream で送る)ので、拡張子の不一致とは言わず、送るときの Content-Type を伝える
+ * それ以外(受け付ける形式のどれでもない・短すぎる)は不一致と言い切れないので、対応形式を並べる
+ */
+function unsupportedImage(declared: string, head: Uint8Array): ApiError {
+  const detected = detectImageType(head);
+  if (detected && detected !== declared) {
+    const actual = IMAGE_TYPES[detected]!;
+    // IMAGE_TYPES は素のオブジェクトなので、`constructor` などの宣言を受け付ける種類と取り違えないよう hasOwn で見る
+    const declaredImage = Object.hasOwn(IMAGE_TYPES, declared) ? IMAGE_TYPES[declared]! : undefined;
+    if (declaredImage) {
+      return new ApiError(415, "unsupported_media_type", {
+        declared,
+        detected,
+        message: "ファイルの拡張子と、画像の実際の形式が合っていません",
+        hint: `ファイルの中身は ${actual.label} ですが、${declaredImage.label} として送られています。拡張子を実際の形式に合わせて(.${actual.ext})、もう一度アップロードしてください`,
+      });
+    }
+    // 宣言はそのまま書く(API から送った人が Content-Type を探せるように)
+    const sentAs = declared ? `形式の指定が ${declared} になっています` : "形式の指定がないまま送られています";
+    return new ApiError(415, "unsupported_media_type", {
+      declared,
+      detected,
+      message: "画像の形式の指定が、受け付ける画像の種類になっていません",
+      hint: `ファイルの中身は ${actual.label} ですが、${sentAs}。API から送るときは、ファイルの Content-Type を ${detected} にしてください。管理画面から送るときは、ファイル名の拡張子が .${actual.ext} になっているかを確かめてください`,
+    });
+  }
+  return new ApiError(415, "unsupported_media_type", {
+    declared,
+    message: "この画像はアップロードできません",
+    hint: `${SUPPORTED_LABELS} の画像だけをアップロードできます(SVG は受け付けません)。形式は、拡張子とファイルの中身の両方で確かめています`,
+  });
+}
 const DEFAULT_MAX_MB = 5;
 
 const AssetUploadForm = z.object({
@@ -105,11 +149,7 @@ assetRoutes.post(
     const bytes = await file.arrayBuffer();
     const spec = IMAGE_TYPES[file.type];
     const head = new Uint8Array(bytes, 0, Math.min(MAGIC_BYTES, bytes.byteLength));
-    if (!spec || head.length < MAGIC_BYTES || !spec.magic(head))
-      throw new ApiError(415, "unsupported_media_type", {
-        declared: file.type,
-        hint: "PNG / JPEG / GIF / WebP / AVIF の画像だけをアップロードできます(SVG は受け付けません)",
-      });
+    if (!spec || head.length < MAGIC_BYTES || !spec.magic(head)) throw unsupportedImage(file.type, head);
     const id = newId("asset");
     const key = `sites/${site.id}/experiments/${experimentId}/${id}.${spec.ext}`;
     const publicUrl = `${store.publicBase}/${key}`;

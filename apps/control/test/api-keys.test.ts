@@ -90,6 +90,30 @@ describe("api keys (decision 34, spec §13.3)", () => {
     expect((await call("DELETE", `/me/api-keys/${made.id}`, { token: owner.token })).status).toBe(404);
   });
 
+  it("using a revoked key is 401 and does not rewrite revoked_at (B23 ⑩)", async () => {
+    const owner = await setupOwner();
+    const made = await json<{ id: string; key: string }>(await call("POST", "/me/api-keys", { token: owner.token, body: { name: "revoked-use", workspaceId: null } }));
+    expect((await call("DELETE", `/me/api-keys/${made.id}`, { token: owner.token })).status).toBe(204);
+    // 失効の時刻を今と区別できる値にずらす(同じミリ秒で書き直されても見分けられるように)。失効の時刻の正は apikey_revocations(brief K15)
+    const revokedAt = Date.now() - 60_000;
+    await env.DB.prepare(`update apikey_revocations set revoked_at = ? where key_id = ?`).bind(revokedAt, made.id).run();
+    const storedRevokedAt = async () =>
+      (await env.DB.prepare(`select revoked_at from apikey_revocations where key_id = ?`).bind(made.id).first<{ revoked_at: number }>())?.revoked_at;
+    const listedRevokedAt = async () =>
+      (await json<Array<{ id: string; revokedAt: number | null }>>(await call("GET", "/me/api-keys", { token: owner.token }))).find((k) => k.id === made.id)?.revokedAt;
+
+    // enabled = 0 のまま使う(Better Auth が先に断る経路)
+    expect((await call("GET", "/me", { token: made.key })).status).toBe(401);
+    expect(await storedRevokedAt()).toBe(revokedAt);
+    expect(await listedRevokedAt()).toBe(revokedAt);
+
+    // Better Auth の書き戻しで enabled = 1 に戻った鍵を使う(Better Auth が鍵を受け付けて行を書き戻し、control の入口が断る経路)
+    await env.DB.prepare(`update apikey set enabled = 1 where id = ?`).bind(made.id).run();
+    expect((await call("GET", "/me", { token: made.key })).status).toBe(401);
+    expect(await storedRevokedAt()).toBe(revokedAt);
+    expect(await listedRevokedAt()).toBe(revokedAt);
+  });
+
   it("a revoked key is purged on the first listing after 30 days from the revocation (B14)", async () => {
     const owner = await setupOwner();
     const made = await json<{ id: string }>(await call("POST", "/me/api-keys", { token: owner.token, body: { name: "old-revoked", workspaceId: null } }));

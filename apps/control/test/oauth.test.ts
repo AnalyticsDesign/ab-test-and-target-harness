@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { app } from "../src/index";
 import { getAuth } from "../src/auth";
+import { FLOW_RE, NEXT_RE } from "../src/routes/oauth";
 import type { Env } from "../src/env";
 import { TEST_FLOW, call, expectEnvelope, failingD1Insert, googleCallback, googleSignIn, googleStart, json, setupOwner, setupReq, uniqueEmail } from "./helpers";
 
@@ -27,7 +28,8 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
     expect(to.origin + to.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
     expect(to.searchParams.get("redirect_uri")).toBe("http://localhost:8788/auth/callback/google");
     expect(to.searchParams.get("client_id")).toBe("test-google-client-id");
-    expect(res.headers.getSetCookie().some((v) => /state=/.test(v))).toBe(true);
+    // Cookie は名前で見る(`state=` を含むかだけだと、どちらか一方が消えても通る)。Better Auth の state Cookie(R15)と、control の結びつけ Cookie の 2 つ
+    expect(res.headers.getSetCookie().map((v) => v.split("=")[0]).sort()).toEqual(["better-auth.oauth_state", "wtt_oauth_state"]);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await count(`select count(*) as n from verification`)).toBe(before); // R15: state は Cookie
   });
@@ -120,7 +122,8 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
     expect(token).toBeNull();
     const back = new URL(location);
     expect(back.origin + back.pathname).toBe(`${ADMIN}/login`);
-    expect(["not_invited", "unable_to_create_user"]).toContain(back.searchParams.get("error"));
+    // auth.ts のフックが投げる APIError の message が、そのまま error= に載る(Better Auth の link-account の catch)
+    expect(back.searchParams.get("error")).toBe("not_invited");
     expect(await count(`select count(*) as n from "user" where email = ?`, email)).toBe(0);
   });
 
@@ -247,6 +250,14 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
     expect((await call("POST", "/auth/one-time-token/verify", { body: { token: "x" } })).status).toBe(404);
     expect((await call("GET", "/auth/one-time-token/generate")).status).toBe(404);
     expect((await call("GET", "/auth/error")).status).toBe(404);
+  });
+
+  it("NEXT_RE and FLOW_RE stay the same literals as admin's copies (B21)", () => {
+    // 別デプロイなので共有せず、両側の literal をテストで固定する。片方の式だけを変えると、その側のこのテストが落ちて相手に気づける。
+    // 相手: admin の lib/safe-next.ts(NEXT_RE)/ lib/oauth-flow.ts(FLOW_RE)。テストは admin の test/safe-next.test.ts / test/oauth-flow.test.ts。
+    // 式を変えるときは 4 か所(両側の定義とテスト)を同時に変える
+    expect([NEXT_RE.source, NEXT_RE.flags]).toEqual(["^\\/invite\\/[A-Za-z0-9_-]{1,64}$", ""]);
+    expect([FLOW_RE.source, FLOW_RE.flags]).toEqual(["^[A-Za-z0-9_-]{16,64}$", ""]);
   });
 
   it("start answers 503 google_not_configured when the client is not set", async () => {

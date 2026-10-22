@@ -7,9 +7,9 @@ import { ApiError, validationFailed } from "../errors";
 import { issueHandoff, redeemHandoff } from "../handoff";
 import { errorResponses } from "../openapi";
 
-/** ログイン後の戻り先として受けるのは招待ページだけ(open redirect を作らない)。admin の lib/safe-next.ts と同じ式 */
+/** ログイン後の戻り先として受けるのは招待ページだけ(open redirect を作らない)。admin の lib/safe-next.ts と同じ式(両側の literal をテストで固定。B21) */
 export const NEXT_RE = /^\/invite\/[A-Za-z0-9_-]{1,64}$/;
-/** admin が Cookie に入れた flow ID(admin の lib/oauth-flow.ts と同じ式)。control は形だけ見て callbackURL に載せて返す */
+/** admin が Cookie に入れた flow ID(admin の lib/oauth-flow.ts と同じ式。両側の literal をテストで固定。B21)。control は形だけ見て callbackURL に載せて返す */
 export const FLOW_RE = /^[A-Za-z0-9_-]{16,64}$/;
 
 export const oauthRoutes = new Hono<AppEnv>();

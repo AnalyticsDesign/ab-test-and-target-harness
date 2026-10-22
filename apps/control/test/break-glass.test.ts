@@ -20,6 +20,18 @@ describe("break-glass (決定 46 (2)(3))", () => {
     }
   });
 
+  it("sign-out and get-session stay reachable while the door is closed", async () => {
+    // 閉じるのはパスワードの経路だけ(PASSWORD_AUTH_PATHS)。Google でログインした人のログアウトとセッション確認まで 404 にしない
+    const owner = await setupOwner();
+    // 同じ env で扉が閉じていること(パスワードの経路は 404)を先に確かめる
+    expect((await call("POST", "/auth/sign-in/email", { body: { email: owner.email, password: "x" }, headers: ORIGIN })).status).toBe(404);
+    const session = await call("GET", "/auth/get-session", { token: owner.token });
+    expect(session.status).toBe(200);
+    expect(await json(session)).toMatchObject({ user: { email: owner.email } });
+    const out = await call("POST", "/auth/sign-out", { token: owner.token, body: {}, headers: ORIGIN });
+    expect(out.status).toBe(200);
+  });
+
   it("a token shorter than 16 characters keeps everything closed", async () => {
     const short = { envOverride: { AB_BREAK_GLASS_TOKEN: "short-token" } };
     expect((await call("POST", "/auth/sign-in/email", { body: { email: "a@example.com", password: "x" }, headers: ORIGIN, ...short })).status).toBe(404);
@@ -90,9 +102,15 @@ describe("break-glass (決定 46 (2)(3))", () => {
     // nextTestIp() が払い出す 198.18.0.0/15 の外の固定 IP(他のテストと枠を食い合わない)
     const headers = { "cf-connecting-ip": "203.0.113.88" };
     const statuses: number[] = [];
-    for (let i = 0; i < AUTH_RATE_LIMIT + 1; i++) statuses.push((await call("POST", "/break-glass/reset-link", { body: { token: "x".repeat(20), email: "a@example.com" }, headers })).status);
+    let last!: Response;
+    for (let i = 0; i < AUTH_RATE_LIMIT + 1; i++) {
+      last = await call("POST", "/break-glass/reset-link", { body: { token: "x".repeat(20), email: "a@example.com" }, headers });
+      statuses.push(last.status);
+    }
     expect(statuses.slice(0, AUTH_RATE_LIMIT).every((s) => s === 404)).toBe(true);
     expect(statuses[AUTH_RATE_LIMIT]).toBe(429);
+    // 429 も封筒で返す(本文を読むのは 31 回目だけ。窓の数え方に影響しない)
+    expect((await expectEnvelope(last)).error).toBe("rate_limited");
   }, 25_000); // 窓の待ち(最大 10 秒)+ 31 回
 });
 

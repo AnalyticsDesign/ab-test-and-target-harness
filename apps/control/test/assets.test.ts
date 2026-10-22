@@ -3,12 +3,38 @@ import { env } from "cloudflare:workers";
 import { call, json, setupOwner, inviteAndJoin, createSite, createExperiment, expectEnvelope } from "./helpers";
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52]);
+/** JPEG(JFIF)の先頭 16 バイト */
+const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01]);
 function form(bytes: Uint8Array, type: string, experimentId: string, name = "a.png") {
   const fd = new FormData();
   fd.set("file", new File([bytes], name, { type }));
   fd.set("experimentId", experimentId);
   return fd;
 }
+
+/** ファイルのパートに Content-Type を付けない multipart(宣言が空のとき)。FormData では作れない */
+function untypedForm(bytes: Uint8Array, experimentId: string, name: string) {
+  const enc = new TextEncoder();
+  const boundary = "untypedboundary";
+  const parts = [
+    enc.encode(
+      `--${boundary}\r\nContent-Disposition: form-data; name="experimentId"\r\n\r\n${experimentId}\r\n` +
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\n\r\n`,
+    ),
+    bytes,
+    enc.encode(`\r\n--${boundary}--\r\n`),
+  ];
+  const raw = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let offset = 0;
+  for (const p of parts) {
+    raw.set(p, offset);
+    offset += p.length;
+  }
+  return { raw, headers: { "content-type": `multipart/form-data; boundary=${boundary}` } };
+}
+
+/** WebP の先頭 16 バイト(`RIFF` + サイズ + `WEBP` + `VP8 `) */
+const WEBP = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x24, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x20]);
 
 /** ISO-BMFF コンテナの先頭 16 バイト(box size + `ftyp` + major brand + 予備) */
 const isoBmff = (brand: string) =>
@@ -44,6 +70,64 @@ describe("assets (spec §13.7)", () => {
         })
       ).status,
     ).toBe(200);
+  });
+
+  it("asset_upload_415_hint_names_the_actual_format_when_it_differs_from_the_declared_one (B66 / W9)", async () => {
+    const owner = await setupOwner();
+    const { id: sid } = await createSite(owner.token, owner.workspaceId);
+    const { id: eid } = await createExperiment(owner.token, sid);
+    const upload = (bytes: Uint8Array, type: string, name: string) => call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: form(bytes, type, eid, name) });
+    // 中身が JPEG の `.png`(ブラウザは拡張子から image/png を宣言する)。対応形式を並べるだけでは原因が分からない
+    let res = await upload(JPEG, "image/png", "photo.png");
+    expect(res.status).toBe(415);
+    let body = await expectEnvelope(res);
+    expect(body).toMatchObject({ error: "unsupported_media_type", declared: "image/png", detected: "image/jpeg" });
+    expect(body.message).toContain("拡張子");
+    expect(body.hint).toContain("JPEG");
+    expect(body.hint).toContain("PNG");
+    expect(body.hint).toContain(".jpg");
+    // 宣言が受け付ける画像の種類でないとき(curl は .webp / .avif を application/octet-stream で送る・image/jpg は非標準の名前)は、
+    // 拡張子が正しいことがあるので、拡張子の不一致とは言わず、送るときの Content-Type を伝える(宣言はそのまま書く)
+    for (const [bytes, type, name, detected, label] of [
+      [PNG, "text/html", "x.html", "image/png", "PNG"],
+      [WEBP, "application/octet-stream", "photo.webp", "image/webp", "WebP"],
+      [JPEG, "application/octet-stream", "photo.jpg", "image/jpeg", "JPEG"],
+      [JPEG, "image/jpg", "photo.jpg", "image/jpeg", "JPEG"],
+    ] as const) {
+      res = await upload(bytes, type, name);
+      expect(res.status).toBe(415);
+      body = await expectEnvelope(res);
+      expect(body).toMatchObject({ declared: type, detected });
+      expect(body.message).not.toContain("拡張子");
+      expect(body.hint).toContain(`ファイルの中身は ${label} ですが`);
+      expect(body.hint).toContain(type);
+      expect(body.hint).toContain(`Content-Type を ${detected} にしてください`);
+      expect(body.hint).not.toContain("拡張子を実際の形式に合わせて");
+    }
+    // 宣言が空(ファイルのパートに Content-Type が無い)。FormData は空の type を application/octet-stream にするので、multipart を手で組む
+    res = await call("POST", `/sites/${sid}/assets`, { token: owner.token, ...untypedForm(WEBP, eid, "photo.webp") });
+    expect(res.status).toBe(415);
+    body = await expectEnvelope(res);
+    expect(body).toMatchObject({ declared: "", detected: "image/webp" });
+    expect(body.message).not.toContain("拡張子");
+    expect(body.hint).toContain("形式の指定がないまま送られています");
+    expect(body.hint).toContain("Content-Type を image/webp にしてください");
+    expect(body.hint).not.toContain("拡張子を実際の形式に合わせて");
+    // 中身が受け付ける形式のどれでもない・短すぎる: 不一致とは言い切らず、対応形式を並べる
+    for (const [bytes, type, name] of [
+      [new TextEncoder().encode("<svg xmlns='http://www.w3.org/2000/svg'/>"), "image/png", "x.png"],
+      [PNG.slice(0, 8), "image/png", "short.png"],
+    ] as const) {
+      res = await upload(bytes, type, name);
+      expect(res.status).toBe(415);
+      body = await expectEnvelope(res);
+      expect(body.detected).toBeUndefined();
+      expect(body.hint).toContain("PNG / JPEG / GIF / WebP / AVIF");
+      expect(body.hint).not.toContain("ですが");
+      expect(body.hint).toContain("拡張子とファイルの中身の両方で確かめています");
+    }
+    // 拒否された分は R2 に残らない
+    expect((await env.ASSETS!.list({ prefix: `sites/${sid}/` })).objects.length).toBe(0);
   });
 
   it("asset_upload_rejects_non_image_and_over_limit", async () => {
