@@ -22,6 +22,10 @@ export const PARITY_CONFIG: CompiledConfig = compile({
     exp("e_weekday_day", { ctx: "time", days: ["mon", "tue", "wed", "thu", "fri"], from: "09:00", to: "18:00" }),
     exp("e_new", { ctx: "sinceFirstVisit", op: "lt", days: 1 }),
     exp("e_mail", { ctx: "query", name: "utm", op: "contains", value: "mail" }),
+    // B135: prototype にある名前のクエリ。無ければ一致しない(直す前は exists が常に真・contains が TypeError)
+    exp("e_q_ctor", { ctx: "query", name: "constructor", op: "exists" }),
+    exp("e_q_tostring", { ctx: "query", name: "toString", op: "contains", value: "x" }),
+    exp("e_q_proto", { ctx: "query", name: "__proto__", op: "exists" }),
   ],
 });
 
@@ -53,5 +57,10 @@ export const PARITY_CASES: ParityCase[] = [
     name: "パスが 256 字を超える = パスの正規表現は判定しない(e_path_re だけ対象外)",
     url: `https://www.example.com/products/${"1".repeat(260)}`, userAgent: WINDOWS_CHROME, width: 1280, hasViewportMeta: true, now: TUE_10_JST, firstVisitAt: TUE_10_JST - 48 * HOUR,
     expected: ["e_host", "e_wide", "e_weekday_day"],
+  },
+  {
+    name: "prototype にある名前のクエリ(constructor・toString・__proto__)が URL にあれば、その値で判定する(B135)",
+    url: "https://www.example.com/?constructor=1&toString=xx&__proto__=1", userAgent: IPHONE_SAFARI, width: 390, hasViewportMeta: true, now: TUE_10_JST, firstVisitAt: TUE_10_JST - 48 * HOUR,
+    expected: ["e_host", "e_safari", "e_not_windows", "e_weekday_day", "e_q_ctor", "e_q_tostring", "e_q_proto"],
   },
 ];

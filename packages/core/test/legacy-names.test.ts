@@ -49,6 +49,20 @@ describe("withoutLegacyNames", () => {
     expect(out.conversionPayloads!.g_buy!.goalName).toBe("外部の購入");
     expect(out.conversionPayloads!.g_click!.goalName).toBe("CTA クリック");
   });
+  it("legacy_names_fill_payloads_for_ids_named_like_prototype_properties (B135)", () => {
+    // 直す前は byVariant / conversionPayloads が継承した constructor を「既にある」と見て、名前の payload を補わなかった
+    const proto: CompiledConfig = {
+      ...legacy,
+      goals: [{ id: "constructor", name: "目標の名前", type: "CUSTOM", config: {} }],
+      experiments: [{ ...legacy.experiments[0]!, id: "constructor", variants: [{ id: "constructor", name: "案の名前", weight: 100, changes: [] }] }],
+      exposurePayloads: {},
+    };
+    const out = withoutLegacyNames(proto);
+    expect(Object.prototype.hasOwnProperty.call(out.exposurePayloads!, "constructor")).toBe(true);
+    expect(out.exposurePayloads!.constructor!.constructor).toEqual({ experimentId: "constructor", experimentName: "社内のヒーロー検証", variantId: "constructor", variantName: "案の名前", extra: {} });
+    expect(out.conversionPayloads!.constructor).toEqual({ goalId: "constructor", goalName: "目標の名前" });
+    expect(CompiledConfigSchema.parse(out)).toBeTruthy();
+  });
   it("名前の無い config はそのまま返す", () => {
     const clean: CompiledConfig = { ...legacy, goals: [{ id: "g", type: "CUSTOM", config: {} }], experiments: [], exposurePayloads: {} };
     expect(withoutLegacyNames(clean)).toEqual(clean);

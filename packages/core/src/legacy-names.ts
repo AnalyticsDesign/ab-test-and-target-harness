@@ -1,3 +1,4 @@
+import { own } from "./own";
 import type { CompiledConfig } from "./schema";
 import type { ConversionPayload, ExposurePayload } from "./analytics-defaults";
 
@@ -20,20 +21,21 @@ export function withoutLegacyNames(config: CompiledConfig): CompiledConfig {
   if (!hasName) return config;
 
   // (1) 既にある payload は変えない。無い組だけ補う(ID はキーと一致させる。extra は空)
+  // 「既にあるか」は自分のキーだけで見る(ID が `constructor` などのとき継承したものを既にあると見ない。B135)
   const exposurePayloads: Record<string, Record<string, ExposurePayload>> = {};
   for (const e of config.experiments) {
-    const byVariant: Record<string, ExposurePayload> = { ...(config.exposurePayloads?.[e.id] ?? {}) };
+    const byVariant: Record<string, ExposurePayload> = { ...own(config.exposurePayloads ?? {}, e.id) };
     for (const v of e.variants) {
-      byVariant[v.id] ??= { experimentId: e.id, experimentName: e.name ?? e.id, variantId: v.id, variantName: v.name ?? v.id, extra: {} };
+      byVariant[v.id] = own(byVariant, v.id) ?? { experimentId: e.id, experimentName: e.name ?? e.id, variantId: v.id, variantName: v.name ?? v.id, extra: {} };
     }
     exposurePayloads[e.id] = byVariant;
   }
   // experiments に無い experimentId の payload は、そのまま残す(検証は schema の責務)
-  for (const [eid, byVariant] of Object.entries(config.exposurePayloads ?? {})) exposurePayloads[eid] ??= byVariant;
+  for (const [eid, byVariant] of Object.entries(config.exposurePayloads ?? {})) exposurePayloads[eid] = own(exposurePayloads, eid) ?? byVariant;
 
   // (2)
   const conversionPayloads: Record<string, ConversionPayload> = { ...(config.conversionPayloads ?? {}) };
-  for (const g of config.goals) conversionPayloads[g.id] ??= { goalId: g.id, goalName: g.name ?? g.id };
+  for (const g of config.goals) conversionPayloads[g.id] = own(conversionPayloads, g.id) ?? { goalId: g.id, goalName: g.name ?? g.id };
 
   // (3) `name` を落とした新しいオブジェクトにする
   const experiments = config.experiments.map(({ name: _en, variants, ...e }) => ({

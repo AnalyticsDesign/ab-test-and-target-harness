@@ -1,4 +1,5 @@
 import { bucketOf, inTraffic } from "./hash";
+import { own } from "./own";
 import { matchPage, pageOf, type PageView } from "./page";
 import { isValidProgram } from "./regex-run";
 import { inTimeWindow } from "./time";
@@ -73,8 +74,8 @@ export function evaluateDsl(node: DslNode, ctx: PageContext, profile: ProfileSna
   }
   if ("hist" in node) {
     if (profile === null) return null; // 履歴を取れない(DO を使わない経路・取得不能)
-    if (node.hist === "visited") return histMatch(profile.pages[node.pattern], node.min ?? 1, node.withinDays, ctx.now);
-    if (node.hist === "converted") return histMatch(profile.goals[node.goal], 1, node.withinDays, ctx.now);
+    if (node.hist === "visited") return histMatch(own(profile.pages, node.pattern), node.min ?? 1, node.withinDays, ctx.now);
+    if (node.hist === "converted") return histMatch(own(profile.goals, node.goal), 1, node.withinDays, ctx.now);
     return null;
   }
   switch (node.ctx) {
@@ -85,7 +86,8 @@ export function evaluateDsl(node: DslNode, ctx: PageContext, profile: ProfileSna
       // ctx キーを PageMatch に持ち込まないよう、フィールドを明示して組み立てる
       return matchPage({ part: node.ctx, op: node.op, value: node.value, ...(node.prog !== undefined ? { prog: node.prog } : {}) }, page);
     case "query": {
-      const v = ctx.query[node.name];
+      // 名前は編集者が自由に付ける。`constructor` などで prototype のものを拾わない(B135)
+      const v = own(ctx.query, node.name);
       if (node.op === "exists") return v !== undefined;
       // node.value の型の確認は schema を迂回した不正 node への fail-closed(decide_malformed_targeting_never_qualifies)
       if (typeof node.value !== "string") return null;
@@ -156,7 +158,7 @@ export function decide(
     if (matchPage(exp.urlMatch, page) !== true) continue;
     // 判定できない(null)・偽は配信しない。profile 取得不能時の履歴条件も null になる(fail-closed)
     if (exp.targeting && evaluateDsl(exp.targeting, ctx, profile, config.timezone, page) !== true) continue;
-    const persistedVariant = exp.persistAssignment ? persisted?.[exp.id] : undefined;
+    const persistedVariant = exp.persistAssignment && persisted ? own(persisted, exp.id) : undefined;
     const validPersisted =
       persistedVariant !== undefined && exp.variants.some((v) => v.id === persistedVariant)
         ? persistedVariant
@@ -181,7 +183,7 @@ export function experimentUsesInvalidPattern(exp: Experiment, patterns: Compiled
     if ("or" in node) return Array.isArray(node.or) && node.or.some(bad);
     if ("not" in node) return bad(node.not);
     if (!("hist" in node) || node.hist !== "visited") return false;
-    const def = Object.prototype.hasOwnProperty.call(patterns, node.pattern) ? patterns[node.pattern] : undefined;
+    const def = own(patterns, node.pattern);
     if (def === undefined) return true;
     if (page !== undefined && matchPage(def, page) === null) return true;
     if (def.op !== "regex") return false;

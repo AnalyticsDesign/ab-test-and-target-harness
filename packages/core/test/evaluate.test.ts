@@ -333,3 +333,66 @@ describe("決定 49: 新しい条件(設計書 §3 / §8 / §11)", () => {
     expect(experimentsForUrl(config, "https://b.example/").map((e) => e.id)).toEqual(["e_host"]);
   });
 });
+
+describe("B135: 条件の名前・ID が prototype にある名前(constructor・toString・__proto__ など)でも、自分のキーだけを引く", () => {
+  const PROTO_NAMES = ["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"];
+  const noQuery = { url: "https://a.example/", query: {}, device: "desktop" as const, referrer: "" };
+  // runtime・edge・control と同じく URL から Object.fromEntries で作る(`__proto__` も自分のキーになる)
+  const withQuery = (name: string, value: string) => {
+    const url = `https://a.example/?${name}=${value}`;
+    return { ...noQuery, url, query: Object.fromEntries(new URL(url).searchParams) };
+  };
+  // JSON から読んだ Profile と同じ形(`__proto__` も自分のキーになる)
+  const ownHistory = (id: string, lastAt: number) =>
+    JSON.parse(`{"goals":{${JSON.stringify(id)}:{"count":1,"lastAt":${lastAt}}},"pages":{${JSON.stringify(id)}:{"count":2,"lastAt":${lastAt}}}}`) as {
+      goals: Record<string, { count: number; lastAt: number }>;
+      pages: Record<string, { count: number; lastAt: number }>;
+    };
+
+  it.each(PROTO_NAMES)("query_condition_named_%s_does_not_match_prototype_when_absent (B135)", (name) => {
+    expect(evaluateDsl({ ctx: "query", name, op: "exists" }, noQuery, null)).toBe(false); // 直す前は常に true
+    expect(evaluateDsl({ not: { ctx: "query", name, op: "exists" } }, noQuery, null)).toBe(true);
+    expect(evaluateDsl({ ctx: "query", name, op: "equals", value: "x" }, noQuery, null)).toBe(false);
+    expect(evaluateDsl({ ctx: "query", name, op: "contains", value: "x" }, noQuery, null)).toBe(false); // 直す前は TypeError
+  });
+  it.each(PROTO_NAMES)("query_condition_named_%s_matches_own_value_when_present (B135)", (name) => {
+    const c = withQuery(name, "xyz");
+    expect(Object.prototype.hasOwnProperty.call(c.query, name)).toBe(true);
+    expect(evaluateDsl({ ctx: "query", name, op: "exists" }, c, null)).toBe(true);
+    expect(evaluateDsl({ ctx: "query", name, op: "equals", value: "xyz" }, c, null)).toBe(true);
+    expect(evaluateDsl({ ctx: "query", name, op: "equals", value: "x" }, c, null)).toBe(false);
+    expect(evaluateDsl({ ctx: "query", name, op: "contains", value: "y" }, c, null)).toBe(true);
+    expect(evaluateDsl({ ctx: "query", name, op: "contains", value: "q" }, c, null)).toBe(false);
+  });
+  it("decide_with_query_named_constructor_or_toString_does_not_throw_or_match_when_absent (B135)", () => {
+    const config = {
+      needsProfile: false,
+      experiments: [
+        twoVariantExp({ id: "e_ctor", targeting: { ctx: "query", name: "constructor", op: "exists" } }),
+        twoVariantExp({ id: "e_tostr", targeting: { ctx: "query", name: "toString", op: "contains", value: "x" } }),
+        twoVariantExp({ id: "e_plain", targeting: { ctx: "query", name: "utm_source", op: "exists" } }),
+      ],
+    };
+    expect(decide(config, ctx, "A".repeat(22), null).map((r) => r.experimentId)).toEqual(["e_plain"]);
+  });
+  it.each(PROTO_NAMES)("hist_condition_with_id_%s_reads_only_own_history (B135)", (id) => {
+    const empty = { goals: {}, pages: {} };
+    const now = Date.UTC(2026, 9, 22);
+    expect(evaluateDsl({ hist: "converted", goal: id }, ctx, empty)).toBe(false);
+    expect(evaluateDsl({ hist: "converted", goal: id, withinDays: 7 }, { ...ctx, now }, empty)).toBe(false);
+    expect(evaluateDsl({ hist: "visited", pattern: id }, ctx, empty)).toBe(false);
+    expect(evaluateDsl({ hist: "visited", pattern: id, withinDays: 7 }, { ...ctx, now }, empty)).toBe(false);
+    const hit = ownHistory(id, now / 1000);
+    expect(evaluateDsl({ hist: "converted", goal: id, withinDays: 7 }, { ...ctx, now }, hit)).toBe(true);
+    expect(evaluateDsl({ hist: "visited", pattern: id, min: 2 }, ctx, hit)).toBe(true);
+  });
+  it("persisted_assignment_for_experiment_id_constructor_uses_only_own_entry (B135)", () => {
+    const exp = twoVariantExp({ id: "constructor", persistAssignment: true });
+    const config = { needsProfile: true, experiments: [exp] };
+    const vid = "A".repeat(22);
+    const c = { ...ctx, url: "https://example.com/pricing/" };
+    expect(decide(config, c, vid, { goals: {}, pages: {} }, {})).toEqual([{ experimentId: "constructor", variantId: pickVariant(exp, vid) }]);
+    const other = pickVariant(exp, vid) === "vA" ? "vB" : "vA";
+    expect(decide(config, c, vid, { goals: {}, pages: {} }, { constructor: other })).toEqual([{ experimentId: "constructor", variantId: other }]);
+  });
+});
