@@ -13,7 +13,8 @@ import type { UsageVisibility } from "./instance-settings";
  * (API キーの鍵スコープを後から足す場所を 1 箇所に保つため。Task 14 の DoD が `ROLE_RANK` の他所での出現を 0 件に固定する)
  */
 export const ROLE_RANK: Record<Role, number> = { owner: 4, admin: 3, editor: 2, viewer: 1 };
-export const isRole = (v: unknown): v is Role => typeof v === "string" && v in ROLE_RANK;
+// in ではなく Object.hasOwn(constructor などの継承したプロパティ名で true にならないように)
+export const isRole = (v: unknown): v is Role => typeof v === "string" && Object.hasOwn(ROLE_RANK, v);
 export const atLeast = (role: Role, min: Role): boolean => ROLE_RANK[role] >= ROLE_RANK[min];
 
 /** spec §13.5 / Plan 10 B1: 公開履歴の失敗理由の生テキスト(例外文字列)は ADMIN 以上にだけ返す。VIEWER / EDITOR には機械可読コードだけ */

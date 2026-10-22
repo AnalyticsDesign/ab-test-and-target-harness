@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { roleCapFromMetadata } from "../src/roles";
+import { isRole, roleCapFromMetadata } from "../src/roles";
 
 /** backlog B33 / 決定 48 (4): metadata の読み取りは fail-closed。読めない形は VIEWER に落とし、無いときだけ「上限なし」 */
 describe("roleCapFromMetadata (B33, fail-closed)", () => {
@@ -27,5 +27,12 @@ describe("roleCapFromMetadata (B33, fail-closed)", () => {
     expect(roleCapFromMetadata('{"roleCap":"superuser"}')).toBe("viewer");
     expect(roleCapFromMetadata('{"roleCap":"owner"}')).toBe("viewer"); // owner 相当は「上限なし」= null で表す約束なので、値としては不正
     expect(roleCapFromMetadata("{not json")).toBe("viewer");
+  });
+});
+
+describe("isRole", () => {
+  it("only_own_role_names_are_roles", () => {
+    expect(isRole("editor")).toBe(true);
+    expect(isRole("constructor")).toBe(false); // 継承したプロパティ名で true にならない(B134 と同じ形を残さない)
   });
 });

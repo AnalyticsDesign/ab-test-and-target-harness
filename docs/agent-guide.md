@@ -154,6 +154,11 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/goals" -H "Authorization: Bearer $A
 
 ### レシピ 2: 下書きを検証する(公開前に本物のページで見る)
 
+本物のページでパターンを見る方法は 2 つあり、見たいものが設置タグのファイルの compiled config(公開で作る設定)に載っているかどうかで使い分けます。
+
+- **compiled config に載っているエクスペリエンスは、URL だけで見られます(設置タグ経由のプレビュー)**: 設置タグのあるページを `#__ab_preview=<エクスペリエンス ID>:<パターン ID>` 付きの URL で開くと、指定したパターンを強制的に表示します。注入も認証も要りません。複数のエクスペリエンスはカンマ区切りで指定します(`#__ab_preview=exp_a:b,exp_b:a`)。下の注入と同じく完全隔離モードで、指定したエクスペリエンスだけを適用し、Cookie・consent・decision 通信・目標・Exposure に触れません。`window.AB.getPreviewReport()` も下と同じ形で読めます。設置タグは、プレビューの処理を設置タグと同じオリジンの別ファイル `/s/preview/<hash>.js` から読みます(通常の訪問者は読みません)。読めなかったときは何も適用せず元の表示のままにし、`getPreviewReport()` は空配列になります(このレシピの末尾の「`getPreviewReport()` が空配列(`[]`)のとき」)
+- **compiled config に載っていないものは、`draft-bootstrap` を注入します**: compiled config に載るのは配信中(`running`)のエクスペリエンスだけで、内容は最後に公開した時点のものです。下書き・一時停止中のエクスペリエンスを URL だけで指定すると `error: "unknown experiment or variant"` の行になり、配信中のエクスペリエンスの保存しただけで未公開の編集は表示されません。これらは次の手順で見ます
+
 ```bash
 curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/draft-bootstrap" \
   -H "Authorization: Bearer $AB_API_KEY" > /tmp/draft-bootstrap.js
@@ -187,7 +192,7 @@ const report = await page.evaluate(() => window.AB.getPreviewReport());
 - **注入は `addInitScript`(ページのどのスクリプトよりも先に走らせる)**。`page.evaluate` や `page.goto` の後に流し込むと DOM の適用が間に合いません。対象ページに**設置タグがあっても下書きが勝ちます** — runtime は 1 ページ 1 起動で、後から走った設置タグの bootstrap は何もしません(`window.AB` も上書きされません)
 - **CSP を出しているページでは設置タグを消さずに注入してください**。注入したコードには `document.currentScript` が無く nonce を取れないため、runtime は**設置タグの nonce を引き継いで** CSS / HTML の `<script>` / CUSTOM_JS を適用します。設置タグを外したページに注入すると、nonce が要るページでは適用がブロックされます
 
-**`getPreviewReport()` が空配列(`[]`)のとき**: プレビューの処理が動けば、`report` には指定したエクスペリエンスごとに必ず 1 行が入ります(ID の誤りやフラグメントの書式の誤りも、`error` 付きの行になります)。したがって空配列は、プレビューの処理がまだ始まっていないか、始められなかったことを表します。上の手順のように下書きの bootstrap を注入した場合は、プレビューの処理が bootstrap に含まれているので、この状態は読むのが早すぎたときか、下の 2. の `wtt: preview failed` が出たときにしか起きません。始められないことがあるのは、注入せずに、設置タグのあるページを `#__ab_preview=` 付きの URL で開いたとき(設置タグ経由のプレビュー)です。このとき設置タグは、プレビューの処理を設置タグと同じオリジンの別ファイル `/s/preview/<hash>.js` から読みます。読めなかったときは何も適用せず、元の表示のままにします。原因は次の順に確かめます。
+**`getPreviewReport()` が空配列(`[]`)のとき**: プレビューの処理が動けば、`report` には指定したエクスペリエンスごとに必ず 1 行が入ります(ID の誤りやフラグメントの書式の誤りも、`error` 付きの行になります)。したがって空配列は、プレビューの処理がまだ始まっていないか、始められなかったことを表します。上の手順のように下書きの bootstrap を注入した場合は、プレビューの処理が bootstrap に含まれているので、この状態は読むのが早すぎたときか、下の 2. の `wtt: preview failed` が出たときにしか起きません。始められないことがあるのは、このレシピの冒頭で紹介した設置タグ経由のプレビューで、別ファイル `/s/preview/<hash>.js` を読めなかったときです。原因は次の順に確かめます。
 
 1. **読むのが早すぎないか**: 設置タグは別ファイルを、サイト設定の `decisionTimeoutMs`(`GET /sites/:sid` の応答にあります。300〜3000 ミリ秒)まで待ちます。ページの `load` の後にこの時間だけ待ってから、もう一度 `getPreviewReport()` を読んでください。まだ空なら、読み込めなかったと判断します
 2. **Console のメッセージ**: 読み込めなかったときは `wtt: preview unavailable`、読み込んだ後に処理が例外で止まったときは `wtt: preview failed` が出ます。どちらも `console.debug` なので、Chrome の DevTools ではログレベルで Verbose を表示しないと見えません。Playwright では `page.on("console", …)` で、`type()` が `debug` のメッセージとして受け取れます

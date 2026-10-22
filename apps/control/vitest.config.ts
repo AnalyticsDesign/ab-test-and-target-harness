@@ -104,7 +104,8 @@ export default defineConfig(async () => {
       setupFiles: ["./test/apply-migrations.ts"],
       // backlog B132 ②: worker ごとに workerd が 1 本立ち、パスワードの hash(単独でも 3.6 秒かかるテストがある)が CPU を取り合う。
       // 既定の 5 秒では、他の作業と重なって load が上がると時間切れになるので、上限を 15 秒に(個別の指定はそのまま優先される)。
-      // worker 数は既定(コア数 - 1)を 7 で頭打ちにして自分の負荷を少し下げる(10 コアで所要は変わらない。CI の 4 コアは既定の 3 のまま)
+      // worker 数は既定(コア数 - 1)を 7 で頭打ちにして自分の負荷を少し下げる(10 コアで所要は変わらない。CI の 4 コアは既定の 3 のまま)。
+      // 既定のコア数 - 1 は `vitest run` のとき。watch の既定は floor(コア数 / 2) なので、watch ではこの値の方が多くなりうる(10 コアで 5 → 7)
       testTimeout: 15_000,
       maxWorkers: Math.max(1, Math.min(7, availableParallelism() - 1)),
     },

@@ -1271,7 +1271,11 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
     // 0 時の時点で評価時点(開始の 14 日後 = T0 − 6 日)を過ぎた記録の対象。00:00 と 00:15 で同じ対象を使い、
     // 00:00 に 0 行なのが「対象が無いから」ではなく配分によることを、00:15 で同じ対象から 1 行できることで確かめる
     const runId = await dueTest(owner, sid, "exp_b132", T0 - 20 * DAY);
-    // 配分: 0 時の枠(tick 優先)の results-daily は 20 で、記録 1 件の見込み(SNAPSHOT_COST 21 + 位置の書き込み 1)に届かない。00:15 は 26
+    // 配分: 0 時の枠(tick 優先)の results-daily は 20、00:15 の枠(daily 優先)は 26。記録 1 件を始めるには、その時点の残りが
+    // SNAPSHOT_COST 21 + 位置の書き込み 1 = 22 要る。00:00 は位置(loadCursors)1・到達の list 1・記録の list 1 の読み取り 3 を使い、
+    // 残り 17 < 22 なので continued。00:15 は、00:00 に到達の段の終わりの印(#end)を書いてあるので到達の list を読まず、
+    // 読み取り 2 で残り 24 ≥ 22 なので ran。このテストが SNAPSHOT_COST の変化に気づくのは、16 以下(00:00 で記録を作る)か
+    // 24 以上(00:15 でも作れない)のときだけで、17〜23 の変化には気づかない
     expect(allotQueries(CRON_JOBS, new Set(["results-daily"]), T0).get("results-daily")).toBe(20);
     expect(allotQueries(CRON_JOBS, new Set(["results-daily"]), T0 + 15 * MIN).get("results-daily")).toBe(26);
     // 配分は tick のジョブがあって決まるので、登録の全ジョブで走らせる(results-daily だけなら tick 優先の枠でも 26 になる)
