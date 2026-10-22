@@ -147,7 +147,8 @@ assetRoutes.post(
     // 宣言だけでも先頭バイトだけでも足りない。両方が同じ種類を指したときだけ受ける。
     // 本体は 1 回だけ読む(先頭バイト用に slice し直すと 2 度読みになる)
     const bytes = await file.arrayBuffer();
-    const spec = IMAGE_TYPES[file.type];
+    // IMAGE_TYPES は素のオブジェクトなので、`constructor` などの宣言で prototype のプロパティを引かないよう hasOwn で見る(B134)
+    const spec = Object.hasOwn(IMAGE_TYPES, file.type) ? IMAGE_TYPES[file.type] : undefined;
     const head = new Uint8Array(bytes, 0, Math.min(MAGIC_BYTES, bytes.byteLength));
     if (!spec || head.length < MAGIC_BYTES || !spec.magic(head)) throw unsupportedImage(file.type, head);
     const id = newId("asset");

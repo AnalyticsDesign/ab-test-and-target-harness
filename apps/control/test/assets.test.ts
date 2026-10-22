@@ -130,6 +130,24 @@ describe("assets (spec §13.7)", () => {
     expect((await env.ASSETS!.list({ prefix: `sites/${sid}/` })).objects.length).toBe(0);
   });
 
+  it("asset_upload_returns_415_not_500_when_the_declared_type_is_an_object_prototype_name (B134)", async () => {
+    const owner = await setupOwner();
+    const { id: sid } = await createSite(owner.token, owner.workspaceId);
+    const { id: eid } = await createExperiment(owner.token, sid);
+    // 受け付ける種類の表は素のオブジェクト。`constructor` / `__proto__` で引くと prototype のプロパティが返り、
+    // 種類の表の項目と取り違えて 500 になっていた。File の型は小文字にそろう(`toString` は `tostring` になる)ので、
+    // 大文字を含む名前は届かない。中身が受け付ける画像のとき(unsupportedImage の不一致の経路)と、画像でないときの両方を見る
+    for (const type of ["constructor", "__proto__"]) {
+      for (const bytes of [PNG, new TextEncoder().encode("not an image at all")]) {
+        const res = await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: form(bytes, type, eid, "x.png") });
+        expect(res.status).toBe(415);
+        const body = await expectEnvelope(res);
+        expect(body).toMatchObject({ error: "unsupported_media_type", declared: type });
+      }
+    }
+    expect((await env.ASSETS!.list({ prefix: `sites/${sid}/` })).objects.length).toBe(0);
+  });
+
   it("asset_upload_rejects_non_image_and_over_limit", async () => {
     const owner = await setupOwner();
     const { id: sid } = await createSite(owner.token, owner.workspaceId);
