@@ -20,6 +20,11 @@
   "services": [{ "binding": "DEPLOYER", "service": "wtt-deployer", "entrypoint": "Deployer" }],
   // Cron Trigger は control に 1 本だけ。ジョブは src/cron/jobs.ts の登録表に足す(Trigger を増やさない)
   "triggers": { "crons": ["*/15 * * * *"] },
+  // Workers Logs を有効にし、Cron の回の要約(`cron run`)とエラーを後から読めるようにする(docs/operations.md 10 節)。
+  // invocation_logs は止める(呼び出しごとの要求・応答の記録)。要求の URL・ヘッダー(ログインの鍵・OAuth の code、
+  // AB_ASSET_PUBLIC_BASE が /dev-assets の構成では訪問者の要求)を保存しないため。有効にしない。
+  // edge は量が多く訪問者の要求そのものなので有効にしない
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } },
   // edge の結果の記録の予算と、記録の失敗の回数の Durable Object(先に wtt-edge をデプロイしておく)。
   // control は予算で記録の停止・削除の枠・読み取りの予約を扱い、失敗の回数を読む
   "durable_objects": {
