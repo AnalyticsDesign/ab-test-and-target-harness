@@ -30,6 +30,8 @@ const PATHS = {
   // 小さな丸。設定のメニューで「危険な操作」だけ歯車と区別する印
   dot: <circle cx="8" cy="8" r="2.4" />,
   gauge: (<><path d="M2.5 11.5a5.5 5.5 0 1 1 11 0" /><path d="M8 11.5l2.6-3.6" /></>),
+  // チェックの印。アイコンだけのコピーのボタンで、コピーできた間だけコピーのアイコンの代わりに出す
+  check: <path d="M3 8.5l3.2 3.2L13 4.5" />,
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof PATHS;

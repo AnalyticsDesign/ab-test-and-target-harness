@@ -5,9 +5,17 @@
 .crumbs > :last-child { color: var(--text); font-weight: 500; }
 /* B60 D6: 幅が足りないときはパンくずの各項目(長いサイト名のリンク・「サイト ID」の印など)を省略表示にして縮める。
    区切りだけは縮めない(区切りが消えると名前の境目が読めない)。「サイト ID」の印も縮める: 編集者の右側(理由の文が付く)は広く、
-   900px の幅では印を縮めないとパンくずが右側へはみ出す(E2E で確認)。全文はサイト設定の画面で読める */
+   900px の幅では印を縮めないとパンくずが右側へはみ出す(E2E で確認)。全文はサイト設定の画面で読め、印の中のコピーのボタン(B140)でいつでもコピーできる */
 .crumbs > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sep { flex-shrink: 0; color: var(--faint); }
+/* 「サイト ID」の印: 縮むのは中の文字だけで、コピーのボタンは縮めない。印は overflow を切らない(ボタンのフォーカスの印が切れるため)。
+   min-width = 左の余白 8 + 文字との間 2(gap。文字が幅 0 まで縮んでも残る) + ボタン 20 + 右の余白 2 + 枠 2(border-box)。これ以上は縮まず、ボタンが押し出されない */
+.crumbs > .siteId { display: inline-flex; align-items: center; gap: 2px; min-width: 34px; overflow: visible; padding-right: 2px; }
+.siteIdText { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 18px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; }
+.copy:hover { color: var(--text); background: var(--sunken); }
+/* コピーできた間(チェックの印)は成功の色にする(成功は緑。admin_ui_rules の U3) */
+.copy[data-copied] { color: var(--ok); }
 /* 右側(版の札・未公開の編集・公開)は縮めない。縮むのはパンくずの側。overflow は付けない(版の札の一覧が切れる) */
 .state { flex-shrink: 0; display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 .unpublished { color: var(--warn); font-weight: 500; }

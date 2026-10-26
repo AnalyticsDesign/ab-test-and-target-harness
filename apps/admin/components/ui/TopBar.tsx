@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import Link from "next/link";
 import { Icon } from "./Icon";
+import { CopyButton } from "./CopyButton";
 import { Crumb } from "./Crumb";
 import { VersionChip } from "./VersionChip";
 import styles from "./TopBar.module.css";
@@ -26,7 +27,13 @@ export function TopBar({ crumbs, publish }: { crumbs: Array<{ label: string; hre
         ))}
         {publish ? (
           <>
-            <span className="badge mono">サイト ID: {publish.siteId}</span>
+            {/* 印の文字は幅が足りないと省略表示で縮むので、全文は印の中のコピーのボタンでいつでもコピーできるようにする(ボタンは縮めない)。
+                印の外に置くと、狭い幅(編集者の 900px)でパンくずが右側へはみ出すので、アイコンだけにして印の中に入れる。
+                切られた文字の全文は title でも見せる(admin_ui_rules 4.5) */}
+            <span className={`badge mono ${styles.siteId}`}>
+              <span className={styles.siteIdText} title={publish.siteId}>サイト ID: {publish.siteId}</span>
+              <CopyButton text={publish.siteId} label="サイト ID をコピー" className={styles.copy} testId="topbar-site-id-copy" iconOnly />
+            </span>
             <Crumb sepClassName={styles.sep} />
           </>
         ) : null}

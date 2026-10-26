@@ -108,6 +108,26 @@ test("invited editor can edit but cannot publish; the API refuses status changes
     const stateBox = (await editor.getByTestId("topbar-state").boundingBox())!;
     expect(crumbsBox.x + crumbsBox.width).toBeLessThanOrEqual(stateBox.x);
     expect(await crumbs.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    // B140: 「サイト ID」の印の中のコピーのボタン(アイコンだけ)は、狭い幅でも縮まずパンくずの箱の中に見え、
+    // 押すと省略表示に関係なくサイト ID の全文が clipboard に入る。ボタンの名前は CodeBlock と同じく「〜をコピーしました」に変わる
+    {
+      const copy = editor.getByTestId("topbar-site-id-copy");
+      await expect(copy).toHaveAccessibleName("サイト ID をコピー");
+      const copyBox = (await copy.boundingBox())!;
+      expect(copyBox.x).toBeGreaterThanOrEqual(crumbsBox.x);
+      expect(copyBox.x + copyBox.width).toBeLessThanOrEqual(crumbsBox.x + crumbsBox.width + 0.5);
+      expect(await copy.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+      await editor.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: ADMIN_URL });
+      await copy.click();
+      await expect(copy).toHaveAccessibleName("サイト ID をコピーしました");
+      expect(await editor.evaluate(() => navigator.clipboard.readText())).toBe(SITE.id);
+      // 押した場所で結果が分かるよう、2 秒だけアイコンがチェックの印(成功の色)に替わり、その後コピーのアイコンに戻る。
+      // 状態は data-copied で見る(図柄を変えても落ちないよう、アイコンの path は照合しない。どのアイコンかは unit の copyIconName の試験)
+      await expect(copy).toHaveAttribute("data-copied", "true");
+      await expect(copy.locator("svg")).toBeVisible();
+      await expect(copy).not.toHaveAttribute("data-copied");
+      await expect(copy).toHaveAccessibleName("サイト ID をコピー");
+    }
     // 版の札の一覧は、本文列(overflow: hidden)に切られず画面の内側に開き、左端は本文列より左へ出ない。開くとフォーカスは一覧へ移る
     await editor.getByTestId("version-chip").click();
     const recent = editor.getByTestId("version-popover");
