@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- 管理画面のファビコン。角丸の正方形を斜めに 2 枚に分けた形(濃い青 = 元の形 A、薄い青 = 変えた形 B)。
+       色は固定(明るいタブでも暗いタブでも同じに見える)。2 枚の間は塗らない。文字と prefers-color-scheme は使わない -->
+  <clipPath id="r"><rect width="32" height="32" rx="7"/></clipPath>
+  <g clip-path="url(#r)">
+    <path d="M0 0H29.2L0 29.2Z" fill="#2d62c8"/>
+    <path d="M32 2.8V32H2.8Z" fill="#82a5ec"/>
+  </g>
+</svg>

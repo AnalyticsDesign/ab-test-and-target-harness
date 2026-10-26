@@ -23,6 +23,18 @@ test("the login screen leads to Google through the BFF and explains OAuth failur
   await expect(page).toHaveURL(/\/login\?error=oauth_failed$/);
 });
 
+// B141: ファビコン。app/icon.svg を vinext の build が Worker に埋め込み、head に link を足して /icon.svg?<内容のハッシュ> で配る。
+// link はルートの layout が全画面に付けるので、ログインせずに開ける /login で確かめる
+test("the head links the favicon and the Worker serves it as SVG", async ({ page, request }) => {
+  await page.goto("/login");
+  const href = await page.locator('head link[rel="icon"]').getAttribute("href");
+  expect(href).toMatch(/^\/icon\.svg\?/);
+  const res = await request.get(href!);
+  expect(res.status()).toBe(200);
+  expect(res.headers()["content-type"]).toContain("image/svg+xml");
+  expect(await res.text()).toContain('viewBox="0 0 32 32"');
+});
+
 test("the flow cookie is really gone from the browser after the return leg (same-path expiry)", async ({ page, context }) => {
   // Google へは行かず、入口の 302 だけ受けて Cookie を得る
   await page.request.get("/api/session/google", { maxRedirects: 0 });
