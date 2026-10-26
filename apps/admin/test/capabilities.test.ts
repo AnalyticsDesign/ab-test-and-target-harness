@@ -244,6 +244,90 @@ describe("capabilities poll", () => {
     await vi.advanceTimersByTimeAsync(120_000);
     expect(fetchCaps).toHaveBeenCalledTimes(1);
   });
+
+  // B146: 60 秒ごとの取得とタブを戻したときの取得が前後しても、古い応答で帯を古い表示に戻さない(最後に出した要求の応答だけ渡す)
+  describe("overlapping requests", () => {
+    /** 要求ごとに、応答の時機を試験が決められる fetchCaps */
+    const deferredFetch = () => {
+      const pending: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
+      const fetchCaps = vi.fn(() => new Promise<unknown>((resolve, reject) => pending.push({ resolve, reject })));
+      /** i 番目(0 始まり)に出した要求 */
+      const req = (i: number) => {
+        const p = pending[i];
+        if (!p) throw new Error(`request ${i} was not sent`);
+        return p;
+      };
+      return { fetchCaps, req };
+    };
+    /** 2 回取りに行かせる(1 回目は 60 秒ごとの取得、2 回目はタブが前に戻ったときの取得) */
+    const startTwo = async (fetchCaps: () => Promise<unknown>, seen: unknown[]) => {
+      const doc = fakeDoc();
+      const stop = startCapabilitiesPoll({ fetchCaps, onData: (d) => seen.push(d), doc });
+      await vi.advanceTimersByTimeAsync(60_000);
+      doc.fire();
+      return stop;
+    };
+
+    it("drops an earlier request's response that arrives after the later request's", async () => {
+      const { fetchCaps, req } = deferredFetch();
+      const seen: unknown[] = [];
+      const stop = await startTwo(fetchCaps, seen);
+      expect(fetchCaps).toHaveBeenCalledTimes(2);
+      req(1).resolve({ n: 2 });
+      await vi.advanceTimersByTimeAsync(0);
+      req(0).resolve({ n: 1 }); // 先に出した要求の応答が後から着く
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seen).toEqual([{ n: 2 }]);
+      stop();
+    });
+
+    it("passes the later request's response and drops the earlier one even when the earlier arrives first", async () => {
+      const { fetchCaps, req } = deferredFetch();
+      const seen: unknown[] = [];
+      const stop = await startTwo(fetchCaps, seen);
+      req(0).resolve({ n: 1 }); // 新しい要求を出した後なので、先に着いても渡さない
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seen).toEqual([]);
+      req(1).resolve({ n: 2 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seen).toEqual([{ n: 2 }]);
+      stop();
+    });
+
+    it("a failure (null) is passed only for the latest request: an earlier failure is dropped", async () => {
+      const { fetchCaps, req } = deferredFetch();
+      const seen: unknown[] = [];
+      const stop = await startTwo(fetchCaps, seen);
+      req(1).resolve({ n: 2 });
+      await vi.advanceTimersByTimeAsync(0);
+      req(0).reject(new Error("down")); // 古い要求の失敗は渡さない
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seen).toEqual([{ n: 2 }]);
+      stop();
+    });
+
+    it("a failure (null) is passed only for the latest request: the latest failure is passed as null", async () => {
+      const { fetchCaps, req } = deferredFetch();
+      const seen: unknown[] = [];
+      const stop = await startTwo(fetchCaps, seen);
+      req(0).resolve({ n: 1 });
+      req(1).reject(new Error("down"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seen).toEqual([null]); // 呼び出し側が直前の表示を保つ
+      stop();
+    });
+
+    it("stop() drops the responses of every request still in flight", async () => {
+      const { fetchCaps, req } = deferredFetch();
+      const seen: unknown[] = [];
+      const stop = await startTwo(fetchCaps, seen);
+      stop();
+      req(1).resolve({ n: 2 });
+      req(0).resolve({ n: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seen).toEqual([]);
+    });
+  });
 });
 
 // 取得を 1 回にする構造: /capabilities を取りに行くのは useCapabilitiesPoll だけで、CapabilitiesBanners がそれを 1 回呼んで 2 つの帯に値を渡す
