@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit -p fixture/tsconfig.json && (test ! -d s1-probe || tsc --noEmit -p s1-probe/tsconfig.json)"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260831.1",
+    "@cloudflare/workers-types": "^5.20260916.1",
     "@types/node": "^26.4.0",
     "typescript": "^7.0.2"
   }

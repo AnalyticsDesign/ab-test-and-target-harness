@@ -1,4 +1,3 @@
-import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
 import { ADMIN_URL, AUTH_SECRET, BREAK_GLASS_TOKEN, CONTROL_URL, E2E_RESULTS_VISITOR_KEY, SETUP_TOKEN, e2eWranglerEnv } from "./e2e/fixtures";
 
@@ -10,13 +9,6 @@ import { ADMIN_URL, AUTH_SECRET, BREAK_GLASS_TOKEN, CONTROL_URL, E2E_RESULTS_VIS
  * その前段で走る — 理由は `e2e/global-setup.ts` のコメント参照。
  */
 const STATE = "../control/.e2e-state"; // control と edge で共有(KV を共有するため)。edge の package ディレクトリからの相対
-
-/**
- * control と edge も admin(`pnpm preview`)と同じ wrangler で起動する(D9 ③ Task 17 の修正 1)。package.json の版は app ごとに
- * 違う(edge 4.127.1 / control 4.128.0 / admin 4.133.0)が、dev registry で互いの Durable Object を呼ぶプロセスどうしの版をそろえる。
- * package.json は変えず、E2E の起動だけ admin の wrangler を使う
- */
-const WRANGLER = fileURLToPath(new URL("./node_modules/wrangler/bin/wrangler.js", import.meta.url));
 
 /**
  * wrangler の webServer に共通の設定(D9 ③ Task 17 の修正 1)。
@@ -45,13 +37,16 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
-      // `--var` は `.dev.vars` より優先される(wrangler 4.128.0 で実測。4.133.0 でも E2E の値で走ることを確認)。開発者のローカル `.dev.vars` があっても E2E 用の値で走る
+      // control と edge は各 app の wrangler(`pnpm exec`)で起動する。dev registry で互いの Durable Object を呼ぶプロセスどうしの
+      // 版(workerd の build)が違うと RPC が落ちる疑いがあり(D9 ③ では版をそろえてから落ちなくなった)、wrangler の版は apps の
+      // package.json でそろえてある(B92)。D9 ③ Task 17 の修正 1 では E2E の起動だけ admin の wrangler を使っていたが、版がそろったので外した。
+      // `--var` は `.dev.vars` より優先される(wrangler 4.128.0 で実測。apps でそろえた 4.133.0 でも E2E の値で走ることを確認)。開発者のローカル `.dev.vars` があっても E2E 用の値で走る
       // URL 系 3 つも上書きする(wrangler.jsonc の vars は本番値)。
       // 決定 46: E2E は Google を呼べないので、非常用のパスワードログインを開けた状態で起動する(fixtures.ts の login())
       // 決定 52: デプロイ専用の Worker は 2 つ目の -c で同じプロセスに載せる(control の DEPLOYER が確実に繋がる。別プロセス + dev registry だと
       // RPC が「Network connection lost」になる実行があった)。その Worker の vars(偽の API の向き先・偽の鍵)は e2e/deployer.wrangler.jsonc に書く(--var は効かない)
       cwd: "../control",
-      command: `node ${WRANGLER} dev -c wrangler.jsonc -c ../admin/e2e/deployer.wrangler.jsonc --port 8799 --persist-to .e2e-state --var AB_SETUP_TOKEN:${SETUP_TOKEN} --var BETTER_AUTH_SECRET:${AUTH_SECRET} --var AB_ADMIN_URL:${ADMIN_URL} --var AB_CONTROL_URL:${CONTROL_URL} --var AB_ASSET_PUBLIC_BASE:${CONTROL_URL}/dev-assets --var AB_EDGE_ORIGIN:https://wtt-edge.example.workers.dev --var AB_GOOGLE_CLIENT_ID:e2e-google-client-id --var AB_GOOGLE_CLIENT_SECRET:e2e-google-client-secret --var AB_BREAK_GLASS_TOKEN:${BREAK_GLASS_TOKEN} --var CF_USAGE_TOKEN: --var CF_ACCOUNT_ID:`,
+      command: `pnpm exec wrangler dev -c wrangler.jsonc -c ../admin/e2e/deployer.wrangler.jsonc --port 8799 --persist-to .e2e-state --var AB_SETUP_TOKEN:${SETUP_TOKEN} --var BETTER_AUTH_SECRET:${AUTH_SECRET} --var AB_ADMIN_URL:${ADMIN_URL} --var AB_CONTROL_URL:${CONTROL_URL} --var AB_ASSET_PUBLIC_BASE:${CONTROL_URL}/dev-assets --var AB_EDGE_ORIGIN:https://wtt-edge.example.workers.dev --var AB_GOOGLE_CLIENT_ID:e2e-google-client-id --var AB_GOOGLE_CLIENT_SECRET:e2e-google-client-secret --var AB_BREAK_GLASS_TOKEN:${BREAK_GLASS_TOKEN} --var CF_USAGE_TOKEN: --var CF_ACCOUNT_ID:`,
       url: "http://127.0.0.1:8799/",
       ...wranglerServer("control"),
       reuseExistingServer: false,
@@ -61,7 +56,7 @@ export default defineConfig({
       // control と同じディレクトリを指す(= 同じローカル KV と計測用 D1(wtt-results)を読む)。
       // D9 ③(plan ③ の K26): 結果の参加・CV を書くための訪問者の鍵を `--var` で渡す(edge のコードは変えない。無いと書かずに failed を返す)
       cwd: "../edge",
-      command: `node ${WRANGLER} dev --port 8787 --persist-to ${STATE} --var RESULTS_VISITOR_KEY:${E2E_RESULTS_VISITOR_KEY}`,
+      command: `pnpm exec wrangler dev --port 8787 --persist-to ${STATE} --var RESULTS_VISITOR_KEY:${E2E_RESULTS_VISITOR_KEY}`,
       url: "http://127.0.0.1:8787/",
       ...wranglerServer("edge"),
       reuseExistingServer: false,
