@@ -4,6 +4,7 @@ import { loadCapabilities, loadSummary } from "@/lib/loaders";
 import { shouldShowBreakGlassBanner } from "@/lib/capabilities";
 import { BreakGlassBanner } from "@/components/BreakGlassBanner";
 import { CapabilitiesBanners } from "@/components/CapabilitiesBanners";
+import { StaticHealthBanner } from "@/components/StaticHealthBanner";
 import { AppShell } from "@/components/ui/AppShell";
 import { Sidebar } from "@/components/ui/Sidebar";
 import { SettingsOriginProvider } from "@/components/ui/SettingsOrigin";
@@ -28,6 +29,8 @@ export default async function AuthedLayout({ children }: { children: ReactNode }
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
       {/* 凍結(全員の操作に関わるので一番上)と版の帯。取り直しは CapabilitiesBanners の 1 回を共有する。どちらも無いときも常にマウントする(開いていた画面にも取り直しで帯が出るように) */}
       <CapabilitiesBanners initial={caps} />
+      {/* 7o K14: 設置タグの配信ファイルの帯はシステム管理者だけ。状態はクライアントだけが取る(この layout の描画にデプロイ専用の Worker への往復を足さない) */}
+      {user.instanceAdmin ? <StaticHealthBanner /> : null}
       {shouldShowBreakGlassBanner(caps) ? <BreakGlassBanner /> : null}
       <SettingsOriginProvider summary={summary.status === 200 ? summary.data : []}>
         <AppShell sidebar={<Sidebar user={user} />}>{children}</AppShell>

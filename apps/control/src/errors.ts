@@ -137,6 +137,8 @@ export function errorHandler(err: Error, c: Context): Response {
     if (err.code === "usage_not_configured") console.warn(err.code);
     // backlog D13: write_frozen も想定内の状態(作業者が入れた凍結)。どの書き込みを断ったかだけを 1 行の warn で残す
     else if (err.code === "write_frozen") console.warn(err.code, c.req.method, new URL(c.req.url).pathname);
+    // 7o K21: デプロイ専用の Worker の binding が無いのも想定内の状態(ローカル・未導入)。管理画面が 5 分ごとに状態を読むので error にしない
+    else if (err.code === "static_deployer_unavailable" && err.extra.reason === "not_configured") console.warn(err.code);
     else if (err.status >= 500) console.error(err.code, err.extra, err);
     // 4xx でも `detail`(応答に出さない診断情報)があればログに残す。捨てると原因調査の手がかりがどこにも残らない
     else if (err.extra.detail !== undefined) console.warn(err.code, err.extra.detail);

@@ -1,12 +1,23 @@
 import { env } from "cloudflare:workers";
 import { sql } from "kysely";
-import { describe, expect, it } from "vitest";
-import { kvKeys, SITE_REMOVED_SEQ } from "@wtt/core";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { kvKeys, SITE_REMOVED_SEQ, staticInputDigest, type StaticDeployResult } from "@wtt/core";
 import { getDb } from "../src/db";
 import type { Env } from "../src/env";
 import { publishSite, type PublishResult } from "../src/publish";
-import { bootstrapSettingsChanged, reconcileStatic, requestStaticDeploy } from "../src/static-delivery";
-import { call, fakeDeployer, inviteAndJoin, json, setupOwner, statusOf, testEnv } from "./helpers";
+import { bootstrapSettingsChanged, genOf, reconcileStatic, requestStaticDeploy } from "../src/static-delivery";
+import { call, fakeDeployer, inviteAndJoin, json, otherStaticInput, setupOwner, staticInputOf, statusOf, testEnv } from "./helpers";
+
+afterEach(() => vi.restoreAllMocks());
+
+/** console.error を黙らせて、呼ばれた最初の引数(ログの文)を返す */
+function errorLog() {
+  const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+  return { messages: () => spy.mock.calls.map((c) => c[0] as unknown), clear: () => spy.mockClear() };
+}
+const freeze = () =>
+  env.DB.prepare("insert into instance_settings (key, value, updated_at, updated_by) values ('writeFreeze', '{\"reason\":\"r\"}', 1, null) on conflict(key) do nothing").run();
+const unfreeze = () => env.DB.prepare("delete from instance_settings where key = 'writeFreeze'").run();
 
 /** Site を作って 1 回 Publish する(DEPLOYER は無し = skipped)。戻り値は D1 の行 */
 async function publishedSite() {
@@ -218,13 +229,13 @@ describe("static delivery (決定 52)", () => {
 
   it("static_redeploy_does_not_recover_while_new_delete_started", async () => {
     // 作り直しが印を消した後(ルートの最初の UPDATE の後)に、新しい削除が始まって印を立てた状態。
-    // 作り直しの続き(recoverTombstone の出し直し)を直接呼ぶ
+    // 作り直しの続き(recover の出し直し)を直接呼ぶ
     const s = await publishedSite();
     const row = await s.row();
     await s.db.updateTable("sites").set({ static_removing: "token-of-new-delete", static_stale: 1 }).where("id", "=", s.siteId).execute();
     const fake = fakeDeployer();
     fake.setTombstone(row.created_at); // 新しい削除の墓標が受け付けられている
-    const out = await requestStaticDeploy({ ...testEnv, DEPLOYER: fake }, s.db, s.siteId, { force: true, recoverTombstone: true });
+    const out = await requestStaticDeploy({ ...testEnv, DEPLOYER: fake }, s.db, s.siteId, { force: true, recover: true });
     expect(out.state).toBe("pending"); // 配信を戻さない
     expect(fake.deploys).toHaveLength(1); // 墓標の結果の後に出し直しの依頼を出さない
     const after = await s.row();
@@ -284,7 +295,7 @@ describe("static delivery (決定 52)", () => {
     await s.db.updateTable("sites").set({ static_epoch: old.created_at + 1 }).where("id", "=", s.siteId).execute();
     const fake = fakeDeployer();
     fake.setStatus(statusOf({ epoch: old.created_at, seq: old.static_seq })); // 前の epoch の世代が配られている
-    expect(await reconcileStatic({ ...testEnv, DEPLOYER: fake }, s.db, old, () => {})).toBe(true);
+    expect(await reconcileStatic({ ...testEnv, DEPLOYER: fake }, s.db, old, () => {})).toEqual({ stale: true, mismatch: false });
     expect((await s.row()).static_stale).toBe(1); // 前の epoch の結果では下ろさない
   });
 
@@ -390,10 +401,26 @@ describe("static delivery (決定 52)", () => {
     const s = await publishedSite(); // DEPLOYER 無しの Publish なので stale
     const row = await s.row();
     const fake = fakeDeployer();
-    fake.setStatus(statusOf({ epoch: row.created_at, seq: row.static_seq }));
+    // 配られている世代が D1 の今の世代と同じで、中身(入力の digest)も D1 の今の入力と同じ(7o K23)
+    const digest = await staticInputDigest(await staticInputOf(s.siteId));
+    fake.setStatus({ ...statusOf({ epoch: row.created_at, seq: row.static_seq }), acceptedDigest: digest, deployedDigest: digest });
     const got = await json(await call("GET", `/sites/${s.siteId}`, { token: s.token, envOverride: { DEPLOYER: fake } }));
     expect(got.staticStale).toBe(false);
+    expect(got.staticMismatch).toBe(false);
     expect((await s.row()).static_stale).toBe(0);
+  });
+
+  it("get_site_keeps_static_stale_when_deployer_digest_is_unknown", async () => {
+    // 7o K23: 世代が同じでも、デプロイ専用の Worker の digest が分からない(古い応答)なら「配信済み」にしない(世代だけで判定しない)
+    const s = await publishedSite();
+    const row = await s.row();
+    const fake = fakeDeployer();
+    fake.setStatus(statusOf({ epoch: row.created_at, seq: row.static_seq }));
+    const got = await json(await call("GET", `/sites/${s.siteId}`, { token: s.token, envOverride: { DEPLOYER: fake } }));
+    expect(got.staticStale).toBe(true);
+    expect(got.staticMismatch).toBe(false);
+    expect((await s.row()).static_stale).toBe(1);
+    expect(fake.deploys).toHaveLength(0); // 受け付け済みなので依頼し直さない
   });
 
   it("GET の自己修復: デプロイ専用の Worker に依頼が届いていなければ依頼し直す(移行の直後)", async () => {
@@ -440,5 +467,262 @@ describe("static delivery (決定 52)", () => {
     const a = await s.row();
     expect(bootstrapSettingsChanged(a, { ...a, name: "x" })).toBe(false);
     expect(bootstrapSettingsChanged(a, { ...a, consent_mode: a.consent_mode === "implicit" ? "required" : "implicit" })).toBe(true);
+  });
+});
+
+describe("デプロイ専用の Worker が D1 より先行・同じ世代で中身が違う(7o K5〜K8・K23)", () => {
+  it("settle_does_not_clear_stale_when_deployer_is_ahead", async () => {
+    const s = await publishedSite(); // DEPLOYER 無しの Publish なので stale
+    const row = await s.row();
+    const fake = fakeDeployer();
+    const ahead = { epoch: genOf(row).epoch, seq: row.static_seq + 10 };
+    fake.setSite(s.siteId, { accepted: ahead, deployed: ahead });
+    const log = errorLog();
+    const out = await requestStaticDeploy({ ...testEnv, DEPLOYER: fake }, s.db, s.siteId);
+    expect(out.state).toBe("pending");
+    const after = await s.row();
+    expect(after.static_stale).toBe(1);
+    expect(after.static_served_version).toBe(row.static_served_version);
+    expect(log.messages()).toContain("static generation ahead of D1");
+  });
+
+  it("same_generation_with_different_content_is_not_reported_deployed", async () => {
+    // D1 を戻して seq が同じ値に戻り、デプロイ専用の Worker は同じ世代で前の中身を持っている。送った世代と同じ世代の別の digest が返る
+    const s = await publishedSite();
+    const row = await s.row();
+    const fake = fakeDeployer();
+    const original = fake.redeploySite;
+    fake.redeploySite = async (req) => {
+      fake.redeploySite = original; // 一度だけ
+      fake.deploys.push(req);
+      const r: StaticDeployResult = { state: "deployed", accepted: req.generation, deployed: req.generation, deployedAt: new Date().toISOString(), acceptedDigest: "other", deployedDigest: "other" };
+      return r;
+    };
+    const log = errorLog();
+    const out = await requestStaticDeploy({ ...testEnv, DEPLOYER: fake }, s.db, s.siteId);
+    expect(out).toMatchObject({ state: "pending", deployedAt: null });
+    const after = await s.row();
+    expect(after.static_stale).toBe(1); // 下ろさず食い違いにする
+    expect(after.static_served_version).toBe(row.static_served_version);
+    expect(log.messages()).toContain("static content differs at the same generation");
+    // 続く作り直しは D1 の seq を進めた新しい世代を送るので、受け付けられて直る(epoch は進めない)
+    const res = await call("POST", `/sites/${s.siteId}/static/redeploy`, { token: s.token, envOverride: { DEPLOYER: fake } });
+    expect(await json(res)).toEqual({ staticDeploy: "deployed" });
+    const fixed = await s.row();
+    expect(fixed.static_stale).toBe(0);
+    expect(fixed.static_epoch).toBe(row.static_epoch);
+  });
+
+  it("static_redeploy_advances_epoch_on_same_generation_collision", async () => {
+    // 作り直しが次に割り当てる世代(D1 の今の seq + 1)と同じ世代・別の中身を、デプロイ専用の Worker が持っている
+    const s = await publishedSite();
+    const row = await s.row();
+    const fake = fakeDeployer();
+    const next = { epoch: genOf(row).epoch, seq: row.static_seq + 1 };
+    fake.setSite(s.siteId, { accepted: next, deployed: next, acceptedDigest: "other", deployedDigest: "other" });
+    const log = errorLog();
+    const res = await call("POST", `/sites/${s.siteId}/static/redeploy`, { token: s.token, envOverride: { DEPLOYER: fake } });
+    expect(res.status).toBe(200);
+    expect(await json(res)).toEqual({ staticDeploy: "deployed" });
+    // 最初の依頼は同じ世代の衝突として捨てられ、epoch を進めて 1 回だけ出し直す
+    expect(fake.deploys).toHaveLength(2);
+    expect(fake.deploys[0]!.generation).toEqual(next);
+    expect(fake.deploys[1]!.generation.epoch).toBe(next.epoch + 1);
+    expect(log.messages()).toContain("static content differs at the same generation");
+    const after = await s.row();
+    expect(after.static_epoch).toBe(next.epoch + 1);
+    expect(after.static_stale).toBe(0);
+  });
+
+  it("legacy_record_same_generation_with_different_content_is_not_reported_deployed", async () => {
+    // digest の無い古い形の記録: デプロイ専用の Worker は D1 が次に送る世代を前の中身で持ち、digest は保存済みの入力から補う
+    const s = await publishedSite();
+    const row = await s.row();
+    const fake = fakeDeployer();
+    const next = { epoch: genOf(row).epoch, seq: row.static_seq + 1 };
+    fake.setSite(s.siteId, { accepted: next, deployed: next, input: otherStaticInput(await staticInputOf(s.siteId)) });
+    errorLog();
+    const out = await requestStaticDeploy({ ...testEnv, DEPLOYER: fake }, s.db, s.siteId);
+    expect(out.state).toBe("pending"); // digest が不明なことを理由に世代だけで「配信済み」にしない
+    const after = await s.row();
+    expect(after.static_stale).toBe(1);
+    expect(after.static_served_version).toBe(row.static_served_version);
+    // 作り直しで直る(D1 の新しい世代が受け付けられる)
+    const res = await call("POST", `/sites/${s.siteId}/static/redeploy`, { token: s.token, envOverride: { DEPLOYER: fake } });
+    expect(await json(res)).toEqual({ staticDeploy: "deployed" });
+    expect((await s.row()).static_stale).toBe(0);
+  });
+
+  it("accepted_ahead_keeps_stale_even_when_deployed_matches_d1", async () => {
+    // 配られている世代は D1 の今の世代(中身も同じ)だが、受け付け済みはそれより新しい(D1 を読み直しても追いついていない)
+    const s = await publishedSite();
+    const row = await s.row();
+    const epoch = genOf(row).epoch;
+    const fake = fakeDeployer("pending"); // 先行した世代は配り終えていない
+    const digest = await staticInputDigest(await staticInputOf(s.siteId));
+    fake.setSite(s.siteId, { accepted: { epoch, seq: row.static_seq + 5 }, deployed: { epoch, seq: row.static_seq + 1 }, deployedDigest: digest });
+    const log = errorLog();
+    const out = await requestStaticDeploy({ ...testEnv, DEPLOYER: fake }, s.db, s.siteId);
+    expect(out.state).toBe("pending");
+    expect(log.messages()).toContain("static generation ahead of D1");
+    const now = await s.row();
+    expect(now.static_seq).toBe(row.static_seq + 1);
+    expect(now.static_stale).toBe(1);
+    // 自己修復も下ろさず、食い違いを返す。依頼し直さず、ログも出さない(出すのは settle だけ)
+    log.clear();
+    expect(await reconcileStatic({ ...testEnv, DEPLOYER: fake }, s.db, now, () => {})).toEqual({ stale: true, mismatch: true });
+    expect((await s.row()).static_stale).toBe(1);
+    expect(fake.deploys).toHaveLength(1);
+    expect(log.messages()).toEqual([]);
+  });
+
+  it("墓標が先行しているサイトの reconcileStatic は食い違いを返す", async () => {
+    const s = await publishedSite();
+    const row = await s.row();
+    const fake = fakeDeployer();
+    fake.setTombstone(row.created_at);
+    expect(await reconcileStatic({ ...testEnv, DEPLOYER: fake }, s.db, row, () => {})).toEqual({ stale: true, mismatch: true });
+    expect(fake.deploys).toHaveLength(0);
+  });
+
+  it("公開履歴の無いサイトの reconcileStatic は依頼し直さない", async () => {
+    const s = await publishedSite();
+    const row = await s.row();
+    await sql`delete from publishes where site_id = ${s.siteId} and version = ${row.active_version}`.execute(s.db);
+    const fake = fakeDeployer(); // 何も受け付けていない(届いていなければ依頼し直す状態)
+    const log = errorLog();
+    const waits: Promise<unknown>[] = [];
+    expect(await reconcileStatic({ ...testEnv, DEPLOYER: fake }, s.db, row, (p) => waits.push(p))).toEqual({ stale: true, mismatch: false });
+    await Promise.all(waits);
+    expect(fake.deploys).toHaveLength(0);
+    expect(fake.removes).toHaveLength(0);
+    expect((await s.row()).static_seq).toBe(row.static_seq);
+    expect(log.messages()).toEqual([]);
+  });
+
+  it("reconcile_reports_mismatch_when_deployer_is_ahead", async () => {
+    const s = await publishedSite(); // stale
+    const row = await s.row();
+    const fake = fakeDeployer();
+    fake.setStatus(statusOf({ epoch: genOf(row).epoch, seq: row.static_seq + 10 }));
+    const log = errorLog();
+    expect(await reconcileStatic({ ...testEnv, DEPLOYER: fake }, s.db, row, () => {})).toEqual({ stale: true, mismatch: true });
+    expect(fake.deploys).toHaveLength(0);
+    expect(log.messages()).toEqual([]);
+    const got = await json(await call("GET", `/sites/${s.siteId}`, { token: s.token, envOverride: { DEPLOYER: fake } }));
+    expect(got.staticMismatch).toBe(true);
+    expect(got.staticStale).toBe(true);
+  });
+
+  it("reconcile_does_not_report_mismatch_for_concurrent_newer_request", async () => {
+    const s = await publishedSite();
+    const row = await s.row(); // seq = n で読んだ
+    // 読んだ後に別の依頼が D1 の seq を n + 1 に進め、デプロイ専用の Worker がそれを受け付けて配った
+    await s.db.updateTable("sites").set({ static_seq: row.static_seq + 1 }).where("id", "=", s.siteId).execute();
+    const fake = fakeDeployer();
+    fake.setStatus(statusOf({ epoch: genOf(row).epoch, seq: row.static_seq + 1 }));
+    const log = errorLog();
+    expect(await reconcileStatic({ ...testEnv, DEPLOYER: fake }, s.db, row, () => {})).toEqual({ stale: true, mismatch: false });
+    expect(log.messages()).toEqual([]);
+    expect((await s.row()).static_stale).toBe(1); // 下ろすのは n + 1 の依頼の側
+    expect(fake.deploys).toHaveLength(0);
+  });
+
+  it("別の依頼に追い越された古い依頼は pending で、印を下ろさずログも出さない", async () => {
+    const s = await publishedSite();
+    const fake = fakeDeployer();
+    const original = fake.redeploySite;
+    fake.redeploySite = async (req) => {
+      fake.redeploySite = original; // 一度だけ
+      // 受け付けの直前に、別の依頼が D1 の seq を進めて受け付けられた
+      await s.db.updateTable("sites").set({ static_seq: sql<number>`static_seq + 1` }).where("id", "=", s.siteId).execute();
+      return original({ ...req, generation: { epoch: req.generation.epoch, seq: req.generation.seq + 1 } });
+    };
+    const log = errorLog();
+    const out = await requestStaticDeploy({ ...testEnv, DEPLOYER: fake }, s.db, s.siteId);
+    expect(out).toMatchObject({ state: "pending", deployedAt: null });
+    expect((await s.row()).static_stale).toBe(1);
+    expect(log.messages()).toEqual([]);
+  });
+
+  it("static_redeploy_advances_epoch_when_deployer_is_ahead", async () => {
+    const s = await publishedSite();
+    const row = await s.row();
+    const fake = fakeDeployer();
+    const ahead = { epoch: genOf(row).epoch, seq: row.static_seq + 10 };
+    fake.setSite(s.siteId, { accepted: ahead, deployed: ahead });
+    errorLog();
+    const res = await call("POST", `/sites/${s.siteId}/static/redeploy`, { token: s.token, envOverride: { DEPLOYER: fake } });
+    expect(res.status).toBe(200);
+    expect(await json(res)).toEqual({ staticDeploy: "deployed" });
+    const after = await s.row();
+    expect(after.static_epoch).toBe(ahead.epoch + 1);
+    expect(after.static_stale).toBe(0);
+    expect(fake.deploys).toHaveLength(2);
+    expect(fake.deploys[1]!.force).toBe(true);
+  });
+
+  it("static_redeploy_does_not_recover_while_new_delete_started: 先行のときも epoch を進めない", async () => {
+    const s = await publishedSite();
+    const row = await s.row();
+    await s.db.updateTable("sites").set({ static_removing: "token-of-new-delete", static_stale: 1 }).where("id", "=", s.siteId).execute();
+    const fake = fakeDeployer();
+    fake.setSite(s.siteId, { accepted: { epoch: genOf(row).epoch, seq: row.static_seq + 10 }, deployed: null });
+    errorLog();
+    const out = await requestStaticDeploy({ ...testEnv, DEPLOYER: fake }, s.db, s.siteId, { force: true, recover: true });
+    expect(out.state).toBe("pending");
+    expect(fake.deploys).toHaveLength(1);
+    const after = await s.row();
+    expect(after.static_epoch).toBe(row.static_epoch);
+    expect(after.static_removing).toBe("token-of-new-delete");
+  });
+
+  it("static_deploy_without_publish_record_does_not_remove_file", async () => {
+    const s = await publishedSite();
+    const row = await s.row();
+    await sql`delete from publishes where site_id = ${s.siteId} and version = ${row.active_version}`.execute(s.db);
+    const fake = fakeDeployer();
+    const log = errorLog();
+    const out = await requestStaticDeploy({ ...testEnv, DEPLOYER: fake }, s.db, s.siteId);
+    expect(out).toMatchObject({ state: "pending", version: null, deployedAt: null, digest: null });
+    expect(fake.removes).toHaveLength(0);
+    expect(fake.deploys).toHaveLength(0);
+    expect((await s.row()).static_stale).toBe(1);
+    expect(log.messages()).toContain("static deploy skipped: active version has no publish record");
+  });
+
+  it("site_delete_returns_204_with_pending_tombstone", async () => {
+    // 墓標を受け付けて配置は再試行中(pending)でも、削除へ進む(B57 (g))
+    const s = await publishedSite();
+    const fake = fakeDeployer("pending");
+    expect((await call("DELETE", `/sites/${s.siteId}`, { token: s.token, envOverride: { DEPLOYER: fake } })).status).toBe(204);
+    expect(await s.db.selectFrom("sites").select("id").where("id", "=", s.siteId).executeTakeFirst()).toBeUndefined();
+    expect(await env.CONFIG_KV.get(kvKeys.settings(s.siteId))).toBeNull();
+    expect(fake.removes[0]!.generation.seq).toBe(SITE_REMOVED_SEQ);
+  });
+
+  it("workspace_delete_returns_204_with_pending_tombstone", async () => {
+    const s = await publishedSite();
+    await call("POST", "/workspaces", { token: s.token, body: { name: "Keeper" } }); // 最後の 1 つは消せない
+    const fake = fakeDeployer("pending");
+    expect((await call("DELETE", `/workspaces/${s.workspaceId}`, { token: s.token, envOverride: { DEPLOYER: fake } })).status).toBe(204);
+    expect(await s.db.selectFrom("organization").select("id").where("id", "=", s.workspaceId).executeTakeFirst()).toBeUndefined();
+    expect(await s.db.selectFrom("sites").select("id").where("id", "=", s.siteId).executeTakeFirst()).toBeUndefined();
+    expect(fake.removes[0]!.generation.seq).toBe(SITE_REMOVED_SEQ);
+  });
+
+  it("凍結中の GET /sites/:sid は staticMismatch: false(問い合わせない)", async () => {
+    const s = await publishedSite();
+    const row = await s.row();
+    const fake = fakeDeployer();
+    fake.setStatus(statusOf({ epoch: genOf(row).epoch, seq: row.static_seq + 10 })); // 解除していれば食い違い
+    await freeze();
+    try {
+      const got = await json(await call("GET", `/sites/${s.siteId}`, { token: s.token, envOverride: { DEPLOYER: fake } }));
+      expect(got.staticStale).toBe(true);
+      expect(got.staticMismatch).toBe(false);
+    } finally {
+      await unfreeze();
+    }
   });
 });

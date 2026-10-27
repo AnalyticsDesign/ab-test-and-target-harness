@@ -13,6 +13,7 @@ import { kvKeys } from "@wtt/core";
 import { siteSettingsRefreshJob } from "../src/cron/site-settings-refresh";
 import { breakGlassSweep } from "../src/cron/break-glass-sweep";
 import { configCleanupJob } from "../src/cron/config-cleanup";
+import { staticReconcileJob } from "../src/cron/static-reconcile";
 import { publishSite } from "../src/publish";
 import { siteToSettings } from "../src/site-settings";
 import { call, createExperiment, createSite, failingKv, fakeDeployer, runDirect, setupOwner, siteRow, siteWithRunning, testEnv, TEXT_CHANGE } from "./helpers";
@@ -167,7 +168,7 @@ describe("cron runner (D9 ② K5・K6)", () => {
 
   it("registers the account guard in CRON_JOBS", () => {
     // D9 ③(K17): 結果のジョブ 5 本を results-account-guard の後に、この順で(どれも wtt-control に書く)
-    expect(CRON_JOBS).toEqual([resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob]);
+    expect(CRON_JOBS).toEqual([resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob, staticReconcileJob]);
     expect(CRON_JOBS.slice(1).map((j) => [j.name, j.cadence, j.writesControl])).toEqual([
       ["results-delivery", { every: "tick" }, true],
       ["results-collect-until", { every: "tick" }, true],
@@ -177,10 +178,12 @@ describe("cron runner (D9 ② K5・K6)", () => {
       ["site-settings-refresh", { daily: { afterUtcHour: 0 } }, true],
       ["break-glass-sweep", { every: "tick" }, true],
       ["config-cleanup", { daily: { afterUtcHour: 1 } }, true],
+      ["static-reconcile", { every: "tick" }, true],
     ]);
     // plan12 K13: 配分(queryShare)を持たない(結果のジョブの配分表を変えない)
     expect(breakGlassSweep.queryShare).toBeUndefined();
     expect(configCleanupJob.queryShare).toBeUndefined();
+    expect(staticReconcileJob.queryShare).toBeUndefined(); // 7o K13
     expect(resultsAccountGuard).toMatchObject({ name: "results-account-guard", cadence: { every: "tick" }, writesControl: false });
   });
 });
@@ -423,11 +426,11 @@ describe("config-cleanup (plan12 K14 (b))", () => {
     return sid;
   }
 
-  it("is registered last as a daily job that writes control and has no query share", () => {
+  it("is registered as a daily job that writes control and has no query share (static-reconcile follows it, 7o K13)", () => {
     expect(new Date(T).getUTCHours()).toBeGreaterThanOrEqual(1);
     expect(configCleanupJob).toMatchObject({ name: "config-cleanup", cadence: { daily: { afterUtcHour: 1 } }, writesControl: true });
     expect(configCleanupJob.queryShare).toBeUndefined();
-    expect(CRON_JOBS.at(-1)).toBe(configCleanupJob);
+    expect(CRON_JOBS.at(-2)).toBe(configCleanupJob);
   });
 
   it("deletes the retired versions on a day without a publish and keeps the served one", async () => {

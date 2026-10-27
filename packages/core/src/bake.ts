@@ -1,6 +1,6 @@
 import type { CompiledConfig } from "./schema";
 import { withoutLegacyNames } from "./legacy-names";
-import { toRuntimeSettings, type SiteSettings } from "./settings";
+import { toRuntimeSettings, type RuntimeSettings, type SiteSettings } from "./settings";
 
 /**
  * 決定 50: bootstrap(`/s/<siteId>.js` の応答)の大きさの上限。全体は新しい接続の最初の往復(初期ウィンドウ 約 14KB)に収める。
@@ -14,6 +14,19 @@ export const BOOTSTRAP_LIMITS = { totalBytes: 14336, headerAllowance: 512, runti
 export type BakeOptions = { previewSource?: string; apiBase?: string | null; runtimeHash?: string };
 
 /**
+ * bootstrap に焼く boot payload(`self.__WTT_BOOT__` の中身)。`bakeBootstrap` と `staticInputDigest`(static-deploy.ts)が共有する。
+ * B77(K6): 古い config(名前付き)でも、焼く本文には名前を入れない。settings は runtime 向けサブセット(toRuntimeSettings)だけ。
+ * apiBase は値があるときだけ入れる(null・空文字・省略は入れない)
+ */
+export function bootPayload(
+  config: CompiledConfig,
+  settings: SiteSettings,
+  apiBase?: string | null,
+): { config: CompiledConfig; settings: RuntimeSettings; apiBase?: string } {
+  return { config: withoutLegacyNames(config), settings: toRuntimeSettings(settings), ...(apiBase ? { apiBase } : {}) };
+}
+
+/**
  * spec §9.4 / §5.4 / §20: runtime.js + compiled config + Identity 設定(runtime 向けサブセット)を 1 ファイルに連結する純関数。
  * KV / R2 / API へのアクセスは呼び出し側(デプロイ専用の Worker・control の下書きの bootstrap とサイズの警告)。決定 52
  * previewSource(決定 50)は下書きの bootstrap(control の draft-bootstrap)だけが渡す。本番の bootstrap はプレビューを別ファイルから読む。
@@ -21,8 +34,7 @@ export type BakeOptions = { previewSource?: string; apiBase?: string | null; run
  * 出力形式(options なし)は edge の serveBootstrap が Plan 3 まで生成していた body と同一(bootstrap.test.ts が固定する)
  */
 export function bakeBootstrap(config: CompiledConfig, settings: SiteSettings, runtimeSource: string, opts: BakeOptions = {}): string {
-  // B77(K6): 古い config(名前付き)でも、焼く本文には名前を入れない。出力(dataLayer)は変えない
-  const boot = JSON.stringify({ config: withoutLegacyNames(config), settings: toRuntimeSettings(settings), ...(opts.apiBase ? { apiBase: opts.apiBase } : {}) });
+  const boot = JSON.stringify(bootPayload(config, settings, opts.apiBase));
   const preview = opts.previewSource === undefined ? "" : `${opts.previewSource}\n`;
   const runtime = opts.runtimeHash ? `, runtime ${opts.runtimeHash}` : "";
   return `/* AB Test and Target Harness bootstrap (site ${config.siteId}, config v${config.version}${runtime}) */\n${preview}self.__WTT_BOOT__=${boot};\n${runtimeSource}`;

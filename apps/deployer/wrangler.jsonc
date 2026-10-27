@@ -9,6 +9,11 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DeployQueue"] }],
   // 毎時 1 回。Cron の実行は Worker のリクエストに数えられるので頻度を上げない
   "triggers": { "crons": ["17 * * * *"] },
+  // Workers Logs を有効にし、配置の失敗(`static deploy failed`)・焼き直しの失敗(`static rebake failed`)・
+  // まとめた受け付けで焼けなかったサイト(`static batch site rejected`)を後から読めるようにする(docs/operations.md 10 節)。
+  // invocation_logs は止める(呼び出しごとの要求・応答の記録)。この Worker は管理用の Worker の RPC と Cron だけを受けるが、
+  // 要求の中身(config・settings)を保存しないよう管理用の Worker と形をそろえる。有効にしない
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } },
   "vars": {
     // 導入するアカウントの Account ID に置き換える(docs/deploy.md)
     "CF_ACCOUNT_ID": "00000000000000000000000000000000",

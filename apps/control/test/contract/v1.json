@@ -2469,6 +2469,9 @@
                   "minimum": -9007199254740991,
                   "type": "integer"
                 },
+                "staticMismatch": {
+                  "type": "boolean"
+                },
                 "staticRemoving": {
                   "type": "boolean"
                 },
@@ -2522,6 +2525,7 @@
                 "resultsEnabled",
                 "resultsRetentionDays",
                 "retentionDays",
+                "staticMismatch",
                 "staticRemoving",
                 "staticStale",
                 "timezone",
@@ -9212,6 +9216,187 @@
             }
           },
           "422": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          }
+        }
+      },
+      "GET /static/status": {
+        "parameters": {},
+        "responses": {
+          "200": {
+            "application/json": {
+              "properties": {
+                "failures": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "lastDeployedAt": {
+                  "type": [
+                    "null",
+                    "number"
+                  ]
+                },
+                "lastError": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "mismatchSites": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "needsAttention": {
+                  "type": "boolean"
+                },
+                "pendingSites": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "publishedSites": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "removingInD1": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "removingSites": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "undeliveredSites": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "unknownSites": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "unpublishedWithFiles": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "failures",
+                "lastDeployedAt",
+                "lastError",
+                "mismatchSites",
+                "needsAttention",
+                "pendingSites",
+                "publishedSites",
+                "removingInD1",
+                "removingSites",
+                "undeliveredSites",
+                "unknownSites",
+                "unpublishedWithFiles"
+              ],
+              "type": "object"
+            }
+          },
+          "401": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "403": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "503": {
             "application/json": {
               "additionalProperties": {},
               "properties": {
@@ -23194,6 +23379,234 @@
                 "error",
                 "message"
               ],
+              "type": "object"
+            }
+          }
+        }
+      },
+      "POST /static/rebuild": {
+        "parameters": {},
+        "responses": {
+          "200": {
+            "application/json": {
+              "properties": {
+                "failed": {
+                  "items": {
+                    "properties": {
+                      "reason": {
+                        "enum": [
+                          "no_publish_record",
+                          "rejected",
+                          "unavailable"
+                        ],
+                        "type": "string"
+                      },
+                      "siteId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "reason",
+                      "siteId"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "next": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "removed": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "requested": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "skippedRemoving": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "failed",
+                "next",
+                "removed",
+                "requested",
+                "skippedRemoving"
+              ],
+              "type": "object"
+            }
+          },
+          "400": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "401": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "403": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "422": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "503": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "additionalProperties": false,
+              "properties": {
+                "after": {
+                  "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                  "type": "string"
+                }
+              },
               "type": "object"
             }
           }

@@ -22,6 +22,8 @@ const SETTINGS_NAV: Array<{ href: string; label: string; icon: IconName; section
   { href: "/w/me/workspaces", label: "ワークスペース", icon: "stack", section: "system" },
   // prefetch を止める: この画面は control の GET /usage(= Cloudflare の使用量の取得)を呼ぶ。先読みすると、測っている使用量そのものを増やしてしまう
   { href: "/w/me/usage", label: "Cloudflare 使用状況", icon: "gauge", section: "system", prefetch: false },
+  // 7o K14: prefetch を止める: この画面は control の GET /static/status(= デプロイ専用の Worker への問い合わせ)を呼ぶ
+  { href: "/w/me/static-delivery", label: "配信ファイル", icon: "upload", section: "system", prefetch: false },
 ];
 
 const SITE_RE = /^\/w\/[^/]+\/sites\/[^/]+(?:\/([^/]+))?/;

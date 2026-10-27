@@ -2,6 +2,7 @@
 import { sql } from "kysely";
 import { nextUtcMidnight, utcDay } from "@wtt/core";
 import { DEFAULT_PLAN } from "@wtt/stats";
+import { edgeOrigin } from "../capabilities";
 import type { ExperimentRow } from "../db";
 import type { Env } from "../env";
 import { capacityLevel, loadPlan, mergeStoredPlan, type LoadedPlan } from "../evaluation-plan";
@@ -223,7 +224,9 @@ export const resultsDeliveryJob: CronJob = {
       async process(siteId) {
         const st = await withTimeout(deployer.siteStatus(siteId), STATUS_TIMEOUT_MS);
         if (st === "timeout") throw new Error("siteStatus timed out");
-        await confirmDeliveries(ctx.db, siteId, { history: st.history, historyFrom: st.historyFrom }, ctx.now, ctx.assertNotFrozen);
+        // 7o K24 (3)(4): history はそのまま渡す(digest を持つ点は同じ世代の依頼の記録の digest と組み合うときだけ数える)。
+        // apiBase は更新前の記録(digest が NULL)を照らし合わせるときに、その記録の版から入力の digest を作るのに使う
+        await confirmDeliveries(ctx.db, siteId, { history: st.history, historyFrom: st.historyFrom }, ctx.now, ctx.assertNotFrozen, edgeOrigin(ctx.env));
         return "next";
       },
     });

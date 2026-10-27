@@ -8,11 +8,15 @@ import {
   STATIC_HEADERS_FILE,
   STATIC_SCRIPT_COMPATIBILITY_DATE,
   STATIC_SCRIPT_SOURCE,
+  StaticBatchDeployRequestSchema,
   StaticDeployRequestSchema,
+  staticInputDigest,
   staticPaths,
   StaticRemoveRequestSchema,
+  type StaticBatchDeployResult,
   type StaticDeployResult,
   type StaticGeneration,
+  type StaticInstanceStatus,
   type StaticSiteStatus,
 } from "@wtt/core";
 import { assetHash, manifestKey, toBase64, type Manifest } from "./assets";
@@ -28,6 +32,9 @@ import type { DeployInput, DeployOutcome } from "./cf-api";
  * - ファイルの中身は `file:<hash>`(内容で決まるキー)に置く。デプロイの最中に Site が書き換わっても、送る中身はずれない
  * - Site ID をキーにする記録(index・デプロイ済みの記録)は Map にし、storage には [siteId, 値] の配列で置く。
  *   Site ID の規則は `__proto__`・`constructor` なども許すので、ふつうのオブジェクトの辞書では継承したプロパティを記録と取り違える
+ * - 7o K23: 受け付けた入力の digest(`staticInputDigest`)を index の項目に、配った入力の digest を `deployed` の記録と履歴に持つ。
+ *   同じ世代番号で中身が違うこと(D1 を戻して seq が同じ値に戻った)を control が見分けるため。digest の無い古い項目は、
+ *   保存済みの入力(`site:<id>`)から補う
  */
 
 export interface QueueStorage {
@@ -63,23 +70,31 @@ export const REBAKE_ALARM_MS = 1_000;
 
 type SiteInput = { config: unknown; settings: unknown; apiBase: string | null };
 type SiteRecord = { input: SiteInput | null };
-type IndexEntry = { gen: StaticGeneration; removed: boolean; hash: string | null; size: number; runtimeHash: string | null };
+/** digest = 受け付けた入力の digest(7o K23。削除の項目と、この変更の前に受け付けた項目には無い。後者は読むときに補う) */
+type IndexEntry = { gen: StaticGeneration; removed: boolean; hash: string | null; size: number; runtimeHash: string | null; digest?: string };
 type Index = Map<string, IndexEntry>;
 type PreviewEntry = { previewHash: string; hash: string; size: number };
-/** gen = いま配られている(デプロイ済みの)この Site の世代。at = それをデプロイし終えた時刻(ms) */
-type DeployedSite = { gen: StaticGeneration; at: number };
+/** gen = いま配られている(デプロイ済みの)この Site の世代。at = それをデプロイし終えた時刻(ms)。digest = 配った入力の digest(7o K23。古い記録には無い) */
+type DeployedSite = { gen: StaticGeneration; at: number; digest?: string };
 /**
  * 配った世代とデプロイし終えた時刻(ms)。新しい順、DEPLOY_HISTORY_DAYS 以内かつ最大 DEPLOY_HISTORY_LIMIT 件で、先頭が gen
  * (`siteStatus().history` の元。plan K21)。1 つの値の上限(2 MB)に当たらないよう、`deployed` のキーではなく Site ごとのキー `history:<siteId>` に置く
  */
-type HistoryEntry = { gen: StaticGeneration; at: number };
+type HistoryEntry = { gen: StaticGeneration; at: number; digest?: string }; // digest = 配った入力の digest(7o K24。古い項目には無い)
 /** history:<siteId> に置く形。truncated = 一度でも記録を捨てたか(siteStatus の historyFrom の判断に使う) */
 type HistoryRecord = { entries: HistoryEntry[]; truncated: boolean };
 /** key = 前回デプロイした manifest(null = まだデプロイしていない、またはデプロイの失敗で捨てた) */
 type Deployed = { key: string | null; sites: Map<string, DeployedSite> };
 /** storage に置く形(Map は [siteId, 値] の配列にする) */
 type DeployedStored = { key: string | null; sites: Array<[string, DeployedSite]> };
-type Meta = { failures: number; lastError: string | null; files: string[] };
+/**
+ * lastDeployedAt = Cloudflare の API でのデプロイが最後に成功した時刻(ms。API を呼ばなかった flush では動かさない。7o K9)。
+ * forceNext = 次の tick の配置を force にする印(force の redeploySites が立てる。7o K10)。読み書きはすべて stateLock の中。
+ * forceSeq = forceNext を立てた回数。flush の snapshot の後(API の待ちのあいだ)に立て直された印を、その flush の成功で消さないために比べる
+ * (forceNext だけでは「snapshot の前から立っていた」と「snapshot の後にもう一度立った」を見分けられない)。
+ * 足した 3 つは古い記録には無く、無ければ undefined として読む
+ */
+type Meta = { failures: number; lastError: string | null; files: string[]; lastDeployedAt?: number; forceNext?: boolean; forceSeq?: number };
 type Baked = { hash: string; size: number; b64: string };
 
 const K = {
@@ -105,6 +120,21 @@ function errorText(e: unknown): string {
   return (e instanceof Error ? e.message : String(e)).slice(0, 300);
 }
 
+/**
+ * 応答に足す digest(7o K23。あるときだけ)。deployedDigest は、配った世代が index の世代と同じなら index の(補った)digest、
+ * 違えば配った記録の digest。どちらも無ければ返さない(digest が分からないことを「配った」の根拠にしない)
+ */
+function digestsOf(entry: IndexEntry | undefined, site: DeployedSite | undefined): { acceptedDigest?: string; deployedDigest?: string } {
+  const deployedDigest = site && entry && compareGeneration(site.gen, entry.gen) === 0 ? entry.digest : site?.digest;
+  return {
+    ...(entry?.digest !== undefined ? { acceptedDigest: entry.digest } : {}),
+    ...(deployedDigest !== undefined ? { deployedDigest } : {}),
+  };
+}
+
+/** force = 同じ manifest でも API を呼ぶ。useForceNext(tick だけ)= snapshot で forceNext が立っていれば force にする */
+type FlushOptions = { force?: boolean; useForceNext?: boolean };
+
 export class DeployQueueLogic {
   private readonly stateLock = new Mutex();
   private readonly deployLock = new Mutex();
@@ -118,27 +148,68 @@ export class DeployQueueLogic {
     const input: SiteInput = { config: req.data.config, settings: req.data.settings, apiBase: req.data.apiBase };
     const baked = await this.bake(siteId, input); // CPU の重い部分はロックの外
     if (!baked) return { state: "rejected", accepted: (await this.index()).get(siteId)?.gen ?? null, ...(await this.deployedOf(siteId)), error: "invalid_payload" };
-    const accepted = await this.stateLock.run(() => this.accept(siteId, generation, input, baked));
+    const digest = await staticInputDigest(input); // bake が通った入力なので parse できる
+    const accepted = await this.stateLock.run(() => this.accept(siteId, generation, input, baked, digest));
     if (accepted) await this.arm(this.deps.now() + SAFETY_ALARM_MS);
     if (await this.runtimeOutdated()) await this.arm(this.deps.now() + REBAKE_ALARM_MS);
-    return this.resultFor(siteId, generation, await this.flush(req.data.force === true));
+    // 同期の flush は forceNext では force にしない(7o K10)。API を呼んで成功すれば、snapshot にあった forceNext はこの配置が兼ねて消える
+    return this.resultFor(siteId, generation, await this.flush({ force: req.data.force === true }));
+  }
+
+  /**
+   * 7o K10: 5 サイトまでをまとめて受け付ける。通常の要素はロックの外で焼き、stateLock の中で 1 件ずつ accept に渡す
+   * (index に入る世代は必ず焼いてある。焼けなかった要素は index に入れない)。削除の要素は焼かずに削除として受け付ける
+   * (removeSite のような同期の配置はしない)。配置は待たずに返し、alarm で 1 回にまとめる
+   */
+  async redeploySites(raw: unknown): Promise<StaticBatchDeployResult> {
+    const req = StaticBatchDeployRequestSchema.safeParse(raw);
+    if (!req.success) return { state: "rejected", sites: [], error: "invalid_request" };
+    type Prepared = { siteId: string; gen: StaticGeneration; ok: boolean; input: SiteInput | null; baked: Baked | null; digest?: string };
+    const prepared: Prepared[] = [];
+    for (const s of req.data.sites) {
+      if ("remove" in s) {
+        prepared.push({ siteId: s.siteId, gen: s.generation, ok: true, input: null, baked: null });
+        continue;
+      }
+      const input: SiteInput = { config: s.config, settings: s.settings, apiBase: s.apiBase };
+      const baked = await this.bake(s.siteId, input); // CPU の重い部分はロックの外
+      if (!baked) {
+        console.error("static batch site rejected", s.siteId); // 7o K15。config・settings は出さない
+        prepared.push({ siteId: s.siteId, gen: s.generation, ok: false, input: null, baked: null });
+        continue;
+      }
+      prepared.push({ siteId: s.siteId, gen: s.generation, ok: true, input, baked, digest: await staticInputDigest(input) });
+    }
+    const { anyAccepted, sites } = await this.stateLock.run(async () => {
+      let anyAccepted = false;
+      for (const p of prepared) if (p.ok && (await this.accept(p.siteId, p.gen, p.input, p.baked, p.digest))) anyAccepted = true;
+      if (anyAccepted && req.data.force === true) await this.markForceNext();
+      // accepted = 処理の後に受け付け済みのその Site の世代(捨てた要素・形の不正の要素も、今の世代か null)
+      const index = await this.index();
+      const sites = prepared.map((p) => ({ siteId: p.siteId, accepted: index.get(p.siteId)?.gen ?? null, ...(p.ok ? {} : { error: "invalid_payload" as const }) }));
+      return { anyAccepted, sites };
+    });
+    if (anyAccepted) await this.arm(this.deps.now() + (req.data.flush === "soon" ? REBAKE_ALARM_MS : SAFETY_ALARM_MS));
+    return { state: "accepted", sites };
   }
 
   async removeSite(raw: unknown): Promise<StaticDeployResult> {
     const req = StaticRemoveRequestSchema.safeParse(raw);
     if (!req.success) return { state: "rejected", accepted: null, deployed: null, deployedAt: null, error: "invalid_request" };
     const { siteId, generation } = req.data;
-    const accepted = await this.stateLock.run(() => this.accept(siteId, generation, null, null));
+    const accepted = await this.stateLock.run(() => this.accept(siteId, generation, null, null, undefined));
     if (accepted) await this.arm(this.deps.now() + SAFETY_ALARM_MS);
     return this.resultFor(siteId, generation, await this.flush());
   }
 
   async siteStatus(siteId: string): Promise<StaticSiteStatus> {
-    const accepted = (await this.index()).get(siteId)?.gen ?? null;
+    const entry = (await this.stateLock.run(() => this.indexWithDigests())).get(siteId);
+    const accepted = entry?.gen ?? null;
     const site = (await this.deployed()).sites.get(siteId);
     const deployed = site?.gen ?? null;
     const rec = await this.history(siteId);
-    const history = rec.entries.map((h) => ({ generation: h.gen, deployedAt: new Date(h.at).toISOString() }));
+    // digest は、ある項目だけ(この変更の前に配った項目には無い。7o K24)
+    const history = rec.entries.map((h) => ({ generation: h.gen, deployedAt: new Date(h.at).toISOString(), ...(h.digest !== undefined ? { digest: h.digest } : {}) }));
     const meta = await this.meta();
     return {
       accepted,
@@ -149,7 +220,29 @@ export class DeployQueueLogic {
       historyFrom: rec.truncated ? (history.at(-1)?.deployedAt ?? null) : null,
       pending: accepted !== null && (deployed === null || compareGeneration(deployed, accepted) < 0),
       lastError: meta.lastError,
+      ...digestsOf(entry, site),
     };
+  }
+
+  /**
+   * 7o K9: index の全サイト(削除の墓標を含む)の世代と digest、配置の失敗の記録。index・deployed・meta を stateLock の中で 1 回ずつ読む
+   * (digest の無い古い項目があるあいだは、その数だけ `site:<id>` を読んで補い、index に書き戻す)
+   */
+  async instanceStatus(): Promise<StaticInstanceStatus> {
+    return this.stateLock.run(async () => {
+      const index = await this.indexWithDigests();
+      const deployed = await this.deployed();
+      const meta = await this.meta();
+      return {
+        sites: [...index].map(([siteId, e]) => {
+          const site = deployed.sites.get(siteId);
+          return { siteId, accepted: e.gen, deployed: site?.gen ?? null, removed: e.removed, ...digestsOf(e, site) };
+        }),
+        failures: meta.failures,
+        lastError: meta.lastError,
+        lastDeployedAt: meta.lastDeployedAt !== undefined ? new Date(meta.lastDeployedAt).toISOString() : null,
+      };
+    });
   }
 
   /** alarm と毎時の Cron。プレビューの更新 → 焼き直し(バッチ)→ 残りがあれば続きの alarm、無ければデプロイ */
@@ -162,7 +255,7 @@ export class DeployQueueLogic {
       await this.deps.storage.setAlarm(this.deps.now() + REBAKE_ALARM_MS);
       return;
     }
-    await this.flush();
+    await this.flush({ useForceNext: true }); // snapshot で forceNext が立っていれば force で配置する(7o K10)
   }
 
   // ---- 内部 ----
@@ -177,27 +270,41 @@ export class DeployQueueLogic {
     return { hash: await assetHash(b64, "js"), size, b64 };
   }
 
-  /** stateLock の中で呼ぶ。保存済みより新しい世代だけ受ける(順不同の依頼・削除の墓標。plan K2) */
-  private async accept(siteId: string, gen: StaticGeneration, input: SiteInput | null, baked: Baked | null): Promise<boolean> {
+  /**
+   * stateLock の中で呼ぶ。保存済みより新しい世代だけ受ける(順不同の依頼・削除の墓標。plan K2)。
+   * digest = 受け付ける入力の digest(削除は undefined)。捨てた依頼では index も `site:<id>` も書かないので、digest は前の入力のまま(7o K23)
+   */
+  private async accept(siteId: string, gen: StaticGeneration, input: SiteInput | null, baked: Baked | null, digest: string | undefined): Promise<boolean> {
     await this.ensurePreviews();
     const index = await this.index();
     const cur = index.get(siteId);
     if (cur && compareGeneration(gen, cur.gen) <= 0) return false;
     if (baked) await this.putFile(baked);
     await this.deps.storage.put<SiteRecord>(K.site(siteId), { input });
-    index.set(siteId, { gen, removed: input === null, hash: baked?.hash ?? null, size: baked?.size ?? 0, runtimeHash: baked ? this.deps.runtime.hash : null });
+    index.set(siteId, {
+      gen, removed: input === null, hash: baked?.hash ?? null, size: baked?.size ?? 0, runtimeHash: baked ? this.deps.runtime.hash : null,
+      ...(digest !== undefined ? { digest } : {}),
+    });
     await this.saveIndex(index);
     return true;
   }
 
-  /** 最新の全 Site の一覧でデプロイする。前回と中身が同じなら API を呼ばずに世代だけ進める(force なら同じでも API を呼ぶ) */
-  private flush(force = false): Promise<{ ok: true } | { ok: false; error: string }> {
+  /**
+   * 最新の全 Site の一覧でデプロイする。前回と中身が同じなら API を呼ばずに世代だけ進める(force なら同じでも API を呼ぶ)。
+   * forceNext は snapshot と一緒に読む。消すのは、snapshot で立っていて API を呼んで成功した flush だけ
+   * (snapshot の後に立て直された印は forceSeq の違いで残す。API を呼ばなかった flush・失敗した flush も消さない。7o K10)
+   */
+  private flush(opts: FlushOptions = {}): Promise<{ ok: true } | { ok: false; error: string }> {
     return this.deployLock.run(async () => {
-      const snap = await this.stateLock.run(async () => ({ index: await this.index(), previews: await this.previews() }));
+      const snap = await this.stateLock.run(async () => {
+        const meta = await this.meta();
+        return { index: await this.indexWithDigests(), previews: await this.previews(), forceNext: meta.forceNext === true, forceSeq: meta.forceSeq ?? 0 };
+      });
       const manifest = buildManifest(snap.index, snap.previews);
       const key = manifestKey(manifest);
       const deployed = await this.deployed();
-      if (force || deployed.key !== key) {
+      const callApi = opts.force === true || (opts.useForceNext === true && snap.forceNext) || deployed.key !== key;
+      if (callApi) {
         try {
           await this.deps.deploy({
             manifest,
@@ -212,12 +319,14 @@ export class DeployQueueLogic {
           });
         } catch (e) {
           const error = errorText(e);
-          await this.stateLock.run(async () => {
+          const failures = await this.stateLock.run(async () => {
             // 失敗の後は実物の状態が分からない(PUT がサーバー側で適用済みで、こちらには失敗に見えただけかもしれない)。
             // 前回の manifest の記録を捨て、次の flush では同じ中身(前回成功した manifest に戻る依頼を含む)でも API を呼ばせる
             await this.saveDeployed({ ...deployed, key: null });
-            await this.scheduleRetry(error);
+            return this.scheduleRetry(error);
           });
+          // 7o K15。error は errorText の後の文(CfApiError の message はトークンを含まない)。config・settings は出さない
+          console.error("static deploy failed", { failures, error });
           return { ok: false as const, error };
         }
       }
@@ -232,12 +341,19 @@ export class DeployQueueLogic {
             sites.set(id, prev);
             continue;
           }
-          sites.set(id, { gen: e.gen, at });
-          await this.appendHistory(id, e.gen, at);
+          // 配った入力の digest を写す(snapshot の index は古い項目も補ってある。7o K23・K24)
+          sites.set(id, { gen: e.gen, at, ...(e.digest !== undefined ? { digest: e.digest } : {}) });
+          await this.appendHistory(id, e.gen, at, e.digest);
         }
         await this.saveDeployed({ key, sites });
         const meta = await this.meta();
-        await this.deps.storage.put<Meta>(K.meta, { ...meta, failures: 0, lastError: null });
+        // forceNext は snapshot で立っていて、API を呼んで成功し、その後に立て直されていない(forceSeq が同じ)ときだけ消す
+        const clearForce = callApi && snap.forceNext && (meta.forceSeq ?? 0) === snap.forceSeq;
+        await this.deps.storage.put<Meta>(K.meta, {
+          ...meta, failures: 0, lastError: null,
+          ...(callApi ? { lastDeployedAt: at } : {}),
+          ...(clearForce ? { forceNext: false } : {}),
+        });
         await this.gcFiles();
         if (await this.isClean()) await this.deps.storage.deleteAlarm();
       });
@@ -247,10 +363,14 @@ export class DeployQueueLogic {
 
   private async resultFor(siteId: string, gen: StaticGeneration, r: { ok: true } | { ok: false; error: string }): Promise<StaticDeployResult> {
     // accepted = 依頼を処理した後に受け付け済みのこの Site の世代(control の削除は、これが送った墓標のときだけ進む。plan K23)
-    const accepted = (await this.index()).get(siteId)?.gen ?? null;
-    const { deployed, deployedAt } = await this.deployedOf(siteId);
-    if (deployed && compareGeneration(deployed, gen) >= 0) return { state: "deployed", accepted, deployed, deployedAt };
-    return { state: "pending", accepted, deployed, deployedAt, ...(r.ok ? {} : { error: r.error }) };
+    const entry = (await this.stateLock.run(() => this.indexWithDigests())).get(siteId);
+    const accepted = entry?.gen ?? null;
+    const site = (await this.deployed()).sites.get(siteId);
+    const deployed = site?.gen ?? null;
+    const deployedAt = site ? new Date(site.at).toISOString() : null;
+    const digests = digestsOf(entry, site);
+    if (deployed && compareGeneration(deployed, gen) >= 0) return { state: "deployed", accepted, deployed, deployedAt, ...digests };
+    return { state: "pending", accepted, deployed, deployedAt, ...(r.ok ? {} : { error: r.error }), ...digests };
   }
 
   /** いま配られている世代と、それをデプロイし終えた時刻 */
@@ -263,22 +383,31 @@ export class DeployQueueLogic {
    * stateLock の中で呼ぶ。Site ごとの履歴の先頭に足し、DEPLOY_HISTORY_DAYS より古い記録と DEPLOY_HISTORY_LIMIT を超えた記録を捨てる(plan K21)。
    * 足すときだけ切り詰めるので、先頭(いま配られている世代)は必ず残る
    */
-  private async appendHistory(siteId: string, gen: StaticGeneration, at: number): Promise<void> {
+  private async appendHistory(siteId: string, gen: StaticGeneration, at: number, digest: string | undefined): Promise<void> {
     const minAt = at - DEPLOY_HISTORY_DAYS * 86_400_000;
     const prev = await this.history(siteId);
-    const kept = [{ gen, at }, ...prev.entries.filter((h) => h.at >= minAt)];
+    const head: HistoryEntry = { gen, at, ...(digest !== undefined ? { digest } : {}) };
+    const kept = [head, ...prev.entries.filter((h) => h.at >= minAt)];
     const entries = kept.slice(0, DEPLOY_HISTORY_LIMIT);
     // 1 件でも捨てたら truncated(以後 historyFrom = 残っている最も古い記録の時刻)
     const truncated = prev.truncated || entries.length < prev.entries.length + 1;
     await this.deps.storage.put<HistoryRecord>(K.history(siteId), { entries, truncated });
   }
 
-  private async scheduleRetry(error: string): Promise<void> {
+  /** stateLock の中で呼ぶ。戻り値 = 足した後の連続の失敗回数 */
+  private async scheduleRetry(error: string): Promise<number> {
     const meta = await this.meta();
     const failures = meta.failures + 1;
     await this.deps.storage.put<Meta>(K.meta, { ...meta, failures, lastError: error });
     const delay = RETRY_DELAYS_MS[Math.min(failures, RETRY_DELAYS_MS.length) - 1]!;
     await this.deps.storage.setAlarm(this.deps.now() + delay); // 保険の alarm より後でも、失敗の後は間隔をあける
+    return failures;
+  }
+
+  /** stateLock の中で呼ぶ。次の tick の配置を force にする印(7o K10) */
+  private async markForceNext(): Promise<void> {
+    const meta = await this.meta();
+    await this.deps.storage.put<Meta>(K.meta, { ...meta, forceNext: true, forceSeq: (meta.forceSeq ?? 0) + 1 });
   }
 
   /** いまの alarm より早いときだけ置き直す */
@@ -311,6 +440,7 @@ export class DeployQueueLogic {
         index.set(id, { ...cur, runtimeHash: this.deps.runtime.hash });
         const meta = await this.meta();
         await this.deps.storage.put<Meta>(K.meta, { ...meta, lastError: `rebake_failed: ${id}` });
+        console.error("static rebake failed", id); // 7o K15。保存した入力は出さない
       }
     }
     await this.saveIndex(index);
@@ -329,7 +459,12 @@ export class DeployQueueLogic {
     await this.deps.storage.put(K.previews, next);
   }
 
+  /**
+   * forceNext が立っているあいだは片づいていない(7o K10。まとめた受け付けと alarm の間に別のサイトの同期の flush が走っても、
+   * alarm を消して強制の配置を毎時の Cron まで遅らせない)
+   */
   private async isClean(): Promise<boolean> {
+    if ((await this.meta()).forceNext === true) return false;
     const manifest = buildManifest(await this.index(), await this.previews());
     return (await this.deployed()).key === manifestKey(manifest) && !(await this.runtimeOutdated());
   }
@@ -353,6 +488,29 @@ export class DeployQueueLogic {
 
   private async index(): Promise<Index> {
     return new Map((await this.deps.storage.get<Array<[string, IndexEntry]>>(K.index)) ?? []);
+  }
+  /**
+   * stateLock の中で呼ぶ。digest の無い削除でない項目(この変更の前に受け付けた項目)を、保存済みの入力から bake と同じく parse して補い、
+   * 補えたら index に書き戻す(以後は `site:<id>` を読まない)。入力が parse できない項目は digest の無いまま(7o K23)
+   */
+  private async indexWithDigests(): Promise<Index> {
+    const index = await this.index();
+    let filled = false;
+    for (const [id, e] of index) {
+      if (e.removed || e.digest !== undefined) continue;
+      const rec = await this.deps.storage.get<SiteRecord>(K.site(id));
+      if (!rec?.input) continue;
+      let digest: string;
+      try {
+        digest = await staticInputDigest(rec.input);
+      } catch {
+        continue; // 読めない入力の中身はログに出さない
+      }
+      index.set(id, { ...e, digest });
+      filled = true;
+    }
+    if (filled) await this.saveIndex(index);
+    return index;
   }
   private async saveIndex(index: Index): Promise<void> {
     await this.deps.storage.put<Array<[string, IndexEntry]>>(K.index, [...index]);

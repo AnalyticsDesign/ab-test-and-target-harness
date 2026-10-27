@@ -147,8 +147,9 @@ publishRoutes.post(
     // 7i plan K23: 途中で止まった削除を取りやめる(削除の印を消す)。この後に古い削除が D1 を消そうとしても、印が違うので消えない
     await db.updateTable("sites").set({ static_removing: null }).where("id", "=", site.id).execute();
     // 作り直しは前回と同じ中身でもデプロイさせる(配信専用の Worker の実物が記録とずれたときの直し)。
-    // 削除の墓標に負けていれば、epoch を墓標 + 1 に進めて 1 回だけ出し直す(復旧はこの操作だけ。plan K2)
-    const outcome = await requestStaticDeploy(c.env, db, site.id, { force: true, recoverTombstone: true });
+    // 削除の墓標に負けている・デプロイ専用の Worker の記録が D1 より先行している・同じ世代で中身が違う(D1 を戻した後など)なら、
+    // epoch をその受け付け済みの世代 + 1 に進めて 1 回だけ出し直す(自動では戻さない。戻すのはこの操作だけ。plan K2、7o K7)
+    const outcome = await requestStaticDeploy(c.env, db, site.id, { force: true, recover: true });
     return c.json({ staticDeploy: outcome.state });
   },
 );

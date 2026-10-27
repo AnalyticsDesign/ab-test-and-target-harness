@@ -1,5 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
-import type { StaticDeployRequest, StaticDeployResult, StaticRemoveRequest, StaticSiteStatus } from "@wtt/core";
+import type {
+  StaticBatchDeployRequest,
+  StaticBatchDeployResult,
+  StaticDeployRequest,
+  StaticDeployResult,
+  StaticInstanceStatus,
+  StaticRemoveRequest,
+  StaticSiteStatus,
+} from "@wtt/core";
 import { PREVIEW_HASH, PREVIEW_SOURCE, RUNTIME_HASH, RUNTIME_SOURCE } from "@wtt/runtime/source";
 import { deployAssets, STATIC_SCRIPT_NAME_RE, type CfApiConfig } from "./cf-api";
 import type { Env } from "./env";
@@ -37,6 +45,14 @@ export class DeployQueue extends DurableObject<Env> {
   }
   siteStatus(siteId: string): Promise<StaticSiteStatus> {
     return this.logic.siteStatus(siteId);
+  }
+  /** 7o K10: まとめた受け付け(配置は alarm で 1 回) */
+  redeploySites(req: StaticBatchDeployRequest): Promise<StaticBatchDeployResult> {
+    return this.logic.redeploySites(req);
+  }
+  /** 7o K9: 全サイトの世代・digest と配置の失敗の記録 */
+  instanceStatus(): Promise<StaticInstanceStatus> {
+    return this.logic.instanceStatus();
   }
   tick(): Promise<void> {
     return this.logic.tick();

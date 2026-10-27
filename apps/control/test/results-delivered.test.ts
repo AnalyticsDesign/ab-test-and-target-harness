@@ -1,14 +1,37 @@
 import { env } from "cloudflare:workers";
 import { sql } from "kysely";
-import { describe, expect, it } from "vitest";
-import type { StaticGeneration } from "@wtt/core";
+import { describe, expect, it, vi } from "vitest";
+import { staticInputDigest, type StaticDeployHistoryEntry, type StaticGeneration } from "@wtt/core";
+import { resultsDeliveryJob } from "../src/cron/results-jobs";
+import { runCron } from "../src/cron/runner";
 import { getDb } from "../src/db";
 import type { Env } from "../src/env";
 import { publishSite } from "../src/publish";
 import { changedParts, confirmDeliveries, deliveredAt, recordDeliveredDefinitions, sitesNeedingDeliveryConfirmation, type DeliveredDefinition } from "../src/results/delivered";
 import type { WriteGuard } from "../src/results/guard";
 import { genOf, reconcileStatic } from "../src/static-delivery";
-import { beforeD1Batch, call, choosePrimaryGoal, createExperiment, createSite, experimentRow, failingD1Query, fakeDeployer, json, publishRes, RESULTS_STORE, setupOwner, siteRow, testEnv, TEXT_CHANGE } from "./helpers";
+import {
+  beforeD1Batch,
+  call,
+  choosePrimaryGoal,
+  createExperiment,
+  createSite,
+  experimentRow,
+  failingD1Query,
+  fakeDeployer,
+  fakeResultsBudget,
+  fakeResultsHealth,
+  json,
+  otherStaticInput,
+  publishRes,
+  RESULTS_STORE,
+  setupOwner,
+  siteRow,
+  staticInputOf,
+  testEnv,
+  testEnvWith,
+  TEXT_CHANGE,
+} from "./helpers";
 
 // D9 ③(設計書 §5.5、plan ③ の K14・Task 7): 届く定義の記録・配信の確認・テスト中の変更
 
@@ -47,10 +70,12 @@ async function record(s: { sid: string; eid: string }, version: number, gen: Sta
 async function seedPublish(sid: string, version: number, by: string, at: number) {
   await sql`insert into publishes (id, site_id, version, status, published_by, created_at, activated_at) values (${`pub_${sid}_${version}`}, ${sid}, ${version}, 'active', ${by}, ${at}, ${at})`.execute(db());
 }
-/** 出し直しの依頼の記録(世代 → 焼いた版) */
-async function seedRequest(sid: string, seq: number, version: number, requestedAt: number) {
-  await db().insertInto("static_deploy_requests").values({ site_id: sid, epoch: 1, seq, version, requested_at: requestedAt }).execute();
+/** 出し直しの依頼の記録(世代 → 焼いた版)。inputDigest を省くと更新前の形(input_digest が NULL) */
+async function seedRequest(sid: string, seq: number, version: number, requestedAt: number, inputDigest: string | null = null) {
+  await db().insertInto("static_deploy_requests").values({ site_id: sid, epoch: 1, seq, version, requested_at: requestedAt, input_digest: inputDigest }).execute();
 }
+/** 配った入力の digest を持つ履歴の点(7o K24) */
+const digestPoint = (seq: number, at: number, digest: string) => ({ ...point(seq, at), digest });
 async function rows(sid: string) {
   return db().selectFrom("experiment_delivered_definitions").selectAll().where("site_id", "=", sid).orderBy("publish_version").execute();
 }
@@ -63,8 +88,8 @@ async function changes(sid: string) {
 const textOf = (d: DeliveredDefinition | undefined) => (d?.variants[1]!.changes[0]?.payload as { text: string } | undefined)?.text;
 
 /** 計測用 D1 がある導入の Site(結果を記録する) */
-async function resultsSite() {
-  const owner = await setupOwner();
+async function resultsSite(existing?: Awaited<ReturnType<typeof setupOwner>>) {
+  const owner = existing ?? (await setupOwner());
   const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
   expect(res.status).toBe(201);
   const { id: sid } = await json<{ id: string }>(res);
@@ -174,10 +199,10 @@ describe("届く定義(D9 ③ K14)", () => {
     await seedRequest(s.sid, 3, 3, 2_500);
     await seedRequest(s.sid, 4, 4, 3_500);
     // Publish の応答の 1 点(partial)では、版 3 を overtaken にしない
-    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null, partial: true }, 5_000, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null, partial: true }, 5_000, noGuard, null);
     expect((await rowOf(s.sid, 3)).settled).toBeNull();
     // 世代 4 だけが history にある(全体): 版 3 は overtaken、版 4 は delivered
-    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null }, 5_000, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null }, 5_000, noGuard, null);
     expect(await rowOf(s.sid, 3)).toMatchObject({ delivered_from: null, settled: "overtaken" });
     expect(await rowOf(s.sid, 4)).toMatchObject({ delivered_from: 4_000, delivered_until: null, settled: "delivered" });
     expect(await deliveredAt(db(), s.sid, s.eid, 3_900)).toBeNull();
@@ -193,15 +218,15 @@ describe("届く定義(D9 ③ K14)", () => {
       await record(s, v, g(v), def(`v${v}`));
       await seedRequest(s.sid, v, v, at);
     }
-    await confirmDeliveries(db(), s.sid, { history: [point(2, 2_000)], historyFrom: null }, 2_100, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(2, 2_000)], historyFrom: null }, 2_100, noGuard, null);
     // 版 3 の出し直しは pending(8 秒を超えた)。後で世代 3 が 3,000 に配られ、版 4 は deployed で 1 点の確認(partial)
-    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null, partial: true }, 4_100, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null, partial: true }, 4_100, noGuard, null);
     expect(await rowOf(s.sid, 3)).toMatchObject({ delivered_from: null, settled: null }); // 未確定のまま(overtaken にしない)
     expect(await rowOf(s.sid, 4)).toMatchObject({ delivered_from: 4_000, settled: null });
     expect((await rowOf(s.sid, 2)).delivered_until).toBe(4_000);
     expect(await changes(s.sid)).toEqual([{ publish_version: 4, at: 4_000, by: "u4", parts_json: '["variants.b.changes"]' }]);
     // Cron の history の全体(新しい順): 版 3 が世代 3 の時刻で delivered、delivered_until = 版 4 の delivered_from
-    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000), point(3, 3_000), point(2, 2_000)], historyFrom: null }, 5_000, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000), point(3, 3_000), point(2, 2_000)], historyFrom: null }, 5_000, noGuard, null);
     expect(await rowOf(s.sid, 3)).toMatchObject({ delivered_from: 3_000, delivered_until: 4_000, settled: "delivered" });
     expect(await rowOf(s.sid, 4)).toMatchObject({ delivered_from: 4_000, delivered_until: null, settled: "delivered" });
     expect((await rowOf(s.sid, 2)).delivered_until).toBe(3_000);
@@ -218,7 +243,7 @@ describe("届く定義(D9 ③ K14)", () => {
     await seedPublish(s.sid, 2, "u2", 1_500);
     await record(s, 2, g(2), def("old"));
     await seedRequest(s.sid, 2, 2, 1_500);
-    await confirmDeliveries(db(), s.sid, { history: [point(2, 2_000)], historyFrom: null }, 2_100, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(2, 2_000)], historyFrom: null }, 2_100, noGuard, null);
     await seedPublish(s.sid, 3, "u3", 2_500);
     await record(s, 3, g(3), def("same"));
     await seedRequest(s.sid, 3, 3, 2_500);
@@ -228,11 +253,11 @@ describe("届く定義(D9 ③ K14)", () => {
     await seedRequest(s.sid, 4, 4, 3_500);
     expect((await rows(s.sid)).map((r) => r.publish_version)).toEqual([2, 3]);
     // 世代 3(版 3)は 3,000 に、世代 4(版 4)は 4,000 に配られた。版 4 の 1 点の確認(partial)が先に来る
-    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null, partial: true }, 4_100, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null, partial: true }, 4_100, noGuard, null);
     expect(await rowOf(s.sid, 3)).toMatchObject({ delivered_from: 4_000, settled: null });
     expect(textOf((await deliveredAt(db(), s.sid, s.eid, 3_500))?.definition)).toBe("old"); // まだ早い点を知らない
     // Cron の history の全体: より早い点(世代 3 の 3,000)を見つけたので早い方へ直し、配信済みに確定する
-    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000), point(3, 3_000), point(2, 2_000)], historyFrom: null }, 5_000, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000), point(3, 3_000), point(2, 2_000)], historyFrom: null }, 5_000, noGuard, null);
     expect(await rowOf(s.sid, 3)).toMatchObject({ delivered_from: 3_000, delivered_until: null, settled: "delivered" });
     expect((await rowOf(s.sid, 2)).delivered_until).toBe(3_000);
     const at3500 = await deliveredAt(db(), s.sid, s.eid, 3_500);
@@ -240,7 +265,7 @@ describe("届く定義(D9 ③ K14)", () => {
     expect(at3500?.deliveredFrom).toBe(3_000);
     expect(await changes(s.sid)).toEqual([{ publish_version: 3, at: 3_000, by: "u3", parts_json: '["variants.b.changes"]' }]);
     // 後でもう一度 1 点の確認(partial)が来ても、遅い方へは戻さず、確定も外さない
-    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null, partial: true }, 6_000, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null, partial: true }, 6_000, noGuard, null);
     expect(await rowOf(s.sid, 3)).toMatchObject({ delivered_from: 3_000, settled: "delivered" });
   });
 
@@ -254,7 +279,7 @@ describe("届く定義(D9 ③ K14)", () => {
     await seedRequest(s.sid, 4, 4, 3_500);
     expect(await rows(s.sid)).toHaveLength(1);
     // 世代 3 は配られず、世代 4 だけが deployed。版 3 の行が世代 4 の時刻で delivered(overtaken にしない)
-    expect(await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null }, 5_000, noGuard)).toBe(1);
+    expect(await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null }, 5_000, noGuard, null)).toBe(1);
     expect(await rowOf(s.sid, 3)).toMatchObject({ delivered_from: 4_000, settled: "delivered" });
   });
 
@@ -267,9 +292,9 @@ describe("届く定義(D9 ③ K14)", () => {
     await seedRequest(s.sid, 3, 3, 1_000);
     await seedRequest(s.sid, 4, 4, 2_500);
     // 履歴は 2,000 より前を切り詰めている。版 3 の依頼(1,000)はそれより前で history に無く、後の行も確かめられていない → unknown
-    await confirmDeliveries(db(), s.sid, { history: [point(9, 2_200)], historyFrom: iso(2_000), partial: true }, 3_000, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(9, 2_200)], historyFrom: iso(2_000), partial: true }, 3_000, noGuard, null);
     expect((await rowOf(s.sid, 3)).settled).toBeNull(); // partial では決めない
-    await confirmDeliveries(db(), s.sid, { history: [point(9, 2_200)], historyFrom: iso(2_000) }, 3_000, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(9, 2_200)], historyFrom: iso(2_000) }, 3_000, noGuard, null);
     expect(await rowOf(s.sid, 3)).toMatchObject({ delivered_from: null, settled: "unknown" });
     // 版 4 の依頼(2,500)は切り詰めた範囲の後。まだ配られていないだけなので未確定のまま
     expect(await rowOf(s.sid, 4)).toMatchObject({ delivered_from: null, settled: null });
@@ -281,17 +306,17 @@ describe("届く定義(D9 ③ K14)", () => {
     await seedPublish(s.sid, 2, "u2", 1_500);
     await record(s, 2, g(2), def("v2"));
     await seedRequest(s.sid, 2, 2, 1_500);
-    await confirmDeliveries(db(), s.sid, { history: [point(2, 2_000)], historyFrom: null }, 2_100, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(2, 2_000)], historyFrom: null }, 2_100, noGuard, null);
     // 出し直しに失敗した Publish(世代が無い): static_generation は NULL
     await seedPublish(s.sid, 3, "u3", 2_500);
     await record(s, 3, null, def("v3"));
     expect((await rowOf(s.sid, 3)).static_generation).toBeNull();
-    await confirmDeliveries(db(), s.sid, { history: [point(2, 2_000)], historyFrom: null }, 3_000, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(2, 2_000)], historyFrom: null }, 3_000, noGuard, null);
     expect(await rowOf(s.sid, 3)).toMatchObject({ delivered_from: null, settled: null }); // 未確定のまま
     expect(textOf((await deliveredAt(db(), s.sid, s.eid, 5_000))?.definition)).toBe("v2"); // 前の定義が有効のまま
     // 自己修復の出し直し(世代 5)がその版を焼いて配られた → 配信済み
     await seedRequest(s.sid, 5, 3, 4_500);
-    await confirmDeliveries(db(), s.sid, { history: [point(5, 5_000), point(2, 2_000)], historyFrom: null }, 5_100, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(5, 5_000), point(2, 2_000)], historyFrom: null }, 5_100, noGuard, null);
     expect(await rowOf(s.sid, 3)).toMatchObject({ delivered_from: 5_000, settled: "delivered" });
     expect((await rowOf(s.sid, 2)).delivered_until).toBe(5_000);
     expect(textOf((await deliveredAt(db(), s.sid, s.eid, 4_999))?.definition)).toBe("v2");
@@ -301,7 +326,7 @@ describe("届く定義(D9 ③ K14)", () => {
     await seedPublish(t.sid, 3, "u3", 2_500);
     await record(t, 3, null, def("v3"));
     await seedRequest(t.sid, 6, 4, 5_500);
-    await confirmDeliveries(db(), t.sid, { history: [point(6, 6_000)], historyFrom: null }, 6_100, noGuard);
+    await confirmDeliveries(db(), t.sid, { history: [point(6, 6_000)], historyFrom: null }, 6_100, noGuard, null);
     expect(await rowOf(t.sid, 3)).toMatchObject({ delivered_from: 6_000, settled: "delivered" });
   });
 
@@ -401,7 +426,7 @@ describe("届く定義(D9 ③ K14)", () => {
     const frozenGuard: WriteGuard = async () => {
       throw new Error("frozen");
     };
-    await expect(confirmDeliveries(db(), t.sid, { history: [point(3, 3_000)], historyFrom: null }, 3_100, frozenGuard)).rejects.toThrow("frozen");
+    await expect(confirmDeliveries(db(), t.sid, { history: [point(3, 3_000)], historyFrom: null }, 3_100, frozenGuard, null)).rejects.toThrow("frozen");
     expect(await rowOf(t.sid, 3)).toMatchObject({ delivered_from: null, settled: null });
   });
 
@@ -492,7 +517,7 @@ describe("届く定義(D9 ③ K14)", () => {
     await seedPublish(s.sid, 2, "u2", 1_500);
     await record(s, 2, g(2), def("old"));
     await seedRequest(s.sid, 2, 2, 1_500);
-    await confirmDeliveries(db(), s.sid, { history: [point(2, 2_000)], historyFrom: null }, 2_100, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(2, 2_000)], historyFrom: null }, 2_100, noGuard, null);
     await seedPublish(s.sid, 3, "u3", 2_500);
     await record(s, 3, g(3), def("same"));
     await seedRequest(s.sid, 3, 3, 2_500);
@@ -503,9 +528,9 @@ describe("届く定義(D9 ③ K14)", () => {
     const racingGuard: WriteGuard = async () => {
       if (raced) return;
       raced = true;
-      await confirmDeliveries(db(), s.sid, { history: [point(3, 3_000)], historyFrom: null, partial: true }, 3_100, noGuard);
+      await confirmDeliveries(db(), s.sid, { history: [point(3, 3_000)], historyFrom: null, partial: true }, 3_100, noGuard, null);
     };
-    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null, partial: true }, 4_100, racingGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(4, 4_000)], historyFrom: null, partial: true }, 4_100, racingGuard, null);
     expect(raced).toBe(true);
     expect((await rowOf(s.sid, 3)).delivered_from).toBe(3_000); // 遅い方で上書きしない
     expect((await rowOf(s.sid, 2)).delivered_until).toBe(3_000); // 読み直した値で付け直す
@@ -523,10 +548,10 @@ describe("届く定義(D9 ③ K14)", () => {
     const racingGuard2: WriteGuard = async () => {
       if (raced2) return;
       raced2 = true;
-      await confirmDeliveries(db(), t.sid, { history: [point(4, 4_000), point(3, 3_000)], historyFrom: null }, 4_100, noGuard);
+      await confirmDeliveries(db(), t.sid, { history: [point(4, 4_000), point(3, 3_000)], historyFrom: null }, 4_100, noGuard, null);
     };
     // 数えるのは実際に変えた行だけ(版 3 の overtaken は書かれなかった。版 4 の 1 行)
-    expect(await confirmDeliveries(db(), t.sid, { history: [point(4, 4_000)], historyFrom: null }, 4_100, racingGuard2)).toBe(1);
+    expect(await confirmDeliveries(db(), t.sid, { history: [point(4, 4_000)], historyFrom: null }, 4_100, racingGuard2, null)).toBe(1);
     expect(raced2).toBe(true);
     expect(await rowOf(t.sid, 3)).toMatchObject({ delivered_from: 3_000, delivered_until: 4_000, settled: "delivered" });
     expect(await changes(t.sid)).toEqual([{ publish_version: 4, at: 4_000, by: "u4", parts_json: '["variants.b.changes"]' }]);
@@ -537,10 +562,10 @@ describe("届く定義(D9 ③ K14)", () => {
     await seedPublish(s.sid, 3, "u3", 2_500);
     await record(s, 3, g(3), def("v3"));
     await seedRequest(s.sid, 3, 3, 2_500);
-    await confirmDeliveries(db(), s.sid, { history: [point(3, 3_000)], historyFrom: null }, 3_100, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(3, 3_000)], historyFrom: null }, 3_100, noGuard, null);
     expect(await rowOf(s.sid, 3)).toMatchObject({ delivered_from: 3_000, settled: "delivered" });
     // 確定した run は読まない(同じ世代の別の時刻が来ても触らない)
-    expect(await confirmDeliveries(db(), s.sid, { history: [point(3, 2_000)], historyFrom: null }, 3_200, noGuard)).toBe(0);
+    expect(await confirmDeliveries(db(), s.sid, { history: [point(3, 2_000)], historyFrom: null }, 3_200, noGuard, null)).toBe(0);
     expect((await rowOf(s.sid, 3)).delivered_from).toBe(3_000);
   });
 
@@ -555,16 +580,219 @@ describe("届く定義(D9 ③ K14)", () => {
     await seedRequest(s.sid, 3, 3, 2_500);
     await seedRequest(s.sid, 4, 4, 3_500);
     await seedRequest(s.sid, 5, 5, 5_500);
-    await confirmDeliveries(db(), s.sid, { history: [point(3, 3_000)], historyFrom: null }, 3_100, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [point(3, 3_000)], historyFrom: null }, 3_100, noGuard, null);
     // 履歴が 4,000 より前を切り詰めた: 版 4 の依頼(3,500)は判断できない → unknown(最新の行)
-    await confirmDeliveries(db(), s.sid, { history: [], historyFrom: iso(4_000) }, 4_100, noGuard);
+    await confirmDeliveries(db(), s.sid, { history: [], historyFrom: iso(4_000) }, 4_100, noGuard, null);
     expect(await rowOf(s.sid, 4)).toMatchObject({ delivered_from: null, settled: "unknown" });
     expect(await sitesNeedingDeliveryConfirmation(db())).toContain(s.sid);
     // 世代 5(版 5 = 版 4 と同じ定義)が配られた → 版 4 の行が配信済み
-    expect(await confirmDeliveries(db(), s.sid, { history: [point(5, 6_000)], historyFrom: iso(4_000) }, 6_100, noGuard)).toBe(1);
+    expect(await confirmDeliveries(db(), s.sid, { history: [point(5, 6_000)], historyFrom: iso(4_000) }, 6_100, noGuard, null)).toBe(1);
     expect(await rowOf(s.sid, 4)).toMatchObject({ delivered_from: 6_000, settled: "delivered" });
     expect((await rowOf(s.sid, 3)).delivered_until).toBe(6_000);
     expect(textOf((await deliveredAt(db(), s.sid, s.eid, 6_500))?.definition)).toBe("v4");
     expect(await sitesNeedingDeliveryConfirmation(db())).not.toContain(s.sid);
+  });
+});
+
+// ---- 7o K24: 世代の再利用で別の中身の配信を証拠にしない ----
+
+describe("配信の確認の入力の digest(7o K24)", () => {
+  /** 実行中のテストを持ち、DEPLOYER なしで公開した(依頼を送っていない)Site。版 1 の届く定義の行がある */
+  async function runningSite(existing?: Awaited<ReturnType<typeof setupOwner>>) {
+    const { owner, sid } = await resultsSite(existing);
+    await testExperiment(owner.token, sid, "exp_t");
+    await transition(owner.token, sid, "exp_t", "running");
+    return { owner, sid };
+  }
+  /** 次の公開が出し直しの依頼に割り当てる世代(activation と依頼がそれぞれ seq を 1 つ進める) */
+  async function nextPublishGen(sid: string): Promise<StaticGeneration> {
+    const row = await siteRow(sid);
+    return { epoch: genOf(row).epoch, seq: row.static_seq + 2 };
+  }
+  /** 15 分ごとの Cron の results-delivery だけを 1 回走らせる(cron-results.test.ts と同じ呼び方) */
+  async function cronDelivery(deployer: Env["DEPLOYER"]) {
+    const e: Env = { ...testEnvWith({ resultsStore: true }), RESULTS_BUDGET: fakeResultsBudget().ns, RESULTS_HEALTH: fakeResultsHealth().ns, DEPLOYER: deployer };
+    return runCron(e, Date.now(), [resultsDeliveryJob]);
+  }
+  /** 自己修復(GET /sites/:sid の reconcileStatic → confirmFromStatus) */
+  async function selfRepair(token: string, sid: string, deployer: Env["DEPLOYER"]) {
+    const res = await call("GET", `/sites/${sid}`, { token, envOverride: { DEPLOYER: deployer } });
+    expect(res.status).toBe(200);
+    return json(res);
+  }
+  const requestOf = (sid: string, g: StaticGeneration) =>
+    db().selectFrom("static_deploy_requests").selectAll().where("site_id", "=", sid).where("epoch", "=", g.epoch).where("seq", "=", g.seq).executeTakeFirst();
+
+  /**
+   * DO が前の中身(版 1)を世代 g で配った履歴の点(digest 付き)を持ち、D1 を戻した後の新しい中身(版 2)の依頼が同じ世代 g を再利用する。
+   * 戻り値の pub = 版 2 の公開の応答
+   */
+  async function collision() {
+    const { owner, sid } = await runningSite();
+    const g = await nextPublishGen(sid);
+    const oldInput = await staticInputOf(sid);
+    const oldDigest = await staticInputDigest(oldInput);
+    const fake = fakeDeployer();
+    const oldAt = Date.now() - 60_000;
+    fake.setSite(sid, { accepted: g, deployed: g, input: oldInput, deployedAt: iso(oldAt), history: [{ generation: g, deployedAt: iso(oldAt), digest: oldDigest }] });
+    expect((await setText(owner.token, sid, "exp_t", "New")).status).toBe(200);
+    const pub = await publishOk(owner.token, sid, { ...RESULTS_STORE, DEPLOYER: fake });
+    expect(pub.staticDeploy).toBe("pending"); // 同じ世代として捨てられた
+    const req = await requestOf(sid, g);
+    expect(req).toMatchObject({ version: pub.version });
+    expect(req!.input_digest).toBe(await staticInputDigest(await staticInputOf(sid)));
+    expect(req!.input_digest).not.toBe(oldDigest);
+    expect(JSON.parse((await rowOf(sid, pub.version)).static_generation!)).toEqual(g); // 行には世代が入る(依頼は送った)
+    return { owner, sid, fake, pub, g, oldAt };
+  }
+
+  it("generation_collision_does_not_confirm_undelivered_definition", async () => {
+    const c = await collision();
+    // (1) 自己修復も (2) Cron も、古い配信を新しい版の証拠にしない(digest を持つ点は rowGenVersion でも引かない)
+    const got = await selfRepair(c.owner.token, c.sid, c.fake);
+    expect(got.staticMismatch).toBe(true);
+    expect(await rowOf(c.sid, c.pub.version)).toMatchObject({ delivered_from: null, settled: null });
+    await cronDelivery(c.fake);
+    expect(await rowOf(c.sid, c.pub.version)).toMatchObject({ delivered_from: null, settled: null });
+    // (3) 手動の作り直しに成功した後は、新しい履歴の点(新しい世代・新しい digest)の時刻で確かめる
+    const res = await call("POST", `/sites/${c.sid}/static/redeploy`, { token: c.owner.token, envOverride: { DEPLOYER: c.fake } });
+    expect(await json(res)).toEqual({ staticDeploy: "deployed" });
+    const at = Date.parse((await c.fake.siteStatus(c.sid)).deployedAt!);
+    expect(at).toBeGreaterThan(c.oldAt);
+    await cronDelivery(c.fake);
+    expect(await rowOf(c.sid, c.pub.version)).toMatchObject({ delivered_from: at, settled: "delivered" });
+  });
+
+  it("作り直しても配置に失敗して新しい配信の証拠が無ければ、版 2 は未確定のまま", async () => {
+    const c = await collision();
+    c.fake.setMode("pending"); // 作り直しの配置が失敗する
+    const res = await call("POST", `/sites/${c.sid}/static/redeploy`, { token: c.owner.token, envOverride: { DEPLOYER: c.fake } });
+    expect(await json(res)).toEqual({ staticDeploy: "pending" });
+    await selfRepair(c.owner.token, c.sid, c.fake);
+    await cronDelivery(c.fake);
+    expect(await rowOf(c.sid, c.pub.version)).toMatchObject({ delivered_from: null, settled: null });
+  });
+
+  it("legacy_history_cannot_confirm_new_definition_when_request_record_fails", async () => {
+    // DO は更新前に前の中身を世代 g で配った(digest の無い履歴の点)。D1 を戻した後の新しい中身の依頼が同じ世代 g を再利用し、依頼の記録だけが書けない
+    const { owner, sid } = await runningSite();
+    const g = await nextPublishGen(sid);
+    const oldAt = Date.now() - 60_000;
+    const fake = fakeDeployer();
+    fake.setSite(sid, { accepted: g, deployed: g, input: await staticInputOf(sid), deployedAt: iso(oldAt), history: [{ generation: g, deployedAt: iso(oldAt) }] });
+    expect((await setText(owner.token, sid, "exp_t", "New")).status).toBe(200);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const pub = await publishOk(owner.token, sid, { ...RESULTS_STORE, DEPLOYER: fake, DB: failingD1Query(env.DB, /^\s*insert into "?static_deploy_requests/i) });
+    error.mockRestore();
+    expect(pub.staticDeploy).toBe("pending");
+    expect(fake.deploys).toHaveLength(0); // 記録を書けなければ送らない
+    expect((await siteRow(sid)).static_stale).toBe(1);
+    expect(await requestOf(sid, g)).toBeUndefined();
+    expect((await rowOf(sid, pub.version)).static_generation).toBeNull(); // 送っていない世代を行に書かない
+    // (1) 自己修復 (2) Cron のどちらでも、古い配信を新しい版の証拠にしない
+    await selfRepair(owner.token, sid, fake);
+    expect(await rowOf(sid, pub.version)).toMatchObject({ delivered_from: null, settled: null });
+    await cronDelivery(fake);
+    expect(await rowOf(sid, pub.version)).toMatchObject({ delivered_from: null, settled: null });
+  });
+
+  it("記録を書けなかった依頼は、後で自己修復が依頼し直して digest 付きの記録で確かめる", async () => {
+    const { owner, sid } = await runningSite();
+    const fake = fakeDeployer(); // 何も受け付けていない
+    expect((await setText(owner.token, sid, "exp_t", "New")).status).toBe(200);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const pub = await publishOk(owner.token, sid, { ...RESULTS_STORE, DEPLOYER: fake, DB: failingD1Query(env.DB, /^\s*insert into "?static_deploy_requests/i) });
+    error.mockRestore();
+    expect(pub.staticDeploy).toBe("pending");
+    expect(fake.deploys).toHaveLength(0);
+    // INSERT を戻した後の自己修復で依頼し直す(waitUntil。call は待つ)
+    await selfRepair(owner.token, sid, fake);
+    expect(fake.deploys).toHaveLength(1);
+    const g = fake.deploys[0]!.generation;
+    expect((await requestOf(sid, g))?.input_digest).toBe(await staticInputDigest(await staticInputOf(sid)));
+    expect((await siteRow(sid)).static_stale).toBe(0);
+    const at = Date.parse((await fake.siteStatus(sid)).deployedAt!);
+    await cronDelivery(fake);
+    expect(await rowOf(sid, pub.version)).toMatchObject({ delivered_from: at, settled: "delivered" });
+  });
+
+  it("legacy_pending_request_deployed_after_upgrade_is_confirmed", async () => {
+    const shared = await setupOwner();
+    for (const via of ["repair", "cron"] as const) {
+      // 更新前の control が書いた依頼の記録(input_digest が NULL)と、更新前の DO が受け付けて配置待ちだった状態(digest なし・保存済みの入力)
+      const { owner, sid } = await runningSite(shared);
+      const row = await siteRow(sid);
+      const g = genOf(row);
+      await db().insertInto("static_deploy_requests").values({ site_id: sid, epoch: g.epoch, seq: g.seq, version: row.active_version!, requested_at: Date.now() }).execute();
+      const fake = fakeDeployer();
+      fake.setSite(sid, { accepted: g, deployed: null, input: await staticInputOf(sid) });
+      await fake.flush(); // 更新後の deployer の alarm で配置(履歴の点に digest が付く)
+      const st = await fake.siteStatus(sid);
+      expect(st.history[0]!.digest).toBeDefined();
+      const at = Date.parse(st.deployedAt!);
+      if (via === "repair") expect((await selfRepair(owner.token, sid, fake)).staticStale).toBe(false);
+      else await cronDelivery(fake);
+      expect(await rowOf(sid, row.active_version!)).toMatchObject({ delivered_from: at, settled: "delivered" });
+    }
+  });
+
+  it("更新前の記録の世代に別の中身が配られた点・記録の後に設定が変わった点は数えない", async () => {
+    const shared = await setupOwner();
+    for (const via of ["repair", "cron"] as const) {
+      for (const kind of ["other_content", "settings_changed"] as const) {
+        const { owner, sid } = await runningSite(shared);
+        const row = await siteRow(sid);
+        const g = genOf(row);
+        await db().insertInto("static_deploy_requests").values({ site_id: sid, epoch: g.epoch, seq: g.seq, version: row.active_version!, requested_at: Date.now() }).execute();
+        const input = await staticInputOf(sid);
+        const fake = fakeDeployer();
+        fake.setSite(sid, { accepted: g, deployed: null, input: kind === "other_content" ? otherStaticInput(input) : input });
+        await fake.flush();
+        // 記録の後に bootstrap に焼く設定が変わった(D1 だけ。今の設定から作る digest が点と合わない)
+        if (kind === "settings_changed") await sql`update sites set decision_timeout_ms = decision_timeout_ms + 100 where id = ${sid}`.execute(db());
+        if (via === "repair") await selfRepair(owner.token, sid, fake);
+        else await cronDelivery(fake);
+        expect(await rowOf(sid, row.active_version!)).toMatchObject({ delivered_from: null, settled: null });
+      }
+    }
+  });
+
+  it("古い記録どうしは世代で引き、digest のどちらかがあれば組み合うときだけ数える", async () => {
+    const owner = await setupOwner();
+    const prepare = async () => {
+      const s = await unitSite(owner);
+      await seedPublish(s.sid, 3, "u3", 2_500);
+      await record(s, 3, g(3), def("v3"));
+      return s;
+    };
+    const confirm = (sid: string, h: StaticDeployHistoryEntry[]) => confirmDeliveries(db(), sid, { history: h, historyFrom: null }, 4_000, noGuard, null);
+    // 点にも記録にも digest が無い(更新前どうし): 記録の版で確かめる
+    const a = await prepare();
+    await seedRequest(a.sid, 3, 3, 2_500);
+    await confirm(a.sid, [point(3, 3_000)]);
+    expect(await rowOf(a.sid, 3)).toMatchObject({ delivered_from: 3_000, settled: "delivered" });
+    // 点にも記録にも digest が無く、記録も無い: 行の世代で補う(更新前の世代)
+    const b = await prepare();
+    await confirm(b.sid, [point(3, 3_000)]);
+    expect(await rowOf(b.sid, 3)).toMatchObject({ delivered_from: 3_000, settled: "delivered" });
+    // 点に digest が無く、記録に digest がある: 数えない
+    const c = await prepare();
+    await seedRequest(c.sid, 3, 3, 2_500, "d-new");
+    await confirm(c.sid, [point(3, 3_000)]);
+    expect(await rowOf(c.sid, 3)).toMatchObject({ delivered_from: null, settled: null });
+    // 点に digest があり、記録の digest が違う: 数えない
+    const d = await prepare();
+    await seedRequest(d.sid, 3, 3, 2_500, "d-new");
+    await confirm(d.sid, [digestPoint(3, 3_000, "d-old")]);
+    expect(await rowOf(d.sid, 3)).toMatchObject({ delivered_from: null, settled: null });
+    // 点に digest があり、記録が無い(行の世代だけ): rowGenVersion で補わない
+    const e = await prepare();
+    await confirm(e.sid, [digestPoint(3, 3_000, "d-old")]);
+    expect(await rowOf(e.sid, 3)).toMatchObject({ delivered_from: null, settled: null });
+    // 点に digest があり、記録の digest が同じ: 数える
+    const f = await prepare();
+    await seedRequest(f.sid, 3, 3, 2_500, "d-new");
+    await confirm(f.sid, [digestPoint(3, 3_000, "d-new")]);
+    expect(await rowOf(f.sid, 3)).toMatchObject({ delivered_from: 3_000, settled: "delivered" });
   });
 });

@@ -1,5 +1,7 @@
 // admin の E2E 用の偽の Cloudflare API(決定 52)。wtt-deployer の CF_API_BASE をここに向ける。
 // 受けるのは アップロードの準備 / アップロード / スクリプトの登録 の 3 つだけ。登録された manifest で /s/* を配る(配信専用の Worker の代わり)
+// E2E 専用の切り替え(本物の API には無い経路): POST /__e2e/fail { on: boolean } で、on のあいだアップロードの準備を
+// 503 + Authentication error にする(トークンの問題で配置が止まった状態。static-delivery.spec.ts が使い、終わりに必ず on: false に戻す)
 import http from "node:http";
 
 const PORT = Number(process.env.FAKE_CF_PORT ?? 8791);
@@ -7,6 +9,7 @@ const blobs = new Map(); // hash -> base64
 const sessions = new Map(); // jwt -> manifest
 let live = { manifest: {}, headers: {} };
 let seq = 0;
+let failing = false;
 
 function send(res, status, body) {
   res.writeHead(status, { "content-type": "application/json" });
@@ -31,7 +34,22 @@ http
   .createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     const p = url.pathname;
+    if (req.method === "POST" && p === "/__e2e/fail") {
+      let on;
+      try {
+        on = JSON.parse((await readBody(req)).toString("utf8")).on;
+      } catch {
+        on = undefined;
+      }
+      if (typeof on !== "boolean") return send(res, 400, { success: false, errors: [{ code: 400, message: "body must be { on: boolean }" }] });
+      failing = on;
+      return send(res, 200, { success: true, result: { failing } });
+    }
     if (req.method === "POST" && p.endsWith("/assets-upload-session")) {
+      if (failing) {
+        await readBody(req); // 本文は読み捨てる(接続を正しく閉じるため)
+        return send(res, 503, { success: false, errors: [{ code: 10000, message: "Authentication error" }] });
+      }
       const { manifest } = JSON.parse((await readBody(req)).toString("utf8"));
       const jwt = `s${++seq}`;
       sessions.set(jwt, manifest);

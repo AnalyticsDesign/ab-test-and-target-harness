@@ -13,7 +13,7 @@ import {
 import { SiteSettingsSchema } from "../src/settings";
 import { CompileInputSchema, ExperimentInputSchema, VariantInputSchema } from "../src/compile";
 import { ConsentBodySchema, DecisionBodySchema, DliteRequestSchema, EventBodySchema } from "../src/protocol";
-import { StaticDeployRequestSchema, StaticRemoveRequestSchema } from "../src/static-deploy";
+import { StaticBatchDeployRequestSchema, StaticDeployRequestSchema, StaticRemoveRequestSchema } from "../src/static-deploy";
 import * as core from "../src/index"; //メタ assertion(表に無い zod スキーマがあれば落とす)
 
 const ctxUrl = { ctx: "url", op: "contains", value: "/pricing/" } as const;
@@ -399,6 +399,10 @@ describe("schema strictness", () => {
     ["StaticDeployRequest", StaticDeployRequestSchema, { protocol: 1, siteId: "site_1", generation: { epoch: 1, seq: 1 }, config: {}, settings: {}, apiBase: null }],
     ["StaticDeployRequest generation", StaticDeployRequestSchema, { protocol: 1, siteId: "site_1", generation: { epoch: 1, seq: 1, __unknown: 1 }, config: {}, settings: {}, apiBase: null }],
     ["StaticRemoveRequest", StaticRemoveRequestSchema, { protocol: 1, siteId: "site_1", generation: { epoch: 1, seq: 1 } }],
+    ["StaticBatchDeployRequest", StaticBatchDeployRequestSchema, { protocol: 1, sites: [{ siteId: "site_1", generation: { epoch: 1, seq: 1 }, config: {}, settings: {}, apiBase: null }], flush: "soon" }],
+    ["StaticBatchDeployRequest site", StaticBatchDeployRequestSchema, { protocol: 1, sites: [{ siteId: "site_1", generation: { epoch: 1, seq: 1 }, config: {}, settings: {}, apiBase: null, __unknown: 1 }], flush: "soon" }],
+    ["StaticBatchDeployRequest remove", StaticBatchDeployRequestSchema, { protocol: 1, sites: [{ siteId: "site_1", generation: { epoch: 1, seq: 1 }, remove: true }], flush: "later" }],
+    ["StaticBatchDeployRequest remove generation", StaticBatchDeployRequestSchema, { protocol: 1, sites: [{ siteId: "site_1", generation: { epoch: 1, seq: 1, __unknown: 1 }, remove: true }], flush: "later" }],
   ];
 
   /**

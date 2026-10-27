@@ -184,7 +184,7 @@ describe("nav", () => {
     expect(gs.map((g) => [g.heading, g.name])).toEqual([["ワークスペース", "ワークスペース1"], ["個人", null], ["システム", null]]);
     expect(gs[0]!.items.map((i) => i.href)).toEqual(["/w/ws1/members", "/w/ws1/api-keys"]);
     expect(gs[1]!.items.map((i) => i.href)).toEqual(["/w/me/api-keys", "/w/me/display"]);
-    expect(gs[2]!.items.map((i) => i.href)).toEqual(["/w/me/instance-admins", "/w/me/workspaces", "/w/me/usage"]);
+    expect(gs[2]!.items.map((i) => i.href)).toEqual(["/w/me/instance-admins", "/w/me/workspaces", "/w/me/usage", "/w/me/static-delivery"]);
   });
 
   it("settings_entry_href_per_origin", () => {
@@ -207,9 +207,17 @@ describe("nav", () => {
     const gs = settingsGroups({ kind: "home" }, { workspaces: [], instanceAdmin: true });
     const usage = gs.find((g) => g.scope === "system")!.items.find((i) => i.label === "Cloudflare 使用状況");
     expect(usage?.prefetch).toBe(false);
-    // prefetch を止めるのは使用状況だけ(ほかの設定の画面は先読みしてよい)
+    // prefetch を止めるのは使用状況と配信ファイルだけ(ほかの設定の画面は先読みしてよい)
     const all = settingsGroups({ kind: "site", wid: "ws1", sid: "s1" }, { workspaces: wsOf("owner"), instanceAdmin: true }).flatMap((g) => g.items);
-    expect(all.filter((i) => i.prefetch !== undefined).map((i) => i.href)).toEqual(["/w/me/usage"]);
+    expect(all.filter((i) => i.prefetch !== undefined).map((i) => i.href)).toEqual(["/w/me/usage", "/w/me/static-delivery"]);
+  });
+
+  // 7o K14: 配信ファイルの画面はシステムの節の最後。先読みでデプロイ専用の Worker を呼ばない(使用状況と同じ)
+  it("settings_groups_static_delivery_last_in_system_and_admin_only", () => {
+    const sys = settingsGroups({ kind: "home" }, { workspaces: [], instanceAdmin: true }).find((g) => g.scope === "system")!;
+    expect(sys.items.at(-1)).toEqual({ key: "/w/me/static-delivery", href: "/w/me/static-delivery", label: "配信ファイル", icon: "upload", prefetch: false });
+    const notAdmin = settingsGroups({ kind: "site", wid: "ws1", sid: "s1" }, { workspaces: wsOf("owner"), instanceAdmin: false }).flatMap((g) => g.items);
+    expect(notAdmin.map((i) => i.href)).not.toContain("/w/me/static-delivery");
   });
 
   it("next_remembered_aligns_origin_with_destination_and_keeps_it", () => {

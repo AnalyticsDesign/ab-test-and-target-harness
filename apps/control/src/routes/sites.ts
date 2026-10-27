@@ -36,6 +36,11 @@ export const siteRoutes = new Hono<AppEnv>();
 /** spec §13.9: `GET /sites/:sid` は siteJson に badge/banner 用の 1 フラグを足して返す */
 const SiteGetSchema = SiteJsonSchema.extend({
   hasUnpublishedChanges: z.boolean().describe("エクスペリエンスのいずれかが unpublished、または目標 / パターン / タイムゾーン / 結果の記録の切り替えが前回 activation より後"),
+  staticMismatch: z
+    .boolean()
+    .describe(
+      "設置タグの配信ファイルの記録が食い違っている(デプロイ専用の Worker の記録が、データベースより新しい世代や削除の記録を持っている、または同じ世代で中身が違う。データベースを過去の時点に戻した後などに起きる)。POST /sites/:sid/static/redeploy か、システム管理者の POST /static/rebuild で直る",
+    ),
   resultsCapacity: z
     .object({
       sizeBytes: z.number().int().describe("計測用のデータベースの大きさ(バイト)"),
@@ -155,14 +160,17 @@ siteRoutes.get(
     // backlog D13 / 決定 56 (7): 凍結中は自己修復を見送り、読んだ時点の印のまま応答する(解除後の GET で直る)。
     // 凍結の読み取りが失敗したときも isWriteFrozen は true(見送る側に倒す)。
     // スイッチを読むのは直すものがある(読んだ行に印が立っている)ときだけ — 印が無ければどちらも書かないので、GET ごとの D1 読み取りを省く。
-    // reconcileStatic は自分で static_stale を見て、0 なら何も問い合わせず false を返す。reconcileActive は行を読み直すので、
+    // reconcileStatic は自分で static_stale を見て、0 なら何も問い合わせず { stale: false, mismatch: false } を返す。reconcileActive は行を読み直すので、
     // loadSite の後に別の要求が印を立てた瞬間だけは書き得る — 凍結中に書かないよう、読んだ行に印が無ければ呼ばない
     // (読んだ行に印が無ければ、応答は呼んだときと同じ activeKvStale = false。直すのは次の GET に回る)
     const needsRepair = site.active_kv_stale === 1 || site.static_stale === 1;
     const frozen = needsRepair && (await isWriteFrozen(db));
     const reconciled = site.active_kv_stale !== 1 ? true : frozen ? false : await reconcileActive(c.env, db, site.id);
-    // 決定 52 / plan K5 ④: 配信ファイルの出し直しが済んでいない Site は、デプロイ専用の Worker の状態を見て印を下ろす(届いていなければ依頼し直す)
-    const staticStale = frozen ? site.static_stale === 1 : await reconcileStatic(c.env, db, site, (p) => c.executionCtx.waitUntil(p));
+    // 決定 52 / plan K5 ④: 配信ファイルの出し直しが済んでいない Site は、デプロイ専用の Worker の状態を見て印を下ろす(届いていなければ依頼し直す)。
+    // 7o K6: 記録の食い違い(先行・同じ世代の別の中身・墓標)も返す。凍結中は問い合わせないので false
+    const { stale: staticStale, mismatch: staticMismatch } = frozen
+      ? { stale: site.static_stale === 1, mismatch: false }
+      : await reconcileStatic(c.env, db, site, (p) => c.executionCtx.waitUntil(p));
     // spec §13.9: いずれかの Experiment が unpublished、または Goal / パターンの変更(sites.content_updated_at)が
     // 前回 activation より後 なら badge/banner を立てる。Experiment 側は 1 件でも該当すれば十分なので limit(1)
     const since = site.last_activated_at ?? 0;
@@ -173,6 +181,7 @@ siteRoutes.get(
       ...siteJson(site),
       activeKvStale: reconciled ? false : site.active_kv_stale === 1,
       staticStale,
+      staticMismatch,
       hasUnpublishedChanges: dirty !== undefined || site.content_updated_at > since,
       resultsCapacity: store ? { sizeBytes: store.size_bytes, measuredAt: store.measured_at, level: capacityLevel(store.size_bytes) } : null,
     });

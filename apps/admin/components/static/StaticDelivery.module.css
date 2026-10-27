@@ -1,0 +1,17 @@
+/* apps/admin/components/static/StaticDelivery.module.css */
+/* 本文の先頭の段落(読みやすい幅に抑える) */
+.lead { max-width: 86ch; margin-bottom: 20px; }
+/* 表のカードの見出し(カードの外・すぐ上)と項目の数(決まり 1.3) */
+.tableHead { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; }
+.tableHead h2 { margin: 0; }
+/* 狭い画面では枠の中で横にスクロールさせる(card-flush の overflow: hidden で切れないように) */
+.scroll { overflow-x: auto; }
+.state { white-space: nowrap; }
+.error { margin-left: 6px; }
+/* カードの下端のボタン(右寄せ。決まり 2.3) */
+.foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 12px; }
+/* 作り直しの結果(緑のカード。IssuedCard と同じ見た目。決まり 5.3) */
+/* globals.css の .card(border・background)と同じ強さだと読み込みの順で負けるので、.card と組にして上書きする */
+:global(.card).done { border-color: var(--ok); background: var(--ok-soft); }
+.done h2:focus { outline: none; }
+.doneFoot { margin-top: 12px; }

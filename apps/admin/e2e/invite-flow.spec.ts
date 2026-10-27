@@ -1,5 +1,5 @@
 import { test, expect, type Request } from "@playwright/test";
-import { ADMIN_URL, EXPERIMENT, OWNER_EMAIL, PASSWORD, SITE, WORKSPACE_NAME, controlHeaders, login, openMembers, openSettings, openWorkspace, pick, waitForHydration } from "./fixtures";
+import { ADMIN_URL, EXPERIMENT, OWNER_EMAIL, SITE, WORKSPACE_NAME, acceptInvite, controlHeaders, issueInvite, login, openMembers, openSettings, openWorkspace, pick, waitForHydration } from "./fixtures";
 
 /**
  * 招待で入った EDITOR の境界(spec §13.2 決定 13)。
@@ -12,21 +12,17 @@ import { ADMIN_URL, EXPERIMENT, OWNER_EMAIL, PASSWORD, SITE, WORKSPACE_NAME, con
 test("invited editor can edit but cannot publish; the API refuses status changes with 403", async ({ browser, page }) => {
   await login(page);
   await openMembers(page);
-  await page.fill('input[name="email"]', "editor@e2e.example");
-  await pick(page, "ロール", /^編集者/);
-  await page.getByRole("button", { name: "招待リンクを発行" }).click();
-  // メールは自動送信しないので、発行された URL を画面から拾って渡す(spec §13.3)。
+  // メールは自動送信しないので、発行された URL を画面から拾って渡す(spec §13.3。issueInvite)。
   // 結果は API キーの発行結果と同じ見出し付きのカードで出し、見出しにフォーカスを移す(backlog B47)
+  const url = await issueInvite(page, "editor@e2e.example", /^編集者/);
   const issuedInvite = page.getByTestId("issued-invite");
   await expect(issuedInvite.getByRole("heading", { name: "招待リンクを発行しました" })).toBeFocused();
   await expect(issuedInvite).toContainText("メールは自動送信されません");
   await expect(issuedInvite.getByRole("button", { name: "リンクをコピー" })).toBeVisible();
-  const url = await issuedInvite.getByTestId("code-block").textContent();
-  expect(url).toMatch(/\/invite\//);
   // 移動の確認は付けない(B47 (a))。閉じても招待中の一覧からリンクを控えられる
   await issuedInvite.getByRole("button", { name: "閉じる" }).click();
   await expect(issuedInvite).toHaveCount(0);
-  await expect(page.getByRole("row").filter({ hasText: "editor@e2e.example" })).toContainText(url!);
+  await expect(page.getByRole("row").filter({ hasText: "editor@e2e.example" })).toContainText(url);
 
   // 招待の取り消し(backlog B24)。ログイン済みのこの流れに相乗りする(sign-in の予算を増やさない。fixtures.ts の内訳参照)
   const canceled = "canceled@e2e.example";
@@ -48,7 +44,7 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   const extendedCard = page.getByTestId("issued-invite");
   await expect(extendedCard.getByRole("heading", { name: "招待の期限を延ばしました" })).toBeFocused();
   await expect(extendedCard).toContainText("リンクは変わっていません");
-  await expect(extendedCard.getByTestId("code-block")).toHaveText(url!); // リンクは変わらない
+  await expect(extendedCard.getByTestId("code-block")).toHaveText(url); // リンクは変わらない
   // 違う Role での再招待は断られ、理由と直し方が招待フォームのそば(招待セクション内)に出る。
   // 上部の ErrorBox には出さない(B28: 発行に失敗したら古い「延ばしました」も消す)
   await page.fill('input[name="email"]', "editor@e2e.example");
@@ -69,16 +65,8 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await issuedReset.getByRole("button", { name: "控えたので閉じる" }).click();
   await expect(issuedReset).toHaveCount(0);
 
-  // 未ログインの別コンテキストで招待を受ける
-  const ctx = await browser.newContext({ baseURL: ADMIN_URL });
-  const editor = await ctx.newPage();
-  await editor.goto(url!);
-  // break-glass が開いているので非常用のパスワードフォームも出る。まず通常経路(Google)の導線を確認する
-  await expect(editor.getByRole("link", { name: "Google でログインして参加" })).toHaveAttribute("href", /\/api\/session\/google\?next=%2Finvite%2F/);
-  await editor.fill('input[name="name"]', "Ed");
-  await editor.fill('input[name="password"]', PASSWORD);
-  await editor.getByRole("button", { name: "参加する" }).click();
-  await expect(editor).toHaveURL(/\/w\/[^/]+$/);
+  // 未ログインの別コンテキストで招待を受ける(acceptInvite は、通常経路(Google)の導線が出ていることも確かめてからパスワードで参加する)
+  const { ctx, page: editor } = await acceptInvite(browser, url, "Ed");
 
   // B60 Task 8: 編集者(管理者未満)のホームのカードには「メンバー」が出ない(数もリンクも)
   await editor.goto("/w");

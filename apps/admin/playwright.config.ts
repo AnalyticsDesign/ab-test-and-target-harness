@@ -94,5 +94,8 @@ export default defineConfig({
     { name: "variant-ui", testMatch: /variant-ui\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // D9 ③: 結果の記録の流れ(評価計画 → 開始 → edge への参加・CV → 結果のタブ → 終了と採用 → 複製の下書き)。専用のサイトを作る
     { name: "results-flow", testMatch: /results-flow\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    // 7o K14: 設置タグの配信ファイルの帯と全サイトの作り直し。偽の API を一時的に失敗にする(終わりに必ず戻す)。専用のサイトを作り、メンバーを 1 人招待する。
+    // 失敗の窓がほかの project の公開に重ならないよう最後に置く(workers: 1 なので並んで走らない)
+    { name: "static-delivery", testMatch: /static-delivery\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
   ],
 });

@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { call, choosePrimaryGoal, createExperiment, createSite, fakeResultsBudget, joinWithPassword, json, RESULTS_STORE, setupOwner } from "./helpers";
+import { call, choosePrimaryGoal, createExperiment, createSite, fakeDeployer, fakeResultsBudget, joinWithPassword, json, RESULTS_STORE, setupOwner } from "./helpers";
 
 /**
  * 利用者(エージェント・運用者)に見える文字列に、非公開の開発記録への参照を出さない。
@@ -178,5 +178,13 @@ describe("public strings carry no private design references", () => {
     const tooOldBody = await json(tooOld);
     expect(tooOldBody.error).toBe("client_too_old");
     noPrivateRef("client_too_old", JSON.stringify(tooOldBody));
+    // 7o K21: デプロイ専用の Worker の状態を取れない 503(binding が無い / 届かない)
+    for (const [reason, envOverride] of [["not_configured", {}], ["unreachable", { DEPLOYER: fakeDeployer("throw") }]] as const) {
+      const unavailable = await call("GET", "/static/status", { token, envOverride });
+      expect(unavailable.status).toBe(503);
+      const body = await json(unavailable);
+      expect(body).toMatchObject({ error: "static_deployer_unavailable", reason });
+      noPrivateRef(`static_deployer_unavailable (${reason})`, JSON.stringify(body));
+    }
   }, 20_000);
 });

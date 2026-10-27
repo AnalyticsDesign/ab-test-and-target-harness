@@ -1343,7 +1343,7 @@ IP with NAT support は Cloudflare の画面の名前で、日本語の表示は
 3. 2.6 の Cache Rule と 2.7 の WAF Rate Limiting Rule を作る
 4. 配信専用の Worker `wtt-static` に設置サイトのゾーンの Route を足す。`workers.dev` は**まだ切らない**(旧 URL のタグを読むページが残っている間は両方で受ける): `pnpm -C apps/deployer setup-static -- --route "<設置ホスト>/s/*" --zone "<ゾーン名>"`(2.9 の (3) の環境変数が要る。期待: `script: exists (kept)` / `route <設置ホスト>/s/*: created`)
 5. control の `AB_EDGE_ORIGIN` を `https://<設置ホスト>` に変え、`AB_STATIC_ORIGIN` を消して再デプロイする(3.4、3.5)
-6. `AB_EDGE_ORIGIN` を変えたら、各サイトの配信ファイルを作り直す(管理画面のサイトの上部、または `POST /sites/<siteId>/static/redeploy`)。配信ファイルに API の宛先が書き込まれているため
+6. `AB_EDGE_ORIGIN` を変えたら、公開中の全サイトの配信ファイルを作り直す。配信ファイルに API の宛先が書き込まれているため。管理画面の左メニューの下の「設定」→「配信ファイル」(「システム」の見出しの下。システム管理者だけに出る)で「公開中の全サイトの配信ファイルを作り直す」を押す。エージェントは、サイトごとの `POST /sites/<siteId>/static/redeploy` を公開中のサイトの数だけ呼ぶ(全サイトの作り直しは API キーでは呼べない)
 7. 設置サイトの全ページのタグ `src` を `https://<設置ホスト>/s/<siteId>.js` に差し替える([サイト導入ガイド 3 節](site-install.md#3-タグを置く))。サイトの CSP に edge と `wtt-static` の旧ホストを足していたなら外す
 8. 旧 URL へのアクセスが無くなったことを確認してから(9 節 (b) の指標、または Workers のログで `workers.dev` ホストへの要求が 0 になってから数日)、edge の `workers_dev` を `false` にして再デプロイし、`wtt-static` の workers.dev も切る。完了の確認は `wrangler deploy` の出力: `Deployed wtt-edge triggers` に Route だけが並び、`https://wtt-edge.<アカウントのサブドメイン>.workers.dev` の行が**無い**こと
 
@@ -1405,7 +1405,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置タグのホスト>/s/
 
 補足:
 
-- **`wtt-deployer`(またはその Durable Object)を消して作り直したとき**: どのサイトの配信ファイルがあるかの記録が失われる。配信ファイルを作り直さずに公開すると、記録にあるサイトだけで配信ファイルが置き換わり、他のサイトのファイルが消える。作り直したあとは、公開中のすべてのサイトの配信ファイルを作り直す(管理画面で各サイトを開く、または `POST /sites/<siteId>/static/redeploy`)
+- **`wtt-deployer`(またはその Durable Object)を消して作り直したとき**: どのサイトの配信ファイルがあるかの記録が失われる。このまま別のサイトを公開すると、記録にあるサイトだけで配信ファイルが置き換わり、ほかのサイトのファイルが消える。作り直したら、公開の前に、管理画面の左メニューの下の「設定」→「配信ファイル」(「システム」の見出しの下)で「公開中の全サイトの配信ファイルを作り直す」を押す(システム管理者が管理画面から行う。全サイトの作り直しは API キーでは呼べない。エージェントは、サイトごとの `POST /sites/<siteId>/static/redeploy` を公開中のサイトの数だけ呼ぶ)。押し忘れても、control の 15 分ごとの定期処理が、記録に無い公開中のサイトを見つけて作り直しを頼む(それまでに別のサイトを公開すると、ほかのサイトの配信ファイルは一度消え、定期処理の後に戻る)。ただし定期処理が 1 回に頼むのは 25 サイトまでなので、公開中のサイトが 25 を超えると、全サイトが戻るまで 15 分ごとに 25 サイトずつ進み、その間は一部のサイトの配信ファイルが 404 になることがある。だから作り直したらすぐ押す
 
 ## 3. control のデプロイ
 
@@ -1538,7 +1538,7 @@ edge の公開 origin(必ず書く):
 
 | キー | 内容 |
 |---|---|
-| `AB_EDGE_ORIGIN` | ← `edge_address`。decision / event を受ける edge の公開 origin。`route` なら `https://<設置ホスト>`、`custom-domain` なら `https://<edge のホスト>`(`edge_host`)、`workers-dev` なら 2.4 の出力の `https://wtt-edge.<アカウントのサブドメイン>.workers.dev`。管理画面がこの値で構成(workers.dev かどうか)を判定し、設置タグのファイルに API(decision / event)の宛先として書き込む。変えたら各サイトの配信ファイルを作り直す(2.8) |
+| `AB_EDGE_ORIGIN` | ← `edge_address`。decision / event を受ける edge の公開 origin。`route` なら `https://<設置ホスト>`、`custom-domain` なら `https://<edge のホスト>`(`edge_host`)、`workers-dev` なら 2.4 の出力の `https://wtt-edge.<アカウントのサブドメイン>.workers.dev`。管理画面がこの値で構成(workers.dev かどうか)を判定し、設置タグのファイルに API(decision / event)の宛先として書き込む。変えたら公開中の全サイトの配信ファイルを作り直す(2.8 の手順 6) |
 | `AB_STATIC_ORIGIN` | **`workers-dev`(ゾーンなし)のときだけ書く**。`route` と `custom-domain` では書かない(設置タグと edge が同じホスト)。設置タグを配る配信専用の Worker の origin(`https://wtt-static.<アカウントのサブドメイン>.workers.dev`。2.9)。省略すると `AB_EDGE_ORIGIN` と同じホストとして扱う。管理画面の導入タグの `src` のホストになる |
 
 使用状況の表示(3.3 の `CF_USAGE_TOKEN` と対。どちらかが欠けていれば使用状況は「未設定」と表示され、ほかの機能には影響しない):
@@ -1789,7 +1789,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' "<アップロード応答の URL>"   
 
 期待と違うとき:
 
-- 設置タグのファイルが 404 → 公開がまだか、配信ファイルの更新が済んでいない。管理画面のサイトの上部に、警告と「配信ファイルを作り直す」が出ていないかを見る。公開の結果の `staticDeploy` が `pending` なら再試行中。`wtt-deployer` が失敗しているなら、secret `CF_DEPLOY_TOKEN` と `apps/deployer/wrangler.jsonc` の `CF_ACCOUNT_ID`(2.9)を確かめる。判定や計測の送信が 404 のときは、KV の id が edge / control で違う(2.2)
+- 設置タグのファイルが 404 → 公開がまだか、配信ファイルの更新が済んでいない。管理画面のサイトの上部に、警告と「配信ファイルを作り直す」が出ていないかを見る。公開の結果の `staticDeploy` が `pending` なら再試行中。いくつものサイトで 404 になるときは、管理画面の左メニューの下の「設定」→「配信ファイル」(「システム」の見出しの下)で状態を見て、「公開中の全サイトの配信ファイルを作り直す」を押す(エージェントは、サイトごとの `POST /sites/<siteId>/static/redeploy` を公開中のサイトの数だけ呼ぶ)。`wtt-deployer` が失敗しているなら、secret `CF_DEPLOY_TOKEN` と `apps/deployer/wrangler.jsonc` の `CF_ACCOUNT_ID`(2.9)を確かめる。判定や計測の送信が 404 のときは、KV の id が edge / control で違う(2.2)
 - `max-age=14400` など → Cache Rule が適用されていない(2.6 の確認)
 - `cf-cache-status: DYNAMIC` のまま → 配信専用の Worker の Route が適用されていない(2.9 の (3)・(4))
 - `cf-cache-status` が出ない(workers-dev)→ 正常。この構成ではゾーンのキャッシュが無い
@@ -2026,7 +2026,7 @@ curl -sS -X POST "<control URL>/workspaces" | jq -r '.error'   # 期待: "unauth
 - (b) がある場合は **【人に依頼】**: 管理画面で対象のサイトのサイト設定を開いて一度保存してもらう。エージェントは `pnpm -C apps/control exec wrangler kv key get "site:<siteId>:settings" --namespace-id <namespace ID> --remote` で新しいフィールドが入ったことを確認する(record を書くのはサイト作成と設定画面の保存だけ)
 - 各サイトでの公開(6.3 の「配る設定の版が上がるリリース」に当たるとき)
 
-期待と違うとき: 先頭の注釈の `runtime <ハッシュ>` が違う → まだ前の runtime の設置タグのファイルが配られている。凍結を外してから管理画面でそのサイトを一度公開するか、1 時間待つ(毎時の Cron が全サイトを作り直す)。
+期待と違うとき: 先頭の注釈の `runtime <ハッシュ>` が違う → まだ前の runtime の設置タグのファイルが配られている。凍結を外してから、管理画面の左メニューの下の「設定」→「配信ファイル」(「システム」の見出しの下)で「公開中の全サイトの配信ファイルを作り直す」を押すか(エージェントは、サイトごとの `POST /sites/<siteId>/static/redeploy` を公開中のサイトの数だけ呼ぶ)、1 時間待つ(毎時の Cron が全サイトを作り直す)。
 
 `deploy-log.md` に「更新 <日付>: <現在 tag> → <目標 tag>、(a)(b)(c) の有無、凍結を入れた時刻、読み取りの確認結果、凍結を外した時刻、(b) の確認結果」を追記する。
 
@@ -2460,13 +2460,9 @@ pnpm -C apps/control exec wrangler d1 time-travel restore wtt-control --bookmark
 
 - **凍結は確認が済んでから外す**(6.6)。公開し直す作業は凍結を外してから行う(凍結中は公開できない)
 - **KV の公開済み config は D1 と一緒には戻らない**。戻した時点より後に公開していたサイトは、管理画面でそのサイトを開き公開し直す(config が D1 の内容から作り直される)。逆に「戻した時点より後に公開した内容を配り続けたい」場合は公開しない
-- **設置タグの配信ファイルの記録も D1 と一緒には戻らない**。配信を管理する Worker は、D1 より新しい世代を配ったことを覚えているので、世代を進めずに公開し直すと依頼が「古い世代」として捨てられ、**管理画面は「配信済み」と出るのに訪問者には戻す前のタグが配られ続ける**。公開し直す前に、公開中の全サイトの世代を今の時刻まで進める:
+- **設置タグの配信ファイルの記録も D1 と一緒には戻らない**。配信を管理する Worker は、D1 より新しい世代を配ったことを覚えているので、世代を進めずに公開し直すと依頼が「古い世代」として捨てられ、**訪問者には戻す前のタグが配られ続ける**(公開の結果の `staticDeploy` は `pending` になる)。凍結を外したら、公開し直す前に、管理画面の左メニューの下の「設定」→「配信ファイル」(「システム」の見出しの下)で「公開中の全サイトの配信ファイルを作り直す」を押す(システム管理者が管理画面から行う。エージェントは、サイトごとの `POST /sites/<siteId>/static/redeploy` を公開中のサイトの数だけ呼ぶ)。この操作は、各サイトの世代を、配信を管理する Worker が覚えている世代より先に進めてから、今の公開内容で作り直す。凍結中は作り直せない(凍結を外してから行う)。データベースでは未公開か、データベースに無いのに配信ファイルが残っているサイト(初めての公開より前や、サイトを作る前の時点に戻した場合)も、この操作でファイルが消える(データベースでは未公開のサイトは、サイトごとの作り直しでも消える。データベースに無いサイトは、サイトごとの作り直しでは消せず、この操作でだけ消える)。配信ファイルの画面の「記録が食い違っているサイト」が「なし」になり、`curl -sS "https://<設置タグのホスト>/s/<siteId>.js" | head -c 200`(`<設置タグのホスト>` は 2.9 の (4))に今の公開内容が出ることを確かめる。
 
-  ```bash
-  pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "update sites set static_epoch = CAST(strftime('%s','now') AS INTEGER) * 1000, static_stale = 1 where active_version is not null"
-  ```
-
-  その後、凍結を外してから各サイトで「配信ファイルを作り直す」(または公開し直す)を行う。サイトの画面の警告(「配信ファイルが古い」)が消え、`curl -sS "https://<設置タグのホスト>/s/<siteId>.js" | head -c 200`(`<設置タグのホスト>` は 2.9 の (4))に今の公開内容が出ることを確かめる
+  control の定期処理は、この向きの食い違いを自動では直さない(戻した内容で上書きしてよいかは人が決めるため)。食い違いがあるかは、配信ファイルの画面の「記録が食い違っているサイト」か、`GET /static/status` の `mismatchSites` で確かめる。配信ファイルの画面は開いたときの状態を出す。システム管理者の画面の上部の帯は、画面を開き直したとき・タブを前に戻したときか、5 分ごとの取り直しのときに出る。サイトの画面の警告「このサイトの配信ファイルの記録が食い違っています」(と `GET /sites/<siteId>` の `staticMismatch`)は、定期処理がそのサイトに印を付けた後に出る。ただし定期処理が印を付けるのは、公開中のサイトで、配信を管理する Worker の記録が通常の更新の世代で先に進んでいるときだけ。削除の記録が先に進んでいるサイト・データベースでは未公開のサイト・データベースに無いサイトには、サイトの警告も `staticMismatch` も出ない
 - **戻した後に書き込みが入っていないかの確認**(手順 3 の数秒の間・凍結の入れ直しに失敗した場合): 次がすべて 0 であること。0 でなければ、その行の内容を見て意図したものか確かめる
   - `pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select (select count(*) from publishes where created_at > <戻した時刻の ms>) as publishes, (select count(*) from experiments where updated_at > <戻した時刻の ms>) as experiments, (select count(*) from changes where updated_at > <戻した時刻の ms>) as changes"`
 - **セッションとログインは切れることがある**(session テーブルも戻るため)。全員がログインし直す。戻した時点より後に発行した招待・API キー・メンバー追加も消えているので、必要なら発行し直す
@@ -2496,7 +2492,7 @@ pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --com
 2. `pnpm -C apps/control d1:migrate:remote`(export 時点より新しいマイグレーションがあれば当たる。無ければ `No migrations to apply`)
 3. **6.6 の「入れる」を `wtt-control-restore` に対して実行する**(コマンドの `wtt-control` を `wtt-control-restore` に読み替える)
 4. `pnpm -C apps/control exec wrangler deploy`
-5. 切り替えた後、確認が済んでから 6.6 の「外す」で外す(同じく `wtt-control-restore` に読み替える)。以後は 10.2 の手順 4 と同じ整合(公開し直し・ログインし直し)。export を取った時点より後に開始したテストの個票は、10.2 の手順 4 のとおり `wtt-results` から消される(`wtt-results` は読み戻さないので、必要なら先に `wtt-results` の export を取る。`wtt-results` を Time Travel で戻しても、`wtt-control` に対応する行が無ければ、また対応するテストの無い記録として消される。戻したら、次の UTC 23 時台より前に export を取る)
+5. 切り替えた後、確認が済んでから 6.6 の「外す」で外す(同じく `wtt-control-restore` に読み替える)。以後は 10.2 の手順 4 と同じ整合(全サイトの配信ファイルの作り直し・公開し直し・ログインし直し)。export を取った時点より後に開始したテストの個票は、10.2 の手順 4 のとおり `wtt-results` から消される(`wtt-results` は読み戻さないので、必要なら先に `wtt-results` の export を取る。`wtt-results` を Time Travel で戻しても、`wtt-control` に対応する行が無ければ、また対応するテストの無い記録として消される。戻したら、次の UTC 23 時台より前に export を取る)
 6. 元の DB は問題が無いと分かってから `wrangler d1 delete wtt-control` で消す
 
 ### 10.4 撤去(導入全体を消す)

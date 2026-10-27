@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { API_CONTRACT_VERSION, CLIENT_VERSION_HEADER } from "@wtt/core";
 
 /**
@@ -80,11 +80,16 @@ export const SITE_FAILED = { id: "site_e2e_fail", name: "E2E Fail Site" };
 /** ページの一致の入力欄(目標・対象 URL・正規表現の置き換えの通知)の確認専用の Site。Publish はしない */
 export const SITE_PAGE_MATCH = { id: "site_e2e_pgm", name: "E2E Page Match" };
 
+/** 設置タグの配信ファイルの帯・全サイトの作り直しの確認専用の Site(static-delivery.spec.ts。偽の API を失敗にしてから初めて公開する) */
+export const SITE_STATIC = { id: "site_e2e_static", name: "E2E Static Delivery" };
+
 export const EXPERIMENT = { id: "exp_e2e_hero", name: "E2E hero" };
 export const EXPERIMENT_PAUSED = { id: "exp_e2e_pause", name: "E2E pause" };
 export const EXPERIMENT_FAILED = { id: "exp_e2e_fail", name: "E2E fail" };
 /** 公開履歴・Publish 確認画面の相乗り確認(上部バーの副 → 主)専用。下書きのまま残り、以後のテストは触らない */
 export const EXPERIMENT_SECOND = { id: "exp_e2e_second", name: "E2E second" };
+/** SITE_STATIC の公開に使う実験(BFF から作って開始する) */
+export const EXPERIMENT_STATIC = { id: "exp_e2e_static", name: "E2E static" };
 
 /** Variant B に入れる TEXT Change(edge の bootstrap にこの文字列が現れることが DoD 3 の確認になる) */
 export const HERO_SELECTOR = ".hero-title";
@@ -97,10 +102,14 @@ export const HERO_TEXT = "E2E から書き換え";
  * admin BFF は接続元 IP を転送しないので(決定 35 (4))、この E2E のすべての無認証 POST は control からは
  * 同じ IP に見え、経路ごとに 1 枠を共有する(apps/control/src/app.ts)。
  *
- * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 25 回(publish-flow 10 / audience-flow 8 / invite-flow 1 / login-screen 1 / write-freeze 1 / experiment-kind-flow 1 / results-settings 1 / variant-ui 1 / results-flow 1、
- * うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 / 招待受諾 1 回 /
- * `break-glass/reset-link` 1 回 / `reset-password` 1 回で、
- * 10 秒窓に入る sign-in は 30 回未満に収まっている。これ以上ログインを増やすなら、
+ * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 30 回(`login(` の呼び出しの実数。publish-flow 10 / audience-flow 10 /
+ * version-banner 2 / experiment-kind-flow 1 / login-screen 1 / results-flow 1 / invite-flow 1 / static-delivery 1 / results-settings 1 /
+ * variant-ui 1 / write-freeze 1、うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 /
+ * 招待受諾 2 回(invite-flow 1 / static-delivery 1。`acceptInvite()` は受諾でセッションを得るので、招待されたメンバーの sign-in は数えない)/
+ * `break-glass/reset-link` 1 回 / `reset-password` 1 回。
+ * 1 実行の sign-in の合計(30)は上限(30 回 / 10 秒。`apps/control/wrangler.jsonc` の AUTH_RATE_LIMITER)と同じで、合計だけでは
+ * 10 秒窓に収まるとは言えない。今は `workers: 1` で直列に走り、各 `login()` の間に画面の遷移とテストの操作が入るので、1 つの 10 秒窓に
+ * 入る sign-in は合計よりずっと少ない(窓ごとの実数は測っていない)。これ以上ログインを増やすなら、
  * 各テストでログインし直すのをやめて `storageState` でセッションを引き回すこと(ログインの検証は 1 本残せばよい)。
  * API キーの失効の確認(`publish-flow.spec.ts` の "a site without a publish is refused by the edge")は
  * 新しい login() を足さず、既にログイン済みのこのテストに相乗りしている(予算は変わらない)。
@@ -183,6 +192,40 @@ export async function openMembers(page: Page): Promise<void> {
   // exact: 「メンバーの API キー」と区別する
   await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "メンバー", exact: true }).click();
   await expect(page).toHaveURL(/\/w\/[^/]+\/members$/);
+}
+
+/**
+ * メンバーの画面(`openMembers()` の後)で招待リンクを発行し、その URL を返す(メールは自動送信しないので、画面の結果のカードから拾う。spec §13.3)。
+ * 結果のカード(`issued-invite`)は開いたまま返す(カードの見た目・フォーカス・閉じ方は invite-flow.spec.ts が確かめる)。
+ * role はロールの選択肢の名前(説明が付くので正規表現。例 `/^編集者/`)。セッションの API なので無認証 POST の予算は使わない
+ */
+export async function issueInvite(page: Page, email: string, role: RegExp): Promise<string> {
+  await page.fill('input[name="email"]', email);
+  await pick(page, "ロール", role);
+  await page.getByRole("button", { name: "招待リンクを発行" }).click();
+  const card = page.getByTestId("issued-invite");
+  await expect(card.getByRole("heading", { name: "招待リンクを発行しました" })).toBeVisible();
+  const url = await card.getByTestId("code-block").textContent();
+  expect(url, "招待リンクのカードに URL が無い").toMatch(/\/invite\//);
+  return url!;
+}
+
+/**
+ * 未ログインの別のコンテキストで招待を受け、パスワードでアカウントを作って参加する(ワークスペースの画面に着くまで)。
+ * 受諾がセッションを張るので、このコンテキストはログイン済みになる(sign-in の予算は使わず、招待受諾の予算を 1 回使う)。
+ * 閉じるのは呼ぶ側(`ctx.close()`)
+ */
+export async function acceptInvite(browser: Browser, url: string, name: string): Promise<{ ctx: BrowserContext; page: Page }> {
+  const ctx = await browser.newContext({ baseURL: ADMIN_URL });
+  const page = await ctx.newPage();
+  await page.goto(url);
+  // break-glass が開いているので非常用のパスワードフォームも出る。まず通常経路(Google)の導線を確認する
+  await expect(page.getByRole("link", { name: "Google でログインして参加" })).toHaveAttribute("href", /\/api\/session\/google\?next=%2Finvite%2F/);
+  await page.fill('input[name="name"]', name);
+  await page.fill('input[name="password"]', PASSWORD);
+  await page.getByRole("button", { name: "参加する" }).click();
+  await expect(page).toHaveURL(/\/w\/[^/]+$/);
+  return { ctx, page };
 }
 
 /**

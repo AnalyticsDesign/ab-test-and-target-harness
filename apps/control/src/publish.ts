@@ -449,15 +449,25 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, userId: strin
 
 /**
  * D9 ③(設計書 §5.5、plan ③ の K14): activation の batch で足した届く定義の行に、この版を焼いた出し直しの世代を入れ、
- * その世代そのものを配り終えていれば、その 1 点で配信を確かめる(partial: ほかの行は確定しない)。
+ * その世代そのもの(中身も同じ)を配り終えていれば、その 1 点で配信を確かめる(partial: ほかの行は確定しない)。
+ * 依頼を送っていない(outcome.digest が null = 依頼の記録を書けなかった・binding が無い・削除の依頼)なら世代も書かない
+ * (7o K24 (5): 送っていない世代が行に入ると、依頼の記録の無い世代を行の世代で補う道で古い履歴に引かれる。これで更新の後は
+ * 「行に世代がある ⇒ 依頼の記録がある」になる)。1 点には送った入力の digest を付ける(依頼の記録の digest と組み合うときだけ数える)。
  * activation は済んでいるので、失敗しても Publish は成功のまま(行は残る。世代が NULL のままでも、その版を焼いた世代は依頼の記録から引ける)
  */
 async function recordDelivery(env: Env, db: Db, siteId: string, version: number, generation: StaticGeneration | null, outcome: StaticDeployOutcome): Promise<void> {
-  if (generation === null) return;
+  if (generation === null || outcome.digest === null) return;
   try {
     await setDeliveredGeneration(db, siteId, version, generation);
     if (outcome.state === "deployed" && outcome.deployedAt !== null)
-      await confirmDeliveries(db, siteId, { history: [{ generation, deployedAt: outcome.deployedAt }], historyFrom: null, partial: true }, Date.now(), apiGuard(env));
+      await confirmDeliveries(
+        db,
+        siteId,
+        { history: [{ generation, deployedAt: outcome.deployedAt, digest: outcome.digest }], historyFrom: null, partial: true },
+        Date.now(),
+        apiGuard(env),
+        edgeOrigin(env),
+      );
   } catch (e) {
     console.error("delivered definition update failed (best-effort, confirmed later by cron)", e);
   }

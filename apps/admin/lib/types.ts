@@ -44,6 +44,8 @@ export type Site = {
   activeVersion: number | null; activeKvStale: boolean; staticStale: boolean; staticRemoving: boolean; lastActivatedAt: number | null; contentUpdatedAt: number; createdAt: number; updatedAt: number;
   /** `GET /sites/:sid` だけが返す(spec §13.9 の badge / banner 用) */
   hasUnpublishedChanges?: boolean;
+  /** `GET /sites/:sid` だけが返す: 設置タグの配信ファイルの記録が食い違っている(7o K6。立つのは staticStale のときだけ) */
+  staticMismatch?: boolean;
   /** `GET /sites/:sid` だけが返す: 計測用のデータベースの使用量(D9 ③。測る前・計測用のデータベースが無い導入では無い) */
   resultsCapacity?: ResultsCapacity | null;
 };
@@ -157,3 +159,30 @@ export type UsageResource = {
   projectedExhaustAt: number | null; reference: { value: number; ratio: number } | null; breakdown: Array<{ name: string; used: number }>;
 };
 export type UsageReport = { plan: "free" | "paid"; asOf: number; resetAt: number; worst: { id: string; status: UsageStatus; ratio: number } | null; settings: UsageSettings; resources: UsageResource[] };
+
+/**
+ * `GET /static/status`(7o K12。システム管理者だけ)。設置タグの配信ファイルの配置の状態(すべてのワークスペース)。
+ * lastDeployedAt = Cloudflare への配置が最後に成功した時刻(epoch ミリ秒)。needsAttention = 全ページの帯を出すか(Q5)
+ */
+export type StaticHealthView = {
+  pendingSites: string[];
+  removingSites: string[];
+  lastError: string | null;
+  failures: number;
+  lastDeployedAt: number | null;
+  mismatchSites: string[];
+  unknownSites: string[];
+  undeliveredSites: string[];
+  publishedSites: number;
+  unpublishedWithFiles: number;
+  removingInD1: number;
+  needsAttention: boolean;
+};
+/** `POST /static/rebuild` の 1 回分の応答(7o K11)。next が null でなければ after に渡して続ける */
+export type RebuildResult = {
+  requested: number;
+  removed: number;
+  skippedRemoving: number;
+  failed: Array<{ siteId: string; reason: "no_publish_record" | "rejected" | "unavailable" }>;
+  next: string | null;
+};

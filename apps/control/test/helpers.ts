@@ -2,8 +2,26 @@ import { env } from "cloudflare:workers";
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { sql } from "kysely";
 import { expect, vi } from "vitest";
-import { kvKeys, nextUtcMidnight, SITE_REMOVED_SEQ, utcDay, type StaticDeployer, type StaticDeployRequest, type StaticDeployResult, type StaticGeneration, type StaticRemoveRequest, type StaticSiteStatus } from "@wtt/core";
+import {
+  compareGeneration,
+  kvKeys,
+  nextUtcMidnight,
+  SITE_REMOVED_SEQ,
+  staticInputDigest,
+  utcDay,
+  type StaticBatchDeployRequest,
+  type StaticDeployer,
+  type StaticDeployHistoryEntry,
+  type StaticDeployRequest,
+  type StaticDeployResult,
+  type StaticGeneration,
+  type StaticInstanceStatus,
+  type StaticRemoveRequest,
+  type StaticSiteStatus,
+} from "@wtt/core";
 import { app } from "../src/index";
+import { edgeOrigin } from "../src/capabilities";
+import { siteToSettings } from "../src/site-settings";
 import { getDb, type ExperimentRow, type SiteRow } from "../src/db";
 import type { BudgetStatus, Env, LeaseResult, ReadReservation, ResultsBudgetRpc, ResultsHealthRpc, StopPeriod, StopReason } from "../src/env";
 import { ErrorEnvelopeSchema } from "../src/openapi";
@@ -699,53 +717,274 @@ export function setupReq(email = "owner@example.com"): Request {
 }
 
 /**
- * 偽のデプロイ専用の Worker(7i)。受けた依頼を控え、応答は mode で決める。
+ * 偽のデプロイ専用の Worker(7i・7o)。受けた依頼を控え、応答は mode と Site ごとの状態で決める。
+ * Site ごとに { accepted, deployed, removed, digest, 入力, history } を持ち、本物の DO と同じ規則で動く:
+ * 受け付け済みより新しい世代だけを受け付け、同じか古い世代の依頼は捨てて今の accepted を返す(同じ世代の別の中身も捨てる。7o K23)。
+ * mode = "deploy" は依頼のたびに配置する(本物の同期の flush と同じく、受け付けていて配っていない Site をすべて配る)/
+ * "pending" は受け付けるだけで配らない(CF API の失敗の形)/ "throw" は RPC が落ちる / "hang" は応答が返らない。
+ * digest は受け付けた入力の `staticInputDigest`。digest の無い状態(setSite の古い形)は、本物と同じく保存済みの入力から補う。
+ * 配置で履歴の先頭に { generation, deployedAt, digest } を足す(7o K24)。
+ * setStatus(s) = siteStatus の応答を s で上書きする(以後ずっと。優先順は setStatus > 墓標 > Site ごとの状態)。
  * setTombstone(epoch) = その epoch 以下の依頼には、削除の墓標を受け付けて配り終えたと答える(削除の途中で止まって墓標だけが残った状態。本物と同じく古い世代は捨てる)。
  * setTombstone(epoch, deployedGen) = 墓標は受け付けただけで配り終えていない(accepted = 墓標 / deployed = deployedGen。CF API の失敗で alarm の再試行待ち)。state は pending
  * onRemove(fn) = removeSite の応答の前に fn を呼ぶ(削除の途中に別の操作を差し込む)。fn が結果を返したら、それを応答にする
+ * setSite(siteId, …) = Site の状態を直接置く(DO が D1 より先行した状態・同じ世代で中身が違う状態・digest の無い古い記録の形)。
+ * setMeta(…) = instanceStatus の失敗の記録。flush() = alarm の配置(受け付けていて配っていない Site をすべて配る)。setMode(m) = mode を替える。
+ * redeploySites は本物と同じく受け付けるだけで配らない(配るのは flush)。batches に依頼を控える。
+ * closure で書き、this を使わない(`{ ...fake, siteStatus }` と展開して使うテストがあるため)
  */
-export function fakeDeployer(mode: "deploy" | "pending" | "throw" | "hang" = "deploy") {
+type FakeDeployerMode = "deploy" | "pending" | "throw" | "hang";
+export type FakeStaticInput = { config: unknown; settings: unknown; apiBase: string | null };
+type FakeStaticSite = {
+  accepted: StaticGeneration | null;
+  deployed: StaticGeneration | null;
+  deployedAt: string | null;
+  removed: boolean;
+  acceptedDigest?: string;
+  deployedDigest?: string;
+  input?: FakeStaticInput;
+  history: StaticDeployHistoryEntry[];
+  historyFrom: string | null;
+};
+export function fakeDeployer(initialMode: FakeDeployerMode = "deploy") {
+  let mode = initialMode;
   const deploys: StaticDeployRequest[] = [];
   const removes: StaticRemoveRequest[] = [];
-  let status: StaticSiteStatus = { accepted: null, deployed: null, deployedAt: null, history: [], historyFrom: null, pending: false, lastError: null };
+  const batches: StaticBatchDeployRequest[] = [];
+  const sites = new Map<string, FakeStaticSite>();
+  let override: StaticSiteStatus | null = null;
   let tombstone: number | null = null;
   let tombstoneDeployed: StaticGeneration | null | undefined; // undefined = 配り終えた墓標 / それ以外 = 受け付けただけで deployed がこの世代
   let removeHook: ((req: StaticRemoveRequest) => Promise<StaticDeployResult | void>) | null = null;
-  const answer = async (gen: StaticGeneration): Promise<StaticDeployResult> => {
-    if (mode === "throw") throw new Error("binding down");
-    if (mode === "hang") return new Promise(() => {});
-    if (mode === "pending") return { state: "pending", accepted: gen, deployed: null, deployedAt: null, error: "HTTP 503" };
-    if (tombstone !== null && gen.epoch <= tombstone) {
-      const t = { epoch: tombstone, seq: SITE_REMOVED_SEQ };
+  let meta: { failures: number; lastError: string | null; lastDeployedAt: string | null } = { failures: 0, lastError: null, lastDeployedAt: null };
+
+  const emptySite = (): FakeStaticSite => ({ accepted: null, deployed: null, deployedAt: null, removed: false, history: [], historyFrom: null });
+  const siteOf = (siteId: string): FakeStaticSite => {
+    let s = sites.get(siteId);
+    if (!s) sites.set(siteId, (s = emptySite()));
+    return s;
+  };
+  /** 墓標(setTombstone)が Site の受け付け済みの世代より新しければ、その墓標 */
+  const tombOf = (s: FakeStaticSite): StaticGeneration | null => {
+    if (tombstone === null) return null;
+    const t = { epoch: tombstone, seq: SITE_REMOVED_SEQ };
+    return s.accepted && compareGeneration(s.accepted, t) > 0 ? null : t;
+  };
+  /** 受け付けた入力の digest。無ければ保存済みの入力から補う(本物の DO と同じ。削除には無い) */
+  const acceptedDigestOf = async (s: FakeStaticSite): Promise<string | undefined> =>
+    s.acceptedDigest ?? (s.input && !s.removed ? await staticInputDigest(s.input) : undefined);
+  /** 本物の digestsOf と同じ: deployedDigest は、配った世代が受け付けた世代と同じなら受け付けた digest、違えば配った記録の digest */
+  const digestsOf = async (s: FakeStaticSite): Promise<{ acceptedDigest?: string; deployedDigest?: string }> => {
+    const a = s.accepted ? await acceptedDigestOf(s) : undefined;
+    const d = s.deployed && s.accepted && compareGeneration(s.deployed, s.accepted) === 0 ? a : s.deployedDigest;
+    return { ...(a !== undefined ? { acceptedDigest: a } : {}), ...(d !== undefined ? { deployedDigest: d } : {}) };
+  };
+  /** 受け付け済み(墓標を含む)より新しい世代だけを受け付ける。input = null は削除。digest を作れない入力(形の不正)は throw */
+  const accept = async (siteId: string, gen: StaticGeneration, input: FakeStaticInput | null): Promise<boolean> => {
+    const s = siteOf(siteId);
+    const cur = tombOf(s) ?? s.accepted;
+    if (cur && compareGeneration(gen, cur) <= 0) return false;
+    const digest = input ? await staticInputDigest(input) : undefined;
+    s.accepted = gen;
+    s.removed = input === null;
+    s.input = input ?? undefined;
+    s.acceptedDigest = digest;
+    return true;
+  };
+  /** 配置(本物の flush と同じく、受け付けていて配っていない Site をすべて配り、履歴の先頭に足す) */
+  const flush = async (): Promise<void> => {
+    const at = new Date().toISOString();
+    for (const s of sites.values()) {
+      if (!s.accepted || (s.deployed && compareGeneration(s.deployed, s.accepted) === 0)) continue;
+      const digest = s.removed ? undefined : await acceptedDigestOf(s);
+      s.history = [{ generation: s.accepted, deployedAt: at, ...(digest !== undefined ? { digest } : {}) }, ...s.history];
+      s.deployed = s.accepted;
+      s.deployedAt = at;
+      s.deployedDigest = digest;
+    }
+    meta = { failures: 0, lastError: null, lastDeployedAt: at };
+  };
+  /** 本物の resultFor と同じ形。墓標が新しければ墓標を答える */
+  const resultFor = async (siteId: string, gen: StaticGeneration, error?: string): Promise<StaticDeployResult> => {
+    const s = siteOf(siteId);
+    const t = tombOf(s);
+    if (t) {
       if (tombstoneDeployed !== undefined) return { state: "pending", accepted: t, deployed: tombstoneDeployed, deployedAt: null, error: "HTTP 503" };
       return { state: "deployed", accepted: t, deployed: t, deployedAt: new Date().toISOString() };
     }
-    const at = new Date().toISOString();
-    const history = [{ generation: gen, deployedAt: at }, ...status.history];
-    status = { accepted: gen, deployed: gen, deployedAt: at, history, historyFrom: null, pending: false, lastError: null };
-    return { state: "deployed", accepted: gen, deployed: gen, deployedAt: at };
+    const r = { accepted: s.accepted, deployed: s.deployed, deployedAt: s.deployedAt, ...(await digestsOf(s)) };
+    if (s.deployed && compareGeneration(s.deployed, gen) >= 0) return { state: "deployed", ...r };
+    return { state: "pending", ...r, ...(error !== undefined ? { error } : {}) };
   };
+  /** throw / hang の mode なら RPC と同じく落ちる・返らない */
+  const reachable = async (): Promise<void> => {
+    if (mode === "throw") throw new Error("binding down");
+    if (mode === "hang") await new Promise(() => {});
+  };
+  /** 受け付けの後の配置。deploy なら配り、pending なら配置の失敗を記録してエラーの文を返す */
+  const afterAccept = async (): Promise<string | undefined> => {
+    if (mode === "deploy") {
+      await flush();
+      return undefined;
+    }
+    meta = { ...meta, failures: meta.failures + 1, lastError: "HTTP 503" };
+    return "HTTP 503";
+  };
+
   const d: StaticDeployer & {
     deploys: typeof deploys;
     removes: typeof removes;
+    batches: typeof batches;
     setStatus(s: StaticSiteStatus): void;
     setTombstone(epoch: number, deployedGen?: StaticGeneration | null): void;
     onRemove(fn: (req: StaticRemoveRequest) => Promise<StaticDeployResult | void>): void;
+    setSite(
+      siteId: string,
+      v: {
+        accepted: StaticGeneration | null;
+        deployed: StaticGeneration | null;
+        removed?: boolean;
+        acceptedDigest?: string;
+        deployedDigest?: string;
+        input?: FakeStaticInput;
+        history?: StaticDeployHistoryEntry[];
+        historyFrom?: string | null;
+        deployedAt?: string | null;
+      },
+    ): void;
+    setMeta(v: { failures?: number; lastError?: string | null; lastDeployedAt?: string | null }): void;
+    setMode(m: FakeDeployerMode): void;
+    flush(): Promise<void>;
   } = {
-    deploys, removes,
-    setStatus(s) { status = s; },
+    deploys, removes, batches,
+    setStatus(s) { override = s; },
     setTombstone(epoch, deployedGen) { tombstone = epoch; tombstoneDeployed = deployedGen; },
     onRemove(fn) { removeHook = fn; },
-    async redeploySite(req) { deploys.push(req); return answer(req.generation); },
+    setSite(siteId, v) {
+      sites.set(siteId, {
+        accepted: v.accepted,
+        deployed: v.deployed,
+        deployedAt: v.deployedAt !== undefined ? v.deployedAt : v.deployed ? new Date().toISOString() : null,
+        removed: v.removed ?? false,
+        ...(v.acceptedDigest !== undefined ? { acceptedDigest: v.acceptedDigest } : {}),
+        ...(v.deployedDigest !== undefined ? { deployedDigest: v.deployedDigest } : {}),
+        ...(v.input !== undefined ? { input: v.input } : {}),
+        history: v.history ?? [],
+        historyFrom: v.historyFrom ?? null,
+      });
+    },
+    setMeta(v) { meta = { ...meta, ...v }; },
+    setMode(m) { mode = m; },
+    flush,
+    async redeploySite(req) {
+      deploys.push(req);
+      await reachable();
+      try {
+        await accept(req.siteId, req.generation, { config: req.config, settings: req.settings, apiBase: req.apiBase });
+      } catch {
+        return { ...(await resultFor(req.siteId, req.generation)), state: "rejected", error: "invalid_payload" };
+      }
+      return resultFor(req.siteId, req.generation, await afterAccept());
+    },
     async removeSite(req) {
       removes.push(req);
       const r = removeHook ? await removeHook(req) : undefined;
-      return r ?? answer(req.generation);
+      if (r) return r;
+      await reachable();
+      await accept(req.siteId, req.generation, null);
+      return resultFor(req.siteId, req.generation, await afterAccept());
     },
-    async siteStatus() { return status; },
+    async siteStatus(siteId) {
+      if (override) return override;
+      const s = sites.get(siteId) ?? emptySite();
+      const t = tombOf(s);
+      if (t) {
+        const deployed = tombstoneDeployed === undefined ? t : tombstoneDeployed;
+        return { accepted: t, deployed, deployedAt: deployed ? s.deployedAt : null, history: [...s.history], historyFrom: s.historyFrom, pending: tombstoneDeployed !== undefined, lastError: meta.lastError };
+      }
+      const pending = s.accepted !== null && (s.deployed === null || compareGeneration(s.deployed, s.accepted) < 0);
+      return { accepted: s.accepted, deployed: s.deployed, deployedAt: s.deployedAt, history: [...s.history], historyFrom: s.historyFrom, pending, lastError: meta.lastError, ...(await digestsOf(s)) };
+    },
+    async redeploySites(req) {
+      batches.push(req);
+      await reachable();
+      const out: Array<{ siteId: string; accepted: StaticGeneration | null; error?: "invalid_payload" }> = [];
+      for (const e of req.sites) {
+        let ok = true;
+        try {
+          await accept(e.siteId, e.generation, "remove" in e ? null : { config: e.config, settings: e.settings, apiBase: e.apiBase });
+        } catch {
+          ok = false;
+        }
+        const s = siteOf(e.siteId);
+        out.push({ siteId: e.siteId, accepted: tombOf(s) ?? s.accepted, ...(ok ? {} : { error: "invalid_payload" as const }) });
+      }
+      return { state: "accepted", sites: out };
+    },
+    async instanceStatus() {
+      await reachable();
+      const list: StaticInstanceStatus["sites"] = [];
+      for (const [siteId, s] of sites) {
+        const t = tombOf(s);
+        if (t) {
+          list.push({ siteId, accepted: t, deployed: tombstoneDeployed === undefined ? t : tombstoneDeployed, removed: true });
+          continue;
+        }
+        if (!s.accepted) continue;
+        list.push({ siteId, accepted: s.accepted, deployed: s.deployed, removed: s.removed, ...(await digestsOf(s)) });
+      }
+      return { sites: list, ...meta };
+    },
   };
   return d;
 }
 
+/**
+ * 公開中のサイト src を、D1 の中で n 個に写す(sites と publishes の行。ID は prefix + 連番)。
+ * 列は表の定義から読む(全列を手で並べない)。config の中のサイト ID も写した ID に置き換える
+ */
+export async function cloneSites(src: string, n: number, prefix: string): Promise<string[]> {
+  const ids = Array.from({ length: n }, (_, i) => `${prefix}${String(i).padStart(3, "0")}`);
+  const colsOf = async (table: string) => (await env.DB.prepare(`select name from pragma_table_info('${table}')`).all<{ name: string }>()).results.map((r) => r.name);
+  const siteCols = await colsOf("sites");
+  await env.DB.prepare(`insert into sites (${siteCols.join(", ")}) select ${siteCols.map((c) => (c === "id" ? "j.value" : `s.${c}`)).join(", ")} from sites s, json_each(?) j where s.id = ?`)
+    .bind(JSON.stringify(ids), src)
+    .run();
+  const pubCols = await colsOf("publishes");
+  const pubSel = pubCols.map((c) =>
+    c === "id" ? "'pub_' || j.value || '_' || p.version" : c === "site_id" ? "j.value" : c === "config_json" ? "replace(p.config_json, ?, j.value)" : `p.${c}`,
+  );
+  await env.DB.prepare(`insert into publishes (${pubCols.join(", ")}) select ${pubSel.join(", ")} from publishes p, json_each(?) j where p.site_id = ?`)
+    .bind(src, JSON.stringify(ids), src)
+    .run();
+  return ids;
+}
+/** 公開中の版の config_json の後ろに空白を足して、長さを bytes にする(JSON としては同じ中身。7o の頁のバイト数の上限のテスト) */
+export async function padConfig(sid: string, bytes: number): Promise<void> {
+  const row = await siteRow(sid);
+  await env.DB.prepare("update publishes set config_json = config_json || replace(hex(zeroblob(? - length(config_json))), '00', ' ') where site_id = ? and version = ?")
+    .bind(bytes, sid, row.active_version)
+    .run();
+}
 /** 状態の問い合わせの応答(世代 g が at に配られている) */
 export const statusOf = (g: StaticGeneration, at = "2026-10-05T00:00:00.000Z"): StaticSiteStatus => ({ accepted: g, deployed: g, deployedAt: at, history: [{ generation: g, deployedAt: at }], historyFrom: null, pending: false, lastError: null });
+
+/**
+ * 7o K23: D1 の今の行から、control が配信ファイルの出し直しに送る入力(公開中の版の config・siteToSettings(行)・edgeOrigin(env))。
+ * envLike は control に渡す env と同じものにする(apiBase が digest に入る)
+ */
+export async function staticInputOf(siteId: string, envLike: Env = testEnv): Promise<FakeStaticInput> {
+  const row = await siteRow(siteId);
+  const pub = await getDb(env)
+    .selectFrom("publishes")
+    .select("config_json")
+    .where("site_id", "=", siteId)
+    .where("version", "=", row.active_version!)
+    .executeTakeFirstOrThrow();
+  return { config: JSON.parse(pub.config_json!), settings: siteToSettings(row), apiBase: edgeOrigin(envLike) };
+}
+/** 入力の bootstrap に焼く設定だけを変えた、別の中身の入力(同じ世代で中身が違う状態を作る) */
+export function otherStaticInput(input: FakeStaticInput): FakeStaticInput {
+  const settings = input.settings as { decisionTimeoutMs: number };
+  return { ...input, settings: { ...settings, decisionTimeoutMs: settings.decisionTimeoutMs + 100 } };
+}

@@ -1,10 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { BOOTSTRAP_LIMITS, bakeBootstrap, parseSiteSettings, type CompiledConfig } from "../src/index";
+import { BOOTSTRAP_LIMITS, bakeBootstrap, bootPayload, parseSiteSettings, type CompiledConfig } from "../src/index";
 
 const cfg: CompiledConfig = {
   schemaVersion: 2, version: 3, siteId: "site_b", siteSalt: "s", needsProfile: false,
   patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [], exposurePayloads: {},
 };
+
+describe("bootPayload", () => {
+  const settings = parseSiteSettings({ settingsVersion: 1, siteId: "site_b" })!;
+  it("config・runtime 向けの settings・apiBase(値があるときだけ)をこの順で作る", () => {
+    expect(Object.keys(bootPayload(cfg, settings, "https://edge.example"))).toEqual(["config", "settings", "apiBase"]);
+    expect(bootPayload(cfg, settings, "https://edge.example").apiBase).toBe("https://edge.example");
+    for (const none of [undefined, null, ""] as const) expect("apiBase" in bootPayload(cfg, settings, none)).toBe(false);
+    expect("apiBase" in bootPayload(cfg, settings)).toBe(false);
+  });
+  it("bakeBootstrap の boot と同じ JSON になる", () => {
+    const out = bakeBootstrap(cfg, settings, "/*R*/", { apiBase: "https://edge.example" });
+    expect(out).toContain(`self.__WTT_BOOT__=${JSON.stringify(bootPayload(cfg, settings, "https://edge.example"))};\n`);
+  });
+});
 
 describe("bakeBootstrap", () => {
   it("bake_embeds_config_and_runtime_settings_before_runtime_source", () => {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { createExecutionContext, runDurableObjectAlarm, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
-import type { CompiledConfig } from "@wtt/core";
+import { staticInputDigest, type CompiledConfig } from "@wtt/core";
 import workerImpl, { Deployer } from "../src/index";
 import { cfApiConfigOf } from "../src/queue-do";
 
@@ -41,7 +41,8 @@ describe("wtt-deployer", () => {
   it("RPC の redeploySite は DO で焼いて API を呼び、deployed を返す", async () => {
     const urls = stubApi();
     const r = await queue().redeploySite(req);
-    expect(r).toEqual({ state: "deployed", accepted: { epoch: 10, seq: 1 }, deployed: { epoch: 10, seq: 1 }, deployedAt: expect.any(String) });
+    const d = await staticInputDigest(req);
+    expect(r).toEqual({ state: "deployed", accepted: { epoch: 10, seq: 1 }, deployed: { epoch: 10, seq: 1 }, deployedAt: expect.any(String), acceptedDigest: d, deployedDigest: d });
     expect(urls).toEqual([
       "POST https://api.test/client/v4/accounts/acc/workers/scripts/wtt-static/assets-upload-session",
       "PUT https://api.test/client/v4/accounts/acc/workers/scripts/wtt-static",
@@ -57,6 +58,25 @@ describe("wtt-deployer", () => {
     stubApi(200);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect((await stub.siteStatus("site_a")).pending).toBe(false);
+  });
+
+  it("RPC の instanceStatus と redeploySites は DO を通って返り、配置は alarm で 1 回(7o K9 K10)", async () => {
+    const urls = stubApi();
+    const stub = queue();
+    const siteId = "site_batch";
+    const site = { siteId, generation: { epoch: 10, seq: 1 }, config: { ...CONFIG, siteId }, settings: { settingsVersion: 1, siteId }, apiBase: null };
+    expect(await stub.redeploySites({ protocol: 1, sites: [site], flush: "soon" })).toEqual({ state: "accepted", sites: [{ siteId, accepted: { epoch: 10, seq: 1 } }] });
+    expect(urls).toEqual([]); // 配置は待たない
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(urls).toEqual([
+      "POST https://api.test/client/v4/accounts/acc/workers/scripts/wtt-static/assets-upload-session",
+      "PUT https://api.test/client/v4/accounts/acc/workers/scripts/wtt-static",
+    ]);
+    const d = await staticInputDigest(site);
+    const st = await stub.instanceStatus();
+    // 前のテストの記録が残っているので、このテストのサイトだけを見る
+    expect(st.sites.find((s) => s.siteId === siteId)).toEqual({ siteId, accepted: { epoch: 10, seq: 1 }, deployed: { epoch: 10, seq: 1 }, removed: false, acceptedDigest: d, deployedDigest: d });
+    expect(st).toMatchObject({ failures: 0, lastError: null, lastDeployedAt: expect.any(String) });
   });
 
   it("cfApiConfigOf はトークンかアカウントが無い設定を not_configured にする", () => {
@@ -96,6 +116,9 @@ describe("wtt-deployer", () => {
     const viaEntry = await deployer.siteStatus("site_via_entry");
     expect(viaEntry).toEqual(await queue().siteStatus("site_via_entry"));
     expect(viaEntry.deployed).toEqual({ epoch: 10, seq: 1 });
+    // まとめた受け付けの rejected も同じ形で返す(入口で RPC の型を作り直している)
+    expect(await deployer.redeploySites({ protocol: 1, sites: [], flush: "soon" } as never)).toEqual({ state: "rejected", sites: [], error: "invalid_request" });
+    expect((await deployer.instanceStatus()).sites.find((s) => s.siteId === "site_via_entry")?.deployed).toEqual({ epoch: 10, seq: 1 });
     await waitOnExecutionContext(ctx);
   });
 });

@@ -1,8 +1,9 @@
 import { sql } from "kysely";
-import { expandAudiences, type StaticDeployHistoryEntry, type StaticGeneration, type Targeting } from "@wtt/core";
+import { expandAudiences, staticInputDigest, type StaticDeployHistoryEntry, type StaticGeneration, type Targeting } from "@wtt/core";
 import { DEFAULT_PLAN, type EvaluationPlan } from "@wtt/stats";
-import type { Db, ExperimentDeliveredDefinitionRow, ExperimentRow } from "../db";
+import type { Db, ExperimentDeliveredDefinitionRow, ExperimentRow, SiteRow, StaticDeployRequestRow } from "../db";
 import type { StoredChangeInput, StoredCompileInput } from "../publish";
+import { siteToSettings } from "../site-settings";
 import type { WriteGuard } from "./guard";
 
 /**
@@ -200,21 +201,73 @@ export async function sitesNeedingDeliveryConfirmation(db: Db, opts: { after?: s
 /** 配信の確認に渡す状態(デプロイ専用の Worker の siteStatus の history と historyFrom)。partial = Publish の応答の 1 点 */
 export type DeliveryStatus = { history: StaticDeployHistoryEntry[]; historyFrom: string | null; partial?: boolean };
 
+/**
+ * 7o K24 (3): 更新前の依頼の記録(input_digest が NULL)の版から、配った入力の digest を作る関数(版ごとに覚える)。
+ * 入力 = その版の config(publishes を 1 文)・今の D1 の行の設定(siteToSettings。digest の中で bootstrap に焼く部分だけを使う)・apiBase。
+ * 版の config・行が無い、または digest を作れない(parse できない)なら null(照らし合わせられないので数えない)。
+ * DO の値を記録に写すことはしない
+ */
+function legacyDigestOf(db: Db, siteId: string, apiBase: string | null): (version: number) => Promise<string | null> {
+  const cache = new Map<number, Promise<string | null>>();
+  let site: Promise<SiteRow | undefined> | null = null;
+  const compute = async (version: number): Promise<string | null> => {
+    try {
+      site ??= db.selectFrom("sites").selectAll().where("id", "=", siteId).executeTakeFirst();
+      const row = await site;
+      const pub = await db.selectFrom("publishes").select("config_json").where("site_id", "=", siteId).where("version", "=", version).executeTakeFirst();
+      if (!row || !pub?.config_json) return null;
+      return await staticInputDigest({ config: JSON.parse(pub.config_json), settings: siteToSettings(row), apiBase });
+    } catch {
+      return null;
+    }
+  };
+  return (version) => {
+    let p = cache.get(version);
+    if (!p) cache.set(version, (p = compute(version)));
+    return p;
+  };
+}
+
+/**
+ * 7o K24 (3): 履歴の 1 点を、同じ世代の依頼の記録(req)との組で版に引く。引けなければ null(その点は数えない)。
+ * rowVersion = その世代を記録に持つ届く定義の行の版(digest の無い点で、記録が無いときだけ使う = 更新前の世代)
+ */
+async function versionOfPoint(
+  h: StaticDeployHistoryEntry,
+  req: StaticDeployRequestRow | undefined,
+  rowVersion: number | undefined,
+  legacyDigest: (version: number) => Promise<string | null>,
+): Promise<number | null> {
+  if (h.digest !== undefined) {
+    if (!req) return null;
+    if (req.input_digest !== null) return req.input_digest === h.digest ? req.version : null;
+    return (await legacyDigest(req.version)) === h.digest ? req.version : null;
+  }
+  if (!req) return rowVersion ?? null;
+  return req.input_digest === null ? req.version : null;
+}
+
 type Work = ExperimentDeliveredDefinitionRow & { id: number; nextFrom: number | null; nextSettled: ExperimentDeliveredDefinitionRow["settled"] };
 
 /**
  * 配信を確かめる(K14)。戻り値 = delivered_from か settled を変えた行の数。
  * - 読むのは needsDeliveryConfirmation の行を持つ run だけ(確定した run は読まない。Cron の 1 回の読み取りを抑える)
- * - history の各点の世代を static_deploy_requests で版 v に引く(無ければその世代を記録に持つ行の版。どちらも無ければ飛ばす)
+ * - history の各点を、同じ世代の依頼の記録(static_deploy_requests)との組で版 v に引く(7o K24 (3)。世代の再利用で別の中身の配信を証拠にしない):
+ *   - 点に digest がある: 記録の input_digest が同じときだけ記録の版。記録の input_digest が NULL(更新前に受け付けて更新後に配った)なら、
+ *     その記録の版の config・今の D1 の行の設定・apiBase から入力の digest を作り、点と同じときだけ記録の版。違う・記録が無いなら飛ばす
+ *     (行の世代からの補完は使わない)
+ *   - 点に digest が無い(更新前に配った): 記録が無ければその世代を記録に持つ行の版(更新前の世代)。記録の input_digest が NULL なら記録の版、
+ *     digest があれば飛ばす。どれでもなければ飛ばす
  * - 各 run で「publish_version <= v で最新の行」R の delivered_from を、R に当たる点の時刻の最小値にする(後の点で先に入れていても早い方へ直す。
  *   同じ定義の再公開では前の版の行が後の世代でも確かめられ、その後で前の世代の点が見つかることがあるため)。遅い方へは動かさない
  *   (UPDATE の CASE: 並行する確認が先に早い時刻を書いていたら、それを残す)
  * - settled = 'delivered' は history の全体(partial でない)のときだけ。partial は delivered_from を仮に入れ、settled は NULL のまま
  * - overtaken / unknown も history の全体と historyFrom を受けたときだけ決める(delivered_from が無い行だけに書く)
  * - delivered_until と テスト中の変更は、行を書いた後に D1 から読み直した delivered_from で作る(並行する確認の結果も含めて付け直す)
- * guard は wtt-control に書く各文の直前に呼ぶ(凍結中なら投げる。K24)
+ * guard は wtt-control に書く各文の直前に呼ぶ(凍結中なら投げる。K24)。
+ * apiBase = control が出し直しに渡す apiBase(edgeOrigin(env))。更新前の記録の digest を作るときだけ使う
  */
-export async function confirmDeliveries(db: Db, siteId: string, status: DeliveryStatus, now: number, guard: WriteGuard): Promise<number> {
+export async function confirmDeliveries(db: Db, siteId: string, status: DeliveryStatus, now: number, guard: WriteGuard, apiBase: string | null): Promise<number> {
   void now; // 時刻はデプロイの時刻(history)を使う。now は将来の検査(未来の時刻の除外など)のために受ける
   const partial = status.partial === true;
   const rows = await db
@@ -234,14 +287,15 @@ export async function confirmDeliveries(db: Db, siteId: string, status: Delivery
     const g = parseGen(r.static_generation);
     if (g) rowGenVersion.set(genKey(g), r.publish_version);
   }
-  const points = status.history
-    .map((h) => {
-      const at = Date.parse(h.deployedAt);
-      const version = reqByGen.get(genKey(h.generation))?.version ?? rowGenVersion.get(genKey(h.generation));
-      return version === undefined || !Number.isFinite(at) ? null : { version, at };
-    })
-    .filter((p): p is { version: number; at: number } => p !== null)
-    .sort((a, b) => a.at - b.at || a.version - b.version);
+  const legacyDigest = legacyDigestOf(db, siteId, apiBase);
+  const points: Array<{ version: number; at: number }> = [];
+  for (const h of status.history) {
+    const at = Date.parse(h.deployedAt);
+    if (!Number.isFinite(at)) continue;
+    const version = await versionOfPoint(h, reqByGen.get(genKey(h.generation)), rowGenVersion.get(genKey(h.generation)), legacyDigest);
+    if (version !== null) points.push({ version, at });
+  }
+  points.sort((a, b) => a.at - b.at || a.version - b.version);
   const inHistory = new Set(status.history.map((h) => genKey(h.generation)));
   // 読めない historyFrom は「すべて切り詰められているかもしれない」として扱う(unknown 側に倒す)
   const historyFrom = status.historyFrom === null ? null : Number.isFinite(Date.parse(status.historyFrom)) ? Date.parse(status.historyFrom) : Infinity;
@@ -275,7 +329,8 @@ export async function confirmDeliveries(db: Db, siteId: string, status: Delivery
         }
         if (w.nextSettled !== null) continue; // 決めた overtaken / unknown は戻さない(配られたら上で delivered になる)
         const own = parseGen(w.static_generation);
-        if (own && inHistory.has(genKey(own))) continue; // history にあるのに版が引けない(起きない)。決めない
+        // history にあるのに版が引けない(同じ世代に別の中身が配られた点。7o K24)。この版の配信の証拠ではないが、配られなかったとも言えないので決めない
+        if (own && inHistory.has(genKey(own))) continue;
         // 出し直しを頼んだ時刻。世代が無い行(出し直しが世代を受け取れなかった)は、その版の activation の時刻で代える
         const pub = pubByVersion.get(w.publish_version);
         const requestedAt = (own ? reqByGen.get(genKey(own))?.requested_at : undefined) ?? pub?.activated_at ?? pub?.created_at ?? null;

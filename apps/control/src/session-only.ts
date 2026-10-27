@@ -26,6 +26,8 @@ export const SESSION_ONLY: ReadonlyArray<{ method: "GET" | "POST" | "PATCH" | "D
   { method: "DELETE", path: "/workspaces/:wid", hint: "ワークスペースの作成・削除はセッション(管理画面)からのみ行えます" },
   // 使用状況の設定(見られる人 = アクセス権。同じ口の残りの項目もまとめて扱う)
   { method: "PATCH", path: "/usage/settings", hint: "使用状況の設定の変更はセッション(管理画面)からのみ行えます" },
+  // 公開中の全サイトの配信ファイルの作り直し(システム管理者の書き込みはすべてセッションのみ。7o Q8)
+  { method: "POST", path: "/static/rebuild", hint: "配信ファイルの作り直しはセッション(管理画面)からのみ行えます" },
   // メンバー・招待・パスワード
   { method: "PATCH", path: "/workspaces/:wid/members/:memberId", hint: "メンバーの変更はセッション(管理画面)からのみ行えます" },
   { method: "DELETE", path: "/workspaces/:wid/members/:memberId", hint: "メンバーの変更はセッション(管理画面)からのみ行えます" },

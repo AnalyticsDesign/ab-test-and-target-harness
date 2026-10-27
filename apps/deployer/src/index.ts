@@ -1,5 +1,14 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { StaticDeployer, StaticDeployRequest, StaticDeployResult, StaticRemoveRequest, StaticSiteStatus } from "@wtt/core";
+import type {
+  StaticBatchDeployRequest,
+  StaticBatchDeployResult,
+  StaticDeployer,
+  StaticDeployRequest,
+  StaticDeployResult,
+  StaticInstanceStatus,
+  StaticRemoveRequest,
+  StaticSiteStatus,
+} from "@wtt/core";
 import type { Env } from "./env";
 
 export { DeployQueue } from "./queue-do";
@@ -19,6 +28,16 @@ export class Deployer extends WorkerEntrypoint<Env> implements StaticDeployer {
   }
   siteStatus(siteId: string): Promise<StaticSiteStatus> {
     return queueOf(this.env).siteStatus(siteId);
+  }
+  /** 7o K10: 5 サイトまでのまとめた出し直し・削除の受け付け(配置は待たない) */
+  async redeploySites(req: StaticBatchDeployRequest): Promise<StaticBatchDeployResult> {
+    const r = await queueOf(this.env).redeploySites(req);
+    // RPC の型は rejected の `sites: []`(空の tuple)を `never[]` に広げるので、形を作り直して返す(中身は同じ)
+    return r.state === "accepted" ? r : { state: "rejected", sites: [], error: r.error };
+  }
+  /** 7o K9: デプロイ専用の Worker の全サイトの状態(読み取りだけ) */
+  instanceStatus(): Promise<StaticInstanceStatus> {
+    return queueOf(this.env).instanceStatus();
   }
 }
 

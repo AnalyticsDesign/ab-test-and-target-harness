@@ -3,12 +3,14 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, describeError } from "@/lib/client";
 import { staticRedeployMessage } from "@/lib/static-deploy";
+import { staticStaleText } from "@/lib/static-health";
 
 /**
  * 設置タグの配信ファイルの更新が済んでいないときの警告。管理者以上は作り直しを押せる。
- * removing = サイトの削除が途中で止まっている(配信ファイルは削除の墓標で消えている)。作り直しで配信を戻せる
+ * removing = サイトの削除が途中で止まっている(配信ファイルは削除の墓標で消えている)。作り直しで配信を戻せる。
+ * mismatch = デプロイ専用の Worker の記録が D1 と食い違っている(7o K6・K14。作り直しで直る = K7)。文言の優先は staticStaleText
  */
-export function StaticStaleBanner({ siteId, canRetry, removing }: { siteId: string; canRetry: boolean; removing: boolean }) {
+export function StaticStaleBanner({ siteId, canRetry, removing, mismatch }: { siteId: string; canRetry: boolean; removing: boolean; mismatch: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -28,10 +30,7 @@ export function StaticStaleBanner({ siteId, canRetry, removing }: { siteId: stri
   return (
     <div className="banner-warn banner-full" role="status" data-testid="static-stale">
       <span>
-        {removing
-          ? "このサイトの削除が途中で止まっています。もう一度削除するか、「配信ファイルを作り直す」で配信を戻してください。"
-          : /* 未設定・初回・再試行中のどれでも誤解が無いように書く(この帯からは区別できない) */
-            "設置タグの配信ファイルが最新の公開内容になっていません。前に作った配信ファイルがあれば訪問者にはそれが届き、初めての公開でまだ無ければタグは読み込まれません。配信ファイルを更新する仕組みが設定されていれば、自動で再試行します。"}
+        {staticStaleText({ staticRemoving: removing, staticMismatch: mismatch })}
         {message ? <span style={{ marginLeft: 12 }}>{message}</span> : null}
       </span>
       {canRetry ? (
