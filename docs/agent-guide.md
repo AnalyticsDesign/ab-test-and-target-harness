@@ -424,6 +424,7 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/duplicate" 
 
 - **selector はページ内で一意**に。当たらない selector は `evaluate` では検出できません — レシピ 2 の `matched` で確認してください
 - **変更はパターンあたり 100 件まで**、1 つの変更の payload は 64KB まで、compiled config 全体で 512KB まで
+- **要求の本文の大きさには上限があります**: 既定は 1MiB、変更の全置換(`PUT …/variants/:vid/changes`)は約 13MB、画像のアップロードは 1 枚の上限(`AB_ASSET_MAX_MB`)+ 1MiB です。超えると 413 `payload_too_large`(画像は 413 `asset_too_large`)を返します
 - **ATTRIBUTE には allowlist があります**(`on*` / `style` / `srcdoc` などは拒否。`href` / `src` は http(s) と相対 URL のみ)。拒否は `attribute_not_allowed` / `attribute_url_not_allowed`
 - **コードの変更(HTML / CSS / CUSTOM_JS)と CSP**: 対象サイトが CSP を出している場合の条件と、開始直後の必須確認手順は `docs/site-install.md` の「10. コードの変更と CSP」と `docs/operations.md` の「5. 開始直後のチェック」を参照してください。CSP でブロックされた CUSTOM_JS は片側だけ Exposure が出ない(SRM)状態になります。**公開前にレシピ 2 の `getPreviewReport()` で `error` を確認する**のが最短の予防です
 - **編集者の権限の鍵で公開・開始を呼ぶと 403**(`{"error":"forbidden","required":"admin"}`)。人間に公開を依頼してください

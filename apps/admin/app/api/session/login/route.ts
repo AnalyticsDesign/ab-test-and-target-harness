@@ -1,3 +1,4 @@
+import { readSessionJson } from "@/lib/body-limit";
 import { cookies } from "next/headers";
 import { controlRequest, controlUnreachable, forwardedFrom, isHttps, originHeader, requireOrigin, sessionCookie } from "@/lib/control";
 import { NOT_INVITED } from "@/lib/oauth-errors";
@@ -9,7 +10,10 @@ import { NOT_INVITED } from "@/lib/oauth-errors";
 export async function POST(req: Request): Promise<Response> {
   const noOrigin = requireOrigin(req);
   if (noOrigin) return noOrigin;
-  const body = (await req.json().catch(() => ({}))) as { email?: unknown; password?: unknown };
+  // B154: 本文は上限(16KB)付きで読む。超えたら読まずに 413
+  const read = await readSessionJson(req);
+  if (!read.ok) return read.response;
+  const body = read.value as { email?: unknown; password?: unknown };
   // 接続元 IP を渡す(control のログインのレート制限が利用者ごとに効く。plan12 K8)
   const res = await controlRequest("/auth/sign-in/email", {
     method: "POST",

@@ -18,8 +18,10 @@ import {
   type ExperimentKind,
   type VariantAnalytics,
   newRunId,
+  MAX_CHANGES_PER_VARIANT,
 } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
+import { changesPutBodyLimit } from "../body-limit";
 import { resultsStore } from "../capabilities";
 import { toStatement, type Db, type ExperimentRow, type SiteRow, type Tables, type VariantRow } from "../db";
 import { copyChangesQuery, copyPlanQuery, copyVariantsQuery, duplicateExperimentRow, insertExperimentQuery, retiredIds } from "../duplicate";
@@ -140,8 +142,8 @@ const VariantsPut = z
   .min(1);
 /** B77(K9): パターンのメモだけを更新する。ほかのキーは受けない */
 const VariantPatch = z.strictObject({ description: Description });
-/** spec §11 / 決定 35 (7): 1 Variant の Change は 100 件まで(保存時の件数上限。Publish の 512KB 上限は別途) */
-const MAX_CHANGES_PER_VARIANT = 100;
+// spec §11 / 決定 35 (7): 1 Variant の Change は 100 件まで(保存時の件数上限。Publish の 512KB 上限は別途)。
+// 値は core(B154: この経路の本文の上限 CHANGES_PUT_BODY_MAX_BYTES が同じ数から決まるため)
 /**
  * core の Change(spec §11: TEXT / IMAGE / HIDE / ATTRIBUTE / HTML / CSS / CUSTOM_JS)の配列。
  * ここで `ChangeSchema` を使わないのは、個々の Change の失敗を `parseChange` が機械可読コード
@@ -786,6 +788,8 @@ experimentRoutes.put(
     },
   }),
   requireSession,
+  // B154: この経路だけ既定(1MiB)より大きい上限。入口では掛けず、ログインを確かめた後・本文の解析の前に掛ける(body-limit.ts)
+  changesPutBodyLimit,
   validator("json", ChangesPut, (r) => {
     if (r.success) return;
     // 件数超過だけは専用コード(zod の issue message に "too_many_changes" を入れて見分ける)

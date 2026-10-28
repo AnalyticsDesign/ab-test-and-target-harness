@@ -3,6 +3,7 @@ import { createMiddleware } from "hono/factory";
 import { API_CONTRACT_VERSION, API_VERSION_HEADER, CLIENT_IP_HEADER, MIN_CLIENT_VERSION, MIN_CLIENT_VERSION_HEADER } from "@wtt/core";
 import { KEY_EXPIRED_HINT, isKeyExpired, keyExpiresAt } from "./api-key-expiry";
 import { apiKeyFromHeaders, getAuth, type Auth, type Role } from "./auth";
+import { requestBodyLimit } from "./body-limit";
 import { getDb, type Db } from "./db";
 import { ApiError, errorHandler, notFound } from "./errors";
 import type { Env } from "./env";
@@ -60,7 +61,9 @@ export function createApp(): Hono<AppEnv> {
     return null;
   };
   app.use("*", async (c, next) => {
-    const routeClass = rateLimitRouteClass(c.req.method, new URL(c.req.url).pathname);
+    // B154(G17): Hono がルートを選ぶのと同じデコードした path で分類する。生の URL の path だと `/s%65tup` などのエンコードした別名が
+    // 分類に当たらないまま本物のルートに届く
+    const routeClass = rateLimitRouteClass(c.req.method, c.req.path);
     if (routeClass) {
       // 決定 63 (6): admin 経由(service binding の ControlBff)なら admin が渡す利用者の IP(x-wtt-client-ip)で数える。
       // この要求は cf-connecting-ip を持たない。公開の入口ではこのヘッダーを消してから app へ渡す(index.ts の stripTrustedHeaders)ので、
@@ -78,6 +81,8 @@ export function createApp(): Hono<AppEnv> {
     }
     await next();
   });
+  // B154(G19): 本文の上限。回数の上限の後(数える前に本文を読まない)、ルート・`/auth/*` の素通しより前(本文を読む処理はすべてこの後)
+  app.use("*", requestBodyLimit);
   app.use("*", async (c, next) => {
     c.set("auth", getAuth(c.env));
     c.set("db", getDb(c.env));

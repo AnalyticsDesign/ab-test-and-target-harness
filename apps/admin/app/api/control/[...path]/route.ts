@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { BFF_CHUNKED_BODY_MAX_BYTES, BFF_DECLARED_BODY_CEILING_BYTES, bodyReadFailed, declaredLength, payloadTooLarge, readBodyLimited } from "@/lib/body-limit";
 import { badOrigin, controlRequest, controlUnreachable, forwardedFrom, originHeader, originVerdict, SESSION_COOKIE } from "@/lib/control";
 
 /**
@@ -39,6 +40,29 @@ const EXECUTABLE_RESPONSE = [/^sites\/[^/]+\/experiments\/[^/]+\/draft-bootstrap
 const envelope = (status: number, error: string, message: string, hint?: string) =>
   Response.json({ error, message, ...(hint ? { hint } : {}) }, { status });
 
+/**
+ * B154(security triage v2 G33): 本文を丸ごとメモリに読まずに control へ渡す。BFF は認証の前(トークンの有無にかかわらず)本文に触れる。
+ * `/reset` の画面が無認証で再設定を呼ぶので、トークンの有無では分けない。
+ * - Content-Length があり天井(100 MiB)以内: 読まずにストリームのまま渡す。経路ごとの上限は control が同じ Content-Length で判定する
+ *   (画像の上限は control の `AB_ASSET_MAX_MB` で決まり、管理画面はその値を持たないため)
+ * - Content-Length が天井を超える: 読まずに 413
+ * - Content-Length が無い(chunked): どの経路でも JSON の既定(1 MiB)まで数えながら読み、超えたら 413。
+ *   途中で打ち切るストリームを渡すと control に届かず 502 になるので、読み切ってから渡す。読んでいる途中の失敗は 400
+ * ストリームの本文には `duplex: "half"` が要る(Node の fetch / Request は無いと TypeError。workerd は付けても害は無い)
+ */
+async function forwardBody(req: Request, headers: Headers): Promise<{ body?: BodyInit; duplex?: "half" } | Response> {
+  if (req.method === "GET" || req.method === "HEAD" || !req.body) return {};
+  const declared = declaredLength(req.headers);
+  if (declared !== null) {
+    if (declared > BFF_DECLARED_BODY_CEILING_BYTES) return payloadTooLarge();
+    headers.set("content-length", String(declared));
+    return { body: req.body, duplex: "half" };
+  }
+  const r = await readBodyLimited(req, BFF_CHUNKED_BODY_MAX_BYTES);
+  if (r.ok) return { body: r.bytes };
+  return r.reason === "too_large" ? payloadTooLarge() : bodyReadFailed();
+}
+
 async function proxy(req: Request, ctx: { params: Promise<{ path: string[] }> }): Promise<Response> {
   // 出自の門は Cookie を読む前(Cookie に触れない要求は Bearer を作らない)
   if (originVerdict(req) !== "ok") return badOrigin();
@@ -65,8 +89,9 @@ async function proxy(req: Request, ctx: { params: Promise<{ path: string[] }> })
   const ct = req.headers.get("content-type");
   if (ct) headers.set("content-type", ct);
   if (token) headers.set("authorization", `Bearer ${token}`);
-  const body = req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer();
-  const res = await controlRequest(target, { method: req.method, headers, body, ...forwardedFrom(req) });
+  const forwarded = await forwardBody(req, headers);
+  if (forwarded instanceof Response) return forwarded;
+  const res = await controlRequest(target, { method: req.method, headers, ...forwarded, ...forwardedFrom(req) });
   // control に届かないときも封筒を返す(ブラウザ側の `api()` は「非 2xx は必ず封筒」を前提にしている)
   if (!res) return controlUnreachable();
   // 応答も素通しにはしない。control の set-auth-token / set-cookie をブラウザに渡さない。

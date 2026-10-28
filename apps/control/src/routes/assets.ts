@@ -1,11 +1,15 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
+import { createMiddleware } from "hono/factory";
 import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
+import { assetMaxMb } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
+import { assetUploadBodyLimit } from "../body-limit";
 import { imageStore, IMAGE_DISABLED_HINT } from "../capabilities";
 import { ApiError, notFound, validationFailed } from "../errors";
 import { newId, SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
+import type { SiteRow } from "../db";
 import { loadSite } from "../roles";
 
 export const assetRoutes = new Hono<AppEnv>();
@@ -82,8 +86,6 @@ function unsupportedImage(declared: string, head: Uint8Array): ApiError {
     hint: `${SUPPORTED_LABELS} の画像だけをアップロードできます(SVG は受け付けません)。形式は、拡張子とファイルの中身の両方で確かめています`,
   });
 }
-const DEFAULT_MAX_MB = 5;
-
 const AssetUploadForm = z.object({
   file: z.file().describe("画像ファイル(PNG / JPEG / GIF / WebP / AVIF)"),
   // R2 のキーにそのまま入るので、Experiment と同じスラッグ形(`/` や `..` を含みえない)に絞る。
@@ -108,6 +110,24 @@ const AssetJsonSchema = z.object({
   createdAt: z.number().int().describe("epoch ミリ秒"),
 });
 
+type UploadEnv = AppEnv & { Variables: { uploadSite: SiteRow; uploadStore: { bucket: R2Bucket; publicBase: string } } };
+
+/**
+ * B154(security triage v2 G19 (a)): アップロードの権限と構成を、本文を読む前に確かめる。
+ * 権限の無い人(閲覧者・別のワークスペースの人)には本文を読まずに 403 / 404 を返す。
+ * `experimentId` は本文にあるので、ここで見るのはサイトの権限だけ(エクスペリエンスの実在は本文を読んだ後)
+ */
+const uploadAccess = createMiddleware<UploadEnv>(async (c, next) => {
+  // UploadEnv は AppEnv に変数を足しただけ(loadSite が読む auth / db / user はそのまま)。Context は変数の型について不変なので型だけ戻す
+  const { site } = await loadSite(c as unknown as Context<AppEnv>, c.req.param("sid") ?? "", "editor");
+  // 決定 43 (5): R2 なし構成は 409。Role 判定(loadSite)の後に置き、権限の無い相手に構成を漏らさない
+  const store = imageStore(c.env);
+  if (!store) throw new ApiError(409, "image_upload_disabled", { hint: IMAGE_DISABLED_HINT });
+  c.set("uploadSite", site);
+  c.set("uploadStore", store);
+  await next();
+});
+
 /**
  * spec §13.5 / §13.7: multipart → R2。EDITOR 以上(認可判定は roles.ts の `loadSite`)。
  * 画像以外は 415 `unsupported_media_type`、上限(env `AB_ASSET_MAX_MB`、既定 5MB)超は 413 `asset_too_large`、
@@ -125,14 +145,15 @@ assetRoutes.post(
     },
   }),
   requireSession,
+  uploadAccess,
+  // B154: 本文の上限は権限の確かめの後・本文の解析(validator)の前。入口の既定の上限はこの経路に掛けない(body-limit.ts)
+  assetUploadBodyLimit,
   validator("form", AssetUploadForm, (r) => {
     if (!r.success) throw validationFailed(r.error);
   }),
   async (c) => {
-    const { site } = await loadSite(c, c.req.param("sid"), "editor");
-    // 決定 43 (5): R2 なし構成は 409。Role 判定(loadSite)の後に置き、権限の無い相手に構成を漏らさない
-    const store = imageStore(c.env);
-    if (!store) throw new ApiError(409, "image_upload_disabled", { hint: IMAGE_DISABLED_HINT });
+    const site = c.get("uploadSite");
+    const store = c.get("uploadStore");
     const valid = c.req.valid("form");
     const experimentId = valid.experimentId;
     // zod の `z.file()` は `typeof globalThis` から File を拾えないと出力型が `{ type, size }` まで縮む
@@ -141,8 +162,7 @@ assetRoutes.post(
     const db = c.get("db");
     const exp = await db.selectFrom("experiments").select("id").where("site_id", "=", site.id).where("id", "=", experimentId).executeTakeFirst();
     if (!exp) throw notFound();
-    const parsedMb = Number(c.env.AB_ASSET_MAX_MB);
-    const maxMb = Number.isFinite(parsedMb) && parsedMb > 0 ? parsedMb : DEFAULT_MAX_MB;
+    const maxMb = assetMaxMb(c.env.AB_ASSET_MAX_MB);
     if (file.size > maxMb * 1024 * 1024) throw new ApiError(413, "asset_too_large", { maxMb, size: file.size, message: "画像が大きすぎます", hint: `1 枚あたり ${maxMb}MB までです` });
     // 宣言だけでも先頭バイトだけでも足りない。両方が同じ種類を指したときだけ受ける。
     // 本体は 1 回だけ読む(先頭バイト用に slice し直すと 2 度読みになる)

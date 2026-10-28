@@ -1,3 +1,4 @@
+import { readSessionJson } from "@/lib/body-limit";
 import { controlRequest, controlUnreachable, forwardedFrom, originHeader, requireOrigin } from "@/lib/control";
 
 /**
@@ -7,7 +8,10 @@ import { controlRequest, controlUnreachable, forwardedFrom, originHeader, requir
 export async function POST(req: Request): Promise<Response> {
   const noOrigin = requireOrigin(req);
   if (noOrigin) return noOrigin;
-  const { setupToken, ...body } = (await req.json().catch(() => ({}))) as { setupToken?: unknown };
+  // B154: 本文は上限(16KB)付きで読む。超えたら読まずに 413
+  const read = await readSessionJson(req);
+  if (!read.ok) return read.response;
+  const { setupToken, ...body } = read.value as { setupToken?: unknown };
   // /setup は control の古い版の判定(426)の対象なので、ブラウザの版との小さいほうを名乗る(forwardedFrom)
   const res = await controlRequest("/setup", {
     method: "POST",

@@ -1,3 +1,4 @@
+import { readSessionJson } from "@/lib/body-limit";
 import { cookies } from "next/headers";
 import { controlRequest, controlUnreachable, forwardedFrom, isHttps, originHeader, requireOrigin, SESSION_COOKIE, sessionCookie } from "@/lib/control";
 
@@ -8,7 +9,10 @@ import { controlRequest, controlUnreachable, forwardedFrom, isHttps, originHeade
 export async function POST(req: Request): Promise<Response> {
   const noOrigin = requireOrigin(req);
   if (noOrigin) return noOrigin;
-  const { id, ...body } = (await req.json().catch(() => ({}))) as { id?: unknown };
+  // B154: 本文は上限(16KB)付きで読む。超えたら読まずに 413
+  const read = await readSessionJson(req);
+  if (!read.ok) return read.response;
+  const { id, ...body } = read.value as { id?: unknown };
   if (typeof id !== "string" || id === "") return Response.json({ error: "bad_request", message: "招待 ID がありません" }, { status: 400 });
   const jar = await cookies();
   const existing = jar.get(SESSION_COOKIE)?.value;
