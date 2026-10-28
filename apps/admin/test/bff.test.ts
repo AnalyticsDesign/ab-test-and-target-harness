@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { API_CONTRACT_VERSION } from "@wtt/core";
+
+/** この画面(BFF)の版の名乗り */
+const OWN_VERSION = String(API_CONTRACT_VERSION);
 
 /**
  * BFF(spec §13.4)の転送規則と Cookie の属性を、外から検証できる範囲で固定する。
@@ -79,11 +83,11 @@ describe("BFF /api/control/[...path]", () => {
     jar = newJar({ wtt_session: "tok" });
     fetchMock.mockResolvedValueOnce(controlRes(200, { ok: true }));
     await GET(new Request(`${ORIGIN}/api/control/me`, { headers: { "x-wtt-client-version": "999" } }), params(["me"]));
-    expect(lastCall().headers.get("x-wtt-client-version")).toBe("1");
+    expect(lastCall().headers.get("x-wtt-client-version")).toBe(OWN_VERSION);
     // controlFetch(サーバー側の読み取りすべての入口)。呼び出し元が渡した値も BFF の版で上書きする(レビュー r1 CX-Medium-4)
     fetchMock.mockResolvedValueOnce(controlRes(200, { ok: true }));
     await controlFetch("/me", { headers: { "x-wtt-client-version": "999" } });
-    expect(lastCall().headers.get("x-wtt-client-version")).toBe("1");
+    expect(lastCall().headers.get("x-wtt-client-version")).toBe(OWN_VERSION);
     fetchMock.mockResolvedValueOnce(controlRes(201, { workspaceId: "w", userId: "u" }));
     await setup(post(`${ORIGIN}/api/session/setup`, { headers: { "content-type": "application/json", "x-setup-token": "t", "x-wtt-client-version": "1" }, body: JSON.stringify({ email: "a@example.com", name: "A", workspaceName: "W" }) }));
     expect(lastCall().headers.get("x-wtt-client-version")).toBe("1");
@@ -667,7 +671,7 @@ describe("版の名乗り(plan12 K3)", () => {
     ["ブラウザが 1 を名乗る", { "x-wtt-client-version": "1" }, "1"],
     ["ブラウザが名乗らない", {}, "0"],
     ["ブラウザの名乗りが読めない", { "x-wtt-client-version": "abc" }, "0"],
-    ["ブラウザが BFF より新しい版を名乗る", { "x-wtt-client-version": "999" }, "1"],
+    ["ブラウザが BFF より新しい版を名乗る", { "x-wtt-client-version": "999" }, OWN_VERSION],
   ];
 
   it("bff_names_the_lower_of_own_and_browser_version", async () => {
@@ -692,7 +696,7 @@ describe("版の名乗り(plan12 K3)", () => {
     // サーバー側の呼び出し(Server Component の controlFetch)はブラウザを介さないので、自分の版をそのまま名乗る
     reqHeaders = new Headers({ "x-wtt-client-version": "0" });
     await controlFetch("/me", { headers: { "x-wtt-client-version": "0" } });
-    expect(versionSent()).toBe("1");
+    expect(versionSent()).toBe(OWN_VERSION);
   });
 
   it("版を名乗らない /api/control/* への書き込みは 426(control の封筒をそのまま返す)", async () => {

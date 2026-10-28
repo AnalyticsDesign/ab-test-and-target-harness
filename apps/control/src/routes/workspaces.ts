@@ -4,6 +4,7 @@ import { sql } from "kysely";
 import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
 import { revokeSessionsForEmailIfNoAccess, revokeSessionsIfNoAccess } from "../access";
+import { revokeKeysStatements } from "../api-key-revocation";
 import { bearerHeaders, ROLES } from "../auth";
 import { PASSWORD_LOGIN_DISABLED_HINT, passwordLoginOpen } from "../break-glass";
 import { ApiError, ROLE_JA, notFound, parseJson, validationFailed } from "../errors";
@@ -42,7 +43,15 @@ const InvitationResultSchema = z.object({
   expiresAt: z.number().describe("epoch ミリ秒"),
   extended: z.boolean().describe("true = 同じロールの招待が既にあり、そのリンクの期限を延ばした(id と url は前と同じ)"),
 });
-const InvitationListSchema = z.object({ id: z.string(), email: z.string(), role: z.string().nullable(), status: z.string(), expiresAt: z.number(), url: z.string() });
+// B156(G15 / 決定 55 (9) の追補): 招待 ID は受諾の資格そのものなので、API キーで読んだ一覧では id・url を null にする
+const InvitationListSchema = z.object({
+  id: z.string().nullable().describe("招待の ID。API キーで読んだときは null(招待の ID はそのまま受諾に使えるため、ログインして読んだときだけ返す)"),
+  email: z.string(),
+  role: z.string().nullable(),
+  status: z.string(),
+  expiresAt: z.number(),
+  url: z.string().nullable().describe("招待のリンク。API キーで読んだときは null(id と同じ理由)"),
+});
 const PublicInvitationSchema = z.object({ id: z.string(), email: z.string(), role: z.string().nullable(), workspaceName: z.string(), status: z.string(), expiresAt: z.number() });
 const AcceptResultSchema = z.object({ token: z.string(), workspaceId: z.string(), userId: z.string().nullable() });
 const ResetLinkSchema = z.object({ url: z.string().describe("管理画面の `/reset?token=…`(本人に手渡しする)") });
@@ -375,10 +384,23 @@ workspaceRoutes.delete(
     assertCanTouchOwner(me, target.role);
     if (target.userId === c.get("user").id) throw new ApiError(409, "cannot_remove_self", { message: "自分自身は外せません", hint: "ほかの管理者かオーナーに外してもらってください" });
     // 2 つの条件を同じ文に入れる: (1) 対象がシステム管理者でない(K9) (2) 最後の OWNER を削除させない(review r2 CX-Medium-5)
-    const del = await sql`delete from member where id = ${memberId} and "organizationId" = ${wid}
-      and not exists (select 1 from instance_admins a where a.user_id = member."userId")
-      and (role != 'owner' or (select count(*) from member m2 where m2."organizationId" = ${wid} and m2.role = 'owner') > 1)`.execute(db);
-    if (Number(del.numAffectedRows ?? 0) === 0) {
+    // B156(G16): 同じ batch で、その人のこのワークスペースの鍵を失効させる。失効の文は「その人がもうこのワークスペースのメンバーでない」
+    // ときだけ書く(外す文が 0 行 = 409 の分岐では鍵に触れない)
+    const [del] = await c.env.DB.batch([
+      c.env.DB.prepare(
+        `delete from member where id = ?1 and "organizationId" = ?2
+         and not exists (select 1 from instance_admins a where a.user_id = member."userId")
+         and (role != 'owner' or (select count(*) from member m2 where m2."organizationId" = ?2 and m2.role = 'owner') > 1)`,
+      ).bind(memberId, wid),
+      ...revokeKeysStatements(c.env.DB, {
+        userId: target.userId,
+        target: { kind: "workspace", workspaceId: wid },
+        revokedBy: c.get("user").id,
+        now: Date.now(),
+        guard: `not exists (select 1 from member m where m."organizationId" = ?4 and m."userId" = ?1)`,
+      }),
+    ]);
+    if ((del?.meta.changes ?? 0) === 0) {
       if (await isInstanceAdmin(db, target.userId)) {
         throw new ApiError(409, "instance_admin_member", { hint: "システム管理者から外すときは、管理画面の左メニューの下の「設定」→「システム管理者」から行ってください(API では DELETE /instance-admins/:userId)" });
       }
@@ -491,7 +513,17 @@ workspaceRoutes.get(
       .where("status", "=", "pending")
       .orderBy("expiresAt", "desc")
       .execute();
-    return c.json(rows.map((r) => ({ ...r, expiresAt: epochMs(r.expiresAt), url: `${c.env.AB_ADMIN_URL}/invite/${r.id}` })));
+    // B156(G15): 鍵経由(keyScope が null でない = requireSession が鍵の範囲を読めた要求。範囲の読めない鍵はそこで 401)では
+    // id・url を返さない。漏れた鍵で招待 ID を読み、非常口の間に Bearer 無しの受諾でアカウントと通常のセッションを作る経路を塞ぐ
+    const viaKey = c.get("keyScope") !== null;
+    return c.json(
+      rows.map((r) => ({
+        ...r,
+        id: viaKey ? null : r.id,
+        expiresAt: epochMs(r.expiresAt),
+        url: viaKey ? null : `${c.env.AB_ADMIN_URL}/invite/${r.id}`,
+      })),
+    );
   },
 );
 

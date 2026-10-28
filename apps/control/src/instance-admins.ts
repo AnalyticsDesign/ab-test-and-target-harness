@@ -1,6 +1,7 @@
 import { getDb, type Db } from "./db";
 import type { Env } from "./env";
 import { randomSlug } from "./ids";
+import { revokeKeysStatements } from "./api-key-revocation";
 
 /**
  * 決定 53(backlog B36): システム管理者のデータの読み書き。**「システム管理者として扱うか」「手を出してよいか」の判定は roles.ts**。
@@ -119,9 +120,16 @@ export async function listInstanceAdminCandidates(
  * 記録は granted_at が今の instance_admins.created_at と一致するものだけを「記録」とみなす(古い control を挟んだ巻き戻しで残った古い記録では戻さない。
  * そのワークスペースの行は (b) で消え、古い記録は (c) で一緒に消える)。
  * opts.restore が false(B46 K11。退職者などを元のロールにも戻さず外す)なら、(a)(b) の代わりに、記録があっても
- * その人の Member 行をすべて消す(3 文。条件と並びは同じ)。既定は true
+ * その人の Member 行をすべて消す(3 文。条件と並びは同じ)。既定は true。
+ * B156(G16): 同じ batch で、その人のフルの鍵(scope = full)と、Member 行を消したワークスペースの鍵を失効させる(opts.revokedBy = 外した人)。
+ * 再び昇格させても・そのワークスペースに招待し直しても外す前の鍵は使えない。元のロールに戻るワークスペースの鍵は失効させない。
+ * 条件は他の文と同じ guard なので、(d) より前に置く(後に置くと guard が偽になり失効しない)
  */
-export async function revokeInstanceAdmin(env: Env, userId: string, opts: { restore?: boolean } = {}): Promise<"revoked" | "not_admin" | "last"> {
+export async function revokeInstanceAdmin(
+  env: Env,
+  userId: string,
+  opts: { restore?: boolean; revokedBy?: string | null } = {},
+): Promise<"revoked" | "not_admin" | "last"> {
   const restore = opts.restore ?? true;
   const guard = `exists (select 1 from instance_admins where user_id = ?1) and (select count(*) from instance_admins) > 1`;
   const prior = `select p.role from instance_admin_prior_roles p where p.user_id = ?1 and p.organization_id = member."organizationId"
@@ -135,6 +143,10 @@ export async function revokeInstanceAdmin(env: Env, userId: string, opts: { rest
   const results = await env.DB.batch([
     ...memberStatements,
     env.DB.prepare(`delete from instance_admin_prior_roles where user_id = ?1 and ${guard}`).bind(userId),
+    ...revokeKeysStatements(env.DB, { userId, target: { kind: "full" }, revokedBy: opts.revokedBy ?? null, now: Date.now(), guard }),
+    // B156: Member 行を消したワークスペース(昇格の前の記録が無い側。restore = false ならすべて)の、その人のワークスペースの鍵も失効させる。
+    // Member 行の文の後に置く(消えた後の状態で「もうメンバーでない」を見る)。guard は (d) の前なのでまだ真
+    ...revokeKeysStatements(env.DB, { userId, target: { kind: "workspaces_left" }, revokedBy: opts.revokedBy ?? null, now: Date.now(), guard }),
     env.DB.prepare(`delete from instance_admins where user_id = ?1 and ${guard}`).bind(userId),
   ]);
   // 判定は最後の文(instance_admins から外す)の changes

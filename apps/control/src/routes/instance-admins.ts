@@ -104,7 +104,7 @@ instanceAdminRoutes.delete(
   async (c) => {
     const userId = c.req.param("userId");
     const query = c.req.valid("query");
-    const result = await revokeInstanceAdmin(c.env, userId, { restore: query.restore !== "false" });
+    const result = await revokeInstanceAdmin(c.env, userId, { restore: query.restore !== "false", revokedBy: c.get("user").id });
     if (result === "not_admin") throw notFound();
     if (result === "last") throw new ApiError(409, "last_instance_admin", { hint: "先に別のユーザーをシステム管理者にしてください" });
     // 元のロールに戻ったワークスペースが無く、有効な招待も無ければログイン状態を切る(B20 と同じ。自分を外した場合は自分も)

@@ -11,14 +11,18 @@
  * (空のままなら core のテストが落ちる)。
  * zod を import しない(admin のどこから import しても軽く保つ)
  */
-export const API_CONTRACT_VERSION = 1;
+// 2(2026-10-28、backlog B156): API キーで読んだ招待の一覧(GET /workspaces/:wid/invitations)の id・url が null になりうる(型の変更)
+export const API_CONTRACT_VERSION = 2;
 export const API_VERSION_HEADER = "x-wtt-api-version";
 export const CLIENT_VERSION_HEADER = "x-wtt-client-version";
 
 /** 書き込みを受ける admin の最小の版。これより小さい名乗りは 426 client_too_old */
 export const MIN_CLIENT_VERSION = 1;
 /** MIN を API_CONTRACT_VERSION より低く据え置くときだけ、その理由を書く(猶予を残す根拠。決定 63 (3)) */
-export const MIN_CLIENT_VERSION_KEPT_BECAUSE = "";
+export const MIN_CLIENT_VERSION_KEPT_BECAUSE =
+  "版 2(backlog B156 / 決定 55 (9) の追補)で変わるのは、API キーで招待の一覧を読んだときの応答(id・url が null)だけ。" +
+  "管理画面は BFF のセッションで読むので、版 1 の管理画面も今までどおり id・url を受け取る。" +
+  "MIN を 2 に上げると、開いたままの古い管理画面のタブの書き込みが読み込み直すまで 426 で断られるだけで、守れるものが無い";
 /** control が全応答に付ける「いまの最小の版」のヘッダー(admin が自分の古さを知るため) */
 export const MIN_CLIENT_VERSION_HEADER = "x-wtt-min-client-version";
 /** admin の BFF が control に、ブラウザの接続元 IP を渡すヘッダー */

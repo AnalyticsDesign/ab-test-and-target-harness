@@ -42,7 +42,8 @@ describe("版の定数", () => {
     expect(MIN_CLIENT_VERSION).toBeLessThanOrEqual(API_CONTRACT_VERSION);
   });
   it("MIN を契約の版より低く据え置くなら理由を書く", () => {
-    expect(MIN_CLIENT_VERSION === API_CONTRACT_VERSION || MIN_CLIENT_VERSION_KEPT_BECAUSE.trim() !== "").toBe(true);
+    // 定数どうしの比較は literal 型のままだと TS2367 になるので number として比べる
+    expect((MIN_CLIENT_VERSION as number) === API_CONTRACT_VERSION ||MIN_CLIENT_VERSION_KEPT_BECAUSE.trim() !== "").toBe(true);
   });
   it("ヘッダー名", () => {
     expect(MIN_CLIENT_VERSION_HEADER).toBe("x-wtt-min-client-version");

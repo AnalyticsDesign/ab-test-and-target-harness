@@ -95,12 +95,12 @@ describe("who may hold a session (B20)", () => {
     expect(bySession.status).toBe(403);
     expect(await expectEnvelope(bySession)).toMatchObject({ error: "forbidden", required: "instance_admin" });
     expect((await call("DELETE", `/workspaces/${owner.workspaceId}/members/${gone.memberId}`, { token: owner.token })).status).toBe(204);
-    // backlog B42: 外された人のワークスペースの鍵は、鍵の入口で 401(範囲のワークスペースのメンバーでない)
+    // backlog B42: 外された人のワークスペースの鍵は、鍵の入口で 401。B156 からは外すときに失効させるので、失効の判定で 401
+    // (失効済みの鍵の 401 は hint を付けない。範囲の判定の hint は api-key-scope.test.ts が見る)
     const denied = await call("GET", "/workspaces", { token: goneKey });
     expect(denied.status).toBe(401);
     const body = await expectEnvelope(denied);
     expect(body.error).toBe("unauthorized");
-    expect(typeof body.hint).toBe("string");
   });
 
   it("refuses to delete the only workspace, so the install can never lose its last way in", async () => {

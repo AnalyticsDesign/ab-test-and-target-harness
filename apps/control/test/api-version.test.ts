@@ -10,8 +10,8 @@ describe("api contract version header (D13 / decision 56 (1))", () => {
     expect(res.headers.get(MIN_CLIENT_VERSION_HEADER), `${label} (min client version)`).toBe(String(MIN_CLIENT_VERSION));
   };
 
-  it("is 1 in v1.0", () => {
-    expect(API_CONTRACT_VERSION).toBe(1);
+  it("is 2 with the minimum kept at 1 (B156)", () => {
+    expect(API_CONTRACT_VERSION).toBe(2);
     expect(API_VERSION_HEADER).toBe("x-wtt-api-version");
     expect(MIN_CLIENT_VERSION_HEADER).toBe("x-wtt-min-client-version");
     expect(MIN_CLIENT_VERSION).toBe(1);

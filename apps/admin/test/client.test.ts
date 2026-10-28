@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { API_CONTRACT_VERSION } from "@wtt/core";
 import { api, ApiClientError, describeError, fieldErrors } from "@/lib/client";
 
 /** ブラウザ側の薄い層。封筒(spec §13.5)の読み方だけを固定する */
@@ -38,7 +39,7 @@ describe("api()", () => {
     await api("POST", "/sites/s1/assets", fd);
     await api("PATCH", "/sites/s1", { name: "x" }, { headers: { "x-wtt-client-version": "999" } });
     for (const [, init] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
-      expect(new Headers(init.headers).get("x-wtt-client-version")).toBe("1");
+      expect(new Headers(init.headers).get("x-wtt-client-version")).toBe(String(API_CONTRACT_VERSION));
     }
   });
 

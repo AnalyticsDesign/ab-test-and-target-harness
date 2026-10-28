@@ -61,9 +61,9 @@ describe("capabilities", () => {
     const { token } = await setupOwner();
     const on = await call("GET", "/capabilities", { token, envOverride: { ...RESULTS_STORE, AB_EDGE_ORIGIN: "https://wtt-edge.my-sub.workers.dev" } });
     expect(on.status).toBe(200);
-    expect(await on.json()).toEqual({ imageUpload: true, edgeOrigin: "https://wtt-edge.my-sub.workers.dev", tagOrigin: "https://wtt-edge.my-sub.workers.dev", edgeOnWorkersDev: true, passwordLogin: false, resultsStore: true, writeFreeze: null, apiVersion: 1, minClientVersion: 1 });
+    expect(await on.json()).toEqual({ imageUpload: true, edgeOrigin: "https://wtt-edge.my-sub.workers.dev", tagOrigin: "https://wtt-edge.my-sub.workers.dev", edgeOnWorkersDev: true, passwordLogin: false, resultsStore: true, writeFreeze: null, apiVersion: 2, minClientVersion: 1 });
     const off = await call("GET", "/capabilities", { token, envOverride: { ASSETS: undefined, AB_EDGE_ORIGIN: undefined } });
-    expect(await off.json()).toEqual({ imageUpload: false, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null, apiVersion: 1, minClientVersion: 1 });
+    expect(await off.json()).toEqual({ imageUpload: false, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null, apiVersion: 2, minClientVersion: 1 });
     expect(capabilities(withEnv({ AB_ASSET_PUBLIC_BASE: "" })).imageUpload).toBe(false);
   });
 

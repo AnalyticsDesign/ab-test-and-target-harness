@@ -1,5 +1,9 @@
 import { test, expect, type Page } from "@playwright/test";
+import { API_CONTRACT_VERSION } from "@wtt/core";
 import { login, openSite, SITE } from "./fixtures";
+
+/** この画面の版の次の版(control が先に上がった状態を作る。版の値そのものに依らないように) */
+const NEXT = API_CONTRACT_VERSION + 1;
 
 /**
  * plan12 K6: 管理画面と control の版の食い違いの帯。
@@ -43,7 +47,7 @@ test("the version banner follows /capabilities: incompatible (red) → outdated 
   await expect(banner).toHaveCount(0); // 本物の control とは版が合っている
 
   // 最低の版が上がった: 赤帯(書き込みが断られる)。別のページに移っても出る
-  await overrideVersions(page, { apiVersion: 2, minClientVersion: 2 });
+  await overrideVersions(page, { apiVersion: NEXT, minClientVersion: NEXT });
   await refetch(page);
   await expect(banner).toHaveAttribute("data-kind", "incompatible");
   await expect(banner).toHaveClass(/banner-warn/);
@@ -52,7 +56,7 @@ test("the version banner follows /capabilities: incompatible (red) → outdated 
   await expect(banner).toBeVisible();
 
   // 新しい版はあるが書き込みは通る: 控えめな帯
-  await overrideVersions(page, { apiVersion: 2, minClientVersion: 1 });
+  await overrideVersions(page, { apiVersion: NEXT, minClientVersion: API_CONTRACT_VERSION });
   await refetch(page);
   await expect(banner).toHaveAttribute("data-kind", "outdated");
   await expect(banner).toHaveClass(/banner-note/);
@@ -74,7 +78,7 @@ test("a failed re-fetch keeps the banner that is showing", async ({ page }) => {
   await login(page);
   await openSite(page, SITE.name);
   const banner = page.getByTestId("version-banner");
-  await overrideVersions(page, { apiVersion: 2, minClientVersion: 2 });
+  await overrideVersions(page, { apiVersion: NEXT, minClientVersion: NEXT });
   await refetch(page);
   await expect(banner).toHaveAttribute("data-kind", "incompatible");
 

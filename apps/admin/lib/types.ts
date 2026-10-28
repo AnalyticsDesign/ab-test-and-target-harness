@@ -30,7 +30,11 @@ export type InstanceAdmin = {
 };
 /** B41 (2): システム管理者にできる人(どこかのワークスペースのメンバーで、まだシステム管理者でない人) */
 export type InstanceAdminCandidate = { userId: string; email: string; name: string; workspaces: Array<{ id: string; name: string; role: string }> };
-/** `GET /invitations/:id`(認証不要)と `GET /workspaces/:wid/invitations` の両方。role は Better Auth 側で null になり得る */
+/**
+ * `GET /invitations/:id`(認証不要)と `GET /workspaces/:wid/invitations` の両方。role は Better Auth 側で null になり得る。
+ * control の契約では一覧の id / url は nullable(API キーで読んだときは null。backlog B156)だが、この画面は BFF のセッションで読むので
+ * 常に文字列が返る。そのため型は string のまま置く
+ */
 export type Invitation = { id: string; email: string; role: Role | null; status: string; expiresAt: number; url: string };
 /** `POST /workspaces/:wid/invitations` の結果。`extended: true` = 同じ Role の招待が既にあり、そのリンクの期限を延ばした(id / url は前と同じ) */
 export type InvitationResult = { id: string; url: string; expiresAt: number; extended: boolean };
