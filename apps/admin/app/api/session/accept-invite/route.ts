@@ -1,6 +1,6 @@
 import { readSessionJson } from "@/lib/body-limit";
 import { cookies } from "next/headers";
-import { controlRequest, controlUnreachable, forwardedFrom, isHttps, originHeader, requireOrigin, SESSION_COOKIE, sessionCookie } from "@/lib/control";
+import { controlRequest, controlUnreachable, forwardedFrom, isHttps, originHeader, requireOrigin, sessionCookie, sessionCookieName } from "@/lib/control";
 
 /**
  * 招待の受諾(spec §13.3)。既にログイン中なら Bearer だけを送って既存アカウントで参加し、
@@ -15,7 +15,7 @@ export async function POST(req: Request): Promise<Response> {
   const { id, ...body } = read.value as { id?: unknown };
   if (typeof id !== "string" || id === "") return Response.json({ error: "bad_request", message: "招待 ID がありません" }, { status: 400 });
   const jar = await cookies();
-  const existing = jar.get(SESSION_COOKIE)?.value;
+  const existing = jar.get(sessionCookieName(isHttps(req)))?.value;
   const headers: Record<string, string> = { "content-type": "application/json", ...originHeader(req) };
   if (existing) headers.authorization = `Bearer ${existing}`;
   // 招待の受諾は control の古い版の判定(426)の対象なので、ブラウザの版との小さいほうを名乗る(forwardedFrom)

@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { BFF_CHUNKED_BODY_MAX_BYTES, BFF_DECLARED_BODY_CEILING_BYTES, bodyReadFailed, declaredLength, payloadTooLarge, readBodyLimited } from "@/lib/body-limit";
-import { badOrigin, controlRequest, controlUnreachable, forwardedFrom, originHeader, originVerdict, SESSION_COOKIE } from "@/lib/control";
+import { badOrigin, controlRequest, controlUnreachable, forwardedFrom, isHttps, originHeader, originVerdict, sessionCookieName } from "@/lib/control";
 
 /**
  * BFF(spec §13.4)。ブラウザは同一オリジンの `/api/control/*` だけを叩き、ここが Cookie のセッショントークンを
@@ -81,7 +81,7 @@ async function proxy(req: Request, ctx: { params: Promise<{ path: string[] }> })
   }
   const url = new URL(req.url);
   const target = `/${path.map(encodeURIComponent).join("/")}${url.search}`;
-  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  const token = (await cookies()).get(sessionCookieName(isHttps(req)))?.value;
   // ブラウザから来たヘッダは引き継がない(authorization / x-setup-token / x-api-key / x-wtt-client-ip の持ち込みや header injection を断つ)。
   // 必要なものだけを組み立て直す: content-type(multipart の boundary ごと)/ Bearer / Origin
   // (Origin はブラウザが名乗ったものだけを渡し、無ければ付けない)。版と接続元 IP は controlRequest が付ける(plan12 K3 / K8)

@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { controlRequest, forwardedFrom, isHttps, selfOrigin, sessionCookie } from "@/lib/control";
-import { FLOW_COOKIE, FLOW_RE, expiredFlowCookie } from "@/lib/oauth-flow";
+import { FLOW_RE, expiredFlowCookie, flowCookieName } from "@/lib/oauth-flow";
 import { safeNext } from "@/lib/safe-next";
 
 /**
@@ -14,8 +14,10 @@ export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const go = (path: string) => new Response(null, { status: 302, headers: { location: new URL(path, selfOrigin(req)).toString(), "cache-control": "no-store", "referrer-policy": "no-referrer" } });
   const jar = await cookies();
-  const expected = jar.get(FLOW_COOKIE)?.value;
-  jar.set(expiredFlowCookie(isHttps(req))); // 成否にかかわらず 1 回で使い切る(delete(name) では path が合わず消えない)
+  const https = isHttps(req);
+  // https では __Host- の名前だけを見る(兄弟ホストが親ドメイン宛てに置いた今の名前の flow は使わない)
+  const expected = jar.get(flowCookieName(https))?.value;
+  jar.set(expiredFlowCookie(https)); // 成否にかかわらず 1 回で使い切る(delete(name) は Secure を付けないので __Host- の Cookie が消えない)
   const flow = url.searchParams.get("flow");
   const code = url.searchParams.get("code");
   if (!expected || !flow || !FLOW_RE.test(flow) || flow !== expected || !code) return go("/login?error=oauth_failed");
@@ -29,6 +31,6 @@ export async function GET(req: Request): Promise<Response> {
   const data = res?.ok ? ((await res.json().catch(() => null)) as { token?: unknown } | null) : null;
   const session = typeof data?.token === "string" && data.token !== "" ? data.token : null;
   if (!session) return go("/login?error=oauth_failed");
-  jar.set(sessionCookie(session, isHttps(req)));
+  jar.set(sessionCookie(session, https));
   return go(safeNext(url.searchParams.get("next")) ?? "/w");
 }

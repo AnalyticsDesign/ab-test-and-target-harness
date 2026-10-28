@@ -39,7 +39,7 @@ test("the flow cookie is really gone from the browser after the return leg (same
   // Google へは行かず、入口の 302 だけ受けて Cookie を得る
   await page.request.get("/api/session/google", { maxRedirects: 0 });
   const before = (await context.cookies()).find((c) => c.name === "wtt_oauth_flow");
-  expect(before?.path).toBe("/api/session");
+  expect(before?.path).toBe("/"); // https では __Host- の条件(Path=/)。http もそろえている
   await page.goto(`/api/session/oauth?flow=${before!.value}`); // code なし → 失敗の着地。Cookie は消費される
   await expect(page).toHaveURL(/\/login\?error=oauth_failed$/);
   expect((await context.cookies()).some((c) => c.name === "wtt_oauth_flow")).toBe(false);
@@ -52,4 +52,14 @@ test("while the emergency door is open, the login screen shows the emergency for
   await expect(page.getByTestId("break-glass-banner")).toBeVisible();
   await openWorkspace(page);
   await expect(page.getByTestId("break-glass-banner")).toBeVisible();
+});
+
+// B157: 枠への埋め込みを禁じるヘッダー(next.config の headers())が、Workers で動く build の応答に実際に付くこと。
+// HTML(/login)と Route Handler(BFF の GET。未ログインなので 401 の封筒)の両方で確かめる
+test("the HTML and the Route Handler responses forbid framing", async ({ request }) => {
+  for (const path of ["/login", "/api/control/me"]) {
+    const res = await request.get(path, { maxRedirects: 0 });
+    expect(res.headers()["content-security-policy"], path).toBe("frame-ancestors 'none'");
+    expect(res.headers()["x-frame-options"], path).toBe("DENY");
+  }
 });

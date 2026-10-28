@@ -62,6 +62,10 @@ const controlRes = (status: number, body: unknown, headers: Record<string, strin
     headers: { "content-type": "application/json", "set-cookie": "control_session=leak", ...headers },
   });
 
+/** セッション Cookie が「張ったときと同じ名前・属性で maxAge 0」で失効させられたか(__Host- は Secure・Path=/ でないとブラウザが消さない) */
+const sessionExpired = (name: string, secure: boolean) =>
+  jar.set.mock.calls.some(([c]) => c.name === name && c.value === "" && c.maxAge === 0 && c.path === "/" && c.secure === secure && c.httpOnly === true && c.sameSite === "lax");
+
 const params = (path: string[]) => ({ params: Promise.resolve({ path }) });
 /** ブラウザからの POST を模す(Origin 付き) */
 const post = (url: string, init: RequestInit = {}) => new Request(url, { method: "POST", ...init, headers: { origin: ORIGIN, ...(init.headers as Record<string, string>) } });
@@ -535,16 +539,42 @@ describe("POST /api/session/logout", () => {
     expect(headers.get("content-type")).toBe("application/json");
     expect(headers.get("origin")).toBe(ORIGIN);
     expect(init.body).toBe("{}");
-    expect(jar.deleted).toEqual(["wtt_session"]);
+    expect(sessionExpired("wtt_session", false)).toBe(true);
   });
 
   it("Origin の無い form POST でも admin 自身を名乗って失効させる(logout だけの例外)", async () => {
-    jar = newJar({ wtt_session: "tok1" });
+    // x-forwarded-proto: https なので https の要求 = __Host- の名前
+    jar = newJar({ "__Host-wtt_session": "tok1" });
     fetchMock.mockResolvedValue(controlRes(200, {}));
     const res = await logout(new Request("http://admin.test/api/session/logout", { method: "POST", headers: { host: "admin.example", "x-forwarded-proto": "https" } }));
     expect(res.status).toBe(303);
     expect(lastCall().headers.get("origin")).toBe("https://admin.example");
-    expect(jar.deleted).toEqual(["wtt_session"]);
+    expect(sessionExpired("__Host-wtt_session", true)).toBe(true);
+  });
+
+  it("別のオリジン・same-site から送られたログアウトは、control を呼ばず Cookie も消さずに / へ 303(B157 / G35)", async () => {
+    // 外部のページの自動送信のフォームで、管理者を勝手にログアウトさせない。/ はログイン中なら /w に移すので、ログアウトできていないことが分かる
+    const cases: Array<[string, Record<string, string>]> = [
+      ["別のオリジンの Origin", { origin: "https://www.example.com" }],
+      ["Origin は一致・Sec-Fetch-Site: same-site", { origin: ORIGIN, "sec-fetch-site": "same-site" }],
+      ["Origin 無し・Sec-Fetch-Site: cross-site", { "sec-fetch-site": "cross-site" }],
+      ["Origin: null", { origin: "null" }],
+    ];
+    for (const [label, headers] of cases) {
+      jar = newJar({ wtt_session: "tok1" });
+      const res = await logout(new Request("http://admin.test/api/session/logout", { method: "POST", headers }));
+      expect(res.status, label).toBe(303);
+      expect(res.headers.get("location"), label).toBe("/");
+      expect(jar.set, label).not.toHaveBeenCalled();
+      expect(jar.deleted, label).toEqual([]);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    // 同じオリジン(Sec-Fetch-Site: same-origin)は今どおり失効させる
+    jar = newJar({ wtt_session: "tok1" });
+    fetchMock.mockResolvedValue(controlRes(200, {}));
+    await logout(post("http://admin.test/api/session/logout", { headers: { "sec-fetch-site": "same-origin" } }));
+    expect(lastCall().url).toBe(`${CONTROL}/auth/sign-out`);
+    expect(sessionExpired("wtt_session", false)).toBe(true);
   });
 
   it("control が落ちていても Cookie は消す", async () => {
@@ -552,7 +582,7 @@ describe("POST /api/session/logout", () => {
     fetchMock.mockRejectedValue(new Error("down"));
     const res = await logout(post("http://admin.test/api/session/logout"));
     expect(res.status).toBe(303);
-    expect(jar.deleted).toEqual(["wtt_session"]);
+    expect(sessionExpired("wtt_session", false)).toBe(true);
   });
 });
 
@@ -564,7 +594,7 @@ describe("Google sign-in through the BFF (決定 46 (6))", () => {
     const res = await googleStart(new Request("http://admin.test/api/session/google?next=/invite/inv_1"));
     expect(res.status).toBe(302);
     const set = jar.set.mock.calls.at(-1)![0];
-    expect(set).toMatchObject({ name: "wtt_oauth_flow", httpOnly: true, sameSite: "lax", path: "/api/session", maxAge: 600 });
+    expect(set).toEqual({ name: "wtt_oauth_flow", value: set.value, httpOnly: true, sameSite: "lax", path: "/", secure: false, maxAge: 600 });
     expect(set.value).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
     const to = new URL(res.headers.get("location")!);
     expect(to.origin + to.pathname).toBe(`${CONTROL}/auth/google/start`);
@@ -576,7 +606,7 @@ describe("Google sign-in through the BFF (決定 46 (6))", () => {
   });
 
   /** flow Cookie が「同じ path・maxAge 0」で失効させられたか(jar.delete では path が合わず、実ブラウザでは消えない) */
-  const flowExpired = () => jar.set.mock.calls.some(([c]) => c.name === "wtt_oauth_flow" && c.value === "" && c.maxAge === 0 && c.path === "/api/session" && c.httpOnly === true);
+  const flowExpired = () => jar.set.mock.calls.some(([c]) => c.name === "wtt_oauth_flow" && c.value === "" && c.maxAge === 0 && c.path === "/" && c.httpOnly === true);
 
   it("oauth: exchanges the hand-off code server-side only when the flow matches the cookie", async () => {
     jar = newJar({ wtt_oauth_flow: FLOW });
@@ -634,6 +664,193 @@ describe("Google sign-in through the BFF (決定 46 (6))", () => {
     expect((await oauth(back(`code=c&flow=${FLOW}`))).headers.get("location")).toBe("http://admin.test/login?error=oauth_failed");
     jar = newJar({ wtt_oauth_flow: FLOW });
     expect((await oauth(back(`flow=${FLOW}`))).headers.get("location")).toBe("http://admin.test/login?error=oauth_failed");
+  });
+});
+
+describe("https では Cookie の名前に __Host- を付ける(B157 / security triage v2 G34)", () => {
+  // 同じ登録ドメインの兄弟ホスト(設置サイト)が、親ドメイン宛てに同じ名前の Cookie を置ける。__Host- の名前はブラウザが
+  // 「このホストが Secure・Path=/・Domain 無しで置いたもの」しか受け付けないので、植えられた Cookie は使われない。
+  // __Host- の条件を満たさない Set-Cookie はブラウザが黙って捨てる。E2E は http なのでここが唯一の確かめ
+  const SECURE = "https://admin.test";
+  const postHttps = (path: string, init: RequestInit = {}) =>
+    new Request(`${SECURE}${path}`, { method: "POST", ...init, headers: { origin: SECURE, ...(init.headers as Record<string, string>) } });
+  /** 本番(Cloudflare の配下)で Server Component の headers() に入る値。Cloudflare が接続の scheme を入れる */
+  const CF_HTTPS = { "cf-visitor": JSON.stringify({ scheme: "https" }) };
+  const FLOW = "flow-0123456789abcdef";
+
+  it("login / accept-invite / oauth が張るセッション Cookie は __Host-wtt_session・Secure・Path=/・Domain 無し", async () => {
+    const expected = { name: "__Host-wtt_session", value: "tok-new", httpOnly: true, sameSite: "lax", path: "/", secure: true, maxAge: 604800 };
+    fetchMock.mockResolvedValue(controlRes(200, {}, { "set-auth-token": "tok-new" }));
+    await login(postHttps("/api/session/login", { body: "{}" }));
+    expect(jar.set.mock.calls[0]?.[0]).toEqual(expected);
+
+    jar = newJar();
+    fetchMock.mockResolvedValue(controlRes(200, { token: "tok-new", workspaceId: "ws1" }));
+    await acceptInvite(postHttps("/api/session/accept-invite", { body: JSON.stringify({ id: "inv1", name: "A", password: "password1" }) }));
+    expect(jar.set.mock.calls[0]?.[0]).toEqual(expected);
+
+    jar = newJar({ "__Host-wtt_oauth_flow": FLOW });
+    fetchMock.mockResolvedValue(controlRes(200, { token: "tok-new" }));
+    const res = await oauth(new Request(`${SECURE}/api/session/oauth?code=c&flow=${FLOW}`));
+    expect(res.headers.get("location")).toBe(`${SECURE}/w`);
+    expect(jar.set.mock.calls.find(([c]) => c.name.endsWith("wtt_session"))?.[0]).toEqual(expected);
+  });
+
+  it("google が張る flow Cookie は __Host-wtt_oauth_flow・Secure・Path=/。oauth は同じ名前・属性で失効させる", async () => {
+    await googleStart(new Request(`${SECURE}/api/session/google`));
+    const set = jar.set.mock.calls.at(-1)![0];
+    expect(set).toEqual({ name: "__Host-wtt_oauth_flow", value: set.value, httpOnly: true, sameSite: "lax", path: "/", secure: true, maxAge: 600 });
+
+    jar = newJar({ "__Host-wtt_oauth_flow": FLOW });
+    fetchMock.mockResolvedValue(controlRes(400, { error: "invalid_handoff", message: "x" }));
+    await oauth(new Request(`${SECURE}/api/session/oauth?code=c&flow=${FLOW}`));
+    expect(jar.set.mock.calls[0]?.[0]).toEqual({ name: "__Host-wtt_oauth_flow", value: "", httpOnly: true, sameSite: "lax", path: "/", secure: true, maxAge: 0 });
+  });
+
+  it("植えられた今の名前の Cookie(wtt_session / wtt_oauth_flow)は https では読まない = 未ログイン扱い", async () => {
+    const planted = { wtt_session: "attacker-token", wtt_oauth_flow: FLOW };
+    // 汎用の転送: Bearer を付けない
+    jar = newJar(planted);
+    fetchMock.mockResolvedValue(controlRes(401, { error: "unauthorized", message: "認証が必要です" }));
+    await GET(new Request(`${SECURE}/api/control/me`), params(["me"]));
+    expect(lastCall().headers.get("authorization")).toBeNull();
+    // 招待の受諾: 既存のセッションとして扱わない
+    jar = newJar(planted);
+    fetchMock.mockResolvedValue(controlRes(200, { token: "tok-new", workspaceId: "ws1" }));
+    await acceptInvite(postHttps("/api/session/accept-invite", { body: JSON.stringify({ id: "inv1", name: "A", password: "password1" }) }));
+    expect(lastCall().headers.get("authorization")).toBeNull();
+    // Google の戻り: 植えられた flow と攻撃者のコードの組でも交換に進まない
+    jar = newJar(planted);
+    fetchMock.mockClear();
+    const back = await oauth(new Request(`${SECURE}/api/session/oauth?code=attacker-code&flow=${FLOW}`));
+    expect(back.headers.get("location")).toBe(`${SECURE}/login?error=oauth_failed`);
+    expect(fetchMock).not.toHaveBeenCalled();
+    // ログアウト: 植えられたトークンで control を呼ばない
+    jar = newJar(planted);
+    await logout(postHttps("/api/session/logout"));
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Server Component(controlFetch): 本番の headers() の形(cf-visitor)でも同じ
+    jar = newJar(planted);
+    reqHeaders = new Headers(CF_HTTPS);
+    fetchMock.mockResolvedValue(controlRes(401, { error: "unauthorized", message: "認証が必要です" }));
+    await controlFetch("/me");
+    expect(lastCall().headers.get("authorization")).toBeNull();
+  });
+
+  it("https の __Host- の Cookie は読む(転送・招待・ログアウト・controlFetch)", async () => {
+    const own = { "__Host-wtt_session": "tok1" };
+    jar = newJar(own);
+    fetchMock.mockResolvedValue(controlRes(200, {}));
+    await GET(new Request(`${SECURE}/api/control/me`), params(["me"]));
+    expect(lastCall().headers.get("authorization")).toBe("Bearer tok1");
+    jar = newJar(own);
+    fetchMock.mockResolvedValue(controlRes(200, { token: "tok-new", workspaceId: "ws1" }));
+    await acceptInvite(postHttps("/api/session/accept-invite", { body: JSON.stringify({ id: "inv1" }) }));
+    expect(lastCall().headers.get("authorization")).toBe("Bearer tok1");
+    jar = newJar(own);
+    fetchMock.mockResolvedValue(controlRes(200, {}));
+    await logout(postHttps("/api/session/logout"));
+    expect(lastCall().headers.get("authorization")).toBe("Bearer tok1");
+    expect(sessionExpired("__Host-wtt_session", true)).toBe(true);
+    for (const h of [CF_HTTPS, { "x-forwarded-proto": "https" }]) {
+      jar = newJar(own);
+      reqHeaders = new Headers(h);
+      await controlFetch("/me");
+      expect(lastCall().headers.get("authorization"), JSON.stringify(h)).toBe("Bearer tok1");
+    }
+  });
+
+  it("本番の形で、login が張る名前と controlFetch が読む名前が一致する(Route Handler は req.url、Server Component はヘッダーで決める)", async () => {
+    fetchMock.mockResolvedValue(controlRes(200, {}, { "set-auth-token": "tok-new" }));
+    await login(postHttps("/api/session/login", { body: "{}" }));
+    const { name, value } = jar.set.mock.calls[0]![0];
+    // cf-visitor が付く場合も、本番の Workers に cf-visitor も x-forwarded-proto も付かなかった場合(host だけ)も一致する
+    for (const h of [{ ...CF_HTTPS, host: "admin.example.com" }, { host: "admin.example.com" }, { host: "wtt-admin.example.workers.dev" }]) {
+      jar = newJar({ [name]: value });
+      reqHeaders = new Headers(h);
+      await controlFetch("/me");
+      expect(lastCall().headers.get("authorization"), JSON.stringify(h)).toBe("Bearer tok-new");
+    }
+  });
+
+  it("controlFetch の https の判定: 既定は https。明示の http か、host が手元のときだけ http(明示の https は host が手元でも https)", async () => {
+    const { httpsFromHeaders } = await import("@/lib/control");
+    const cases: Array<[Record<string, string>, boolean]> = [
+      [{ host: "admin.example.com" }, true], // ヘッダー無し + 本番風の host
+      [{}, true], // host も無い
+      [{ host: "admin.example.com", "x-forwarded-proto": "http" }, false],
+      [{ host: "admin.example.com", "cf-visitor": JSON.stringify({ scheme: "http" }) }, false],
+      [{ host: "127.0.0.1:3000" }, false],
+      [{ host: "localhost" }, false],
+      [{ host: "localhost:3000" }, false],
+      [{ host: "[::1]:8787" }, false],
+      [{ host: "127.0.0.1", "cf-visitor": JSON.stringify({ scheme: "https" }) }, true],
+      [{ host: "localhost:3000", "x-forwarded-proto": "https" }, true],
+      [{ host: "localhost.example.com" }, true], // 手元に似た名前でも手元ではない
+      [{ host: "admin.example.com", "cf-visitor": "not json" }, true],
+    ];
+    for (const [h, expected] of cases) expect(httpsFromHeaders(new Headers(h)), JSON.stringify(h)).toBe(expected);
+  });
+
+  it("http(手元の next dev・E2E)では今の名前のまま。controlFetch は明示の http か手元の host なら今の名前を読む", async () => {
+    jar = newJar({ wtt_session: "tok1", "__Host-wtt_session": "other" });
+    fetchMock.mockResolvedValue(controlRes(200, {}));
+    const cases: Record<string, string>[] = [
+      { host: "127.0.0.1:3000" }, // E2E の preview(workerd はどちらのヘッダーも付けない)
+      { host: "localhost:3000", "x-forwarded-proto": "http" }, // next dev
+      { host: "admin.example.com", "x-forwarded-proto": "http" },
+      { host: "admin.example.com", "cf-visitor": JSON.stringify({ scheme: "http" }) },
+      { host: "localhost:3000", "cf-visitor": "not json" },
+    ];
+    for (const h of cases) {
+      reqHeaders = new Headers(h);
+      await controlFetch("/me");
+      expect(lastCall().headers.get("authorization"), JSON.stringify(h)).toBe("Bearer tok1");
+    }
+  });
+});
+
+describe("controlFetch のパスの門(B157 / security triage v2 G37)", () => {
+  // 画面の URL の値(aid など)は vinext がデコードしてから渡す。`..%2F..%2F..%2Fauth%2Fget-session` は `../../../auth/get-session` になり、
+  // そのまま control のパスに埋めると URL の正規化で宛先が /auth/get-session(応答にセッションのトークンが載る)に変わる
+  const ATTACKS = [
+    "/sites/S/audiences/../../../auth/get-session", // 再現: vinext がデコードした後の値
+    "/sites/S/audiences/%2E%2E/%2E%2E/%2E%2E/auth/get-session",
+    "/sites/S/audiences/%2e%2e/%2e%2e/%2e%2e/auth/get-session",
+    "/sites/S/audiences/..\\..\\..\\auth\\get-session",
+    "/sites/S/audiences/a%2Fb",
+    "/sites/S/audiences/a%5cb",
+    "/sites/S/audiences/./x",
+    "/sites/S/audiences/.",
+    "/sites//audiences",
+    "/sites/S/",
+    "sites/S", // 先頭の / が無い(control の URL のホストに続いてしまう)
+    "/sites/S/audiences/..?x=1",
+  ];
+
+  it("正規化で変わる・紛らわしいパスは control を呼ばずに 400(fetch と binding のどちらも呼ばれない)", async () => {
+    jar = newJar({ wtt_session: "tok1" });
+    fetchMock.mockResolvedValue(controlRes(200, { token: "leak" }));
+    for (const b of [null, { fetch: vi.fn(async () => controlRes(200, { token: "leak" })) }]) {
+      binding = b;
+      for (const path of ATTACKS) {
+        const r = await controlFetch(path);
+        expect(r.status, path).toBe(400);
+        expect(r.data, path).toBeNull();
+      }
+      if (b) expect(b.fetch).not.toHaveBeenCalled();
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("正規の path は今どおり(query 付きも通る)", async () => {
+    jar = newJar({ wtt_session: "tok1" });
+    fetchMock.mockImplementation(async () => controlRes(200, { ok: true }));
+    for (const path of ["/me", "/sites/s1/experiments?limit=10", "/sites/site_e2e_ctl/audiences/aud_1", "/workspaces/w1/sites"]) {
+      const r = await controlFetch(path);
+      expect(r.status, path).toBe(200);
+      expect(lastCall().url, path).toBe(`${CONTROL}${path}`);
+    }
   });
 });
 
