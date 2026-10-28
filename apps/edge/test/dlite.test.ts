@@ -199,7 +199,7 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
   });
   it("unknown host 404 / bad body 400", async () => {
     const ctx = createExecutionContext();
-    const res = await app.fetch(new Request("https://unknown.example/__ab/decision", { method: "POST", body: JSON.stringify(decisionBody()) }), env, ctx);
+    const res = await app.fetch(new Request("https://unknown.example/__ab/decision", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(decisionBody()) }), env, ctx);
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(404);
     expect((await post({ v: 1 })).status).toBe(400);

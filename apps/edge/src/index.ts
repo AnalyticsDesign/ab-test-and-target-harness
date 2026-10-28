@@ -101,6 +101,19 @@ app.post("/v1/sites/:siteId/event", async (c) => {
   return c.body(null, 204, corsHeaders(origin));
 });
 
+// B158(G05): D-lite の POST /__ab/* の門。同じ登録ドメインの兄弟ホストのページが訪問者のブラウザから text/plain で送ると
+// Cookie 付きで届くため、json 以外は 415、ブラウザが別オリジンから送ったもの(Sec-Fetch-Site が same-origin 以外)は 403。
+// Sec-Fetch-Site が無いもの(ブラウザ以外・古いブラウザ)は通す。KV・本文を読む前に断り、Set-Cookie は出さない。
+// POST にだけ掛ける(B139 で足す GET の確認の経路を門の外に置くため)
+app.post("/__ab/*", async (c, next) => {
+  const mediaType = (c.req.header("Content-Type") ?? "").split(";")[0]!.trim().toLowerCase();
+  if (mediaType !== "application/json") return c.text("unsupported media type", 415);
+  // 大文字・前後の空白は吸収して比べる(admin の originVerdict とそろえる)
+  const fetchSite = c.req.header("Sec-Fetch-Site")?.trim().toLowerCase();
+  if (fetchSite !== undefined && fetchSite !== "same-origin") return c.text("forbidden", 403);
+  await next();
+});
+
 // spec §9.2 / §9.6: D-lite の event。Cookie が Identity。Cookie 無し・不正は DO に触れず 204(Cookie は発行しない、§15.1)
 app.post("/__ab/event", async (c) => {
   const host = new URL(c.req.url).hostname;
