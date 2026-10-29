@@ -136,7 +136,9 @@ export function errorHandler(err: Error, c: Context): Response {
     // usage_not_configured は想定内の状態(トークン未設定)。スタック付きの error にせず 1 行の warn にする
     if (err.code === "usage_not_configured") console.warn(err.code);
     // backlog D13: write_frozen も想定内の状態(作業者が入れた凍結)。どの書き込みを断ったかだけを 1 行の warn で残す
-    else if (err.code === "write_frozen") console.warn(err.code, c.req.method, new URL(c.req.url).pathname);
+    // backlog B168 ①: 招待 ID は資格になりうるので伏せる。凍結は middleware で断るので routePath は `/*` になり使えない。
+    // Hono がルートを選ぶのと同じデコードした path で伏せる(`/invit%61tions/…` の別名も伏せる)
+    else if (err.code === "write_frozen") console.warn(err.code, c.req.method, c.req.path.replace(/\/invitations\/[^/]+/gi, "/invitations/:id"));
     // 7o K21: デプロイ専用の Worker の binding が無いのも想定内の状態(ローカル・未導入)。管理画面が 5 分ごとに状態を読むので error にしない
     else if (err.code === "static_deployer_unavailable" && err.extra.reason === "not_configured") console.warn(err.code);
     else if (err.status >= 500) console.error(err.code, err.extra, err);

@@ -1,6 +1,6 @@
 // apps/control/test/write-freeze.test.ts
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { app } from "../src/index";
 import { getDb } from "../src/db";
 import type { Env } from "../src/env";
@@ -164,6 +164,26 @@ describe("write freeze guard (D13 / decision 56 (4))", () => {
     expect((await call("PATCH", `/sites/${sid}`, { token: owner.token, body: { name: "x" } })).status).toBe(503);
     await env.DB.prepare("delete from instance_settings where key = 'writeFreeze'").run();
     expect((await call("PATCH", `/sites/${sid}`, { token: owner.token, body: { name: "x" } })).status).toBe(200);
+  });
+
+  // backlog B168 ①: 凍結の行の本文に招待 ID を書かない(非常口が開いている導入では招待 ID が資格になる)。どの書き込みを断ったかは残す
+  it("the write_frozen log line masks invitation IDs but still names the refused write", async () => {
+    await freeze('{"reason":"r"}');
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const sent: [string, string, string][] = [
+        ["POST", "/invitations/inv_SECRET_A/accept", "/invitations/:id/accept"],
+        ["DELETE", "/workspaces/ws_1/invitations/inv_SECRET_B", "/workspaces/ws_1/invitations/:id"],
+        // エンコードした別名でもルートには届くので、伏せる判定はデコードした path で行う
+        ["POST", "/invit%61tions/inv_SECRET_C/accept", "/invitations/:id/accept"],
+      ];
+      for (const [method, path] of sent) expect((await call(method, path, { body: method === "DELETE" ? undefined : {} })).status, path).toBe(503);
+      const lines = warn.mock.calls.filter((a) => a[0] === "write_frozen");
+      expect(lines).toEqual(sent.map(([method, , masked]) => ["write_frozen", method, masked]));
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(/inv_SECRET/);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("reads do not touch the switch (a broken D1 read of the switch does not break GET)", async () => {
