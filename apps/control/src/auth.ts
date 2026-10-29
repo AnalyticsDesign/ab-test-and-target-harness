@@ -3,11 +3,11 @@ import { APIError, createAuthMiddleware } from "better-auth/api";
 import { apiKey, bearer, organization } from "better-auth/plugins";
 import { createAccessControl } from "better-auth/plugins/access";
 import { adminAc, defaultStatements, memberAc, ownerAc } from "better-auth/plugins/organization/access";
-import { D1Dialect } from "kysely-d1";
 import { sql } from "kysely";
 import type { Env } from "./env";
 import { hasAccess, hasLiveInvitation } from "./access";
 import { getDb } from "./db";
+import { authD1Dialect } from "./auth-d1-dialect";
 import { timingSafeEqualString } from "./ids";
 
 /** spec §13.2 の Role 4 種。Better Auth の member.role にこの文字列を入れる */
@@ -108,7 +108,7 @@ function buildAuth(env: Env) {
     baseURL: env.AB_CONTROL_URL,
     basePath: "/auth",
     secret: env.BETTER_AUTH_SECRET,
-    database: { dialect: new D1Dialect({ database: env.DB }), type: "sqlite" },
+    database: { dialect: authD1Dialect(env.DB), type: "sqlite" },
     trustedOrigins: [env.AB_ADMIN_URL],
     // OAuth の途中で Better Auth が自前のエラーページ(/auth/error。公開していない)へ飛ばそうとする場合の行き先
     onAPIError: { errorURL: `${env.AB_ADMIN_URL}/login` },
