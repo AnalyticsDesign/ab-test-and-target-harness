@@ -160,9 +160,12 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/goals" -H "Authorization: Bearer $A
 - **compiled config に載っていないものは、`draft-bootstrap` を注入します**: compiled config に載るのは配信中(`running`)のエクスペリエンスだけで、内容は最後に公開した時点のものです。下書き・一時停止中のエクスペリエンスを URL だけで指定すると `error: "unknown experiment or variant"` の行になり、配信中のエクスペリエンスの保存しただけで未公開の編集は表示されません。これらは次の手順で見ます
 
 ```bash
+BOOT=$(mktemp) && export BOOT &&   # 推測できない名前で、所有者だけが読めるファイルを作る
 curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/draft-bootstrap" \
-  -H "Authorization: Bearer $AB_API_KEY" > /tmp/draft-bootstrap.js
+  -H "Authorization: Bearer $AB_API_KEY" > "$BOOT"
 ```
+
+`/tmp/draft-bootstrap.js` のような決まった名前は使いません。同じ端末の別のアカウントが先にその名前でファイルを置いておくと、中身(未公開のコード)を読まれたり、注入する前に差し替えられたりするためです。使い終わったら `rm -f "$BOOT"` で消します。
 
 得られるのは設置タグのファイルと同形式の**完全に機能する** bootstrap JS(compiled config + runtime)です。KV にも本番の配信ファイルにも書き込まれませんが、隔離されるかどうかは**ページの URL に `#__ab_preview=` フラグメントが付いているかだけ**で決まります。
 
@@ -172,7 +175,7 @@ curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/draft-bootstrap" \
 
 ```js
 // Playwright
-const boot = require("fs").readFileSync("/tmp/draft-bootstrap.js", "utf8");
+const boot = require("fs").readFileSync(process.env.BOOT, "utf8"); // 上の BOOT を export したシェルから実行する
 await page.addInitScript({ content: boot });
 await page.goto("https://www.example.com/lp/#__ab_preview=exp_hero_q1:b");
 const report = await page.evaluate(() => window.AB.getPreviewReport());
@@ -385,7 +388,7 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/duplicate" 
 ## 3. 踏みやすい制約
 
 - **ID は作成後に変更できません**(エクスペリエンス / パターン / 目標 / オーディエンス)。`experimentId` は割当ハッシュの入力なので、変えると全訪問者の割当が変わります。作り直す場合は新しい ID で作ります。エクスペリエンスとオーディエンスの ID に `new` は使えません(管理画面の新規作成の画面と重なるため。422)。エクスペリエンス・パターン・目標の ID に `constructor` は使えません(JavaScript で特別な意味を持つ名前で、設置タグが設定を読むときに取り違えるため。422)
-- **公開の反映**: 公開の結果の `staticDeploy` が `deployed` なら、訪問者のブラウザには 60 秒以内に届きます。`pending` なら配信ファイルの更新を再試行中です(`GET /sites/:sid` の `staticStale` が `true`。続くときは `POST /sites/:sid/static/redeploy` で作り直せます。管理者以上)。公開直後の検証は 1 分ほど待つか、キャッシュを迂回する URL で確認してください。`GET /sites/:sid` の `staticMismatch` が `true` なら、配信ファイルの記録が食い違っています(データベースを過去の時点に戻した後などに起きます)。`staticMismatch` が `false` でも食い違っていないとは限りません。15 分ごとの定期処理がサイトに印を付けるのは、公開中のサイトで、デプロイ専用の Worker の記録が通常の更新の世代で先に進んでいるときだけで、削除の記録が先に進んでいるサイト・データベースでは未公開のサイト・データベースに無いサイトには `staticMismatch` もサイトの警告も出ません。全体は、管理画面の配信ファイルの画面か、`GET /static/status` の `mismatchSites` で確かめてください。`POST /sites/:sid/static/redeploy` で今の公開内容に作り直せます(管理者以上)
+- **公開の反映**: 公開の結果の `staticDeploy` が `deployed` なら、訪問者のブラウザには 60 秒以内に届きます。`pending` なら配信ファイルの更新を再試行中です(`GET /sites/:sid` の `staticStale` が `true`。続くときは `POST /sites/:sid/static/redeploy` で作り直せます。管理者以上)。公開直後の検証は 1 分ほど待つか、キャッシュを迂回する URL で確認してください。`GET /sites/:sid` の `staticMismatch` が `true` なら、配信ファイルの記録が食い違っています(データベースを過去の時点に戻した後などに起きます)。`staticMismatch` が `false` でも食い違っていないとは限りません。15 分ごとの定期処理がサイトに印を付けるのは、公開中のサイトで、デプロイ専用の Worker の記録が通常の更新の世代で先に進んでいるときだけで、それ以外の形の食い違い(データベースでは未公開のサイト・データベースに無いサイトなど)では、`staticMismatch` もサイトの警告も出ないことがあります。全体は、管理画面の配信ファイルの画面か、`GET /static/status` の `mismatchSites` で確かめてください。ただし、同じ世代で中身が食い違うかの比較は、ID の順に先頭の 25 サイトまで(公開中の設定の合計が大きいときはそれより少ない)なので、その形の食い違いが多いと `mismatchSites` に出ないサイトが残りえます。疑わしいときは、システム管理者に全サイトの配信ファイルの作り直しを頼んでください。`POST /sites/:sid/static/redeploy` で今の公開内容に作り直せます(管理者以上)
 - **種別は作成後に変えられない**。パターンの数はテストが 2 つ以上、パーソナライズが 1 つ(違反は 422 `variant_count_invalid`)。変えたいときは複製する
 - **重なったときの優先**: 同じ要素の部分を複数のエクスペリエンスが変えると、パーソナライズ(作成の古い順)→ テスト(開始・再開の新しい順)の後ろが勝つ(テストどうしは先に配信に入ったもの。再開したテストは、その間に開始したテストより優先が低い)。保証するのは同じ要素の同じ部分までで、祖先と子孫にまたがる重なりは保証しない。公開の応答の `warnings`(`path` = `experiments.<優先の低い方>`)と `GET …/publish-preview` の `overlaps` に、対象 URL の条件とセレクタの文字列がどちらも完全に一致する組だけが出る。`?starting=<id>` を付けると、その下書きを開始したとき・一時停止中のテストを再開したときの組が分かる
 - **開始後のテストで変えられないもの**: パターンの追加・削除・重み、基準、判定に使う目標の選択(パターンの集合の `PUT …/variants` は下書きだけ。409 `experiment_active`)、配信率(`trafficPercentage`)を下げる・割当の固定(`persistAssignment`)を変える(409 `test_setting_locked`。絞るときは一時停止か終了)。配信率を上げる・変更・対象 URL・配信条件・目標の定義の変更はできますが、公開して配信を確かめた時点で「テスト中の変更」として結果に記録されます。大きく変えるなら複製して新しいテストにします。パーソナライズはどの状態でも編集できます

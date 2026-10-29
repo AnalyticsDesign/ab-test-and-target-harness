@@ -12,6 +12,7 @@
 | `OPTIONS /v1/sites/:siteId/{decision,event}` | CORS preflight |
 | `POST /__ab/decision` | Mode B(サーバー発行 Cookie、旧称 D-lite)の decision。応答に訪問者 ID の短いハッシュ `vh`(runtime の送信済みの印に使う)を足す。revoke は Profile の DO に非接触で、`forgetOnRevoke` が false でなく正本 Cookie があれば計測用 D1 のその訪問者の行を消す |
 | `POST /__ab/event` | Mode B の event。Cookie が Identity。Cookie 無し・不正は Cookie を発行せず DO 非接触で 204。結果の送信は Mode A と同じ判定・同じ応答(CORS なし) |
+| (`POST /__ab/*` の共通の検査) | 上の 2 経路の前に、KV と本文を読まずに断る。`Content-Type` のメディア型が `application/json` でなければ 415、`Sec-Fetch-Site` があって `same-origin` でなければ 403(どちらも Set-Cookie と CORS のヘッダーを付けない)。`Sec-Fetch-Site` が無い要求(ブラウザ以外・古いブラウザ)は通す。runtime は同じオリジンへ `application/json` で送るので影響しない。同じ登録ドメインの別のホストのページから、訪問者の Cookie を使って撤回や送信をさせないため |
 
 ## 結果の記録
 
@@ -68,7 +69,7 @@ E2E は `pnpm e2e` 一発で完結する: `runtime:build` → fixture seed → �
 4. Mode B を使う Site: 対象ゾーンに Workers Route `<site-domain>/__ab/*` → `wtt-edge` を追加し、KV にホスト対応(`host:<hostname>` → siteId)と site-settings record があることを確認する。これらは control(`apps/control`)の Site 設定(mode = B、hosts)から Site 作成 / 更新時に投入される(`docs/deploy.md`)。fixture CLI(`pnpm fixture`)は E2E / ローカル開発専用で、本番 KV への投入には使わない
 5. **`routes` を `wrangler.jsonc` に書いたら `"dev": { "host": "localhost" }` も併記する(2026-09-02 実測)。** `routes` があると `wrangler dev` のローカル origin host が route のホスト名になる(`--local-upstream` の既定が「dev.host or route」)。host から Site を引く Mode B の経路がローカルで 404 になり、`pnpm e2e` が dlite の 3 件で落ちる
 6. Rate Limiting binding は wrangler >= 4.36 が必要。`namespace_id` はアカウント内で一意な整数文字列(既定 "1001")
-7. `/__ab/*` の保護は運用者ゾーンの WAF / レート制限ルールに委ねる(任意)
+7. `/__ab/*` の保護は運用者ゾーンの WAF / レート制限ルールに委ねる。Mode B の Site を置くなら**必須**(`/__ab/decision` は Cookie の無い要求のたびに新しい visitorId を発行するため。`docs/deploy.md` 2.3 の「パスごとの意味」と 2.7)
 
 ## 既知の制約
 

@@ -134,7 +134,7 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 |---|---|---|
 | `POST /sites/:sid/assets` | EDITOR | 画像を R2 へ(multipart: `file` / `experimentId`)。201 `{ id, publicUrl, mime, size, key }` |
 | `GET /sites/:sid/assets` | VIEWER | Site(`?experimentId=` で絞る)配下の画像一覧 |
-| `GET /dev-assets/*` | — | ローカル用に R2 をそのまま返す。**`AB_ASSET_PUBLIC_BASE === ${AB_CONTROL_URL}/dev-assets` のときだけ有効**(本番は R2 カスタムドメインなので常に 404) |
+| `GET /dev-assets/*` | — | R2 の画像をそのまま返す(認証なし)。**`AB_ASSET_PUBLIC_BASE === ${AB_CONTROL_URL}/dev-assets` のときだけ有効**で、それ以外は 404。ローカル開発のほか、R2 のバケットに公開ドメインをつながずに始める本番の構成(`docs/deploy.md` 3.2 の (3))でも使う。返すのはアップロードした画像だけで、画像はもともと訪問者に公開するもの |
 
 受理する MIME は `image/png` / `image/jpeg` / `image/gif` / `image/webp` / `image/avif` で、**宣言(multipart の Content-Type)と先頭バイトの両方**が一致したものだけ。
 SVG は `<script>` を含みうるので MVP では受けない。画像以外は 415 `unsupported_media_type`、`AB_ASSET_MAX_MB`(既定 5)超は 413 `asset_too_large`、`experimentId` 不明は 404。

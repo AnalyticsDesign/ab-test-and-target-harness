@@ -106,7 +106,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/subdomain" 
 
 **5. ダッシュボードで作る**(0.5)
 
-リポジトリ直下に `deploy-secrets.env` を作り、作った値を貼っていく。このファイルは git 管理外。形:
+リポジトリ直下に `deploy-secrets.env` を作り、作った値を貼っていく。このファイルは git 管理外。作るときは、所有者だけが読める権限にする(macOS / Linux / Git Bash の例: `[ -e deploy-secrets.env ] || (umask 077 && touch deploy-secrets.env); chmod 600 deploy-secrets.env`)。形:
 
 ```bash
 GOOGLE_CLIENT_ID=<クライアント ID>          # 秘密ではないが受け渡しをまとめるためここに書く。3.4 の vars に入る
@@ -430,6 +430,7 @@ Windows のエージェントが複数行のブロックを実行するときは
 - エージェントが値の空いた `.env.agent` を先に作り(5.1 の 2)、人は自分のエディタか、エージェントとは別のターミナルで書き込む。依頼文にはこの注意を必ず書く
 - ターミナルで書く場合は、鍵がコマンドの履歴に残らない形にする。macOS / Linux / Git Bash の例: `read -rs K && printf 'AB_API_KEY=%s\n' "$K" >> .env.agent && unset K` を実行して鍵を貼り Enter を押す。追記した後ろの行の値が使われる。Windows PowerShell ではエディタで書く
 - エージェントは鍵の値を表示しない
+- 導入と運用は、自分だけが使う端末で行う。手順のコマンドの多くは鍵を curl の引数に入れるので、他の人も使う端末(共用の Mac・サーバー)では、他のアカウントが実行中のコマンドの引数から鍵を読めるため
 - 更新のためだけに発行した鍵は、有効期限を 1 日にして発行する。作業が終わったら人に失効してもらい(左メニューの下の「設定」→「API キー」)、エージェントは `.env.agent` を消す。失効したことは、消す前に `curl -sS -o /dev/null -w '%{http_code}\n' "$AB_CONTROL_URL/me" -H "Authorization: Bearer $AB_API_KEY"` が 401 を返すことで確かめる
 
 ### 0.1 既定の構成
@@ -696,6 +697,7 @@ fi
 **`deploy-secrets.env` の作り方**(依頼文を示す前に、エージェントが作る):
 
 - リポジトリ直下に、要る行だけ・値は空で作る(形は下の「`deploy-secrets.env` の形」)。git 管理外
+- 作るときは、所有者だけが読める権限にする。同じ端末に別のアカウントがあると、既定の権限では他のアカウントからも読めるため。macOS / Linux / Git Bash の例: `[ -e deploy-secrets.env ] || (umask 077 && printf 'GOOGLE_CLIENT_ID=\nGOOGLE_CLIENT_SECRET=\nCF_DEPLOY_TOKEN=\nCF_USAGE_TOKEN=\n' > deploy-secrets.env); chmod 600 deploy-secrets.env`(要る行は構成に合わせる。既にあれば上書きしない(貼った値を消さない)。`chmod` は前からあるファイルの権限も直す)。Windows の PowerShell では、ホームのフォルダの既定の権限に任せる
 - 人にはファイルを作らせない。Windows のエクスプローラやメモ帳から新しく作ると、拡張子だけのファイル名に `.txt` が付きやすいため。人は開いて `=` の右に貼るだけにする
 - ファイルはエージェントがエディタで開き、人にシェルを開かせない。まず `pwd` で絶対パスを確かめる。Windows の Git Bash では `pwd -W` が `C:/…` の形を返す。次に Windows = `notepad "<絶対パス>"`、macOS = `open -e "<絶対パス>"`、Linux = `xdg-open "<絶対パス>"` を自分で実行する
 - エディタは閉じるのを待たない形で開き、開いた後に依頼文を出す。閉じるまで戻らない形で開くと、依頼文を出す前にエージェントが次の処理に進めなくなる。人は何を書くか分からないまま、エディタを前に待つことになる
@@ -1249,7 +1251,9 @@ curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/http_r
 - 既にルールが 1 本あり、式に `/v1/sites/` が無い → Free プランでは枠が無い。運用者に「既存ルールに OR で `/v1/sites/` と `/__ab/` を足す」か「作らない(`edge_waf_rate_limit: false`)」かを聞く
   - 作らないを選んだら、`deploy-answers.yaml` の `edge_waf_rate_limit` を `false` にする(後の更新で WAF の有無を決めるのがこのキーなので、6.2)。あわせて `apps/edge/wrangler.jsonc` の `limit` を 2.3 の WAF が無い構成の値(`edge_waf_requests_per_10s`)に書き直し、edge を deploy し直す。2.3 では WAF がある構成の値(1000)を書いているため
   - OR で足すなら、しきい値はその既存ルールの回数になる。binding はその回数と 2.3 の規則で比べる。足すのは、**【人に依頼】** ダッシュボードでそのルールを開いて式を書き換えてもらう(下の PUT はレート制限ルールを丸ごと置き換えるので、既存のルールが消える)
-- 式に `/v1/sites/` が既にある → 作らずに終わる(再実行時)。式に `/setup` も含まれる(7.2 で control のパスを足して 1 本にした Free のルール)なら、回数を変えるときも下の PUT を使わない。PUT で置き換えると control のパスが消える。**【人に依頼】** ダッシュボードでそのルールを開いて回数を変えてもらう
+- 式に `/v1/sites/` が既にあり、`/__ab/` も含まれる → 作らずに終わる(再実行時)
+- 式に `/v1/sites/` はあるが `/__ab/` が無い → Mode B のサイトを置かない(入力ファイルの `dlite_hosts` が空)なら、作らずに終わる。Mode B のサイトを置くなら、`/__ab/*` がこのルールの外に残るので、**【人に依頼】** ダッシュボードでそのルールを開き、式に OR で `(starts_with(http.request.uri.path, "/__ab/"))` を足してもらう(下の PUT はレート制限ルールを丸ごと置き換えるので使わない)。足した後に上の GET で式を読み直し、`/__ab/` が入ったことを確かめる。後から `dlite_hosts` を足すときも、この確認をやり直す
+- 上の 2 つのどちらでも、式に `/setup` も含まれる(7.2 で control のパスを足して 1 本にした Free のルール)なら、回数を変えるときも下の PUT を使わない。PUT で置き換えると control のパスが消える。**【人に依頼】** ダッシュボードでそのルールを開いて回数を変えてもらう
 
 ```bash
 RL=$(cat <<JSON
@@ -1656,7 +1660,9 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 
 `workers_dev` / `preview_urls` を false にしないと `https://wtt-admin.<アカウントのサブドメイン>.workers.dev` と Preview URL が残り、Access / WAF を迂回できる。
 
-**(2) ゾーン側で「Always Use HTTPS」を有効にする**(http で開くとセッション Cookie に `Secure` が付かない)。
+**(2) ゾーン側で「Always Use HTTPS」を有効にする**(http で開くとセッション Cookie に `Secure` が付かない)。管理画面は https では `__Host-` で始まる名前の Cookie だけを使い、同じドメインの別のホストから置かれた同じ名前の Cookie を受け付けない。この保護も Always Use HTTPS が前提で、無効だと、管理画面を http で開かせて、今の名前(`__Host-` の無い名前)の Cookie を使わせることができる。
+
+**同じドメインに置くときの注意**: 管理画面を設置サイトと同じドメインの下(例 `admin.example.com` と `www.example.com`)に置くと、ブラウザは両者を同じサイトとして扱い、別のホストのページからの要求にもログインの Cookie を付ける。管理画面は、別のオリジンからの書き込みの要求・枠(iframe)への埋め込み・同じ名前の Cookie の持ち込みを断るが、同じドメインの下に、他の人が内容を置けるホスト(利用者が作るページ、外部のサービスに任せたサブドメイン、使わなくなったのに DNS レコードが残ったホスト)があるなら、管理画面はそれと別のドメインに置くか、`workers-dev` のままにする。`workers-dev` でも、ブラウザは同じアカウントの `*.<アカウントのサブドメイン>.workers.dev` のホスト同士を同じサイトとして扱う(別のアカウントのホストとは別のサイト)。同じアカウントの別の Worker で他の人が内容を出せるなら、同じ注意が当たる。
 
 **(3) デプロイ(4.3)の後に、workers.dev 側が閉じたことを確認する:**
 
@@ -1820,7 +1826,8 @@ pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --json --comm
 2. エージェントがリポジトリ直下に `.env.agent`(git 管理外)を作る。値は空の行を残し、人が貼る:
 
 ```bash
-[ -e .env.agent ] || printf 'AB_CONTROL_URL=%s\nAB_API_KEY=\n' '<control URL>' > .env.agent   # 既にあれば上書きしない(貼った鍵を消さない)
+[ -e .env.agent ] || (umask 077 && printf 'AB_CONTROL_URL=%s\nAB_API_KEY=\n' '<control URL>' > .env.agent)   # 既にあれば上書きしない(貼った鍵を消さない)
+chmod 600 .env.agent   # 所有者だけが読める権限にする(前からあるファイルにも効かせる)
 ```
 
 3. **【人が行う】** 管理画面の左メニューの下の「設定」→「API キー」の「新しい API キーを発行」で、名前と 1 で選んだ範囲・権限と、有効期限を指定して発行する
@@ -1921,11 +1928,11 @@ pnpm install
 - 更新しても、既存のサイトの「結果を記録する」は無効のまま。記録を始めるには、管理者がサイト設定で有効にしてから、テストを開始する(有効にする前に開始したテストは記録されない)
 - control だけを先にデプロイすると失敗する(edge の `ResultsBudget`・`ResultsHealth` を参照するため。3.5)
 
-手順 0 の控えと、手順 1〜3 は別のブロックにしてある。どちらも**リポジトリ直下で**流す(控えのファイルは `$PWD/deploy-backups/` に絶対パスで書く。`pnpm -C apps/control` で動く wrangler に相対パスを渡すと、`apps/control` の下に書かれるため)。2 つ目のブロックは、同じシェルで 1 つ目のブロックが作った控えのファイル(`$BACKUP`)が空でないときだけ動く。控えが取れなかったとき(1 つ目のブロックが `$BACKUP` を消す)・別のシェルで始めたとき(`$BACKUP` が無い)は、何もせずに「控えがありません」と出して止まる。2 つ目のブロックの中は `&&` でつないであり、途中の手順が失敗するとそこで止まる(止まった手順の出力を読んで直し、2 つ目のブロックを流し直す。どの手順も何度流しても結果は同じ)。
+手順 0 の控えと、手順 1〜3 は別のブロックにしてある。どちらも**リポジトリ直下で**流す(控えのファイルは `$PWD/deploy-backups/` に絶対パスで書く。`pnpm -C apps/control` で動く wrangler に相対パスを渡すと、`apps/control` の下に書かれるため)。控えのディレクトリは所有者だけが開ける権限にし、export のダウンロード URL を標準出力にも wrangler のログのファイルにも残さない(理由は 10.1)。2 つ目のブロックは、同じシェルで 1 つ目のブロックが作った控えのファイル(`$BACKUP`)が空でないときだけ動く。控えが取れなかったとき(1 つ目のブロックが `$BACKUP` を消す)・別のシェルで始めたとき(`$BACKUP` が無い)は、何もせずに「控えがありません」と出して止まる。2 つ目のブロックの中は `&&` でつないであり、途中の手順が失敗するとそこで止まる(止まった手順の出力を読んで直し、2 つ目のブロックを流し直す。どの手順も何度流しても結果は同じ)。
 
 ```bash
 # 0. 更新前の控え(必須。10.1)。成功すると「控え: <ファイル名>」と出る
-BACKUP="$PWD/deploy-backups/wtt-control-$(date -u +%Y%m%dT%H%M%SZ).sql" && mkdir -p "$PWD/deploy-backups" && pnpm -C apps/control exec wrangler d1 export wtt-control --remote --output "$BACKUP" && test -s "$BACKUP" && echo "控え: $BACKUP" || unset BACKUP
+BACKUP="$PWD/deploy-backups/wtt-control-$(date -u +%Y%m%dT%H%M%SZ).sql" && mkdir -p "$PWD/deploy-backups" && chmod 700 "$PWD/deploy-backups" && WRANGLER_WRITE_LOGS=false pnpm -C apps/control exec wrangler d1 export wtt-control --remote --output "$BACKUP" >/dev/null && test -s "$BACKUP" && echo "控え: $BACKUP" || unset BACKUP
 ```
 
 ```bash
@@ -2079,7 +2086,7 @@ control の Cron(15 分ごと。3.5)も、`wtt-control` に書く前に毎回凍
 
 マイグレーションは 1 ファイルの中では割り込まれない。ただし、ファイルとファイルの間や、マイグレーションの後に、更新前の版の処理が書くことはあり得る。まれに、そうした遅れた書き込みでデータが食い違うことがある(例: 公開の履歴に無い版の番号が公開中になる)。
 
-確認(6.4・10.2 の手順 4)で、公開中の版と公開の履歴の食い違いに気づいたら、凍結を外してから公開し直す。公開中の版が履歴の最新と同じ番号になったことを確かめ、揃わなければもう一度公開する。
+確認(6.4・10.2 の手順 6)で、公開中の版と公開の履歴の食い違いに気づいたら、凍結を外してから公開し直す。公開中の版が履歴の最新と同じ番号になったことを確かめ、揃わなければもう一度公開する。
 
 **状態を見る**:
 
@@ -2282,16 +2289,18 @@ Zero Trust(Free で 50 ユーザーまで)の Access アプリケーション(Se
    printf '%s' "$BG" | pnpm -C apps/control exec wrangler secret put AB_BREAK_GLASS_TOKEN
    ```
 
-   `$BG` はこのシェルの中だけで使う(手順 2 の curl の引数にする)。別のシェルで続けるなら、`read -rs BG` で入力してから手順 2 を実行する(入力は画面に出ない)。
+   `$BG` はこのシェルの中だけで使う(手順 2 で curl の標準入力に渡す)。別のシェルで続けるなら、`read -rs BG` で入力してから手順 2 を実行する(入力は画面に出ない)。
 
    secret の反映には数秒かかることがある。`curl -sS "<control URL>/login-options"` が `"passwordLogin":true` を返すのを確かめてから次へ進む(反映前は次の手順が 404 になる)
 
 2. オーナーのパスワード再設定リンクを得る(オーナー以外のメールアドレスや、違うトークンには 404 が返る。control の前段に WAF のレート制限を入れている導入では、連打すると遮断される)
 
    ```bash
-   curl -sS -X POST "<control URL>/break-glass/reset-link" -H 'content-type: application/json' \
-     -d "{\"token\":\"$BG\",\"email\":\"<オーナーのメールアドレス>\"}"   # 期待: {"url":"<admin URL>/reset?token=…"}
+   printf '{"token":"%s","email":"%s"}' "$BG" '<オーナーのメールアドレス>' \
+     | curl -sS -X POST "<control URL>/break-glass/reset-link" -H 'content-type: application/json' --data-binary @-   # 期待: {"url":"<admin URL>/reset?token=…"}
    ```
+
+   本文は標準入力で渡す。curl の引数に入れると、curl が動いている間、同じ端末の他のアカウントが実行中のコマンドの引数からトークンを読めるため(`printf` はシェルの中で動くので、引数は他のアカウントから見えない)。値はそのまま JSON に入るので、手で入れるトークンには `"` と `\` を含めない(手順 1 で作るトークンは 16 進の文字だけなので当たらない)。
 
    URL を画面に出さずにクリップボードへ直接入れるなら、末尾を `| jq -r .url | pbcopy`(macOS)/ `| jq -r .url | clip.exe`(Windows の Git Bash)/ `| jq -r .url | xclip -selection clipboard`(Linux)にする。リンクは 1 回限り・1 時間で失効する。
 
@@ -2405,7 +2414,7 @@ GA4 の DebugView で `ab_exposure` イベントが届くことを確認する�
 
 - 運用データの原本は **D1(`wtt-control`)**。KV の公開済み config と R2 の画像はそこから作り直せる(KV は公開で、R2 の画像は再アップロードで)
 - Durable Objects の Visitor Profile(訪問者の割当と履歴)は列挙も複製もできないので、バックアップの対象にしない。失われても割当はハッシュで同じパターンに戻り、履歴条件だけが最初からになる
-- 計測用のデータベース(`wtt-results`)にあるのは、テストの参加者ごとの記録(個票)だけ。サイト・エクスペリエンスの設定と、固定した結果の記録は `wtt-control` にある。`wtt-results` も Time Travel で過去の時点に戻せる(10.2 のコマンドの `wtt-control` を `wtt-results` に読み替える。凍結と KV の整合の手順は要らない)
+- 計測用のデータベース(`wtt-results`)にあるのは、テストの参加者ごとの記録(個票)だけ。サイト・エクスペリエンスの設定と、固定した結果の記録は `wtt-control` にある。`wtt-results` も Time Travel で過去の時点に戻せる(10.2 の手順 1・2 と、手順 5 の最初の行(戻すコマンド)の `wtt-control` を `wtt-results` に読み替える。凍結・非常口・人とアクセス権の一覧・セッションと API キーの手当て・KV の整合の手順は要らない。`wtt-results` にはその表が無い)
 - 個票を消しても(保持期間の削除・同意の撤回による削除)、D1 の Time Travel の保持期間(Workers Free は 7 日、Workers Paid は 30 日)のあいだは過去の時点として残り、運用者が取った export(10.1)にも残る
 
 ### 10.1 手元バックアップ(`wrangler d1 export --remote`)
@@ -2415,19 +2424,20 @@ D1 の中身を 1 つの `.sql` ファイル(スキーマ + データ)として�
 次のコマンドは**リポジトリ直下で**流す。控えのファイルは 6.3 と同じく `$PWD/deploy-backups/` に絶対パスで書く(`pnpm -C apps/control` で動く wrangler に相対パスを渡すと、`apps/control` の下に書かれ、リポジトリ直下の `ls` や `grep` から見えないため)。
 
 ```bash
-mkdir -p "$PWD/deploy-backups"
-pnpm -C apps/control exec wrangler d1 export wtt-control --remote --output "$PWD/deploy-backups/wtt-control-$(date -u +%Y%m%dT%H%M%SZ).sql"
+mkdir -p "$PWD/deploy-backups" && chmod 700 "$PWD/deploy-backups" \
+  && WRANGLER_WRITE_LOGS=false pnpm -C apps/control exec wrangler d1 export wtt-control --remote --output "$PWD/deploy-backups/wtt-control-$(date -u +%Y%m%dT%H%M%SZ).sql" >/dev/null   # ディレクトリは所有者だけが開ける(前からあっても効く)。ダウンロード URL を標準出力にも wrangler のログのファイルにも残さない(下の注意)
 ls -la "$PWD/deploy-backups/" | tail -3           # 期待: 今の日時のファイルがあり、サイズが 0 でない
 grep -c 'CREATE TABLE' "$PWD"/deploy-backups/wtt-control-*.sql | tail -1   # 期待: 1 以上(テーブル定義が入っている)
 ```
 
-- `deploy-backups/` は git に入らない(`.gitignore` 済み)。**ファイルにはメンバーのメールアドレス・パスワードと API キーのハッシュ・エクスペリエンスの内容が入る**ので、リポジトリや共有フォルダに置かず、暗号化されたディスクやアクセス制御のある置き場に移す
+- `deploy-backups/` は git に入らない(`.gitignore` 済み)。**ファイルにはメンバーのメールアドレス・パスワードと API キーのハッシュ・エクスペリエンスの内容と、ログイン中のセッションのトークンが入る**。トークンはそのまま使えば、その人としてログインできる(使われている間は同じトークンのまま期限が延びる)。そのため、ディレクトリは所有者だけが開ける権限にし(上の `chmod 700`)、リポジトリや共有フォルダに置かず、暗号化されたディスクやアクセス制御のある置き場に移す
+- `wrangler d1 export` は、控えを 1 時間ダウンロードできる URL を標準出力に出す。URL を知っていれば誰でも D1 全体の控えを落とせるので、上のコマンドは標準出力を捨て、エージェントの会話の記録に残さない。wrangler は同じ内容を自分のログのファイル(`~/.wrangler/logs` など。macOS は `~/Library/Preferences/.wrangler/logs`)にも書くので、`WRANGLER_WRITE_LOGS=false` を付けて書かせない。失敗の文言は標準エラー出力に出るので、捨てずに読める
 - エラー `Authentication error` / `code: 10000` → `wrangler login` のアカウントが違う。`pnpm -C apps/control exec wrangler whoami` で確認する
 - Time Travel(10.2)は Cloudflare 側の保持期間を過ぎると遡れない(Workers Free は 7 日、Workers Paid は 30 日)ので、それより古い時点に戻す控えがこのファイル。読み戻し方は 10.3
 
 ### 10.2 D1 を過去の時点に戻す(Time Travel)
 
-誤操作(エクスペリエンスやサイトの削除、メンバーの外し忘れ)や失敗した更新のあと、D1 を**時刻を指定して**丸ごと戻す。Cloudflare 側の機能で、事前準備は要らない。保持期間は 10.1 のとおり。
+誤操作(エクスペリエンスやサイトの削除、メンバーを誤って外した)や失敗した更新のあと、D1 を**時刻を指定して**丸ごと戻す。Cloudflare 側の機能で、事前準備は要らない。保持期間は 10.1 のとおり。
 
 1. **今の状態の控え**を取る(戻したあと「やはり戻す前に戻したい」ときのため)。10.1 の export に加え、今の bookmark も記録する:
 
@@ -2443,29 +2453,77 @@ pnpm -C apps/control exec wrangler d1 time-travel info wtt-control --timestamp 2
 
 期待: bookmark が返る。`timestamp is out of range` を含むエラー → 保持期間より前なので、10.3(手元バックアップからの読み戻し)に切り替える。
 
-3. 6.6 の凍結を入れ、1 分待ってから戻す(戻す途中の書き込みは失われる)。**戻す時刻が凍結を入れた時刻より前なら、戻したデータベースには凍結が入っていない**。戻すコマンドと 6.6 の「入れる」を `&&` でつないで 1 行で実行し、戻した直後に凍結を入れ直す:
+3. 6.6 の凍結を入れ、1 分待つ(戻す途中の書き込みは失われる)。非常口(8 節)が開いていれば、ここで閉じる。D1 を戻すと、パスワードの記録と再設定のリンクも戻った時点のものに戻るため。閉じておけば、戻ったパスワードの記録は、凍結を外した後の最初の定期処理で消える。戻した後も非常口が要る(Google でログインできない)なら、凍結を外した後に 8 節を最初からやり直す(新しいトークンと再設定のリンクを作る):
 
 ```bash
-pnpm -C apps/control exec wrangler d1 time-travel restore wtt-control --bookmark <手順 2 の bookmark> && pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "<6.6 の「入れる」の SQL>"
+curl -sS "<control URL>/login-options"   # "passwordLogin":true なら開いている → 次の行で閉じる
+pnpm -C apps/control exec wrangler secret delete AB_BREAK_GLASS_TOKEN   # 開いているときだけ。閉じた後に上の curl が "passwordLogin":false を返すことを確かめる
 ```
 
-`y` で確認する。期待: `Database wtt-control restored back to bookmark …` と、新しい bookmark。
+4. **人とアクセス権の一覧を控える**。D1 を戻すと、戻した時点より後に外したメンバー・下げたロール・取り消した招待・システム管理者から外したことが、戻した時点の状態に戻る。これらには変更の時刻が残らないので、戻す前と戻した後の一覧を比べて見つける(手順 6)。1 行が 1 件で、列は 種類(`member` = メンバー / `invitation` = 受諾待ちの招待 / `instance_admin` = システム管理者)・メールアドレス・ワークスペースの名前・ロール・ワークスペースの ID の順。ワークスペースの名前は重なることがあるので、ID も控える。ファイルにはメールアドレスが入るので、10.1 の控えと同じく所有者だけが開ける `deploy-backups/` に置く。下の 2 行(SQL と関数の定義)は、手順 6・7 でも同じシェルで使う。別のシェルで続けるときは、この 2 行を流し直す:
+
+```bash
+ACCESS_SQL="select 'member' as kind, lower(u.email) as email, o.name as workspace, m.role as role, o.id as workspace_id from member m join \"user\" u on u.id = m.\"userId\" join organization o on o.id = m.\"organizationId\" union all select 'invitation', lower(i.email), o.name, coalesce(i.role, ''), o.id from invitation i join organization o on o.id = i.\"organizationId\" where i.status = 'pending' union all select 'instance_admin', lower(u.email), '', '', '' from instance_admins a join \"user\" u on u.id = a.user_id order by kind, email, workspace_id"
+access_list() { pnpm -C apps/control exec wrangler d1 execute "$1" --remote --json --command "$ACCESS_SQL" | jq -r '.[0].results[] | [.kind, .email, .workspace, .role, .workspace_id] | @tsv'; }
+mkdir -p "$PWD/deploy-backups" && chmod 700 "$PWD/deploy-backups" && access_list wtt-control > "$PWD/deploy-backups/access-before.tsv" && test -s "$PWD/deploy-backups/access-before.tsv" && wc -l < "$PWD/deploy-backups/access-before.tsv"   # 期待: 1 以上の数(何も出ない・エラーなら取れていない。先へ進まない)
+```
+
+5. **戻す**。戻すコマンドに、凍結の入れ直し・全員のセッションの削除・すべての API キーの失効を `&&` でつなぎ、1 回で実行する。戻した直後から、この 3 つが済むまでの間を短くし、順番を崩さないため:
+
+```bash
+pnpm -C apps/control exec wrangler d1 time-travel restore wtt-control --bookmark <手順 2 の bookmark> \
+  && pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "<6.6 の「入れる」の SQL>" \
+  && pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "delete from session" \
+  && pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "insert or ignore into apikey_revocations (key_id, revoked_at, revoked_by) select id, CAST(strftime('%s','now') AS INTEGER) * 1000, null from apikey; update apikey set enabled = 0"
+```
+
+`y` で確認する。期待: `Database wtt-control restored back to bookmark …` と、新しい bookmark。続く 3 つのコマンドもエラーなく終わる。
+
+- **凍結の入れ直し**: 戻す時刻が凍結を入れた時刻より前なら、戻したデータベースには凍結が入っていないため
+- **セッションの削除**: 戻すと、戻した時点で有効だったログイン状態(後でログアウトや失効で消したものを含む)が生き返るため。全員がログインし直す
+- **すべての API キーの失効**: 戻すと失効の記録も消え、漏れたために失効させた鍵がまた使えるようになるため。鍵を選ばずに全部失効させるのは、戻したデータベースには、どの鍵を信用してよいかを決める材料が無いため。戻した時点より後に発行した鍵はどのみち消えていて、発行し直しは持ち主が自分でできる。エージェントの鍵(5.1 の `.env.agent`)も発行し直す
 
 期待と違うとき:
 
-- 戻してから入れ直すまでの数秒は凍結が有効でない → その間に保存された変更が無かったかは、手順 4 の確認の SQL(戻した時刻より後の書き込みを数える)で見る
-- 入れ直しが `no such table` で失敗する(戻す時刻が凍結の表を作ったマイグレーションより前)→ 手順 4 の確認が済むまで管理画面の利用者とエージェントに書き込みを止めてもらう
+- 戻してから入れ直すまでの数秒は凍結が有効でない → その間に保存された変更が無かったかは、手順 6 の確認の SQL(戻した時刻より後の書き込みを数える)で見る
+- 続く 3 つのどれかが `no such table` で失敗する(戻す時刻が、その表を作ったマイグレーションより前)→ そこから後ろのコマンドは動いていない。`pnpm -C apps/control d1:migrate:remote` でマイグレーションを当ててから、失敗したコマンドから後ろを同じ順で流し直す
 
-4. 戻したあとの整合:
+6. **凍結中の確認と直し**:
 
-- **凍結は確認が済んでから外す**(6.6)。公開し直す作業は凍結を外してから行う(凍結中は公開できない)
+- **戻した後に書き込みが入っていないかの確認**(手順 5 の数秒の間): 次がすべて 0 であること。0 でなければ、その行の内容を見て意図したものか確かめる。`<戻した時刻の ms>` は、手順 2 の時刻を epoch ミリ秒にした値(例: `jq -n '"2026-01-01T00:00:00Z" | fromdate * 1000'` が `1767225600000` を返す)
+  - `pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select (select count(*) from publishes where created_at > <戻した時刻の ms>) as publishes, (select count(*) from experiments where updated_at > <戻した時刻の ms>) as experiments, (select count(*) from changes where updated_at > <戻した時刻の ms>) as changes"`
+- **人とアクセス権の一覧を比べる**。手順 4 と同じ形の一覧を戻した後のデータベースから取り、比べる。比べた結果も `deploy-backups/` に残し、凍結を外した後に見直せるようにする:
+
+```bash
+access_list wtt-control > "$PWD/deploy-backups/access-after.tsv" && test -s "$PWD/deploy-backups/access-after.tsv" && { diff "$PWD/deploy-backups/access-before.tsv" "$PWD/deploy-backups/access-after.tsv" > "$PWD/deploy-backups/access-diff.txt"; cat "$PWD/deploy-backups/access-diff.txt"; }   # 何も出なければ、人とアクセス権は戻す前と同じ
+```
+
+`<` で始まる行は戻すと消えたもの、`>` で始まる行は戻すと生き返ったもの。行の形ごとに次のように扱う:
+
+| diff の行 | 意味 | すること | いつ |
+|---|---|---|---|
+| `>` の `member` だけ | 外した人が生き返った | 外したままにするなら、下の SQL で外す | 凍結中 |
+| `>` の `invitation` だけ | 取り消した招待が戻った | 取り消したままにするなら、下の SQL で取り消す | 凍結中 |
+| 同じ人・同じワークスペースの `member` が `<` と `>` の組 | ロールが戻った | 管理画面でロールを直す | 凍結を外した直後(手順 7) |
+| `>` の `instance_admin` | 外したシステム管理者が戻った | 管理画面でシステム管理者から外し直す。その人の `member` の行(すべてのワークスペースのオーナー)は、外し直すと外したときの形に戻るので、別には扱わない | 凍結を外した直後(手順 7) |
+| `<` の行だけ | 戻した時点より後に足したものが消えた | 必要なら招待・昇格し直す | 凍結を外した後(手順 7) |
+
+- ワークスペースの ID とメールアドレスは、一覧の行の値をそのまま使う(メールアドレスは小文字にそろえてある)
+- 外す(`<ID>`・`<メールアドレス>` を差し替える): `pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "delete from member where \"organizationId\" = '<ID>' and \"userId\" = (select id from \"user\" where lower(email) = '<メールアドレス>') and \"userId\" not in (select user_id from instance_admins)"`。システム管理者は条件で除いてあり、この SQL では外れない。システム管理者はすべてのワークスペースのオーナーなので、この SQL でオーナーが 1 人もいないワークスペースはできない
+- 取り消す: `pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "update invitation set status = 'canceled' where status = 'pending' and \"organizationId\" = '<ID>' and lower(email) = '<メールアドレス>'"`
+- 誤って外した人を戻すために D1 を戻したときは、その人の `>` の行はそのままにする(外さない)。それ以外で迷ったら、外したままにする(後から招待し直せる)
+- 直した後に、上の比べるブロックのファイル名の `access-after`・`access-diff` を `access-fixed`・`access-diff-fixed` に変えてもう一度流し(最初の比べた結果を残すため)、`>` の行が意図したものだけになったことを確かめる
+- エージェントが行う場合: 比べた結果を、誰が・どのワークスペースで・何が戻ったかの言葉にして人に見せ、外したまま(取り消したまま)にするかを 1 回だけ聞いて、答えのとおりに上の SQL を流す。管理画面で直すもの(ロール・システム管理者)は、凍結を外した直後に、人とワークスペースを名指しして **【人に依頼】** で頼む。人とアクセス権の書き込みは管理画面のログインでしかできず、エージェントの API キーではできないため(鍵も手順 5 で失効している)
+
+7. **凍結を外し、すぐに管理画面で直す**。確認と直しが済んでから、6.6 の「外す」で凍結を外す。外した後の最初の作業として、手順 6 の表で「凍結を外した直後」の行(ロールを直す・システム管理者から外し直す)を管理画面で行う。続けて、「`<` の行だけ」のうち要るもの(招待・昇格し直す)を行う。全員がログインし直し、API キーを使う人とエージェントは鍵を発行し直す
+
+8. **戻したあとの整合**(凍結を外した後):
+
+- 公開し直す作業は凍結を外してから行う(凍結中は公開できない)
 - **KV の公開済み config は D1 と一緒には戻らない**。戻した時点より後に公開していたサイトは、管理画面でそのサイトを開き公開し直す(config が D1 の内容から作り直される)。逆に「戻した時点より後に公開した内容を配り続けたい」場合は公開しない
 - **設置タグの配信ファイルの記録も D1 と一緒には戻らない**。配信を管理する Worker は、D1 より新しい世代を配ったことを覚えているので、世代を進めずに公開し直すと依頼が「古い世代」として捨てられ、**訪問者には戻す前のタグが配られ続ける**(公開の結果の `staticDeploy` は `pending` になる)。凍結を外したら、公開し直す前に、管理画面の左メニューの下の「設定」→「配信ファイル」(「システム」の見出しの下)で「公開中の全サイトの配信ファイルを作り直す」を押す(システム管理者が管理画面から行う。エージェントは、サイトごとの `POST /sites/<siteId>/static/redeploy` を公開中のサイトの数だけ呼ぶ)。この操作は、各サイトの世代を、配信を管理する Worker が覚えている世代より先に進めてから、今の公開内容で作り直す。凍結中は作り直せない(凍結を外してから行う)。データベースでは未公開か、データベースに無いのに配信ファイルが残っているサイト(初めての公開より前や、サイトを作る前の時点に戻した場合)も、この操作でファイルが消える(データベースでは未公開のサイトは、サイトごとの作り直しでも消える。データベースに無いサイトは、サイトごとの作り直しでは消せず、この操作でだけ消える)。配信ファイルの画面の「記録が食い違っているサイト」が「なし」になり、`curl -sS "https://<設置タグのホスト>/s/<siteId>.js" | head -c 200`(`<設置タグのホスト>` は 2.9 の (4))に今の公開内容が出ることを確かめる。
 
-  control の定期処理は、この向きの食い違いを自動では直さない(戻した内容で上書きしてよいかは人が決めるため)。食い違いがあるかは、配信ファイルの画面の「記録が食い違っているサイト」か、`GET /static/status` の `mismatchSites` で確かめる。配信ファイルの画面は開いたときの状態を出す。システム管理者の画面の上部の帯は、画面を開き直したとき・タブを前に戻したときか、5 分ごとの取り直しのときに出る。サイトの画面の警告「このサイトの配信ファイルの記録が食い違っています」(と `GET /sites/<siteId>` の `staticMismatch`)は、定期処理がそのサイトに印を付けた後に出る。ただし定期処理が印を付けるのは、公開中のサイトで、配信を管理する Worker の記録が通常の更新の世代で先に進んでいるときだけ。削除の記録が先に進んでいるサイト・データベースでは未公開のサイト・データベースに無いサイトには、サイトの警告も `staticMismatch` も出ない
-- **戻した後に書き込みが入っていないかの確認**(手順 3 の数秒の間・凍結の入れ直しに失敗した場合): 次がすべて 0 であること。0 でなければ、その行の内容を見て意図したものか確かめる
-  - `pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select (select count(*) from publishes where created_at > <戻した時刻の ms>) as publishes, (select count(*) from experiments where updated_at > <戻した時刻の ms>) as experiments, (select count(*) from changes where updated_at > <戻した時刻の ms>) as changes"`
-- **セッションとログインは切れることがある**(session テーブルも戻るため)。全員がログインし直す。戻した時点より後に発行した招待・API キー・メンバー追加も消えているので、必要なら発行し直す
+  control の定期処理は、この向きの食い違いを自動では直さない(戻した内容で上書きしてよいかは人が決めるため)。食い違いがあるかは、配信ファイルの画面の「記録が食い違っているサイト」か、`GET /static/status` の `mismatchSites` で確かめる。配信ファイルの画面は開いたときの状態を出す。システム管理者の画面の上部の帯は、画面を開き直したとき・タブを前に戻したときか、5 分ごとの取り直しのときに出る。サイトの画面の警告「このサイトの配信ファイルの記録が食い違っています」(と `GET /sites/<siteId>` の `staticMismatch`)は、定期処理がそのサイトに印を付けた後に出る。ただし定期処理が印を付けるのは、公開中のサイトで、配信を管理する Worker の記録が通常の更新の世代で先に進んでいるときだけ。それ以外の形の食い違い(データベースでは未公開のサイト・データベースに無いサイトなど)では、サイトの警告も `staticMismatch` も出ないことがある。また、同じ世代で中身が食い違うかの比較は、ID の順に先頭の 25 サイトまで(公開中の設定の合計が大きいときはそれより少ない)しか行わないので、その形の食い違いが多いと、画面の一覧と `mismatchSites` に出ないサイトが残りうる。D1 を戻した後は、一覧が「なし」でも上の「公開中の全サイトの配信ファイルを作り直す」を行う
 - **R2 の画像は消えない**。戻した時点より後にアップロードした画像は R2 に残るが D1 の一覧からは消える(実害は無い。気になれば R2 のダッシュボードで消す)
 - **計測用のデータベース(`wtt-results`)の個票は、戻した時点より後に開始したテストの分が消される**。そのテストのエクスペリエンスの行は戻した `wtt-control` に無いので、個票は「対応するテストの無い記録」とみなされ、毎日 UTC 23 時台に動く Cron が、戻した後の最初の UTC 23 時台から順に消す(1 日に調べる件数に上限があるので、消し終わるまで数日かかることがある)。個票が要るときは、戻す前に `wtt-results` の export を取る(10.1 の `wtt-control` を `wtt-results` に読み替える)。消えたあとは、`wtt-results` の Time Travel の保持期間(10.1 のとおり)のうちなら 10.2 の手順で戻せるが、それを過ぎると取り戻せない。また、`wtt-results` を Time Travel で戻しても、`wtt-control` に対応する行が無ければ、また対応するテストの無い記録として消される。戻したら、次の UTC 23 時台より前に export を取る
 - 確認: `curl -sS -o /dev/null -w '%{http_code}\n' "<control URL>/llms.txt"` が 200、管理画面にログインしてサイト一覧が期待どおり
@@ -2474,7 +2532,7 @@ pnpm -C apps/control exec wrangler d1 time-travel restore wtt-control --bookmark
 
 Time Travel の保持期間より前に戻すとき、または D1 を消してしまったとき。export の `.sql` は `CREATE TABLE` を含むので、**今の DB に上書きせず、空の DB を新しく作ってそこに読み込み、control の向き先を切り替える**(切り替える前に中身を確かめられる)。
 
-今のデータベースが残っているなら、読み戻しの前に 6.6 の凍結を入れておく(切り替えの前に入った書き込みは、新しいデータベースに入らない)。
+今のデータベースが残っているなら、読み戻しの前に、今の `wtt-control` に 10.2 の手順 3・4 を行う(6.6 の凍結を入れる・非常口が開いていれば閉じる・人とアクセス権の一覧を `access-before.tsv` に控える)。凍結は、切り替えの前に入った書き込みが新しいデータベースに入らないようにするため。今のデータベースが無いときは一覧を控えられないので、切り替えの手順 4 では、読み戻した一覧を人に見せて確かめる。
 
 次のコマンドも 10.1 と同じく**リポジトリ直下で**流し、控えのファイルは絶対パス(`$PWD/deploy-backups/…`)で渡す。
 
@@ -2489,11 +2547,19 @@ pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --com
 切り替え:
 
 1. `apps/control/wrangler.jsonc` の `d1_databases[0].database_id` を新しい id に書き換える(`database_name` も `wtt-control-restore` に)
-2. `pnpm -C apps/control d1:migrate:remote`(export 時点より新しいマイグレーションがあれば当たる。無ければ `No migrations to apply`)
-3. **6.6 の「入れる」を `wtt-control-restore` に対して実行する**(コマンドの `wtt-control` を `wtt-control-restore` に読み替える)
-4. `pnpm -C apps/control exec wrangler deploy`
-5. 切り替えた後、確認が済んでから 6.6 の「外す」で外す(同じく `wtt-control-restore` に読み替える)。以後は 10.2 の手順 4 と同じ整合(全サイトの配信ファイルの作り直し・公開し直し・ログインし直し)。export を取った時点より後に開始したテストの個票は、10.2 の手順 4 のとおり `wtt-results` から消される(`wtt-results` は読み戻さないので、必要なら先に `wtt-results` の export を取る。`wtt-results` を Time Travel で戻しても、`wtt-control` に対応する行が無ければ、また対応するテストの無い記録として消される。戻したら、次の UTC 23 時台より前に export を取る)
-6. 元の DB は問題が無いと分かってから `wrangler d1 delete wtt-control` で消す
+2. `pnpm -C apps/control exec wrangler d1 migrations apply wtt-control-restore --remote`(export 時点より新しいマイグレーションがあれば当たる。無ければ `No migrations to apply`。`pnpm -C apps/control d1:migrate:remote` は `wtt-control` の名前で探すので、名前を変えた後は使えない)
+3. `wtt-control-restore` に、凍結・全員のセッションの削除・すべての API キーの失効を流す(10.2 の手順 5 の、戻すコマンドの後ろの 3 つと同じ。理由も同じ)。control はまだ `wtt-control-restore` を向いていないので、凍結の後に待つ時間は要らない:
+
+```bash
+pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --command "<6.6 の「入れる」の SQL>" \
+  && pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --command "delete from session" \
+  && pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --command "insert or ignore into apikey_revocations (key_id, revoked_at, revoked_by) select id, CAST(strftime('%s','now') AS INTEGER) * 1000, null from apikey; update apikey set enabled = 0"
+```
+
+4. 10.2 の手順 6 の「人とアクセス権の一覧を比べる」と、表のうち「凍結中」の行を、`wtt-control-restore` に対して行う(`access_list wtt-control-restore` で `access-after.tsv` を取り、外す・取り消す SQL の `wtt-control` も `wtt-control-restore` に読み替える)。`ACCESS_SQL` と `access_list` が無いシェルでは、10.2 の手順 4 の 2 行を先に流す。書き込みが入っていないかの確認は要らない(control がまだ向いていないため)
+5. `pnpm -C apps/control exec wrangler deploy`
+6. 切り替えた後、確認が済んでから 6.6 の「外す」で外す(コマンドの `wtt-control` を `wtt-control-restore` に読み替える)。以後は 10.2 の手順 7(管理画面での直し・ログインと鍵の発行し直し)と手順 8(全サイトの配信ファイルの作り直し・公開し直し)。export を取った時点より後に開始したテストの個票は、10.2 の手順 8 のとおり `wtt-results` から消される(`wtt-results` は読み戻さないので、必要なら先に `wtt-results` の export を取る。`wtt-results` を Time Travel で戻しても、`wtt-control` に対応する行が無ければ、また対応するテストの無い記録として消される。戻したら、次の UTC 23 時台より前に export を取る)
+7. 元の DB は問題が無いと分かってから `wrangler d1 delete wtt-control` で消す
 
 ### 10.4 撤去(導入全体を消す)
 
