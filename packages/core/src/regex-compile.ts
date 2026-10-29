@@ -141,6 +141,8 @@ function parse(src: string): Node {
         min = max = Number(m[1]);
       }
       if (min > max) return fail("regex_syntax", "`{n,m}` は n ≦ m にします", i, m[0].length);
+      // 0 回の繰り返しは書かないのと同じ。命令を出さずに本体の変換だけが回り、入れ子にすると変換の手間が膨らむので断る(B159、G11)
+      if (max === 0) return fail("regex_ambiguous", `0 回の繰り返し \`${m[0]}\` は書かないのと同じなので使えません。前の文字やグループごと消してください`, i, m[0].length);
       if (max > REGEX_LIMITS.repeatMax)
         // 例は下限を保つ形だけ(下限 0 は `*`、1 は `+`)。下限が 2 以上の `{n,m}` は `+` にすると下限が落ちて意味が変わるので例を出さない
         return fail("regex_repeat_too_large", `繰り返しの回数は ${REGEX_LIMITS.repeatMax} までです。大きな繰り返しは \`*\` か \`+\` に置き換えてください`, i, m[0].length, min === 0 ? "*" : min === 1 ? "+" : undefined);
@@ -275,7 +277,17 @@ function sizeOf(n: Node, cap: number): number {
   }
 }
 
-function emit(n: Node, code: number[], setIndex: (b: Bits) => number): void {
+/**
+ * 変換(emit)の呼び出し回数の上限(B159、G11)。命令の数ではなくノードの訪問を数える(cat / alt / rep は命令を出さずに訪問するため)。
+ * 導き方: `{0}` を断った後は、どの訪問もその下で 1 つ以上の命令を出す。命令を出す訪問(文字・`^`・`$`)は命令数(instructionsPerRegex)
+ * 以下で、1 つの命令を出す訪問の上にある訪問は木の深さ以下。木の各段は式の 1 文字以上に当たるので深さ ≦ sourceMax。
+ * よって訪問 ≦ instructionsPerRegex × (sourceMax + 1) = 200 × 201 = 40,200。
+ * 正しい式はこれを超えないので、超えたら見積もりの漏れとして断る(守りの二重化)
+ */
+const EMIT_VISITS_MAX = REGEX_LIMITS.instructionsPerRegex * (REGEX_LIMITS.sourceMax + 1);
+
+function emit(n: Node, code: number[], setIndex: (b: Bits) => number, work: { visits: number }): void {
+  if (++work.visits > EMIT_VISITS_MAX) throw new Fail(tooLarge(`変換の手間 ${EMIT_VISITS_MAX} 超`, 0)); // length は compileRegex が式全体に直す
   const pc = (): number => code.length / 3;
   const put = (op: number, a = 0, b = 0): number => {
     code.push(op, a, b);
@@ -292,16 +304,16 @@ function emit(n: Node, code: number[], setIndex: (b: Bits) => number): void {
       put(OP_EOL);
       return;
     case "cat":
-      for (const x of n.items) emit(x, code, setIndex);
+      for (const x of n.items) emit(x, code, setIndex, work);
       return;
     case "alt": {
       // SPLIT L1, L2; L1: 選択肢 1; JMP end; L2: SPLIT ... ; 最後の選択肢は JMP 不要
       const jumps: number[] = [];
       n.items.forEach((x, k) => {
-        if (k === n.items.length - 1) return emit(x, code, setIndex);
+        if (k === n.items.length - 1) return emit(x, code, setIndex, work);
         const split = put(OP_SPLIT);
         code[split * 3 + 1] = pc();
-        emit(x, code, setIndex);
+        emit(x, code, setIndex, work);
         jumps.push(put(OP_JMP));
         code[split * 3 + 2] = pc();
       });
@@ -312,14 +324,14 @@ function emit(n: Node, code: number[], setIndex: (b: Bits) => number): void {
       let lastStart = pc();
       for (let k = 0; k < n.min; k++) {
         lastStart = pc();
-        emit(n.node, code, setIndex);
+        emit(n.node, code, setIndex, work);
       }
       if (n.max === -1) {
         if (n.min === 0) {
           // L: SPLIT body, end; body; JMP L
           const split = put(OP_SPLIT);
           code[split * 3 + 1] = pc();
-          emit(n.node, code, setIndex);
+          emit(n.node, code, setIndex, work);
           put(OP_JMP, split);
           code[split * 3 + 2] = pc();
         } else {
@@ -334,12 +346,17 @@ function emit(n: Node, code: number[], setIndex: (b: Bits) => number): void {
         const split = put(OP_SPLIT);
         code[split * 3 + 1] = pc();
         splits.push(split);
-        emit(n.node, code, setIndex);
+        emit(n.node, code, setIndex, work);
       }
       for (const s of splits) code[s * 3 + 2] = pc();
       return;
     }
   }
+}
+
+/** regex_too_large の issue(式全体を指す)。`what` は括弧の中の数え方 */
+function tooLarge(what: string, length: number): RegexIssue {
+  return { code: "regex_too_large", message: `この正規表現は大きすぎます(${what})。\`{0,100}\` のような大きな繰り返しを \`*\` に置き換えてください`, index: 0, length, example: "*" };
 }
 
 export type RegexCompileResult = { ok: true; prog: RegexProgram; instructions: number } | { ok: false; issue: RegexIssue };
@@ -367,17 +384,7 @@ export function compileRegex(src: string): RegexCompileResult {
   }
   const cap = REGEX_LIMITS.instructionsPerRegex;
   const size = sizeOf(node, cap) + 1; // + MATCH
-  if (size > cap)
-    return {
-      ok: false,
-      issue: {
-        code: "regex_too_large",
-        message: `この正規表現は大きすぎます(命令の数 ${size > cap + 1 ? `${cap} 超` : size} / ${cap})。\`{0,100}\` のような大きな繰り返しを \`*\` に置き換えてください`,
-        index: 0,
-        length: src.length,
-        example: "*",
-      },
-    };
+  if (size > cap) return { ok: false, issue: tooLarge(`命令の数 ${size > cap + 1 ? `${cap} 超` : size} / ${cap}`, src.length) };
   const sets: number[][] = [];
   const keys = new Map<string, number>();
   const setIndex = (b: Bits): number => {
@@ -391,7 +398,12 @@ export function compileRegex(src: string): RegexCompileResult {
     return ix;
   };
   const code: number[] = [];
-  emit(node, code, setIndex);
+  try {
+    emit(node, code, setIndex, { visits: 0 });
+  } catch (e) {
+    if (e instanceof Fail) return { ok: false, issue: { ...e.issue, length: src.length } };
+    throw e;
+  }
   code.push(OP_MATCH, 0, 0);
   return { ok: true, prog: { v: REGEX_PROGRAM_VERSION, sets, code }, instructions: code.length / 3 };
 }

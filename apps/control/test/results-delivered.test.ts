@@ -592,6 +592,30 @@ describe("届く定義(D9 ③ K14)", () => {
     expect(textOf((await deliveredAt(db(), s.sid, s.eid, 6_500))?.definition)).toBe("v4");
     expect(await sitesNeedingDeliveryConfirmation(db())).not.toContain(s.sid);
   });
+
+  it("run_id を持つ実行中のテストで展開の上限を超える Publish は、届く定義を作る前に audience_expansion_too_large で止まる(B159、G32)", async () => {
+    const { owner, sid } = await resultsSite();
+    const leaf = { ctx: "referrer", op: "isEmpty" };
+    expect((await call("POST", `/sites/${sid}/audiences`, { token: owner.token, body: { id: "aud_big", name: "大きい", definition: leaf } })).status).toBe(201);
+    await testExperiment(owner.token, sid, "exp_t", { targeting: { or: Array.from({ length: 500 }, () => ({ audience: "aud_big" })) } });
+    await transition(owner.token, sid, "exp_t", "running"); // 開始の自動 Publish(1 ノード × 500 回は上限の内)で run_id が付く
+    expect((await experimentRow(sid, "exp_t")).run_id).not.toBeNull();
+    expect(await rows(sid)).toHaveLength(1);
+    // 実行中のまま、オーディエンスを 50 ノードにする(50 × 500 = 25,000 > 20,000)
+    const definition = { or: Array.from({ length: 49 }, () => leaf) };
+    expect((await call("PATCH", `/sites/${sid}/audiences/aud_big`, { token: owner.token, body: { definition } })).status).toBe(200);
+    // 届く定義の記録は定義を JSON にして hash を取る。展開した全ノードの JSON(約 900 KB)が hash に渡らないこと = 記録を作る前に止まったこと
+    const digest = vi.spyOn(crypto.subtle, "digest");
+    try {
+      const r = await json<{ ok: boolean; error?: string }>(await publishRes(owner.token, sid, RESULTS_STORE));
+      expect(r).toMatchObject({ ok: false, error: "audience_expansion_too_large" });
+      const largest = Math.max(0, ...digest.mock.calls.map(([, data]) => (data as ArrayBufferView | ArrayBuffer).byteLength));
+      expect(largest).toBeLessThan(100_000);
+    } finally {
+      digest.mockRestore();
+    }
+    expect(await rows(sid)).toHaveLength(1); // 失敗した Publish は届く定義の行を足さない
+  });
 });
 
 // ---- 7o K24: 世代の再利用で別の中身の配信を証拠にしない ----

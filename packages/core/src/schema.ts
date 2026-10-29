@@ -19,6 +19,13 @@ export const LIMITS = {
   audienceNestMax: 4,
   changeValueMaxBytes: 65536,
   configMaxBytes: 524288,
+  /**
+   * compile がオーディエンスの参照を展開する量の上限(サイト全体。参照のたびに、そのオーディエンスの定義のノード数 = and / or / not /
+   * 条件をすべて 1 つと数えたものを足す)。展開の前に止める(B159)。根拠: 配る設定の上限 512 KB ÷ 展開したノード 1 つの JSON の最小の
+   * 大きさ。実測で、一番小さい条件は 31〜33 バイト、`{"not":…}` の包みは +8 バイトで、not と条件を交互にした形が平均約 21 バイト/ノード
+   * (2 万ノードで約 420 KB。一番小さい形でも、上限ちょうどの展開が 512 KB の内に収まる)
+   */
+  audienceExpansionMax: 20_000,
 } as const;
 
 const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;

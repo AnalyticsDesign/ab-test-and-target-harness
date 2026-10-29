@@ -31,7 +31,7 @@ describe("regex: 照合器と RegExp の差分(設計書 §10.5 R9)", () => {
     const rep = (d: number): string => {
       const a = atom(d);
       if (a === "^" || a === "$" || rnd() < 0.55) return a;
-      return a + pick(["*", "+", "?", "{2}", "{0,2}", "{1,3}", "{0}", "{2,2}"]);
+      return a + pick(["*", "+", "?", "{2}", "{0,2}", "{1,3}", "{2,2}"]);
     };
     const cat = (d: number): string => Array.from({ length: 1 + Math.floor(rnd() * 4) }, () => rep(d)).join("");
     const alt = (d: number): string => Array.from({ length: rnd() < 0.7 ? 1 : 2 + Math.floor(rnd() * 2) }, () => cat(d)).join("|");
@@ -143,7 +143,7 @@ describe("regex: 許可リスト(設計書 §10.2)", () => {
     expect(!b.ok && b.issue.example).toBe("\\{");
   });
 
-  it.each(["^/products/\\d+/?$", "^/category/(shoes|bags|hats|watches)/page/\\d+$", "[-a]", "[a-]", "[\\.-\\/]", "a{0}", "(?:ab)+", "^/a/[^/]+/b$", "\\$\\^\\|\\(\\)\\[\\]\\{\\}"])("通す形: %s", (src) => {
+  it.each(["^/products/\\d+/?$", "^/category/(shoes|bags|hats|watches)/page/\\d+$", "[-a]", "[a-]", "[\\.-\\/]", "(?:ab)+", "^/a/[^/]+/b$", "\\$\\^\\|\\(\\)\\[\\]\\{\\}"])("通す形: %s", (src) => {
     const r = compileRegex(src);
     expect(r.ok).toBe(true);
     expect(() => new RegExp(src)).not.toThrow();
@@ -168,6 +168,42 @@ describe("regex: 命令数", () => {
     const huge = compileRegex("(a{100}){100}");
     expect(!huge.ok && huge.issue.code).toBe("regex_too_large");
     expect(performance.now() - t0).toBeLessThan(50);
+  });
+
+  it("0 回の繰り返し({0}・{0,0})は regex_ambiguous で拒否し、位置は量指定子(B159、G11)", () => {
+    for (const [src, index, length] of [["a{0}", 1, 3], ["a{0,0}", 1, 5], ["(?:ab){00}", 6, 4]] as const) {
+      const r = compileRegex(src);
+      expect(r.ok, src).toBe(false);
+      if (r.ok) continue;
+      expect(r.issue).toMatchObject({ code: "regex_ambiguous", index, length });
+      expect(r.issue.message).toContain("0 回");
+    }
+    expect(compileRegex("a{0,1}").ok).toBe(true); // 上限が 1 以上なら通す
+  });
+
+  it("入れ子の {0} で作業量が膨らまない(4 段の式がすぐ返る。B159、G11)", () => {
+    for (const src of ["(?:(?:(?:(?:a{0}){100}){100}){100}){100}", "(?:(?:(?:(?:a{0,0}){100}){100}){100}){100}"]) {
+      const t0 = performance.now();
+      const r = compileRegex(src);
+      expect(performance.now() - t0, src).toBeLessThan(100);
+      expect(!r.ok && r.issue.code, src).toBe("regex_ambiguous");
+    }
+  });
+
+  it("命令数の上限ぎりぎりの正しい式(入れ子を含む)は今までどおり通す(作業量の上限で誤って断らない。B159)", () => {
+    expect(compileRegex(".{0,99}")).toMatchObject({ ok: true, instructions: 199 }); // (SPLIT + 本体) × 99 + MATCH
+    // 入れ子の繰り返し: ((a{1,2}){1,2}) … を深く重ねても、命令数が上限内なら通す
+    let nested = "a";
+    for (let k = 0; k < 6; k++) nested = `(?:${nested}){1,2}`; // 本体 1 → 2 + 1 = 3 → 7 → … 2^7 - 1 = 127 命令
+    const r1 = compileRegex(nested);
+    expect(r1).toMatchObject({ ok: true, instructions: 128 });
+    // 入れ子の深い選択と繰り返し(式の長さの上限 200 字に近い形)
+    const deep = `${"(?:a|".repeat(30)}b${")".repeat(30)}[ab]{1,40}`;
+    expect(deep.length).toBeLessThanOrEqual(REGEX_LIMITS.sourceMax);
+    const r2 = compileRegex(deep);
+    expect(r2).toMatchObject({ ok: true, instructions: 171 });
+    // 200 命令ちょうどで、選択を入れた繰り返しを入れ子にした形
+    expect(compileRegex("(?:(?:a|b){1,2}c){19}d{0,4}e")).toMatchObject({ ok: true, instructions: REGEX_LIMITS.instructionsPerRegex });
   });
 
   it("同じ文字の集合は 1 つにまとめる", () => {

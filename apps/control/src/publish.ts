@@ -234,10 +234,11 @@ const FAILURE_MESSAGES: Record<string, { message: string; hint?: string }> = {
   invalid_regex: { message: "配信できない正規表現があります" },
   regex_too_large: { message: "大きすぎる正規表現があります" },
   regex_budget_exceeded: { message: "正規表現の合計が大きすぎます(サイト全体で 500 命令まで)" },
+  audience_expansion_too_large: { message: "オーディエンスの参照が多すぎます(展開した条件の数はサイト全体で 20,000 まで)" },
 };
 /** compile の CompileError の message が利用者向けの日本語の説明(場所と直し方)になっているコード。hint にそのまま出す */
 export const COMPILE_HINT_CODES: ReadonlySet<string> = new Set([
-  "invalid_regex", "regex_too_large", "regex_budget_exceeded",
+  "invalid_regex", "regex_too_large", "regex_budget_exceeded", "audience_expansion_too_large",
   "legacy_targeting", "invalid_experiment_targeting", "invalid_audience_definition", "unknown_audience", "unknown_goal", "within_days_exceeds_retention",
 ]);
 
@@ -292,10 +293,12 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, userId: strin
     const experiments = await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute();
     statusSnapshot = experiments.map((e) => ({ id: e.id, status: e.status }));
     const input = await buildCompileInput(db, site, version, experiments);
-    deliveries = await prepareDeliveredDefinitions(deliveredDefinitionsFor(input, experiments, await plansForDelivery(db, site.id)), experiments);
     // D9 ②(K15): results は Publish の経路だけで足す(写しと同じ SELECT の行から作る)。③ K6: 削除待ちの個票があれば forget を出し続ける
     const results = resultsForCompile(site, experiments, await hasPendingPurge(db, site.id));
     config = compile(results ? { ...input, results } : input);
+    // 届く定義は compile が通った後に作る(同じ input・同じ行のまま)。展開の上限(B159)より前にオーディエンスを展開した全ノードを
+    // JSON 化・hash しない。compile は input を書き換えないので、前に作っていたときと記録は同じ
+    deliveries = await prepareDeliveredDefinitions(deliveredDefinitionsFor(input, experiments, await plansForDelivery(db, site.id)), experiments);
     // §10.9: compile は警告に留める。拒否は保存 API(`assertName`)側
     warnings = analyticsWarnings(config);
     // 決定 51(設計書 §3.3): 同じ対象 URL・同じセレクタを変える組。拒否はしない(どちらが優先されるかを文に入れる)

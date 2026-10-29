@@ -28,7 +28,8 @@ export type CompileErrorCode =
   | "invalid_analytics"
   | "invalid_regex"
   | "regex_too_large"
-  | "regex_budget_exceeded";
+  | "regex_budget_exceeded"
+  | "audience_expansion_too_large";
 
 export class CompileError extends Error {
   constructor(public code: CompileErrorCode, message: string) {
@@ -103,6 +104,14 @@ function compileMatch(m: PageMatchInput, where: string, budget: Array<{ where: s
   return { ...n, prog: r.prog };
 }
 
+/** 配信条件のノード数(and / or / not / 条件をすべて 1 つと数える) */
+function countNodes(node: Targeting): number {
+  if ("and" in node) return 1 + node.and.reduce((a, n) => a + countNodes(n), 0);
+  if ("or" in node) return 1 + node.or.reduce((a, n) => a + countNodes(n), 0);
+  if ("not" in node) return 1 + countNodes(node.not);
+  return 1;
+}
+
 /**
  * 形の検査の文言に、保存 422 と同じ直し方(hint)を続ける。Publish の失敗では CompileError の message がそのまま hint に出るため、
  * v0.9 から残った入れ子の配信条件を Publish したときにも「どうすれば」が伝わるようにする(final review Important 1)
@@ -131,9 +140,9 @@ export function compile(input: unknown): CompiledConfig {
   const experiments: Experiment[] = [];
   let needsProfile = false;
 
-  /** オーディエンスの定義(参照されたものを、最初に参照された時点で検査して覚える。設計書 §4.3 の 1) */
-  const audienceCache = new Map<string, Targeting>();
-  const resolveAudience = (id: string, eid: string): Targeting => {
+  /** オーディエンスの定義(参照されたものを、最初に参照された時点で検査して覚える。設計書 §4.3 の 1)。nodes = 定義のノード数 */
+  const audienceCache = new Map<string, { def: Targeting; nodes: number }>();
+  const resolveAudience = (id: string, eid: string): { def: Targeting; nodes: number } => {
     const hit = audienceCache.get(id);
     if (hit) return hit;
     if (!Object.prototype.hasOwnProperty.call(rawAudiences, id)) throw new CompileError("unknown_audience", `エクスペリエンス ${eid} の配信条件が参照するオーディエンス ${id} が見つかりません`);
@@ -144,9 +153,40 @@ export function compile(input: unknown): CompiledConfig {
     const def = normalizeTargeting(p.data);
     const issue = audienceDefinitionIssue(def);
     if (issue) throw new CompileError("invalid_audience_definition", `オーディエンス ${id}: ${withHint(issue)}`);
-    audienceCache.set(id, def);
-    return def;
+    const entry = { def, nodes: countNodes(def) };
+    audienceCache.set(id, entry);
+    return entry;
   };
+
+  /**
+   * オーディエンスの展開の量(B159、G32)。参照のたびに定義のノード数を足し、展開する前に上限を見る(数千回の参照で、配る設定の
+   * 大きさの検査より先に Worker の上限に当たらないように)。refs = オーディエンスごとの参照の回数(超えたときの文言に出す)
+   */
+  let expanded = 0;
+  const refs = new Map<string, number>();
+  const countExpansion = (id: string, nodes: number): void => {
+    expanded += nodes;
+    refs.set(id, (refs.get(id) ?? 0) + 1);
+    if (expanded <= LIMITS.audienceExpansionMax) return;
+    const top = [...refs]
+      .map(([a, k]) => ({ a, k, n: audienceCache.get(a)!.nodes }))
+      .sort((x, y) => y.n * y.k - x.n * x.k)
+      .slice(0, 5)
+      .map((x) => `オーディエンス ${x.a}(条件 ${x.n} 個 × 参照 ${x.k} 回)`)
+      .join("、");
+    throw new CompileError(
+      "audience_expansion_too_large",
+      `配信条件のオーディエンスを展開した条件の数の合計が上限を超えます(${expanded} / ${LIMITS.audienceExpansionMax})。多いもの: ${top}。配信条件でのオーディエンスの参照を減らすか、オーディエンスの条件を減らしてください`,
+    );
+  };
+
+  /**
+   * オーディエンスごとの展開の結果(最初の参照で 1 回だけ展開し、以後は同じ DslNode を使い回す)。regexes = 中の ctx の正規表現
+   * (場所の文言と命令数)。ctx の正規表現の命令列は参照するエクスペリエンスごとに配る設定へ写るので、参照のたびに budget に積み直す
+   * (場所はその参照のエクスペリエンス)。閲覧の条件の正規表現は patterns にパターン ID ごとに 1 回だけ積むので積み直さない。
+   * 使い回す DslNode は後の処理(maxWithinDays・dslNeedsProfile・CompiledConfigSchema.parse・JSON 化)が読むだけで書き換えない
+   */
+  const expansionCache = new Map<string, { node: DslNode; regexes: Array<{ what: string; instructions: number }> }>();
 
   /**
    * 保存形 → 配る形を 1 回の走査で行う: オーディエンスの参照はその時点の定義に置き換えて(設計書 §4.3 の 1)その中を続けて変換し、
@@ -155,12 +195,26 @@ export function compile(input: unknown): CompiledConfig {
    * 正規表現の命令数は展開後に出てくるたびに数える(ctx の正規表現の命令列は参照するエクスペリエンスごとに配る設定へ写るため。
    * 閲覧の条件の正規表現は patterns に 1 つだけ載るので、パターン ID ごとに 1 回)
    */
-  const toCompiled = (node: Targeting, eid: string, via?: string): DslNode => {
+  const toCompiled = (node: Targeting, eid: string, via?: string, regexes?: Array<{ what: string; instructions: number }>): DslNode => {
     const where = (what: string) => `エクスペリエンス ${eid} の${what}${via !== undefined ? `(オーディエンス ${via})` : ""}`;
-    if ("and" in node) return { and: node.and.map((n) => toCompiled(n, eid, via)) };
-    if ("or" in node) return { or: node.or.map((n) => toCompiled(n, eid, via)) };
-    if ("not" in node) return { not: toCompiled(node.not, eid, via) };
-    if ("audience" in node) return toCompiled(resolveAudience(node.audience, eid), eid, node.audience); // 定義の中に別の参照は無い(audienceDefinitionIssue が止める)
+    if ("and" in node) return { and: node.and.map((n) => toCompiled(n, eid, via, regexes)) };
+    if ("or" in node) return { or: node.or.map((n) => toCompiled(n, eid, via, regexes)) };
+    if ("not" in node) return { not: toCompiled(node.not, eid, via, regexes) };
+    if ("audience" in node) {
+      // 定義の中に別の参照は無い(audienceDefinitionIssue が止める)
+      const id = node.audience;
+      const { def, nodes } = resolveAudience(id, eid);
+      countExpansion(id, nodes); // 展開の前に量を見る
+      const hit = expansionCache.get(id);
+      if (hit) {
+        for (const r of hit.regexes) budget.push({ where: `エクスペリエンス ${eid} の${r.what}(オーディエンス ${id})`, instructions: r.instructions });
+        return hit.node;
+      }
+      const found: Array<{ what: string; instructions: number }> = [];
+      const compiled = toCompiled(def, eid, id, found);
+      expansionCache.set(id, { node: compiled, regexes: found });
+      return compiled;
+    }
     if ("hist" in node) {
       if (node.hist === "converted") {
         if (!goalIds.has(node.goal)) throw new CompileError("unknown_goal", `エクスペリエンス ${eid} の配信条件が参照する目標 ${node.goal} が見つかりません`);
@@ -175,7 +229,9 @@ export function compile(input: unknown): CompiledConfig {
       return node as DslNode;
     }
     if (node.ctx === "host" || node.ctx === "path") {
+      const before = budget.length;
       const m = compileMatch({ part: node.ctx, op: node.op, value: node.value }, where("配信条件"), budget);
+      if (regexes && budget.length > before) regexes.push({ what: "配信条件", instructions: budget[before]!.instructions });
       return { ctx: node.ctx, op: node.op, value: m.value, ...(m.prog ? { prog: m.prog } : {}) } as DslNode;
     }
     return node as DslNode; // ページ以外の条件(クエリ・端末・時刻など)は保存形と配る形が同じ

@@ -2,8 +2,15 @@ import { describe, it, expect } from "vitest";
 import { compile, CompileError } from "../src/compile";
 import { patternIdOf } from "../src/pattern-id";
 import { compileRegex, REGEX_LIMITS } from "../src/regex-compile";
-import { CompiledConfigSchema, type CompiledConfig, type Experiment } from "../src/schema";
+import { CompiledConfigSchema, DslNodeSchema, LIMITS, type CompiledConfig, type Experiment } from "../src/schema";
 import { parseCompiledConfig } from "../src/config-read";
+import { decide, dslNeedsProfile, evaluateDsl, type PageContext } from "../src/evaluate";
+import { evaluateWhatIf } from "../src/what-if";
+import { withoutLegacyNames } from "../src/legacy-names";
+import { bakeBootstrap, bootPayload } from "../src/bake";
+import { staticInputDigest } from "../src/static-deploy";
+import { parseSiteSettings } from "../src/settings";
+import { maxWithinDays } from "../src/targeting";
 
 const exp = (targeting?: unknown, persist = false): Experiment => ({
   id: "exp_001", name: "hero",
@@ -416,6 +423,123 @@ describe("compile: 版 2(決定 49)", () => {
       const cfg = compile({ ...base, experiments: Array.from({ length: n }, (_, i) => ({ ...exp(visited), id: `exp_${i}` })) });
       expect(Object.keys(cfg.patterns)).toHaveLength(1);
     });
+  });
+});
+
+describe("compile: オーディエンスの展開の上限(B159、G32)", () => {
+  const LEAF = { ctx: "referrer", op: "isEmpty" };
+  /** 50 ノード(or 1 + not × 24 + その中の条件 24 + 条件 1)。not で包んで 1 ノードあたりの JSON を小さくし、2 万ノードでも 512 KB に収める */
+  const AUD50 = { or: [...Array.from({ length: 24 }, () => ({ not: LEAF })), LEAF] };
+  const refs = (id: string, k: number) => Array.from({ length: k }, () => ({ audience: id }));
+  const expWith = (targeting: unknown, id = "exp_001") => ({ ...exp(), id, targeting }) as never;
+  const codeOf = (run: () => unknown): string | null => {
+    try {
+      run();
+    } catch (e) {
+      return (e as CompileError).code;
+    }
+    return null;
+  };
+
+  it("上限はサイト全体で 20,000", () => {
+    expect(LIMITS.audienceExpansionMax).toBe(20_000);
+  });
+
+  it("50 ノードのオーディエンスを 500 回参照(合計 25,000)は audience_expansion_too_large。展開の前に止まる(config_too_large まで進まない)", () => {
+    const aud = { or: Array.from({ length: 49 }, () => LEAF) }; // 50 ノード。展開すると 512 KB を超える
+    const t0 = performance.now();
+    let err: CompileError | null = null;
+    try {
+      compile({ ...base, audiences: { aud_big: aud }, experiments: [expWith({ or: refs("aud_big", 500) })] });
+    } catch (e) {
+      err = e as CompileError;
+    }
+    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(err?.code).toBe("audience_expansion_too_large");
+    // どのオーディエンスが何回参照されて合計がいくつか・直し方
+    expect(err?.message).toContain("(20050 / 20000)"); // 401 回目の参照で上限を超える
+    expect(err?.message).toContain("オーディエンス aud_big(条件 50 個 × 参照 401 回)");
+    expect(err?.message).toContain("参照を減らす");
+  });
+
+  it("境目: 合計がちょうど 20,000 は通り、20,001 は止まる(複数のエクスペリエンスの参照を合計する)", () => {
+    const audiences = { aud_50: AUD50, aud_1: LEAF };
+    const half = (id: string) => expWith({ or: refs("aud_50", 200) }, id);
+    const cfg = compile({ ...base, audiences, experiments: [half("exp_a"), half("exp_b")] }); // 50 × 400 = 20,000
+    expect(cfg.experiments).toHaveLength(2);
+    const over = codeOf(() => compile({ ...base, audiences, experiments: [half("exp_a"), half("exp_b"), expWith({ audience: "aud_1" }, "exp_c")] }));
+    expect(over).toBe("audience_expansion_too_large");
+  });
+
+  it("展開の結果を使い回しても、参照ごとの出力は今と同じ(それぞれ定義を展開した形)", () => {
+    const aud = { and: [{ ctx: "path", op: "regex", value: "^/a/\\d+$" }, { not: { ctx: "device", op: "in", value: ["mobile"] } }, { hist: "visited", page: PRICING }] };
+    const cfg = compile({ ...base, audiences: { aud_x: aud }, experiments: [expWith({ audience: "aud_x" }, "exp_a"), expWith({ or: [{ audience: "aud_x" }, { audience: "aud_x" }] }, "exp_b")] });
+    const one = cfg.experiments[0]!.targeting;
+    expect(one).toEqual({
+      and: [
+        { ctx: "path", op: "regex", value: "^/a/\\d+$", prog: expect.objectContaining({ v: 1 }) },
+        { not: { ctx: "device", op: "in", value: ["mobile"] } },
+        { hist: "visited", pattern: patternIdOf(PRICING) },
+      ],
+    });
+    expect(cfg.experiments[1]!.targeting).toEqual({ or: [one, one] });
+    // JSON にしても同じ(共有したオブジェクトでも配る形は変わらない)
+    expect(JSON.parse(JSON.stringify(cfg.experiments[1]!.targeting))).toEqual({ or: [JSON.parse(JSON.stringify(one)), JSON.parse(JSON.stringify(one))] });
+  });
+
+  it("使い回した展開の結果(共有の DslNode)は、出力を受ける下流の関数が書き換えない(deep-freeze しても結果が同じ)", async () => {
+    const aud = { and: [{ ctx: "path", op: "regex", value: "^/lp/\\d+$" }, { not: { ctx: "device", op: "in", value: ["mobile"] } }, { hist: "visited", page: PRICING }] };
+    const input = { ...base, audiences: { aud_x: aud }, experiments: [expWith({ audience: "aud_x" }, "exp_a"), expWith({ or: [{ audience: "aud_x" }, { ctx: "referrer", op: "isEmpty" }] }, "exp_b")] };
+    const deepFreeze = <T>(v: T): T => {
+      if (v !== null && typeof v === "object" && !Object.isFrozen(v)) {
+        Object.freeze(v);
+        for (const k of Reflect.ownKeys(v)) deepFreeze((v as Record<PropertyKey, unknown>)[k]);
+      }
+      return v;
+    };
+    const frozen = deepFreeze(compile(input));
+    const fresh = compile(input); // 比べる用(凍らせない)
+    // 使い回す DslNode を共有するのは compile の中(覚えてから CompiledConfigSchema.parse まで)だけ。parse が新しい木を返すので、
+    // 出力には同じ参照は残らない。中で共有したノードを読むのは maxWithinDays・dslNeedsProfile・CompiledConfigSchema.parse・JSON 化の 4 つ
+    const shared = frozen.experiments[0]!.targeting!;
+    expect(maxWithinDays(shared)).toBe(0);
+    expect(dslNeedsProfile(shared)).toBe(true);
+    expect(DslNodeSchema.parse(shared)).toEqual(shared);
+    expect(CompiledConfigSchema.parse(frozen)).toEqual(fresh);
+
+    // 書き換えようとすれば TypeError(ESM は strict)。下流の関数が通り、凍らせない出力と同じ結果になる
+    const settings = parseSiteSettings({ settingsVersion: 1, siteId: base.siteId })!;
+    expect(withoutLegacyNames(frozen)).toEqual(withoutLegacyNames(fresh));
+    expect(bootPayload(frozen, settings, "https://edge.example")).toEqual(bootPayload(fresh, settings, "https://edge.example"));
+    expect(bakeBootstrap(frozen, settings, "/*R*/", { apiBase: "https://edge.example" })).toBe(bakeBootstrap(fresh, settings, "/*R*/", { apiBase: "https://edge.example" }));
+    expect(await staticInputDigest({ config: frozen, settings, apiBase: null })).toBe(await staticInputDigest({ config: fresh, settings, apiBase: null }));
+    expect(parseCompiledConfig(frozen)).toEqual(parseCompiledConfig(fresh));
+    const ctx: PageContext = { url: "https://example.com/lp/12", query: {}, referrer: "", device: "desktop", now: 0 };
+    const profile = { goals: {}, pages: { [patternIdOf(PRICING)]: { count: 1, lastAt: 1 } } };
+    expect(evaluateDsl(shared, ctx, profile)).toBe(true);
+    expect(decide(frozen, ctx, "visitor_1", profile)).toEqual(decide(fresh, ctx, "visitor_1", profile));
+    const items = (c: CompiledConfig) => c.experiments.map((experiment) => ({ experiment, status: "running" as const, published: true }));
+    expect(evaluateWhatIf(items(frozen), ctx, { visitorId: "visitor_1", history: profile, patterns: frozen.patterns })).toEqual(
+      evaluateWhatIf(items(fresh), ctx, { visitorId: "visitor_1", history: profile, patterns: fresh.patterns }),
+    );
+    expect(JSON.stringify(frozen)).toBe(JSON.stringify(fresh));
+  });
+
+  it("regex_budget_exceeded は、同じオーディエンスを複数のエクスペリエンスから参照したとき、参照のたびの場所と今と同じ合計で出る", () => {
+    const src = "^/(ja|en)/products/[0-9]+$";
+    const r = compileRegex(src);
+    if (!r.ok) throw new Error(r.issue.code);
+    const n = Math.floor(REGEX_LIMITS.instructionsPerSite / r.instructions) + 1;
+    const audiences = { aud_rx: { and: [{ ctx: "path", op: "regex", value: src }, LEAF] } };
+    let err: CompileError | null = null;
+    try {
+      compile({ ...base, audiences, experiments: Array.from({ length: n }, (_, i) => expWith({ audience: "aud_rx" }, `exp_${i}`)) });
+    } catch (e) {
+      err = e as CompileError;
+    }
+    expect(err?.code).toBe("regex_budget_exceeded");
+    expect(err?.message).toContain(`正規表現の命令の数の合計 ${n * r.instructions} / ${REGEX_LIMITS.instructionsPerSite}`);
+    expect(err?.message).toContain("エクスペリエンス exp_0 の配信条件(オーディエンス aud_rx)(" + r.instructions + ")");
   });
 });
 

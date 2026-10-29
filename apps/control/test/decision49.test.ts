@@ -93,6 +93,19 @@ describe("正規表現の規則(決定 49、設計書 §10)", () => {
     expect(r).toMatchObject({ ok: false, error: "regex_budget_exceeded" });
     expect(r.hint).toMatch(/エクスペリエンス exp_big\d の対象 URL\(198\)/);
   });
+
+  it("Publish はオーディエンスの展開の合計 20,000 超を audience_expansion_too_large で止め、hint に compile の文言を出す(B159、G32)", async () => {
+    const { owner, sid } = await site();
+    const leaf = { ctx: "referrer", op: "isEmpty" };
+    const definition = { or: Array.from({ length: 49 }, () => leaf) }; // 50 ノード
+    const aud = await call("POST", `/sites/${sid}/audiences`, { token: owner.token, body: { id: "aud_big", name: "大きい", definition } });
+    expect(aud.status).toBe(201);
+    const { id } = await createExperiment(owner.token, sid, { id: "exp_many", targeting: { or: Array.from({ length: 500 }, () => ({ audience: "aud_big" })) } });
+    await runDirect(sid, id);
+    const r = await json<PublishBody>(await publishRes(owner.token, sid));
+    expect(r).toMatchObject({ ok: false, error: "audience_expansion_too_large" });
+    expect(r.hint).toContain("オーディエンス aud_big(条件 50 個 × 参照 401 回)");
+  });
 });
 
 describe("bootstrap の大きさ(決定 50)", () => {
