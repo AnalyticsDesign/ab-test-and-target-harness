@@ -15,7 +15,14 @@ const STATIC = join(fileURLToPath(new URL(".", import.meta.url)), ".static");
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".json": "application/json", ".css": "text/css", ".png": "image/png" };
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://localhost:${PORT}`);
+  // 壊れた要求の URL(例 `//[`)で投げると async の中の拒否を誰も受けずプロセスごと落ちるので、400 で返す
+  let url;
+  try {
+    url = new URL(req.url, `http://localhost:${PORT}`);
+  } catch {
+    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+    return res.end("bad request");
+  }
   if (url.pathname.startsWith("/s/")) {
     // 配信専用の Worker と同じヘッダ(_headers)。無いファイルは 404(未 Publish の Site)
     try {

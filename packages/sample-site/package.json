@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "echo 'e2e runs via: pnpm e2e'",
+    "test": "node --test test/*.test.mjs",
     "e2e": "playwright test",
     "typecheck": "tsc --noEmit"
   },
