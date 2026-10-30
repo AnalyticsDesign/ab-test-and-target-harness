@@ -44,7 +44,10 @@ export type { AnalyticsSettings };
 export type Site = {
   id: string; workspaceId: string; name: string; domain: string; mode: "A" | "B"; idSource: string; allowedOrigins: string[]; hosts: string[];
   retentionDays: number; consentMode: "implicit" | "required"; forgetOnRevoke: boolean; resultsEnabled: boolean; resultsRetentionDays: number; newProfileBudgetPerDay: number | null; timezone: string; decisionTimeoutMs: number; visitorCookieName: string; uuidCookieEnabled: boolean; uuidCookieName: string;
-  previousCookieNames: Array<{ name: string; until: number }>; analytics: AnalyticsSettings; ga4PropertyId: string | null; bigqueryDataset: string | null;
+  previousCookieNames: Array<{ name: string; until: number }>;
+  /** B139: 訪問者 ID の Cookie の共有と、control が hosts・allowedOrigins から導いたまとまり(読むだけ。共有がオフなら空) */
+  shareSubdomains: boolean; cookieGroups: Array<{ domain: string; hosts: string[] }>;
+  analytics: AnalyticsSettings; ga4PropertyId: string | null; bigqueryDataset: string | null;
   activeVersion: number | null; activeKvStale: boolean; staticStale: boolean; staticRemoving: boolean; lastActivatedAt: number | null; contentUpdatedAt: number; createdAt: number; updatedAt: number;
   /** `GET /sites/:sid` だけが返す(spec §13.9 の badge / banner 用) */
   hasUnpublishedChanges?: boolean;
@@ -53,6 +56,11 @@ export type Site = {
   /** `GET /sites/:sid` だけが返す: 計測用のデータベースの使用量(D9 ③。測る前・計測用のデータベースが無い導入では無い) */
   resultsCapacity?: ResultsCapacity | null;
 };
+/**
+ * `POST /workspaces/:wid/sites` の応答。B139: 同じ登録ドメインの別のサイトと訪問者 ID の Cookie がぶつかるため、
+ * 共有をオフにするか(shareSubdomains = false)、Cookie 名を変えて(共有はオンのまま)作ったときだけ sharingAdjusted が付く
+ */
+export type SiteCreated = Site & { sharingAdjusted?: { reason: "conflict"; shareSubdomains: boolean; visitorCookieName: string } };
 export type Status = "draft" | "running" | "paused" | "archived";
 export type ChangeType = "TEXT" | "IMAGE" | "HIDE" | "ATTRIBUTE" | "HTML" | "CSS" | "CUSTOM_JS";
 /**

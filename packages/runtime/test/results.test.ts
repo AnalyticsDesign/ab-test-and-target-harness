@@ -19,18 +19,19 @@ const KEY = "_ab_vid_r";
 type Body = Record<string, unknown>;
 type Reply = ResultsEventResponse | null | Promise<ResultsEventResponse | null>;
 
-/** 既定の応答: 参加は stored、CV は runId ごとに stored */
-const stored = (b: Body): ResultsEventResponse =>
-  b.type === "conversion" ? { result: "stored", runs: Object.fromEntries((b.runIds as string[]).map((r) => [r, { result: "stored" as const }])) } : { result: "stored" };
+/** 既定の応答: 参加も CV(B139: 目標だけ。run ごとの結果は返らない)も stored */
+const stored = (): ResultsEventResponse => ({ result: "stored" });
+/** B139(設計書 §5.2): 目標だけの CV の本文 */
+const cvBody = (...goalIds: string[]): Body => ({ type: "conversion", v: 2, goalIds });
 
-const cfg = (runs: Record<string, string> = { exp_a: RUN_A, exp_b: RUN_B }): CompiledConfig => ({ ...baseConfig, results: { forget: true, runs } });
+const cfg = (runs: Record<string, string> = { exp_a: RUN_A, exp_b: RUN_B }, needsProfile = false): CompiledConfig => ({ ...baseConfig, needsProfile, results: { forget: true, runs } });
 
 /** 1 ページ分の送信側。send は本文を記録して reply を返す偽物 */
-function page(o: { runs?: Record<string, string>; storage?: Storage | null; now?: number; reply?: (b: Body) => Reply } = {}) {
+function page(o: { runs?: Record<string, string>; storage?: Storage | null; now?: number; reply?: (b: Body) => Reply; needsProfile?: boolean } = {}) {
   const sent: Body[] = [];
   const reply = o.reply ?? stored;
   const s = createResultsSender({
-    config: cfg(o.runs),
+    config: cfg(o.runs, o.needsProfile),
     settings: baseSettings,
     storage: o.storage === undefined ? localStorage : o.storage,
     send: async (b) => {
@@ -46,7 +47,7 @@ const join = (s: ResultsSender, exp = "exp_a", variant = "vB"): void => {
   s.endScan();
 };
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
-const marks = (): { v: number; i: string; p: Record<string, string>; c: Record<string, string[]>; s?: number } | null => JSON.parse(localStorage.getItem(KEY) ?? "null");
+const marks = (): { v: number; i: string; p: Record<string, string>; c?: unknown; s?: number } | null => JSON.parse(localStorage.getItem(KEY) ?? "null");
 const deferred = () => {
   let resolve!: (r: ResultsEventResponse | null) => void;
   const promise = new Promise<ResultsEventResponse | null>((r) => (resolve = r));
@@ -101,9 +102,9 @@ it("permanently_ignored_participant_is_not_resent", async () => {
   const next = page();
   next.s.begin(H);
   join(next.s);
-  next.s.conversion("g_cta");
+  next.s.conversion("g_cta", false, false);
   await flush();
-  expect(next.sent).toEqual([]);
+  expect(next.sent).toEqual([cvBody("g_cta")]); // x は参加だけを止める(CV の送り先は edge が参加の行から決める。B139)
 });
 
 it("participant_stop_response_does_not_mark_sent", async () => {
@@ -122,7 +123,7 @@ it("participant_stop_response_does_not_mark_sent", async () => {
   const p2 = page({ now: until - 1 });
   p2.s.begin(H);
   join(p2.s);
-  p2.s.conversion("g_cta");
+  p2.s.conversion("g_cta", false, false);
   await flush();
   expect(p2.sent).toEqual([]);
   // 期限を過ぎたら s を消して送り直す
@@ -154,67 +155,137 @@ it("participant_d1_failure_resends_on_next_page", async () => {
 it("conversion_waits_for_participant", async () => {
   const a = deferred();
   const b = deferred();
-  const { s, sent } = page({ reply: (body) => (body.type === "conversion" ? stored(body) : body.runId === RUN_A ? a.promise : b.promise) });
+  const { s, sent } = page({ reply: (body) => (body.type === "conversion" ? stored() : body.runId === RUN_A ? a.promise : b.promise) });
   s.begin(H);
   s.participant("exp_a", "vB", "desktop");
   s.participant("exp_b", "vA", "mobile");
   s.endScan();
-  s.conversion("g_cta");
+  s.conversion("g_cta", false, false);
   await flush();
   expect(sent.map((x) => x.type)).toEqual(["participant", "participant"]); // CV は参加の settle を待つ
   a.resolve({ result: "stored" });
   await flush();
   expect(sent).toHaveLength(2);
-  b.resolve({ result: "failed" }); // 保存されなかった run は送り先から外す
+  b.resolve({ result: "failed" }); // すべての参加の送信が settle してから CV を送る(送り先の run は edge が参加の行から決める)
   await flush();
-  expect(sent[2]).toEqual({ type: "conversion", v: 1, goalId: "g_cta", runIds: [RUN_A] });
-  expect(marks()!.c).toEqual({ [RUN_A]: ["g_cta"] });
+  expect(sent[2]).toEqual(cvBody("g_cta"));
+  expect(marks()!.c).toBeUndefined(); // B139 Q19: CV の印は書かない
 });
 
 it("conversion_during_pending_participant_is_preserved", async () => {
   // 送信の準備(begin)の前・scan の途中(参加の保留中)に起きた CV も、参加が保存された後に送る
   const { s, sent } = page();
   s.participant("exp_a", "vB", "desktop");
-  s.conversion("g_cta");
+  s.conversion("g_cta", false, false);
   s.endScan();
   await flush();
   expect(sent).toEqual([]); // begin の前は溜める
   s.begin(H);
   await flush();
-  expect(sent).toEqual([participantBody(RUN_A, "vB", "ok"), { type: "conversion", v: 1, goalId: "g_cta", runIds: [RUN_A] }]);
+  expect(sent).toEqual([participantBody(RUN_A, "vB", "ok"), cvBody("g_cta")]);
 });
 
-it("conversion splits runIds into chunks of 20", async () => {
-  const runs: Record<string, string> = {};
-  const p: Record<string, string> = {};
-  for (let i = 0; i < 45; i++) {
-    const run = String(i).padStart(22, "r");
-    runs[`exp_${i}`] = run;
-    p[run] = "vA:o";
+// ---- B139(設計書 §5.2・Q19・Q22): 目標だけの CV ----
+
+it("twenty_one_pageview_goals_split_into_two_requests", async () => {
+  // ページを開いたときの目標は 1 回にまとめる。goalIds は 1 回 20 件までなので、21 件は 2 回に分ける(全目標を送る)
+  for (const [n, sizes] of [[20, [20]], [21, [20, 1]]] as const) {
+    const { s, sent } = page();
+    s.begin(H);
+    const ids = Array.from({ length: n }, (_, i) => `g_${i}`);
+    for (const id of ids) s.conversion(id, false, true);
+    await flush();
+    expect(sent.map((b) => (b.goalIds as string[]).length)).toEqual(sizes);
+    expect(sent.flatMap((b) => b.goalIds as string[])).toEqual(ids);
   }
-  localStorage.setItem(KEY, JSON.stringify({ v: 1, i: H, p, c: {} }));
-  const { s, sent } = page({ runs });
-  s.begin(H);
-  s.conversion("g_cta");
-  await flush();
-  expect(sent.map((b) => (b.runIds as string[]).length)).toEqual([20, 20, 5]);
-  expect(new Set(sent.flatMap((b) => b.runIds as string[]))).toEqual(new Set(Object.keys(p)));
-  expect(Object.keys(marks()!.c)).toHaveLength(45);
 });
 
-it("conversion marks only stored or final runs", async () => {
-  localStorage.setItem(KEY, JSON.stringify({ v: 1, i: H, p: { [RUN_A]: "vA:o", [RUN_B]: "vA:o", [RUN_C]: "vB:f" }, c: {} }));
-  const runs = { exp_a: RUN_A, exp_b: RUN_B, exp_c: RUN_C };
-  const first = page({ runs, reply: () => ({ result: "stored", runs: { [RUN_A]: { result: "stored" }, [RUN_B]: { result: "ignored", retry: false }, [RUN_C]: { result: "failed" } } }) });
-  first.s.begin(H);
-  first.s.conversion("g_cta");
+it("multiple_pageview_goals_share_one_conversion_request", async () => {
+  const { s, sent } = page();
+  s.begin(H);
+  s.conversion("g_pv1", false, true);
+  s.conversion("g_pv2", false, true);
   await flush();
-  expect(marks()!.c).toEqual({ [RUN_A]: ["g_cta"], [RUN_B]: ["g_cta"] });
-  const next = page({ runs });
+  expect(sent).toEqual([cvBody("g_pv1", "g_pv2")]);
+  s.conversion("g_click", false, false); // その後に達成した目標は達成のたびに送る
+  await flush();
+  expect(sent).toEqual([cvBody("g_pv1", "g_pv2"), cvBody("g_click")]);
+});
+
+it("goal_only_cv_sent_once_per_page", async () => {
+  // どの run にも参加していなくても送る。同じページの同じ目標は 1 回(メモリの Set)、次のページではまた送る
+  const { s, sent } = page();
+  s.begin(H);
+  s.conversion("g_cta", false, false);
+  await flush();
+  s.conversion("g_cta", false, false);
+  s.conversion("g_cta", false, true);
+  await flush();
+  expect(sent).toEqual([cvBody("g_cta")]);
+  expect(marks()).toEqual({ v: 1, i: H, p: {} });
+  const next = page();
   next.s.begin(H);
-  next.s.conversion("g_cta");
+  next.s.conversion("g_cta", false, false);
   await flush();
-  expect(next.sent).toEqual([{ type: "conversion", v: 1, goalId: "g_cta", runIds: [RUN_C] }]);
+  expect(next.sent).toEqual([cvBody("g_cta")]);
+});
+
+it("no_cv_sent_when_results_runs_empty", async () => {
+  const { s, sent } = page({ runs: {} });
+  s.begin(H);
+  s.conversion("g_cta", false, false);
+  s.conversion("g_pv", false, true);
+  await flush();
+  expect(sent).toEqual([]);
+});
+
+it("runtime_does_not_send_pageview_cv_on_cloudflare_host (sender)", async () => {
+  // Cloudflare 経由のドメイン(edgePath)のページの表示の目標は edge が decision で記録する。クリックなどの目標は送る
+  const { s, sent } = page();
+  s.begin(H);
+  s.conversion("g_pv", true, true);
+  s.conversion("g_click", true, false);
+  await flush();
+  expect(sent).toEqual([cvBody("g_click")]);
+});
+
+it("needs_profile_goal_sends_no_separate_cv (sender)", async () => {
+  // needsProfile のときは edge が type:"goal" で結果の CV も記録する
+  const { s, sent } = page({ needsProfile: true });
+  s.begin(H);
+  s.conversion("g_cta", false, false);
+  s.conversion("g_pv", false, true);
+  await flush();
+  expect(sent).toEqual([]);
+});
+
+it("goal_only_cv_stopped_sets_halt_until", async () => {
+  const until = NOW + 3_600_000;
+  const { s, sent } = page({ reply: () => ({ result: "stopped", until, retry: false }) });
+  s.begin(H);
+  s.conversion("g_a", false, false);
+  await flush();
+  expect(marks()!.s).toBe(until);
+  s.conversion("g_b", false, false); // 停止の期限まで送らない
+  await flush();
+  expect(sent).toEqual([cvBody("g_a")]);
+  const next = page({ now: until - 1 });
+  next.s.begin(H);
+  next.s.conversion("g_a", false, false);
+  await flush();
+  expect(next.sent).toEqual([]);
+});
+
+it("upgrade_keeps_participation_marks", async () => {
+  // 今の形の印(v: 1、c あり)を読んでも p は残り、参加を送り直さない。c は読まず、書き直すときに落とす
+  localStorage.setItem(KEY, JSON.stringify({ v: 1, i: H, p: { [RUN_A]: "vB:o" }, c: { [RUN_A]: ["g_cta"] } }));
+  const { s, sent } = page();
+  s.begin(H);
+  join(s);
+  s.conversion("g_cta", false, false);
+  await flush();
+  expect(sent).toEqual([cvBody("g_cta")]);
+  expect(marks()).toEqual({ v: 1, i: H, p: { [RUN_A]: "vB:o" } });
 });
 
 it("late failure is sent once and switches the mark to f", async () => {
@@ -378,7 +449,7 @@ it("successful_changes_do_not_report_failure_on_rescan", async () => {
 
 it("late_failure_waits_for_participant", async () => {
   const p = deferred();
-  const { s, sent } = page({ reply: (b) => (b.applied === "ok" ? p.promise : stored(b)) });
+  const { s, sent } = page({ reply: (b) => (b.applied === "ok" ? p.promise : stored()) });
   s.begin(H);
   join(s);
   await flush();
@@ -394,7 +465,7 @@ it("recovery_during_pending_failure_is_preserved", async () => {
   // failed_later の応答待ちの間の成功は、その応答の後に確かめる。同じページで失敗を受けたので回復にはせず、印 f を保つ。
   // 回復は次のページで(すべての Change が成功したとき)送り、印の最後の状態は r
   const f = deferred();
-  const { s, sent } = page({ reply: (b) => (b.applied === "failed_later" ? f.promise : stored(b)) });
+  const { s, sent } = page({ reply: (b) => (b.applied === "failed_later" ? f.promise : stored()) });
   s.begin(H);
   join(s);
   await flush();
@@ -422,7 +493,7 @@ it("same_identity_variant_change_resends_participant", async () => {
   p1.s.participant("exp_a", "vA", "desktop");
   p1.s.applyFailed("exp_a");
   p1.s.endScan();
-  p1.s.conversion("g_cta");
+  p1.s.conversion("g_cta", false, false);
   await flush();
   expect(marks()!.p[RUN_A]).toBe("vA:f");
   const p2 = page(); // 同じ i・同じパターン → 送らない
@@ -435,9 +506,8 @@ it("same_identity_variant_change_resends_participant", async () => {
   join(p3.s, "exp_a", "vB");
   await flush();
   expect(p3.sent).toEqual([participantBody(RUN_A, "vB", "ok")]);
-  // 印は新しいパターンに書き換え、適用の状態(D1 の行の状態)と CV の印は引き継ぐ
+  // 印は新しいパターンに書き換え、適用の状態(D1 の行の状態)は引き継ぐ
   expect(marks()!.p[RUN_A]).toBe("vB:f");
-  expect(marks()!.c).toEqual({ [RUN_A]: ["g_cta"] });
 });
 
 it("id_change_resends_participant", async () => {
@@ -447,7 +517,7 @@ it("id_change_resends_participant", async () => {
   join(s);
   await flush();
   expect(sent).toEqual([participantBody(RUN_A, "vB", "ok")]);
-  expect(marks()).toEqual({ v: 1, i: H, p: { [RUN_A]: "vB:o" }, c: {} });
+  expect(marks()).toEqual({ v: 1, i: H, p: { [RUN_A]: "vB:o" } });
 });
 
 it("marks_fall_back_to_memory_without_storage", async () => {
@@ -460,10 +530,10 @@ it("marks_fall_back_to_memory_without_storage", async () => {
   join(s);
   await flush();
   join(s); // ページの中のメモリで重複を防ぐ
-  s.conversion("g_cta");
-  s.conversion("g_cta");
+  s.conversion("g_cta", false, false);
+  s.conversion("g_cta", false, false);
   await flush();
-  expect(sent).toEqual([participantBody(RUN_A, "vB", "ok"), { type: "conversion", v: 1, goalId: "g_cta", runIds: [RUN_A] }]);
+  expect(sent).toEqual([participantBody(RUN_A, "vB", "ok"), cvBody("g_cta")]);
   expect(() => s.clear()).not.toThrow();
 });
 
@@ -493,21 +563,20 @@ it("marks for runs missing from results.runs are pruned", async () => {
   const { s } = page();
   s.begin(H);
   await flush();
-  expect(marks()).toEqual({ v: 1, i: H, p: { [RUN_A]: "vB:o" }, c: { [RUN_A]: ["g_cta"] } });
+  expect(marks()).toEqual({ v: 1, i: H, p: { [RUN_A]: "vB:o" } });
 });
 
 it("corrupted_marks_fall_back_to_empty", async () => {
-  // i は合っているが形の壊れた印(p が文字列・項目が数・c が null)で止まらない: 壊れた所は捨て、送り直して書き直す
-  for (const bad of [{ p: "oops", c: {} }, { p: { [RUN_A]: 5 }, c: { [RUN_A]: "g_cta" } }, { p: { [RUN_A]: "vB:o" }, c: null }]) {
+  // i は合っているが形の壊れた印(p が文字列・項目が数・p が null)で止まらない: 壊れた所は捨て、送り直して書き直す(c は B139 から読まない)
+  for (const bad of [{ p: "oops" }, { p: { [RUN_A]: 5 } }, { p: null, c: {} }]) {
     localStorage.setItem(KEY, JSON.stringify({ v: 1, i: H, ...bad }));
     const { s, sent } = page();
     s.begin(H);
     join(s);
-    s.conversion("g_cta");
+    s.conversion("g_cta", false, false);
     await flush();
     expect(sent[0]).toEqual(participantBody(RUN_A, "vB", "ok"));
     expect(marks()!.p).toEqual({ [RUN_A]: "vB:o" });
-    expect(marks()!.c).toEqual({ [RUN_A]: ["g_cta"] });
     localStorage.clear();
   }
 });
@@ -520,11 +589,20 @@ it("oversized marks are discarded", async () => {
   join(s);
   await flush();
   expect(sent).toEqual([participantBody(RUN_A, "vB", "ok")]);
-  expect(marks()).toEqual({ v: 1, i: H, p: { [RUN_A]: "vB:o" }, c: {} });
+  expect(marks()).toEqual({ v: 1, i: H, p: { [RUN_A]: "vB:o" } });
   // 書くときも 4,096 文字を超えるなら書かない(キーを消す)。メモリでは持ち続ける
-  s.conversion("x".repeat(4100));
+  const runs: Record<string, string> = {};
+  for (let i = 0; i < 130; i++) runs[`exp_${i}`] = String(i).padStart(22, "r");
+  const big = page({ runs });
+  big.s.begin(H);
+  for (const e of Object.keys(runs)) big.s.participant(e, "vA", "desktop");
+  big.s.endScan();
   await flush();
+  expect(big.sent).toHaveLength(130);
   expect(localStorage.getItem(KEY)).toBeNull();
+  join(big.s, "exp_0", "vA"); // メモリの印で送り直さない
+  await flush();
+  expect(big.sent).toHaveLength(130);
 });
 
 // ---- runtime を通すもの(Mode A は crypto.subtle のハッシュを待つので本物のタイマーで待つ) ----

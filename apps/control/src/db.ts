@@ -31,6 +31,11 @@ export type SiteRow = {
   collect_until_dirty: number;
   /** migrations/0017_plan12_defense.sql(plan12 K10・K15): 新しい訪問者の記録の上限(1 日あたり)。null = Cloudflare のプランの既定 */
   new_profile_budget_per_day: number | null;
+  /**
+   * migrations/0020_share_subdomains.sql(B139): 訪問者 ID の Cookie を共有するか(0 / 1)・前の共有の範囲(`[{ domain, until(epoch 秒) }]`)・
+   * 共有の自動の移行の対象か(0 / 1。既存の行は 1)
+   */
+  share_subdomains: number; previous_cookie_domains_json: string; share_migration_pending: number;
 };
 export type SiteHostRow = { host: string; site_id: string };
 /** migrations/0007_audiences.sql。definition_json = 保存する形の配信条件(core の Targeting) */

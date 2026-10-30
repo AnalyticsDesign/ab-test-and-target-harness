@@ -19,9 +19,12 @@ export function toBase64Url(bytes: Uint8Array): string {
   return out;
 }
 
+/** ID に入れる発行時刻の丸め単位(1 時間) */
+const ISSUE_TIME_UNIT_MS = 3_600_000;
+
 /**
  * 決定 49(設計書 §7.1): 正本は UUIDv7 互換(RFC 9562)。先頭 48 bit = 発行時刻の Unix ミリ秒(big-endian)、version = 7、
- * variant = RFC 4122、残り 74 bit が乱数。表記は今までどおり 22 文字の base64url
+ * variant = RFC 4122、残り 74 bit が乱数。時刻は 1 時間に切り捨てて入れる(B139 Q21)。表記は今までどおり 22 文字の base64url
  */
 export function generateVisitorId(
   random: (buf: Uint8Array) => void = (b) => crypto.getRandomValues(b as Uint8Array<ArrayBuffer>),
@@ -29,7 +32,8 @@ export function generateVisitorId(
 ): string {
   const buf = new Uint8Array(16);
   random(buf);
-  let t = now;
+  // B139 Q21: 先頭 48 bit の時刻は 1 時間に切り捨てる(ID の発行時刻から訪問の正確な時刻を逆算させない。乱数の 74 bit は変えない)
+  let t = Math.floor(now / ISSUE_TIME_UNIT_MS) * ISSUE_TIME_UNIT_MS;
   for (let i = 5; i >= 0; i--) {
     buf[i] = t % 256;
     t = Math.floor(t / 256);

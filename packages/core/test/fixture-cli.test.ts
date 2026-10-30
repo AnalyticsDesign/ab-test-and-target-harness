@@ -85,7 +85,7 @@ describe("fixture CLI", () => {
     execFileSync("pnpm", ["fixture", "fixtures/demo-dlite.json", out, "--kv-bulk", bulk], { cwd: ROOT, stdio: "pipe" });
     const entries = JSON.parse(readFileSync(bulk, "utf8")) as Array<{ key: string; value: string }>;
     const byKey = new Map(entries.map((e) => [e.key, e.value]));
-    expect(byKey.get("host:localhost")).toBe("site_demo_dlite");
+    expect(byKey.get("host:www.example.test")).toBe("site_demo_dlite");
     const settings = SiteSettingsSchema.parse(JSON.parse(byKey.get("site:site_demo_dlite:settings")!));
     expect(settings.mode).toBe("B");
     rmSync(out, { force: true });

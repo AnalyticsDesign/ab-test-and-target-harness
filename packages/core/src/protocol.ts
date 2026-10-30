@@ -53,8 +53,18 @@ const ParticipantBodySchema = z.discriminatedUnion("applied", [
   z.strictObject({ type: z.literal("participant"), v: z.literal(1), runId: RunId, variantId: z.string().min(1), device: z.enum(DEVICES), applied: z.enum(["ok", "failed"]), visitorId: z.string().optional() }),
   z.strictObject({ type: z.literal("participant"), v: z.literal(1), runId: RunId, variantId: z.string().min(1), applied: z.enum(["failed_later", "recovered"]), visitorId: z.string().optional() }),
 ]);
-/** 決定 51(設計書 §6.3): 結果の CV。1 回に 1〜20 件の runId(超える分は runtime が分けて送る) */
-const ConversionBodySchema = z.strictObject({ type: z.literal("conversion"), v: z.literal(1), goalId: z.string().min(1), runIds: z.array(RunId).min(1).max(20), visitorId: z.string().optional() });
+/**
+ * 決定 51(設計書 §6.3): 結果の CV(run 指定、版 1)。1 回に 1〜20 件の runId(超える分は runtime が分けて送る)。
+ * B139 §5.2: runtime は送らなくなるが、全サイトの配信ファイルを作り直すまで古い runtime が送るので edge は受ける
+ */
+const RunConversionBodySchema = z.strictObject({ type: z.literal("conversion"), v: z.literal(1), goalId: z.string().min(1), runIds: z.array(RunId).min(1).max(20), visitorId: z.string().optional() });
+/**
+ * B139 §5.2(Q14): 目標だけの CV(版 2)。run は edge が参加の記録から引く。1 回に 1〜20 件の目標(超える分は runtime が分けて送る)。
+ * visitorId は Mode A の直接経路(/v1/)で必須(edge が検証する)。D-lite では無視(Cookie が正)
+ */
+const GoalConversionBodySchema = z.strictObject({ type: z.literal("conversion"), v: z.literal(2), goalIds: z.array(z.string().min(1)).min(1).max(20), visitorId: z.string().optional() });
+/** CV は `v` で分ける(`type` の判別子が重ならないよう入れ子にする) */
+const ConversionBodySchema = z.discriminatedUnion("v", [RunConversionBodySchema, GoalConversionBodySchema]);
 
 export const EventBodySchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("goal"), goalId: z.string().min(1), visitorId: z.string().optional() }),
@@ -64,4 +74,7 @@ export const EventBodySchema = z.discriminatedUnion("type", [
 ]);
 export type EventBody = z.infer<typeof EventBodySchema>;
 export type ParticipantBody = z.infer<typeof ParticipantBodySchema>;
-export type ConversionBody = z.infer<typeof ConversionBodySchema>;
+/** run 指定の CV(版 1。移行の間だけ受ける) */
+export type ConversionBody = z.infer<typeof RunConversionBodySchema>;
+/** 目標だけの CV(版 2。B139 §5.2) */
+export type GoalConversionBody = z.infer<typeof GoalConversionBodySchema>;

@@ -112,7 +112,8 @@ describe("POST /v1/sites/:siteId/event (spec §9.2)", () => {
     expect(kv).toBe(0);
     expect((await send("/v1/sites/site_p/event", { type: "goal", goalId: "g_lead", visitorId: generateVisitorId() }, { origin: "https://evil.example" })).status).toBe(403);
     expect((await send("/v1/sites/site_p/event", { type: "goal", goalId: "g_lead", visitorId: generateVisitorId() }, { origin: null })).status).toBe(403);
-    expect((await send("/v1/sites/site_dl/event", { type: "goal", goalId: "g_lead", visitorId: generateVisitorId() })).status).toBe(404); // Mode B はブラウザ直接経路を持たない
+    // B139 §4.2: Mode B も /v1/ を受ける。site_dl は allowedOrigins が空なので Origin 検証で 403(404 ではない)
+    expect((await send("/v1/sites/site_dl/event", { type: "goal", goalId: "g_lead", visitorId: generateVisitorId() })).status).toBe(403);
     expect((await send("/v1/sites/site_none/event", { type: "goal", goalId: "g_lead", visitorId: generateVisitorId() })).status).toBe(404);
     expect((await send("/v1/sites/site_p/event", { type: "pageview" })).status).toBe(400);
   });

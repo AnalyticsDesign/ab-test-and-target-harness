@@ -173,16 +173,152 @@ describe("mode C (idSource cookie:<name>)", () => {
   });
 });
 
-describe("d-lite (mode B)", () => {
-  it("never touches document.cookie and returns no visitor id (spec §9.6)", async () => {
-    // r1 CX-Medium-7: 「書かれていない」ではなく「読み書きに来ない」を直接数える(HttpOnly は JS 書込を静かに拒否するため、
-    // 値の比較だけでは runtime が試みたかどうかを識別できない)
-    const doc = { reads: 0, writes: 0, get cookie() { this.reads++; return "_old=zzz"; }, set cookie(_v: string) { this.writes++; } };
-    const s: RuntimeSettings = { ...baseSettings, mode: "B", previousCookieNames: ["_old"] };
-    const r = await establishIdentity(s, "salt", doc as unknown as { cookie: string });
-    expect(r.visitorId).toBeNull();
-    expect(doc.writes).toBe(0); // 旧名の削除も edge の仕事。runtime は一切書かない
-    expect(doc.reads).toBe(0);
+// B139: Cookie の範囲(Domain)ごとに値を持つ jar。Cookie ヘッダー相当の文字列には、host が属する範囲とホスト限定の値を並べる
+type Jar = { cookie: string; writes: string[]; value(name: string, domain: string | null): string | undefined };
+function makeJar(host: string, init: Array<[name: string, value: string, domain: string | null]> = []): Jar {
+  const store = new Map<string, { name: string; value: string; domain: string | null }>();
+  const put = (name: string, value: string, domain: string | null): void => void store.set(`${name}|${domain ?? ""}`, { name, value, domain });
+  for (const [n, v, d] of init) put(n, v, d);
+  const writes: string[] = [];
+  return {
+    writes,
+    value: (name, domain) => store.get(`${name}|${domain ?? ""}`)?.value,
+    get cookie(): string {
+      return [...store.values()]
+        .filter((c) => c.domain === null || host === c.domain || host.endsWith("." + c.domain))
+        .map((c) => `${c.name}=${c.value}`)
+        .join("; ");
+    },
+    set cookie(raw: string) {
+      writes.push(raw);
+      const [pair, ...attrs] = raw.split(/;\s*/);
+      const eq = pair!.indexOf("=");
+      const name = pair!.slice(0, eq);
+      const domain = attrs.find((a) => a.startsWith("Domain="))?.slice("Domain=".length) ?? null;
+      const maxAge = Number(attrs.find((a) => a.startsWith("Max-Age="))!.slice("Max-Age=".length));
+      if (maxAge <= 0) store.delete(`${name}|${domain ?? ""}`);
+      else put(name, pair!.slice(eq + 1), domain);
+    },
+  };
+}
+const OTHER_ID = uuidToVisitorId("99999999-2222-4333-8444-555555555555")!;
+const FUTURE = Math.floor(Date.now() / 1000) + 86400;
+const PAST = Math.floor(Date.now() / 1000) - 10;
+/** Mode B・共有がオン・www だけが Cloudflare 経由。form.example.com は Cloudflare 外のドメイン */
+const outside: RuntimeSettings = { ...baseSettings, mode: "B", edgeHosts: ["www.example.com"], cookieDomains: ["example.com"], previousCookieDomains: [] };
+const HOST = "form.example.com";
+const del = (name: string, domain: string | null): string => `${name}=; Path=/;${domain ? ` Domain=${domain};` : ""} Max-Age=0; Secure; SameSite=Lax`;
+const set = (name: string, value: string, domain: string | null): string => `${name}=${value}; Path=/;${domain ? ` Domain=${domain};` : ""} Max-Age=31536000; Secure; SameSite=Lax`;
+
+describe("B139 shared visitor cookie (mode A / mode B outside Cloudflare)", () => {
+  it("outside_domain_issues_id_and_marker_when_absent", async () => {
+    const doc = makeJar(HOST);
+    const r = await establishIdentity(outside, "salt", doc, () => true, undefined, HOST);
+    expect(isCanonicalModeAId(r.visitorId!)).toBe(true);
+    expect(doc.writes).toContain(set("_ab_vid", r.visitorId!, "example.com"));
+    expect(doc.writes).toContain(set("_ab_vid_js", r.visitorId!, "example.com")); // 印の値は ID そのもの
+    expect(doc.writes).toContain(del("_ab_vid", null)); // 範囲付きで発行するので、ホスト限定の側を消す
+    expect(doc.writes.join("\n")).not.toMatch(/HttpOnly/);
+  });
+
+  it("outside_domain_extends_js_born_id", async () => {
+    const doc = makeJar(HOST, [["_ab_vid", KNOWN_ID, "example.com"], ["_ab_vid_js", KNOWN_ID, "example.com"]]);
+    const r = await establishIdentity(outside, "salt", doc, () => true, undefined, HOST);
+    expect(r.visitorId).toBe(KNOWN_ID);
+    expect(doc.writes).toContain(set("_ab_vid", KNOWN_ID, "example.com"));
+    expect(doc.writes).toContain(set("_ab_vid_js", KNOWN_ID, "example.com"));
+  });
+
+  it("outside_domain_does_not_rewrite_server_written_id", async () => {
+    // 印が無い / 印の値が ID と違う = サーバーが書いた ID。読むだけで、後始末も含めて何も書かない
+    for (const init of [[["_ab_vid", KNOWN_ID, "example.com"]], [["_ab_vid", KNOWN_ID, "example.com"], ["_ab_vid_js", OTHER_ID, "example.com"]]] as Array<Array<[string, string, string | null]>>) {
+      const doc = makeJar(HOST, init);
+      const r = await establishIdentity({ ...outside, uuidCookieEnabled: true }, "salt", doc, () => true, undefined, HOST);
+      expect(r.visitorId).toBe(KNOWN_ID);
+      expect(doc.writes).toEqual([]);
+    }
+  });
+
+  it("runtime_issues_new_id_when_values_differ (mode A: id only)", async () => {
+    const s: RuntimeSettings = { ...baseSettings, cookieDomains: ["example.com"] };
+    const doc = makeJar(HOST, [["_ab_vid", KNOWN_ID, null], ["_ab_vid", OTHER_ID, "example.com"]]);
+    const r = await establishIdentity(s, "salt", doc, () => true, undefined, HOST);
+    expect([KNOWN_ID, OTHER_ID]).not.toContain(r.visitorId);
+    expect(doc.value("_ab_vid", "example.com")).toBe(r.visitorId);
+    expect(doc.value("_ab_vid", null)).toBeUndefined();
+    expect(doc.writes.some((w) => w.startsWith("_ab_vid_js=") && !w.includes("Max-Age=0"))).toBe(false); // Mode A は印を使わない
+  });
+
+  it("runtime_issues_new_id_when_values_differ (mode B outside, sharing on: id and marker)", async () => {
+    const doc = makeJar(HOST, [["_ab_vid", KNOWN_ID, null], ["_ab_vid", OTHER_ID, "example.com"]]);
+    const r = await establishIdentity(outside, "salt", doc, () => true, undefined, HOST);
+    expect([KNOWN_ID, OTHER_ID]).not.toContain(r.visitorId);
+    expect(doc.value("_ab_vid", "example.com")).toBe(r.visitorId);
+    expect(doc.value("_ab_vid_js", "example.com")).toBe(r.visitorId);
+  });
+
+  it("outside_domain_sharing_off_rewrites_unmarked_id", async () => {
+    const s: RuntimeSettings = { ...outside, cookieDomains: [] };
+    const doc = makeJar(HOST, [["_ab_vid", KNOWN_ID, null]]);
+    const r = await establishIdentity(s, "salt", doc, () => true, undefined, HOST);
+    expect(r.visitorId).toBe(KNOWN_ID);
+    expect(doc.writes).toContain(set("_ab_vid", KNOWN_ID, null)); // 印が無くても、ホスト限定で書き直す(延長)
+    expect(doc.writes.some((w) => w.startsWith("_ab_vid_js=") && !w.includes("Max-Age=0"))).toBe(false);
+  });
+
+  it("disabling_sharing_preserves_id_in_host_only_cookie", async () => {
+    const s: RuntimeSettings = { ...baseSettings, cookieDomains: [], previousCookieDomains: [{ domain: "example.com", until: FUTURE }] };
+    const doc = makeJar(HOST, [["_ab_vid", KNOWN_ID, "example.com"]]);
+    const r = await establishIdentity(s, "salt", doc, () => true, undefined, HOST);
+    expect(r.visitorId).toBe(KNOWN_ID);
+    expect(doc.value("_ab_vid", null)).toBe(KNOWN_ID); // 同じ値がホスト限定に引き継がれる
+    expect(doc.value("_ab_vid", "example.com")).toBeUndefined(); // 前の範囲の写しは消える
+  });
+
+  it("renamed_cookie_marker_cleaned_on_issue", async () => {
+    const host = "form.shop.example.com";
+    const s: RuntimeSettings = { ...outside, previousCookieNames: ["_old"], previousCookieDomains: [{ domain: "shop.example.com", until: FUTURE }] };
+    const doc = makeJar(host, [["_old", KNOWN_ID, null], ["_old_js", KNOWN_ID, "example.com"]]);
+    await establishIdentity(s, "salt", doc, () => true, undefined, host);
+    for (const name of ["_old", "_old_js"]) {
+      for (const d of ["example.com", null, "shop.example.com"]) expect(doc.writes, `${name} ${d}`).toContain(del(name, d));
+    }
+  });
+
+  it("uuid_cookie_shares_domain_and_never_httponly", async () => {
+    const doc = makeJar(HOST);
+    const r = await establishIdentity({ ...outside, uuidCookieEnabled: true }, "salt", doc, () => true, undefined, HOST);
+    expect(doc.writes).toContain(set("_ab_uuid", await deriveExternalUuid("salt", r.visitorId!), "example.com"));
+    expect(doc.writes.join("\n")).not.toMatch(/HttpOnly/);
+  });
+
+  it("runtime_previous_range_cleanup_keeps_current_target", async () => {
+    const host = "form.shop.example.com";
+    const s: RuntimeSettings = { ...outside, previousCookieDomains: [{ domain: "example.com", until: FUTURE }, { domain: "shop.example.com", until: FUTURE }] };
+    const doc = makeJar(host, [["_ab_vid", KNOWN_ID, "example.com"], ["_ab_vid_js", KNOWN_ID, "example.com"]]);
+    await establishIdentity(s, "salt", doc, () => true, undefined, host);
+    expect(doc.writes).not.toContain(del("_ab_vid", "example.com")); // 今の発行先は後始末しない
+    expect(doc.writes).toContain(del("_ab_vid", "shop.example.com"));
+    expect(doc.value("_ab_vid", "example.com")).toBe(KNOWN_ID);
+  });
+
+  it("expired_previous_range_not_deleted_by_runtime", async () => {
+    const host = "form.shop.example.com";
+    const s: RuntimeSettings = { ...outside, previousCookieDomains: [{ domain: "shop.example.com", until: PAST }, { domain: "other.test", until: FUTURE }] };
+    const doc = makeJar(host);
+    await establishIdentity(s, "salt", doc, () => true, undefined, host);
+    expect(doc.writes.join("\n")).not.toMatch(/Domain=shop\.example\.com/); // 期限切れ
+    expect(doc.writes.join("\n")).not.toMatch(/Domain=other\.test/); // このホストが属さない範囲
+  });
+
+  it("revoke_deletes_all_sides_in_runtime", () => {
+    const host = "form.shop.example.com";
+    const s: RuntimeSettings = { ...outside, uuidCookieEnabled: true, previousCookieNames: ["_old"], previousCookieDomains: [{ domain: "shop.example.com", until: FUTURE }] };
+    const doc = makeJar(host, [["_old", "x", null], ["_old_js", "x", "example.com"]]); // 旧名は届いたものだけ消す(edge と同じ)
+    revokeIdentity(s, doc, host);
+    for (const name of ["_ab_vid", "_ab_uuid", "_ab_vid_js", "_old", "_old_js"]) {
+      for (const d of ["example.com", null, "shop.example.com"]) expect(doc.writes, `${name} ${d}`).toContain(del(name, d));
+    }
   });
 });
 

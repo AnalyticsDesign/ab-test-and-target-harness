@@ -18,6 +18,7 @@ describe("settings sections", () => {
     expect(sectionOfField("byoidCookie")).toBe("identity");
     expect(sectionOfField("visitorCookieName")).toBe("identity");
     expect(sectionOfField("uuidCookieName")).toBe("identity");
+    expect(sectionOfField("shareSubdomains")).toBe("identity"); // B139: 422 sharing_conflict の path
     expect(sectionOfField("analytics.exposure.event")).toBe("naming");
     expect(sectionOfField("exposure.event")).toBe("naming"); // invalid_analytics は analytics. が付かない
     expect(sectionOfField("extraKey")).toBe("naming");
@@ -47,5 +48,13 @@ describe("settings sections", () => {
     expect(origins("allowedOrigins.0")).toBe(true); // 配列の添字
     expect(origins("domain")).toBe(false);
     expect(origins("allowedOriginsX")).toBe(false);
+  });
+  // B139: 共有の衝突(422 sharing_conflict、path は shareSubdomains)は正本 Cookie 名を変えると解けるので、正本 Cookie 名を変えたら共有のエラーも消す
+  it("clears_sharing_conflict_when_visitor_cookie_name_changes", () => {
+    expect(fieldKeysFor("shareSubdomains")("shareSubdomains")).toBe(true);
+    const vid = fieldKeysFor("visitorCookieName");
+    expect(vid("visitorCookieName")).toBe(true);
+    expect(vid("shareSubdomains")).toBe(true);
+    expect(fieldKeysFor("uuidCookieName")("shareSubdomains")).toBe(false);
   });
 });

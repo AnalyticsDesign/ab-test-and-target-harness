@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DEFAULT_ANALYTICS } from "@wtt/core";
+import { deriveCookieScopes } from "./cookie-scope";
 import type { ExperimentRow, GoalRow, SiteRow } from "./db";
 
 /** siteSalt は返さない(公開値ではあるが管理画面に不要。spec §4.3) */
@@ -12,6 +13,8 @@ export function siteJson(row: SiteRow) {
     newProfileBudgetPerDay: row.new_profile_budget_per_day,
     visitorCookieName: row.visitor_cookie_name, uuidCookieEnabled: row.uuid_cookie_enabled === 1, uuidCookieName: row.uuid_cookie_name,
     previousCookieNames: JSON.parse(row.previous_cookie_names_json) as Array<{ name: string; until: number }>,
+    // B139: 共有の切り替えと、hosts・allowedOrigins から導いたまとまり(読むだけ。保存しない)
+    shareSubdomains: row.share_subdomains === 1, cookieGroups: deriveCookieScopes(row).groups,
     // 決定 62 より前に保存した行は dataLayerName を持たないので既定名で補う(edge へ配る record は SiteSettingsSchema が埋める)
     analytics: row.analytics_json ? { dataLayerName: DEFAULT_ANALYTICS.dataLayerName, ...JSON.parse(row.analytics_json) } : DEFAULT_ANALYTICS,
     ga4PropertyId: row.ga4_property_id, bigqueryDataset: row.bigquery_dataset,
@@ -44,6 +47,10 @@ export const SiteJsonSchema = z.object({
   uuidCookieEnabled: z.boolean(),
   uuidCookieName: z.string(),
   previousCookieNames: z.array(z.object({ name: z.string(), until: z.number().int().describe("保持期限(epoch 秒)") })),
+  shareSubdomains: z.boolean().describe("訪問者 ID の Cookie を、同じ登録ドメインのサブドメインのあいだで共有する"),
+  cookieGroups: z
+    .array(z.object({ domain: z.string().describe("Cookie の Domain 属性にする登録ドメイン"), hosts: z.array(z.string()).describe("このまとまりに属する、タグを置くホスト") }))
+    .describe("共有のまとまり(hosts と allowedOrigins の https のホストを登録ドメインごとにまとめたもの。読むだけ)。共有がオフなら空。IP アドレス・localhost・http やポート付きの Origin は入らない"),
   analytics: z.record(z.string(), z.unknown()).describe("外部計測の名前(dataLayer の命名設定。`analytics`。push 先の配列の名前 `dataLayerName` を含む)"),
   ga4PropertyId: z.string().nullable(),
   bigqueryDataset: z.string().nullable(),

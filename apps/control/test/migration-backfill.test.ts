@@ -105,3 +105,24 @@ describe("migration 0017: new profile budget column (plan12 K15)", () => {
     expect(row).toEqual({ v: null });
   });
 });
+
+describe("migration 0020: share subdomains columns (B139)", () => {
+  it("existing_sites_stay_host_only_and_are_marked_for_migration", async () => {
+    const mine = env.TEST_MIGRATIONS.find((m) => m.name.endsWith("_share_subdomains.sql"))!.name;
+    await reset();
+    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS.filter((m) => m.name < mine));
+    const t = 1_700_000_000_000;
+    await env.DB.batch([
+      env.DB.prepare(`insert into organization (id, name, slug, "createdAt") values ('w1', 'W', 'ws-1', '2026-09-01T00:00:00.000Z')`),
+      env.DB.prepare(`insert into sites (id, workspace_id, name, domain, site_salt, content_updated_at, created_at, updated_at) values ('s1', 'w1', 'S', 'example.com', 'salt', ?1, ?1, ?1)`).bind(t),
+    ]);
+    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+    const row = await env.DB.prepare(`select share_subdomains, previous_cookie_domains_json, share_migration_pending from sites where id = 's1'`).first();
+    // 既存の行は今までどおりホスト限定(0)で、自動の移行の対象(1)
+    expect(row).toEqual({ share_subdomains: 0, previous_cookie_domains_json: "[]", share_migration_pending: 1 });
+    // 共有の予約の表ができている(サイトを消すと予約も消える)
+    await env.DB.prepare(`insert into sharing_claims (domain, cookie_name, site_id, until) values ('example.com', '_ab_vid', 's1', null)`).run();
+    await env.DB.prepare(`delete from sites where id = 's1'`).run();
+    expect((await env.DB.prepare(`select count(*) as n from sharing_claims`).first<{ n: number }>())!.n).toBe(0);
+  });
+});

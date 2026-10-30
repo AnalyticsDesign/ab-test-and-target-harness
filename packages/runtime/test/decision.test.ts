@@ -1,11 +1,11 @@
 import { expect, it, vi } from "vitest";
-import { decideLocally, needsRemoteDecision, requestDecision } from "../src/decision";
+import { decideLocally, needsRemoteDecision, onEdgePath, requestDecision } from "../src/decision";
 import { baseConfig, baseSettings, remoteConfig } from "./fixtures";
 
 const CTX = { url: "https://site.test/pricing", query: {}, device: "desktop" as const, referrer: "" };
 
 it("mode A with needsProfile=false decides locally — no request (spec §7.1)", () => {
-  expect(needsRemoteDecision(baseSettings, baseConfig, CTX.url)).toBe(false);
+  expect(needsRemoteDecision(false, baseConfig, CTX.url)).toBe(false);
   const out = decideLocally(baseConfig, CTX, "A".repeat(22));
   // 固定した visitor id でハッシュ割り当てが決定的であることをピンニング。
   // @wtt/core の decide() に対する experimentId→id / variantId→variant フィールド割り当て検証も兼ねる
@@ -13,15 +13,25 @@ it("mode A with needsProfile=false decides locally — no request (spec §7.1)",
 });
 
 it("d-lite always requests remotely — cookie renewal rides the decision (spec §7.1 / §9.6)", () => {
-  expect(needsRemoteDecision({ ...baseSettings, mode: "B" }, baseConfig, CTX.url)).toBe(true);
+  expect(needsRemoteDecision(true, baseConfig, CTX.url)).toBe(true); // Cloudflare 経由のドメイン(onEdgePath が真)のときだけ
+});
+
+it("onEdgePath: Mode B で https かつ host(ポート込み)が Cloudflare 経由のドメインの一覧にあるときだけ真(B139 §4.1)", () => {
+  const s = { ...baseSettings, mode: "B" as const, edgeHosts: ["www.example.com"] };
+  expect(onEdgePath(s, { protocol: "https:", host: "www.example.com" })).toBe(true);
+  expect(onEdgePath(s, { protocol: "https:", host: "form.example.com" })).toBe(false);
+  expect(onEdgePath(s, { protocol: "https:", host: "www.example.com:8443" })).toBe(false); // 開発用の Origin
+  expect(onEdgePath(s, { protocol: "http:", host: "www.example.com" })).toBe(false); // scheme だけ違う開発用のページ
+  expect(onEdgePath({ ...s, mode: "A" }, { protocol: "https:", host: "www.example.com" })).toBe(false);
+  expect(onEdgePath({ ...baseSettings, mode: "B" }, { protocol: "https:", host: "www.example.com" })).toBe(false); // edgeHosts が欠けたら空
 });
 
 it("mode A with needsProfile=true requests when url matches an experiment or a pattern (spec §7.1)", () => {
-  expect(needsRemoteDecision(baseSettings, remoteConfig, CTX.url)).toBe(true);
+  expect(needsRemoteDecision(false, remoteConfig, CTX.url)).toBe(true);
   const noMatch = { ...remoteConfig, experiments: [{ ...remoteConfig.experiments[0]!, urlMatch: { op: "contains" as const, value: "/never" } }], patterns: { p_x: { op: "contains" as const, value: "/pricing" } } };
-  expect(needsRemoteDecision(baseSettings, noMatch, CTX.url)).toBe(true);  // patterns 一致でも送る(履歴記録)
+  expect(needsRemoteDecision(false, noMatch, CTX.url)).toBe(true);  // patterns 一致でも送る(履歴記録)
   const noneMatch = { ...noMatch, patterns: { p_x: { op: "contains" as const, value: "/never" } } };
-  expect(needsRemoteDecision(baseSettings, noneMatch, CTX.url)).toBe(false); // どちらにも一致しなければ送らない
+  expect(needsRemoteDecision(false, noneMatch, CTX.url)).toBe(false); // どちらにも一致しなければ送らない
 });
 
 /** 実 Response に依存しない最小スタブ(requestDecision が使うのは ok と json() だけ。r1 CL-Medium-4) */

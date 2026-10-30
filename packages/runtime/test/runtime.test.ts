@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { uuidToVisitorId, visitorIdToUuid, bucketOf, hashByoidValue, compile, shortVisitorHash } from "@wtt/core";
 import type { CompiledConfig } from "@wtt/core";
 import { createRuntime, type AbApi, type RuntimeDeps } from "../src/runtime";
-import { baseConfig, baseSettings, goalsConfig, namedConfig, namedSettings, remoteConfig, renamedAnalytics } from "./fixtures";
+import { baseConfig, baseSettings, dliteSettings, goalsConfig, namedConfig, namedSettings, remoteConfig, renamedAnalytics } from "./fixtures";
 
 /** exp_hero(50/50)で指定の半分に入る canonical ID を探す */
 function findVisitor(half: "A" | "B"): string {
@@ -360,7 +360,7 @@ it("d_lite_initial_denied_starts_nothing", async () => {
   try {
     (window as unknown as Record<string, unknown> & Window).__ab = { consent: "denied" };
     const f = deferredFetch();
-    const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: { ...baseSettings, mode: "B" } });
+    const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: dliteSettings });
     await flush();
     vi.advanceTimersByTime(3000);
     await flush();
@@ -528,7 +528,7 @@ it("aborts the in-flight decision before posting the d-lite consent body (spec �
   // 「revoke で削除 → 直前の decision 応答が着弾 → Cookie が 1 年分再発行」になり §16 が破れる。
   // isStale() による応答の破棄では防げない(破棄されるのは本体だけ)ので、中断そのものを固定する
   const f = perCallDeferredFetch(); // decision を in-flight のまま保つ(共有 Promise では中断を観測できない)
-  const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: { ...baseSettings, mode: "B" } });
+  const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: dliteSettings });
   await flush();
   expect(f.calls.length).toBe(1); // decision が in-flight
   const signal = f.calls[0]!.init!.signal as AbortSignal;
@@ -548,7 +548,7 @@ it("aborts the in-flight decision before posting the d-lite consent body (spec �
 
 it("d-lite revoke posts a consent body and never writes document.cookie (spec §16 / §9.6)", async () => {
   const f = deferredFetch();
-  const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: { ...baseSettings, mode: "B" } });
+  const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: dliteSettings });
   await flush();
   expect(f.calls.length).toBe(1); // D-lite は毎 PV decision
   expect(f.calls[0]!.url).toBe("/__ab/decision");
@@ -746,7 +746,7 @@ it("revoke_stops_click_detection_and_regrant_restarts_it", async () => {
 it("d_lite_first_pageview_event_is_sent_after_the_decision_settles", async () => {
   // CX-High-1: D-lite の Cookie は decision 応答で発行される。PAGEVIEW は検知時に溜め、応答が settle してから /__ab/event へ送る
   const f = perCallDeferredFetch();
-  createRuntime(makeDeps(f.fn), { config: goalsConfig, settings: { ...baseSettings, mode: "B" } });
+  createRuntime(makeDeps(f.fn), { config: goalsConfig, settings: dliteSettings });
   await flush();
   expect(f.calls.map((c) => c.url)).toEqual(["/__ab/decision"]); // まだ event は送らない
   expect(dataLayer().filter((e) => e.event === "ab_conversion")).toHaveLength(1); // dataLayer には即時に出る
@@ -802,7 +802,7 @@ it("d_lite_flushes_goal_events_after_a_decision_timeout", async () => {
   // r2 CX-High-1: D-lite の decision が期限で abort されても Goal の送信は始まる(以後の CLICK も溜まらない)
   document.body.innerHTML = `<h1 class="hero-title">orig</h1><a class="cta">buy</a>`;
   const f = perCallDeferredFetch();
-  createRuntime(makeDeps(f.fn), { config: goalsConfig, settings: { ...baseSettings, mode: "B" } });
+  createRuntime(makeDeps(f.fn), { config: goalsConfig, settings: dliteSettings });
   await flush();
   expect(f.calls.map((c) => c.url)).toEqual(["/__ab/decision"]);
   vi.advanceTimersByTime(1000); // 期限到達 → abort(スタブは signal に反応しないので、期限後の応答を手で届ける)
@@ -988,7 +988,7 @@ it("rank_follows_config_order_not_decision_order", async () => {
     ],
   };
   const f = deferredFetch();
-  createRuntime(makeDeps(f.fn), { config, settings: { ...baseSettings, mode: "B" } });
+  createRuntime(makeDeps(f.fn), { config, settings: dliteSettings });
   await flush();
   f.resolve(f.okRes({ v: config.version, experiments: [{ id: "exp_t", variant: "vB" }, { id: "exp_s", variant: "a" }] }));
   await flush();
@@ -1002,9 +1002,8 @@ const RUN_P = "p".repeat(22);
 const MARKS = "_ab_vid_r";
 const withResults = (runs: Record<string, string> = { exp_hero: RUN }, config: CompiledConfig = baseConfig): CompiledConfig => ({ ...config, results: { forget: true, runs } });
 type Body = Record<string, unknown>;
-/** 結果のイベントに返す既定の応答(参加は stored、CV は runId ごとに stored) */
-const storedReply = (b: Body): unknown =>
-  b.type === "conversion" ? { result: "stored", runs: Object.fromEntries((b.runIds as string[]).map((r) => [r, { result: "stored" }])) } : { result: "stored" };
+/** 結果のイベントに返す既定の応答(参加も CV も stored。B139 の CV は run ごとの結果を返さない) */
+const storedReply = (): unknown => ({ result: "stored" });
 
 /** 全リクエストの URL と本文を記録する fetch。decision には `decision` を、結果のイベントには reply(body) を返す(Promise も可) */
 function resultsFetch(o: { reply?: (b: Body) => unknown; decision?: unknown } = {}) {
@@ -1077,7 +1076,7 @@ it("revoke clears marks and sends forget after inflight participant", async () =
   document.cookie = `_ab_vid=${VB}; Path=/`;
   let release!: (v: unknown) => void;
   const hold = new Promise((r) => (release = r));
-  const f = resultsFetch({ reply: (b) => (b.type === "participant" ? hold : storedReply(b)) });
+  const f = resultsFetch({ reply: (b) => (b.type === "participant" ? hold : storedReply()) });
   const api = createRuntime(makeDeps(f.fn), { config: withResults(), settings: baseSettings });
   await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
   expect(localStorage.getItem(MARKS)).not.toBeNull(); // 起動で印を書いた(i だけ)
@@ -1176,11 +1175,11 @@ it("all-variants-without-changes test participates on :root and converts", async
   const api = createRuntime(makeDeps(f.fn), { config, settings: baseSettings });
   await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
   api.track("g_cta");
-  await vi.waitFor(() => expect(f.events("conversion")).toEqual([{ type: "conversion", v: 1, goalId: "g_cta", runIds: [RUN], visitorId: VB }]));
+  await vi.waitFor(() => expect(f.events("conversion")).toEqual([{ type: "conversion", v: 2, goalIds: ["g_cta"], visitorId: VB }]));
 });
 
 it("paused run receives conversion", async () => {
-  // 一時停止中のテストは experiments[] に無いが results.runs にある。参加済みなら CV を送る
+  // 一時停止中のテストは experiments[] に無いが results.runs にある。B139: CV は目標だけで送り、記録する run は edge が参加の行から決める
   vi.useRealTimers();
   document.cookie = `_ab_vid=${VB}; Path=/`;
   localStorage.setItem(MARKS, JSON.stringify({ v: 1, i: await shortVisitorHash(VB), p: { [RUN_P]: "vA:o" }, c: {} }));
@@ -1189,13 +1188,13 @@ it("paused run receives conversion", async () => {
   await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
   api.track("g_cta");
   await vi.waitFor(() => expect(f.events("conversion")).toHaveLength(1));
-  expect(new Set(f.events("conversion")[0]!.runIds as string[])).toEqual(new Set([RUN, RUN_P]));
+  expect(f.events("conversion")[0]).toEqual({ type: "conversion", v: 2, goalIds: ["g_cta"], visitorId: VB });
 });
 
 it("dlite uses vh from the decision response", async () => {
   vi.useRealTimers();
   const f = resultsFetch({ decision: { v: baseConfig.version, experiments: [{ id: "exp_hero", variant: "vB" }], vh: "dliteHash01" } });
-  createRuntime(makeDeps(f.fn), { config: withResults(), settings: { ...baseSettings, mode: "B" } });
+  createRuntime(makeDeps(f.fn), { config: withResults(), settings: dliteSettings });
   await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
   const sent = f.calls.find((c) => c.body.type === "participant")!;
   expect(sent.url).toBe("/__ab/event");
@@ -1223,4 +1222,227 @@ it("participant pause and resume while sending", async () => {
   await vi.waitFor(() => expect(g.events("participant")).toHaveLength(1));
   await settleReal();
   expect(JSON.parse(localStorage.getItem(MARKS)!).p).toEqual({ [RUN]: "vB:o" });
+});
+
+// ---- B139(設計書 §5.2・Q22): 目標だけの CV をどの経路で送るか ----
+
+/** needsProfile なし・ページの表示(/pricing)とクリック(.cta)の目標つき・結果を集める config */
+const cvConfig = withResults({ exp_hero: RUN }, { ...baseConfig, goals: goalsConfig.goals });
+
+it("runtime_does_not_send_pageview_cv_on_cloudflare_host", async () => {
+  // Cloudflare 経由のドメインでは、ページの表示の目標は edge が decision で記録する(タグは送らない)。クリックの目標は送る(ID は Cookie が正)
+  vi.useRealTimers();
+  document.body.innerHTML = `<h1 class="hero-title">orig</h1><button class="cta">buy</button>`;
+  const f = resultsFetch({ decision: { v: baseConfig.version, experiments: [{ id: "exp_hero", variant: "vB" }], vh: "dliteHash01" } });
+  createRuntime(makeDeps(f.fn), { config: cvConfig, settings: dliteSettings });
+  await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
+  await settleReal();
+  expect(f.events("conversion")).toEqual([]);
+  document.querySelector<HTMLElement>(".cta")!.click();
+  await vi.waitFor(() => expect(f.events("conversion")).toEqual([{ type: "conversion", v: 2, goalIds: ["g_click"] }]));
+});
+
+it("needs_profile_goal_sends_no_separate_cv", async () => {
+  // needsProfile のときは目標のイベント(type:"goal")を受けた edge が結果の CV も記録する。結果の CV は別に送らない
+  vi.useRealTimers();
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const f = resultsFetch({ decision: { v: baseConfig.version, experiments: [{ id: "exp_hero", variant: "vB" }] } });
+  const api = createRuntime(makeDeps(f.fn), { config: withResults({ exp_hero: RUN }, goalsConfig), settings: baseSettings });
+  await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
+  api.track("g_cta");
+  await vi.waitFor(() => expect(f.events("goal").map((b) => b.goalId)).toEqual(["g_pv", "g_cta"]));
+  await settleReal();
+  expect(f.events("conversion")).toEqual([]);
+});
+
+// ---- B139: Cloudflare 外のドメインの経路・共有の Cookie・撤回 ----
+
+/** Mode B・共有がオン・www だけが Cloudflare 経由 */
+const outsideSettings = { ...baseSettings, mode: "B" as const, edgeHosts: ["www.example.com"], cookieDomains: ["example.com"], previousCookieDomains: [] };
+
+/** happy-dom のページの URL を変えて走らせる。終わったら撤回でエンジンを止め、範囲付きの Cookie も消して元の URL に戻す */
+async function onPage(url: string, run: () => Promise<void>): Promise<void> {
+  const hd = (window as unknown as { happyDOM: { setURL(u: string): void } }).happyDOM;
+  hd.setURL(url);
+  try {
+    await run();
+  } finally {
+    ((window as RuntimeDeps["win"]).AB as AbApi | undefined)?.consent(false);
+    delete (window as unknown as Record<string, unknown> & Window).AB;
+    for (const d of ["", "; Domain=example.com"]) {
+      for (const part of document.cookie.split(/;\s*/)) {
+        const name = part.split("=")[0];
+        if (name) document.cookie = `${name}=; Path=/; Max-Age=0${d}`;
+      }
+    }
+    hd.setURL("https://site.test/pricing?utm=x");
+  }
+}
+
+/** document.cookie への書き込み(生の文字列)を記録する。読み書きの中身は変えない */
+function recordCookieWrites(): { writes: string[]; restore(): void } {
+  const writes: string[] = [];
+  const desc = Object.getOwnPropertyDescriptor(document, "cookie")!;
+  Object.defineProperty(document, "cookie", {
+    configurable: true,
+    get() { return desc.get!.call(document); },
+    set(v: string) { writes.push(v); desc.set!.call(document, v); },
+  });
+  return { writes, restore: () => Object.defineProperty(document, "cookie", desc) };
+}
+
+it("mode_b_outside_domain_uses_v1_with_visitor_id", async () => {
+  await onPage("https://form.example.com/pricing", async () => {
+    const f = deferredFetch();
+    createRuntime(makeDeps(f.fn), { config: remoteConfig, settings: outsideSettings });
+    await flush();
+    expect(f.calls[0]!.url).toBe("https://edge.test/v1/sites/site_unit/decision");
+    const body = JSON.parse(String(f.calls[0]!.init?.body));
+    expect(typeof body.visitorId).toBe("string");
+    expect(document.cookie).toContain(`_ab_vid=${body.visitorId}`);
+  });
+});
+
+it("outside_domain_decides_locally_without_profile", async () => {
+  await onPage("https://form.example.com/pricing", async () => {
+    const f = deferredFetch();
+    const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: outsideSettings });
+    await flush();
+    expect(f.calls).toHaveLength(0); // needsProfile が無ければ手元で判定(Mode A と同じ)
+    expect(Object.keys(api.getAssignments())).toEqual(["exp_hero"]);
+  });
+});
+
+it("dev_origin_same_hostname_uses_v1_path", async () => {
+  await onPage("https://www.example.com:8443/pricing", async () => {
+    const f = deferredFetch();
+    createRuntime(makeDeps(f.fn), { config: remoteConfig, settings: outsideSettings });
+    await flush();
+    expect(f.calls[0]!.url).toBe("https://edge.test/v1/sites/site_unit/decision");
+  });
+});
+
+it("dev_origin_same_hostname_different_scheme_uses_v1_path", async () => {
+  await onPage("http://www.example.com/pricing", async () => {
+    const f = deferredFetch();
+    createRuntime(makeDeps(f.fn), { config: remoteConfig, settings: outsideSettings });
+    await flush();
+    expect(f.calls[0]!.url).toBe("https://edge.test/v1/sites/site_unit/decision");
+  });
+});
+
+it("dev_origin_same_hostname_uses_production_cookie_domain", async () => {
+  await onPage("https://www.example.com:8443/pricing", async () => {
+    const rec = recordCookieWrites();
+    try {
+      createRuntime(makeDeps(deferredFetch().fn), { config: baseConfig, settings: outsideSettings });
+      await flush();
+    } finally {
+      rec.restore();
+    }
+    // Cookie はポートで分かれない。範囲は location.hostname(ポートなし)で選ぶので本番と同じ
+    expect(rec.writes.some((w) => /^_ab_vid=[^;]+; Path=\/; Domain=example\.com; Max-Age=31536000/.test(w))).toBe(true);
+  });
+});
+
+it("boot_payload_rejects_malformed_cookie_domains (boot does nothing)", async () => {
+  const rec = recordCookieWrites();
+  try {
+    const f = deferredFetch();
+    createRuntime(makeDeps(f.fn), { config: remoteConfig, settings: { ...outsideSettings, previousCookieDomains: [{ domain: "example.com" }] } as unknown as typeof outsideSettings });
+    await flush();
+    expect(f.calls).toHaveLength(0);
+    expect(rec.writes).toEqual([]);
+  } finally {
+    rec.restore();
+  }
+});
+
+it("revoke_forgets_all_canonical_values", async () => {
+  await onPage("https://form.example.com/pricing", async () => {
+    const f = perCallDeferredFetch();
+    const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: outsideSettings });
+    await flush();
+    const id = /_ab_vid=([^;]+)/.exec(document.cookie)![1]!;
+    document.cookie = `_ab_vid=${VB}; Path=/`; // ホスト限定の同じ名前の値(撤回の時点で 2 種類届く)
+    document.cookie = "_ab_vid=not-canonical; Path=/pricing"; // 形の正しくない値は送らない
+    api.consent(false);
+    await flush();
+    vi.advanceTimersByTime(2000);
+    await flush();
+    const forgets = f.calls.map((c) => ({ url: c.url, body: JSON.parse(String(c.init?.body)) }));
+    expect(forgets.map((c) => c.url)).toEqual(["https://edge.test/v1/sites/site_unit/event", "https://edge.test/v1/sites/site_unit/event"]);
+    expect(forgets.map((c) => c.body.visitorId).sort()).toEqual([id, VB].sort());
+    expect(forgets.every((c) => c.body.type === "forget")).toBe(true);
+    document.cookie = "_ab_vid=; Path=/pricing; Max-Age=0";
+  });
+});
+
+it("outside_domain_revoke_posts_forget_to_v1_not_relative_ab", async () => {
+  await onPage("https://form.example.com/pricing", async () => {
+    const f = perCallDeferredFetch();
+    const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: outsideSettings });
+    await flush();
+    api.consent(false);
+    await flush();
+    vi.advanceTimersByTime(2000);
+    await flush();
+    expect(f.calls.map((c) => c.url)).toEqual(["https://edge.test/v1/sites/site_unit/event"]);
+    expect(f.calls.some((c) => c.url.startsWith("/__ab"))).toBe(false); // consent の本文を相対パスに送らない
+    expect(document.cookie).not.toMatch(/_ab_vid=[^;]/); // runtime が JavaScript で消す
+  });
+});
+
+it("regrant_after_revoke_issues_fresh_id", async () => {
+  await onPage("https://form.example.com/pricing", async () => {
+    const f = perCallDeferredFetch();
+    const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: outsideSettings });
+    await flush();
+    const first = /_ab_vid=([^;]+)/.exec(document.cookie)![1]!;
+    api.consent(false);
+    await flush();
+    vi.advanceTimersByTime(2000);
+    await flush();
+    for (const c of f.calls) c.resolve({ ok: true, status: 204, json: async () => ({}) } as unknown as Response);
+    api.consent(true);
+    await flush();
+    const second = /_ab_vid=([^;]+)/.exec(document.cookie)?.[1];
+    expect(second).toBeDefined();
+    expect(second).not.toBe(first);
+    expect(document.cookie).toContain(`_ab_vid_js=${second}`);
+  });
+});
+
+it("mode_c_revoke_forgets_effective_byoid_identity", async () => {
+  // B139 Q31: 結果の記録を消す ID = Cookie の形の正しい値 ∪ 撤回の前の ID(Mode C は BYOID のハッシュで、Cookie の値と違う)
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  document.cookie = "_site_session=sess-1; Path=/";
+  vi.useRealTimers(); // BYOID のハッシュ
+  const f = perCallDeferredFetch();
+  const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: { ...baseSettings, idSource: "cookie:_site_session" } });
+  await vi.waitFor(() => expect(api.getAssignments()).not.toEqual({}));
+  api.consent(false);
+  await vi.waitFor(() => expect(f.calls).toHaveLength(2));
+  expect(f.calls.map((c) => JSON.parse(String(c.init?.body)).visitorId).sort()).toEqual([VB, await hashByoidValue("salt", "sess-1")].sort());
+});
+
+it("same_page_pageview_goal_after_participation_is_recorded", async () => {
+  // B139 Q22 の 3: Cloudflare 外のドメインのページの表示の目標は、同じページの参加の送信が settle してから目標だけの CV を送る(参加の行の後に届く)
+  await onPage("https://form.example.com/pricing", async () => {
+    vi.useRealTimers();
+    document.body.innerHTML = `<h1 class="hero-title">orig</h1>`;
+    let release!: (v: unknown) => void;
+    const hold = new Promise((r) => (release = r));
+    const f = resultsFetch({ reply: (b) => (b.type === "participant" ? hold : storedReply()) });
+    createRuntime(makeDeps(f.fn), { config: cvConfig, settings: outsideSettings });
+    await vi.waitFor(() => expect(f.events("participant")).toHaveLength(1));
+    await settleReal();
+    expect(f.events("conversion")).toEqual([]); // 参加の送信中は待つ
+    release({ result: "stored" });
+    await vi.waitFor(() => expect(f.events("conversion")).toHaveLength(1));
+    const [participant, cv] = [f.events("participant")[0]!, f.events("conversion")[0]!];
+    expect(f.calls.map((c) => c.url)).toEqual(["https://edge.test/v1/sites/site_unit/event", "https://edge.test/v1/sites/site_unit/event"]);
+    expect(cv).toEqual({ type: "conversion", v: 2, goalIds: ["g_pv"], visitorId: participant.visitorId });
+    expect(typeof cv.visitorId).toBe("string");
+  });
 });

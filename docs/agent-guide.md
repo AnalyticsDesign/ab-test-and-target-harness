@@ -321,7 +321,7 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/evaluate" -H "Authorization: Bearer
   - `userAgent`: 端末・ブラウザ・OS をここから判定します(`device` / `browser` / `os` を直接指定するとそちらが優先)
   - `viewportWidth`: 画面の幅(px)
   - `now`: 判定時刻(epoch ミリ秒。省略するとサーバーの現在時刻。曜日・時間帯はサイトのタイムゾーンで判定します)
-  - `firstVisitAt`: 初回の訪問時刻(epoch ミリ秒)。`null` は発行時刻が不明な古い訪問者を表し、「N 以上経過」の条件に当てはまります。省略とは区別されます(省略は `input_missing`)
+  - `firstVisitAt`: 初回の訪問時刻(epoch ミリ秒)。ID の発行時刻は 1 時間単位に切り捨てて持つので、実際の初回の訪問より最大 1 時間早い値になります。`null` は発行時刻が不明な古い訪問者を表し、「N 以上経過」の条件に当てはまります。省略とは区別されます(省略は `input_missing`)
   - `history` の各項目の `lastAt`(epoch 秒): 「最後の閲覧 / 達成が N 日以内」といった期間つきの履歴条件に使います。省略した項目では期間つきの条件は `input_missing` です
 - `visitorId` は**省略できます**。省略すると ID に依存しない段まで(`weights` と `reason`)を返し、`traffic_excluded` / `variantId` には進みません
 - 履歴条件(`visited` / `converted`)は Visitor Profile(Durable Object)を**見ません**。`history` で与えてください:

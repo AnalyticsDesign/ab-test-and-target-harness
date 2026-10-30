@@ -254,6 +254,15 @@ export async function assertCanTouchInstanceAdmin(c: Context<AppEnv>, targetUser
 export type SiteAccess = { site: SiteRow; role: Role };
 
 /**
+ * B139(spec Q23): 要求した人が、そのワークスペースのサイトを見られるか(閲覧者以上のメンバーで、鍵の範囲に入る。loadSite の "viewer" と同じ判定)。
+ * 共有の衝突の 422 で相手のサイト名を出してよいかに使う(見られなければ名前も ID も出さない)
+ */
+export async function canViewWorkspace(c: Context<AppEnv>, workspaceId: string): Promise<boolean> {
+  if (!scopeIncludes(c, workspaceId)) return false;
+  return (await roleIn(c.get("db"), workspaceId, c.get("user").id)) !== null;
+}
+
+/**
  * Site 単位のアクセス(spec §13.2)。Site が無い / その Workspace の非メンバー = 404、Role 不足 = 403。
  * Site が属する Workspace の Role を毎回 D1 で引くので、Site 配下のルートはこれ以外の認可判定を持たない
  */

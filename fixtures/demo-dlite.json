@@ -3,7 +3,7 @@
   "siteSalt": "demo-dlite-salt-0001",
   "version": 1,
   "goals": [{ "id": "g_dlite_buy", "name": "Buy click", "type": "CLICK", "config": { "selector": "#buy" } }],
-  "settings": { "mode": "B", "hosts": ["localhost", "127.0.0.1"] },
+  "settings": { "mode": "B", "hosts": ["www.example.test"], "allowedOrigins": ["https://form.example.test"], "shareSubdomains": true, "cookieDomains": ["example.test"] },
   "experiments": [
     {
       "id": "exp_dlite", "name": "D-lite demo",
@@ -24,5 +24,6 @@
         { "id": "vB", "name": "B", "weight": 100, "changes": [{ "id": "c_c", "type": "TEXT", "selector": ".old-banner", "payload": { "text": "D-lite converted" } }] }
       ]
     }
-  ]
+  ],
+  "results": { "forget": true, "runs": { "exp_dlite": "e2eDliteShared00000001" } }
 }

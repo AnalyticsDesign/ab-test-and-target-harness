@@ -3,6 +3,7 @@ import { utcDay } from "@wtt/core";
 import { getDb, type Db } from "../db";
 import type { Env } from "../env";
 import { readCloudflarePlan, type CloudflarePlan } from "../instance-settings";
+import { migrateSharing } from "../sharing-conflict";
 import { isWriteFrozen } from "../write-freeze";
 
 /**
@@ -245,6 +246,16 @@ export async function runCron(env: Env, scheduledTime: number, jobs: readonly Cr
   const now = scheduledTime;
   // 凍結は最初に 1 回だけ読む(D1 が読めないときも凍結中 = isWriteFrozen の決まり)。書く直前の確かめは assertNotFrozen が読み直す
   const frozenAtStart = await isWriteFrozen(db);
+  // B139: 共有の自動の移行(一度きり。完了の印があれば KV を 1 回読むだけ)を毎回の最初に進める。wtt-control に書くので凍結中は見送る。
+  // 配分の外(runner の分)で動かす。1 回に 25 サイトまでで、D1 の呼び出しは多くて 60 件ほど(上限 1,000 との差に入る)。
+  // 失敗はログに残し、ジョブは止めない(次の実行で続きから)
+  if (!frozenAtStart) {
+    try {
+      await migrateSharing(env, env.DB, Math.floor(now / 1000));
+    } catch (e) {
+      console.error("cron: sharing migration failed", e);
+    }
+  }
   // 今回動くジョブ(凍結で見送るものを除く)と、daily の due を先に決める(配分を決めるため。読み取りの数は前と同じ)
   const runnable = jobs.filter((j) => !(j.writesControl && frozenAtStart));
   const due = new Map<string, boolean | Error>();

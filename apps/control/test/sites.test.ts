@@ -13,7 +13,7 @@ async function kvSettings(siteId: string) {
 describe("sites", () => {
   it("creates a site with defaults, writes the settings record and returns no salt", async () => {
     const { token, workspaceId } = await setupOwner();
-    const { id } = await createSite(token, workspaceId, { id: "site_one" });
+    const { id } = await createSite(token, workspaceId, { id: "site_one", domain: "www.example.com" });
     expect(id).toBe("site_one");
     const site = await json(await call("GET", "/sites/site_one", { token }));
     expect(site).toMatchObject({ id: "site_one", mode: "A", idSource: "ab", consentMode: "implicit", visitorCookieName: "_ab_vid", uuidCookieEnabled: false, allowedOrigins: ["https://www.example.com"], hosts: [], analytics: { extraKey: "ab_extra" } });
@@ -158,7 +158,7 @@ describe("sites", () => {
     const a = await setupOwner();
     const wsB = await json<{ id: string }>(await call("POST", "/workspaces", { token: a.token, body: { name: "B" } })); // 別 Workspace(同じ OWNER で可。所有権は Site 単位)
     await createSite(a.token, a.workspaceId, { id: "s1", mode: "B", domain: "shop.example.com" }); // mode B は hosts = [domain]
-    await createSite(a.token, wsB.id, { id: "s2", domain: "x.example.com" });
+    await createSite(a.token, wsB.id, { id: "s2", domain: "x.example.com", visitorCookieName: "_ab_vid_s2" }); // B139: 同じ登録ドメインなので Cookie 名を分ける
     const dup = await call("PATCH", `/sites/s2`, { token: a.token, body: { hosts: ["SHOP.example.com."] } }); // 正規化後に s1 と衝突
     expect(dup.status).toBe(409);
     const dupBody = (await expectEnvelope(dup)) as { error: string; message: string };
@@ -391,7 +391,7 @@ describe("host release order (plan12 K14 (c))", () => {
   it("host_release_keeps_mapping_owned_by_another_site", async () => {
     const { token, workspaceId } = await setupOwner();
     const a = await createSite(token, workspaceId, { id: "site_ra", mode: "B", domain: "h.example.com" });
-    const b = await createSite(token, workspaceId, { id: "site_rb", domain: "b.example.com" });
+    const b = await createSite(token, workspaceId, { id: "site_rb", domain: "b.example.com", visitorCookieName: "_ab_vid_rb" }); // B139: 同じ登録ドメインなので Cookie 名を分ける
     await moveHostToB("h.example.com", b.id);
     // A が H を外す PATCH。後始末の KV の get が古い "A" を 1 回返しても、D1 で B が持っているので H の mapping は消えない
     const res = await call("PATCH", `/sites/${a.id}`, { token, body: { hosts: [] }, envOverride: { CONFIG_KV: staleGetOnce(kvKeys.host("h.example.com"), a.id) } });
@@ -438,7 +438,7 @@ describe("host release order (plan12 K14 (c))", () => {
   it("site deletion does not delete a mapping another site now owns, even when kv returns a stale value", async () => {
     const { token, workspaceId } = await setupOwner();
     const a = await createSite(token, workspaceId, { id: "site_re", mode: "B", domain: "gone.example.com" });
-    const b = await createSite(token, workspaceId, { id: "site_rf", domain: "b2.example.com" });
+    const b = await createSite(token, workspaceId, { id: "site_rf", domain: "b2.example.com", visitorCookieName: "_ab_vid_rf" }); // B139: 同じ登録ドメインなので Cookie 名を分ける
     await moveHostToB("gone.example.com", b.id);
     const res = await call("DELETE", `/sites/${a.id}`, { token, envOverride: { CONFIG_KV: staleGetOnce(kvKeys.host("gone.example.com"), a.id) } });
     expect(res.status).toBe(204);
@@ -450,11 +450,112 @@ describe("host release order (plan12 K14 (c))", () => {
     const { token, workspaceId } = await setupOwner();
     const keeper = await json<{ id: string }>(await call("POST", "/workspaces", { token, body: { name: "Keeper" } }));
     const a = await createSite(token, workspaceId, { id: "site_rg", mode: "B", domain: "ws-gone.example.com" });
-    const b = await createSite(token, keeper.id, { id: "site_rh", domain: "b3.example.com" });
+    const b = await createSite(token, keeper.id, { id: "site_rh", domain: "b3.example.com", visitorCookieName: "_ab_vid_rh" }); // B139: 同じ登録ドメインなので Cookie 名を分ける
     await moveHostToB("ws-gone.example.com", b.id);
     const res = await call("DELETE", `/workspaces/${workspaceId}`, { token, envOverride: { CONFIG_KV: staleGetOnce(kvKeys.host("ws-gone.example.com"), a.id) } });
     expect(res.status).toBe(204);
     expect(await env.CONFIG_KV.get(kvKeys.host("ws-gone.example.com"))).toBe(b.id);
     expect(await env.CONFIG_KV.get(kvKeys.settings(a.id))).toBeNull();
+  });
+});
+
+// B139 Task 3: 共有の範囲を導き、前の範囲を記録する
+describe("cookie sharing scopes (B139)", () => {
+  const prevDomains = async (sid: string) => JSON.parse((await siteRow(sid)).previous_cookie_domains_json) as Array<{ domain: string; until: number }>;
+
+  it("re_enabling_sharing_within_retention_keeps_domain_cookie", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id } = await createSite(token, workspaceId, { retentionDays: 30, domain: "www.example.com" });
+    const nowSec = Math.floor(Date.now() / 1000);
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { shareSubdomains: false } })).status).toBe(200);
+    const off = await prevDomains(id);
+    expect(off.map((p) => p.domain)).toEqual(["example.com"]);
+    // until = 保存の時刻 + retention_days * 86400(epoch 秒)
+    expect(off[0]!.until).toBeGreaterThanOrEqual(nowSec + 30 * 86400);
+    expect(off[0]!.until).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 30 * 86400);
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { shareSubdomains: true } })).status).toBe(200);
+    expect(await prevDomains(id)).toEqual([]);
+  });
+
+  it("previous_range_cleanup_does_not_delete_current_target", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id } = await createSite(token, workspaceId, { domain: "www.example.com" });
+    await call("PATCH", `/sites/${id}`, { token, body: { shareSubdomains: false } });
+    await call("PATCH", `/sites/${id}`, { token, body: { shareSubdomains: true } });
+    const s = await kvSettings(id);
+    expect(s?.cookieDomains).toEqual(["example.com"]);
+    // 今の範囲は前の範囲の一覧に残さない(edge / runtime が今の発行先を消さないため)
+    expect(s?.previousCookieDomains.map((p) => p.domain)).not.toContain("example.com");
+    expect((await siteRow(id)).share_subdomains).toBe(1);
+  });
+
+  it("removing_group_records_previous_range", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id } = await createSite(token, workspaceId, { domain: "www.example.com" });
+    const both = ["https://www.example.com", "https://shop.example-shop.jp"];
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { allowedOrigins: both } })).status).toBe(200);
+    expect((await kvSettings(id))?.cookieDomains).toEqual(["example.com", "example-shop.jp"]);
+    expect(await prevDomains(id)).toEqual([]);
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { allowedOrigins: ["https://www.example.com"] } })).status).toBe(200);
+    expect((await prevDomains(id)).map((p) => p.domain)).toEqual(["example-shop.jp"]);
+    // まとまりを戻すと前の範囲から外れる
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { allowedOrigins: both } })).status).toBe(200);
+    expect(await prevDomains(id)).toEqual([]);
+  });
+
+  it("kv_settings_carry_cookie_domains", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id } = await createSite(token, workspaceId, { domain: "www.example.com" });
+    const res = await call("PATCH", `/sites/${id}`, { token, body: { allowedOrigins: ["https://www.example.com", "https://form.example.com"] } });
+    expect(res.status).toBe(200);
+    const raw = JSON.parse((await env.CONFIG_KV.get(kvKeys.settings(id)))!);
+    expect(raw).toMatchObject({ shareSubdomains: true, cookieDomains: ["example.com"], previousCookieDomains: [] });
+    // D1 の行に残り、GET が導いたまとまりを返す
+    expect((await siteRow(id)).share_subdomains).toBe(1);
+    const got = await json(await call("GET", `/sites/${id}`, { token }));
+    expect(got).toMatchObject({ shareSubdomains: true, cookieGroups: [{ domain: "example.com", hosts: ["www.example.com", "form.example.com"] }] });
+    expect(await json(res)).toMatchObject({ shareSubdomains: true, cookieGroups: [{ domain: "example.com" }] });
+  });
+
+  it("new_site_shares_by_default_and_migration_flag_is_off", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id } = await createSite(token, workspaceId, { domain: "www.example.com" });
+    const r = await siteRow(id);
+    expect(r).toMatchObject({ share_subdomains: 1, previous_cookie_domains_json: "[]", share_migration_pending: 0 });
+    expect((await kvSettings(id))?.cookieDomains).toEqual(["example.com"]);
+  });
+
+  it("uuid_cookie_name_must_differ_from_marker", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id } = await createSite(token, workspaceId, { retentionDays: 30 });
+    const expect422 = async (body: Record<string, unknown>) => {
+      const res = await call("PATCH", `/sites/${id}`, { token, body });
+      expect(res.status).toBe(422);
+      expect((await expectEnvelope(res)).error).toBe("cookie_name_in_use");
+    };
+    // 今の正本名から作った印と同じ UUID Cookie 名
+    await expect422({ uuidCookieName: "_ab_vid_js" });
+    // 旧名から作った印と同じ UUID Cookie 名
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { visitorCookieName: "_wtt_vid" } })).status).toBe(200);
+    await expect422({ uuidCookieName: "_ab_vid_js" });
+    await expect422({ uuidCookieName: "_wtt_vid_js" });
+  });
+
+  it("visitor_cookie_rename_must_not_collide_with_marker_names", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id } = await createSite(token, workspaceId, { retentionDays: 30 });
+    // "x" → "x_js": 旧名から作った印が今の正本名になる(旧名の後始末が今の ID を消す)
+    const a = await call("PATCH", `/sites/${id}`, { token, body: { visitorCookieName: "_ab_vid_js" } });
+    expect(a.status).toBe(422);
+    expect((await expectEnvelope(a)).error).toBe("cookie_name_in_use");
+    // "x_js" → "x" の向き: 今の正本名から作った印が旧名と同じになる
+    const { id: id2 } = await createSite(token, workspaceId, { retentionDays: 30, visitorCookieName: "_v_js" });
+    const b = await call("PATCH", `/sites/${id2}`, { token, body: { visitorCookieName: "_v" } });
+    expect(b.status).toBe(422);
+    expect((await expectEnvelope(b)).error).toBe("cookie_name_in_use");
+    // BYOID の参照 Cookie 名が印の名前と同じ
+    const c = await call("PATCH", `/sites/${id2}`, { token, body: { idSource: "cookie:_v_js_js" } });
+    expect(c.status).toBe(422);
+    expect((await expectEnvelope(c)).error).toBe("cookie_name_in_use");
   });
 });

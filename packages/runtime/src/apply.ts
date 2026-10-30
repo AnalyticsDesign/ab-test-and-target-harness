@@ -243,7 +243,7 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
         inserted = applyHtml(el, change);
       } catch (e) {
         inserted = null; // 不正な HTML でも他の Change は続行(§10.7)
-        console.debug("wtt: html insert failed", change.id, e);
+        console.debug("wtt: html", change.id, e);
       }
       if (inserted === null) {
         fail(experimentId); // 挿入の例外、または replace で html / head / body を指した(要素はあるのに適用できない)
@@ -261,7 +261,7 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
           // 差し替えで外れた最上位 <script> は落とし、代わりにクローンをマーク対象に加える(クローンに子孫は無い)
           roots = [...inserted.filter((n) => n.isConnected), ...clones];
         } catch (e) {
-          console.debug("wtt: html scripts failed", change.id, e);
+          console.debug("wtt: html js", change.id, e);
         }
       }
       // 決定 51: replace は要素のすべての部分を書いた。元の記録を新しい最上位の要素に写し、新しい部分木のすべての要素を自分の順位にする
@@ -332,7 +332,7 @@ export function createApplyEngine(doc: Document, cbs: EngineCallbacks, opts: Eng
       } catch (e) {
         // Change 単位の例外境界(§10.7)。要素生成や <style> 挿入の例外(Trusted Types 等)で後続の Change と対照 watch を止めない。
         // CUSTOM_JS / HTML <script> / CSS は試行前に executed へ入るので MutationObserver の再スキャンで繰り返さない
-        console.debug("wtt: change failed", change.id, e);
+        console.debug("wtt: change", change.id, e);
         fail(experimentId); // CSS の <style> の挿入の例外など
       }
     }

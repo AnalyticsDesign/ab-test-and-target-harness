@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { markerCookieName } from "../src/visitor-cookie";
 import { SiteSettingsSchema, parseSiteSettings, toRuntimeSettings, kvKeys } from "../src/settings";
 import { DecisionBodySchema, DliteRequestSchema } from "../src/protocol";
 import { DEFAULT_ANALYTICS } from "../src/analytics-defaults";
@@ -65,6 +66,7 @@ describe("SiteSettings (spec §5.4 site-settings record)", () => {
       uuidCookieEnabled: false, uuidCookieName: "_ab_uuid",
       previousCookieNames: ["_old"], decisionTimeoutMs: 1000, consentMode: "implicit",
       analytics: DEFAULT_ANALYTICS, forgetOnRevoke: true,
+      edgeHosts: [], cookieDomains: [], previousCookieDomains: [], // B139: Mode A の edgeHosts は []
     });
     expect("hosts" in r).toBe(false);
     expect("allowedOrigins" in r).toBe(false);
@@ -199,5 +201,57 @@ describe("newProfileBudget(plan12 K9・決定 63 (8))", () => {
   it("utcHourKey は UTC の YYYY-MM-DDTHH", () => {
     expect(utcHourKey(Date.UTC(2026, 9, 19, 23, 59, 59))).toBe("2026-10-19T23");
     expect(utcHourKey(Date.UTC(2026, 9, 20, 0, 0, 0))).toBe("2026-10-20T00");
+  });
+});
+
+describe("共有の設定(B139)", () => {
+  const base = { settingsVersion: 1, siteId: "site_x" };
+  it("共有の既定は ON で、範囲と旧範囲は空", () => {
+    const s = SiteSettingsSchema.parse(base);
+    expect(s.shareSubdomains).toBe(true);
+    expect(s.cookieDomains).toEqual([]);
+    expect(s.previousCookieDomains).toEqual([]);
+  });
+  it("cookieDomains と previousCookieDomains は小文字のドメイン名だけ受ける", () => {
+    expect(parseSiteSettings({ ...base, cookieDomains: ["example.com"], previousCookieDomains: [{ domain: "old.example.com", until: 1 }] })).not.toBeNull();
+    expect(parseSiteSettings({ ...base, cookieDomains: ["Example.com"] })).toBeNull();
+    expect(parseSiteSettings({ ...base, previousCookieDomains: [{ domain: "x y", until: 1 }] })).toBeNull();
+    expect(parseSiteSettings({ ...base, previousCookieDomains: [{ domain: "a.com", until: 1.5 }] })).toBeNull();
+    expect(parseSiteSettings({ ...base, previousCookieDomains: [{ domain: "a.com", until: 1, extra: 1 }] })).toBeNull();
+  });
+  it("toRuntimeSettings は previousCookieDomains を { domain, until } のまま詰め、時刻で絞らない", () => {
+    const prev = [{ domain: "old.example.com", until: 1 }, { domain: "older.example.com", until: 9_999_999_999 }];
+    const r = toRuntimeSettings(SiteSettingsSchema.parse({ ...base, cookieDomains: ["example.com"], previousCookieDomains: prev }));
+    expect(r.previousCookieDomains).toEqual(prev);
+    expect(r.cookieDomains).toEqual(["example.com"]);
+  });
+  it("edgeHosts は Mode B のとき hosts、Mode A のとき []", () => {
+    expect(toRuntimeSettings(SiteSettingsSchema.parse({ ...base, mode: "B", hosts: ["a.example.com"] })).edgeHosts).toEqual(["a.example.com"]);
+    expect(toRuntimeSettings(SiteSettingsSchema.parse({ ...base, mode: "A", hosts: ["a.example.com"] })).edgeHosts).toEqual([]);
+  });
+  it("byoid_cookie_name_must_differ_from_marker", () => {
+    expect(parseSiteSettings({ ...base, idSource: "cookie:_ab_vid_js" })).toBeNull();
+    expect(parseSiteSettings({ ...base, idSource: "cookie:my_vid_js", visitorCookieName: "my_vid" })).toBeNull();
+    expect(parseSiteSettings({ ...base, idSource: "cookie:_ab_vid_js", visitorCookieName: "other" })).not.toBeNull();
+  });
+  it("byoid_cookie_name_must_differ_from_previous_marker", () => {
+    // 旧名の印の掃除(Max-Age=0)が BYOID の Cookie を消さないように
+    expect(parseSiteSettings({ ...base, idSource: "cookie:_old_js", previousCookieNames: [{ name: "_old", until: 1 }] })).toBeNull();
+    expect(parseSiteSettings({ ...base, idSource: "cookie:_other_js", previousCookieNames: [{ name: "_old", until: 1 }] })).not.toBeNull();
+  });
+  it("visitor_cookie_name_must_differ_from_previous_marker", () => {
+    // a → a_js に改名すると、旧名 a の印(a_js)の掃除が生きている正本を消す
+    expect(parseSiteSettings({ ...base, visitorCookieName: "a_js", previousCookieNames: [{ name: "a", until: 1 }] })).toBeNull();
+    expect(parseSiteSettings({ ...base, visitorCookieName: "b", previousCookieNames: [{ name: "a", until: 1 }] })).not.toBeNull();
+  });
+  it("marker_cookie_name_must_differ_from_previous_names", () => {
+    // 旧名の掃除が生きている印(visitorCookieName + _js)を消さないように
+    expect(parseSiteSettings({ ...base, visitorCookieName: "a", previousCookieNames: [{ name: "a_js", until: 1 }] })).toBeNull();
+    expect(parseSiteSettings({ ...base, visitorCookieName: "a", previousCookieNames: [{ name: "z", until: 1 }] })).not.toBeNull();
+  });
+  it("uuid_cookie_name_must_differ_from_marker", () => {
+    expect(parseSiteSettings({ ...base, uuidCookieName: markerCookieName("_ab_vid") })).toBeNull();
+    expect(parseSiteSettings({ ...base, previousCookieNames: [{ name: "_old", until: 1 }], uuidCookieName: markerCookieName("_old") })).toBeNull();
+    expect(parseSiteSettings({ ...base, uuidCookieName: "_ab_uuid" })).not.toBeNull();
   });
 });

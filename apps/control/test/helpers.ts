@@ -514,9 +514,15 @@ export function pausingD1Insert(db: D1Database, table: string, at: "before" | "a
   return { db: wrapped, reached, release };
 }
 
-/** Site を 1 つ作る(Task 3 以降のテストが Site 配下のルートを叩くのに使う) */
+/** createSite の既定のドメインの連番 */
+let siteDomainSeq = 0;
+/**
+ * Site を 1 つ作る(Task 3 以降のテストが Site 配下のルートを叩くのに使う)。
+ * 既定のドメインは呼ぶたびに登録ドメインそのものが違う形(`www.example-<連番>.com`)にする(B139: 同じ登録ドメインのサイトは訪問者 ID の Cookie の共有の衝突を
+ * 避けるために作成で自動の調整を受ける。衝突を確かめるテストは domain と Cookie 名を明示する)
+ */
 export async function createSite(token: string, workspaceId: string, overrides: Record<string, unknown> = {}): Promise<{ id: string }> {
-  const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "Site", domain: "www.example.com", ...overrides } });
+  const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "Site", domain: `www.example-${++siteDomainSeq}.com`, ...overrides } });
   expect(res.status).toBe(201);
   return json(res);
 }

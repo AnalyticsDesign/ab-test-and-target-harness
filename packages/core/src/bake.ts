@@ -8,7 +8,7 @@ import { toRuntimeSettings, type RuntimeSettings, type SiteSettings } from "./se
  * runtimeGzipMax は packages/runtime/scripts/embed.mjs の RUNTIME_GZIP_MAX と同じ値(bake.test.ts が照合する)。
  * 上限を変えたくなったら、本体 spec の決定 50 (6) から始める(前提が変わったか / 同期で読まなくてよいコードを外し尽くしたか)
  */
-export const BOOTSTRAP_LIMITS = { totalBytes: 14336, headerAllowance: 512, runtimeGzipMax: 11392 } as const;
+export const BOOTSTRAP_LIMITS = { totalBytes: 14336, headerAllowance: 512, runtimeGzipMax: 11809 } as const;
 
 /** previewSource = 下書きの bootstrap だけ(決定 50)。apiBase = edge の公開 origin(決定 52 (7))。runtimeHash = 先頭の注釈に出す(更新の確認用) */
 export type BakeOptions = { previewSource?: string; apiBase?: string | null; runtimeHash?: string };

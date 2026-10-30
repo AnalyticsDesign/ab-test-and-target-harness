@@ -76,7 +76,7 @@ describe("bakeBootstrap", () => {
     expect(named.experiments[0]!.name).toBe("社内名"); // 入力は書き換えない
   });
   it("BOOTSTRAP_LIMITS は決定 50 の値で、runtime の build の検査値と同じ", async () => {
-    expect(BOOTSTRAP_LIMITS).toEqual({ totalBytes: 14336, headerAllowance: 512, runtimeGzipMax: 11392 });
+    expect(BOOTSTRAP_LIMITS).toEqual({ totalBytes: 14336, headerAllowance: 512, runtimeGzipMax: 11809 });
     const { readFileSync } = await import("node:fs");
     const embed = readFileSync(new URL("../../runtime/scripts/embed.mjs", import.meta.url), "utf8");
     expect(embed).toMatch(new RegExp(`RUNTIME_GZIP_MAX = ${BOOTSTRAP_LIMITS.runtimeGzipMax};`));

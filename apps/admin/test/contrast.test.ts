@@ -22,7 +22,7 @@ function contrast(a: string, b: string): number {
   return (hi! + 0.05) / (lo! + 0.05);
 }
 
-// 文字色と背景の組(StatusPill.tsx の tone と、globals.css の .badge / .badge-warn)
+// 文字色と背景の組(StatusPill.tsx の tone と、globals.css の .badge / .badge-ok / .badge-warn)
 const PAIRS: Array<[string, string]> = [
   ["ok", "ok-soft"],
   ["warn", "warn-soft"],

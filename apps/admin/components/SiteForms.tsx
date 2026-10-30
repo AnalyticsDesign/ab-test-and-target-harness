@@ -1,12 +1,22 @@
 "use client";
 import { useEffect, useState } from "react";
 import { api, describeError, fieldErrors } from "@/lib/client";
-import type { Site, UsageSettingsView } from "@/lib/types";
+import type { SiteCreated, UsageSettingsView } from "@/lib/types";
 import { sharedFreeLimitNotice } from "@/lib/usage";
 import { Field } from "./Field";
 import { ErrorBox } from "./ErrorBox";
 import { SubmitButton } from "./SubmitButton";
 import { Picker } from "./ui/Picker";
+
+/**
+ * 作成の後の遷移先。ふつうはサイトの概要。B139: 作成で衝突を避けるために共有か Cookie 名を変えたときは、
+ * サイト設定の訪問者 ID の節へ ?sharing= を付けて移り、共有のカードで何を変えたかを 1 回だけ知らせる(作成の画面には結果の段が無いため)
+ */
+export function createdHref(workspaceId: string, s: SiteCreated): string {
+  const base = `/w/${workspaceId}/sites/${s.id}`;
+  if (!s.sharingAdjusted) return base;
+  return `${base}/settings?section=identity&sharing=${s.sharingAdjusted.shareSubdomains ? "renamed" : "off"}`;
+}
 
 export function SiteCreateForm({ workspaceId, visibleSites }: { workspaceId: string; visibleSites: number }) {
   const [busy, setBusy] = useState(false);
@@ -37,10 +47,10 @@ export function SiteCreateForm({ workspaceId, visibleSites }: { workspaceId: str
         const body: Record<string, unknown> = { name: fd.get("name"), domain: String(fd.get("domain")).toLowerCase(), mode: fd.get("mode"), consentMode: fd.get("consentMode") };
         if (fd.get("id")) body.id = fd.get("id");
         try {
-          const s = await api<Site>("POST", `/workspaces/${workspaceId}/sites`, body);
+          const s = await api<SiteCreated>("POST", `/workspaces/${workspaceId}/sites`, body);
           // クライアント遷移(router.push)は共有 layout(サイドバーの Site 一覧)を描き直さず、
           // router.refresh() を足しても確実には反映されない(このバージョンの Next.js/vinext で実測)ため、全画面の遷移にする
-          window.location.assign(`/w/${workspaceId}/sites/${s.id}`);
+          window.location.assign(createdHref(workspaceId, s));
         } catch (err) {
           setError(describeError(err));
           setFields(fieldErrors(err));

@@ -154,10 +154,13 @@ describe("POST /__ab/* gate (B158, G05)", () => {
     expect((await send("/__ab/decision", decisionBody())).status).toBe(200);
   });
 
-  it.each(["GET", "HEAD"])("%s /__ab/decision and /__ab/event are outside the gate (404, not 415/403)", async (method) => {
+  it.each(["GET", "HEAD"])("%s /__ab/decision and /__ab/event are outside the gate (not 415/403)", async (method) => {
+    // B139 §4.2: GET は導入の確認に使う(印が無ければ 503)。門の 415/403 にはならない
+    await env.CONFIG_KV.put(kvKeys.installMarker, "marker-gate");
+    // 印の有無は検証の対象外(ここでは門の外にあることだけを見る)
     for (const path of ["/__ab/decision", "/__ab/event"]) {
       const res = await send(path, undefined, { method, contentType: "text/plain", fetchSite: "cross-site" });
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(200);
     }
   });
 

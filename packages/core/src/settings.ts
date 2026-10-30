@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { AnalyticsSettingsSchema } from "./analytics";
 import type { AnalyticsSettings } from "./analytics-defaults";
+import { markerCookieName } from "./visitor-cookie";
 
 /** RFC 6265 の cookie-name(token)規則。spec §13.5 の保存時検証と同じ規則をスキーマで持つ */
 const COOKIE_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const CookieName = z.string().min(1).max(64).regex(COOKIE_NAME_RE); // 1〜64 字(決定 29)
+/** B139: Cookie の Domain にするドメイン名(小文字・IDN は punycode。hosts と同じ文字種) */
+const DomainName = z.string().regex(/^[a-z0-9.-]+$/);
 
 /** Site ID の受理集合(1〜64 字)。CompileInput / SiteSettings / edge の全ルートで単一定義を共有する(r2 CX-Medium-8。KV key は 512B 上限) */
 export const SITE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -41,6 +44,10 @@ export const SiteSettingsSchema = z
     uuidCookieEnabled: z.boolean().default(false),
     uuidCookieName: CookieName.default("_ab_uuid"),
     previousCookieNames: z.array(z.strictObject({ name: CookieName, until: z.number().int() })).default([]), // until = 保持期限(epoch 秒)。edge は参照せず control が prune する(spec §5.4)。生きているエントリと同名への変更は control が 422 で拒否(決定 29)
+    // B139: 訪問者 ID の Cookie をサブドメイン間で共有する(既定 ON)。strict のため、これらを書く前に edge を deploy する
+    shareSubdomains: z.boolean().default(true),
+    cookieDomains: z.array(DomainName).default([]), // control が hosts などから導いた今の範囲(Cookie の Domain の候補)
+    previousCookieDomains: z.array(z.strictObject({ domain: DomainName, until: z.number().int() })).default([]), // until = 保持期限(epoch 秒)。previousCookieNames と同じ形
     decisionTimeoutMs: z.number().int().min(300).max(3000).default(1000),
     consentMode: z.enum(["implicit", "required"]).default("implicit"),
     // spec §10.9(決定 32): dataLayer の名札。全フィールド optional で既定値を埋める。settingsVersion は据え置き(optional 追加)。
@@ -64,6 +71,16 @@ export const SiteSettingsSchema = z
       .optional(),
   })
   .refine((s) => s.visitorCookieName !== s.uuidCookieName, { message: "visitorCookieName and uuidCookieName must differ" })
+  // B139 §3.2: UUID Cookie 名は、印の Cookie 名(現在の名前と、旧名から作ったもの)とも違う。旧名は期限を見ず全件比較する
+  .refine(
+    (s) => s.uuidCookieName !== markerCookieName(s.visitorCookieName) && !s.previousCookieNames.some((p) => markerCookieName(p.name) === s.uuidCookieName),
+    { message: "uuidCookieName must differ from the marker cookie names derived from visitorCookieName and previousCookieNames" },
+  )
+  // B139 §3.2: 旧名(と旧名から作った印)の掃除は Max-Age=0 で消すので、今の正本・今の印と同名にならないようにする
+  .refine(
+    (s) => !s.previousCookieNames.some((p) => s.visitorCookieName === markerCookieName(p.name) || markerCookieName(s.visitorCookieName) === p.name),
+    { message: "visitorCookieName and its marker cookie name must differ from previousCookieNames and their marker cookie names" },
+  )
   // spec §4(決定 1): Mode B の BYOID は Bridge フック(Phase 2)。MVP では併用不可(r2 CX-Medium-10)
   .refine((s) => s.mode === "A" || s.idSource === "ab", { message: "mode B requires idSource ab (BYOID hook is Phase 2)" })
   // BYOID の参照 Cookie 名が Identity 系の名前と衝突すると、フォールバックで自分が書いた値を
@@ -73,9 +90,12 @@ export const SiteSettingsSchema = z
     (s) => {
       if (!s.idSource.startsWith("cookie:")) return true;
       const ref = s.idSource.slice("cookie:".length);
-      return ref !== s.visitorCookieName && ref !== s.uuidCookieName && !s.previousCookieNames.some((p) => p.name === ref);
+      return (
+        ref !== s.visitorCookieName && ref !== s.uuidCookieName && ref !== markerCookieName(s.visitorCookieName) &&
+        !s.previousCookieNames.some((p) => p.name === ref || markerCookieName(p.name) === ref)
+      );
     },
-    { message: "idSource cookie name must differ from visitorCookieName, uuidCookieName and previousCookieNames" },
+    { message: "idSource cookie name must differ from visitorCookieName, uuidCookieName, its marker cookie name and previousCookieNames" },
   );
 export type SiteSettings = z.infer<typeof SiteSettingsSchema>;
 
@@ -98,6 +118,12 @@ export type RuntimeSettings = {
   analytics?: AnalyticsSettings;
   /** §16 / 決定 37: 撤回時の forget 送信。optional なのは旧 record 由来の boot payload を runtime が既定 true で受けるため */
   forgetOnRevoke?: boolean;
+  /** B139: Mode B のときの hosts(Mode A は [])。optional なのは旧 record 由来の boot payload を runtime が空の配列として受けるため */
+  edgeHosts?: string[];
+  /** B139: Cookie の Domain の候補になる今の範囲。欠けたら空の配列として扱う */
+  cookieDomains?: string[];
+  /** B139: 旧範囲。until(epoch 秒)も焼く。時刻で絞らない(digest を保つ)。runtime が手元の時刻と比べ、期限切れを使わない */
+  previousCookieDomains?: Array<{ domain: string; until: number }>;
 };
 
 export function toRuntimeSettings(s: SiteSettings): RuntimeSettings {
@@ -112,6 +138,9 @@ export function toRuntimeSettings(s: SiteSettings): RuntimeSettings {
     consentMode: s.consentMode,
     analytics: s.analytics,
     forgetOnRevoke: s.forgetOnRevoke,
+    edgeHosts: s.mode === "B" ? s.hosts : [],
+    cookieDomains: s.cookieDomains,
+    previousCookieDomains: s.previousCookieDomains.map((p) => ({ domain: p.domain, until: p.until })),
   };
 }
 
@@ -121,4 +150,6 @@ export const kvKeys = {
   active: (siteId: string) => `site:${siteId}:active`,
   settings: (siteId: string) => `site:${siteId}:settings`,
   host: (host: string) => `host:${host.toLowerCase()}`,
+  /** B139: 導入ごとの印(共有の自動の移行を終えたときに control が crypto.randomUUID() を書く。B148 の判定の照合にも使う) */
+  installMarker: "meta:install",
 } as const;

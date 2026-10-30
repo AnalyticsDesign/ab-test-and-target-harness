@@ -218,8 +218,8 @@ describe("GET /static/status (7o K12)", () => {
     expect(pub).toMatchObject({ ok: true, staticDeploy: "pending" });
     expect((await siteRow(s)).static_stale).toBe(1);
     const before = await siteRow(s);
-    // bootstrap に焼かない設定だけを変える(世代は進まない)
-    const patch = await call("PATCH", `/sites/${s}`, { token: o.token, body: { allowedOrigins: ["https://www.example.com", "https://shop.example.com"] }, envOverride: { DEPLOYER: fake } });
+    // bootstrap に焼かない設定だけを変える(世代は進まない)。B139: allowedOrigins は共有の範囲(cookieDomains)に効きうるので、焼き込みに効かない retentionDays を使う
+    const patch = await call("PATCH", `/sites/${s}`, { token: o.token, body: { retentionDays: 120 }, envOverride: { DEPLOYER: fake } });
     expect(patch.status).toBe(200);
     expect((await siteRow(s)).static_seq).toBe(before.static_seq);
     await fake.flush(); // 公開のときの入力で配り終える
@@ -227,6 +227,20 @@ describe("GET /static/status (7o K12)", () => {
     const got = await json(await call("GET", `/sites/${s}`, { token: o.token, envOverride: { DEPLOYER: fake } }));
     expect(got).toMatchObject({ staticStale: false, staticMismatch: false });
     expect((await getStatus(o.token, { DEPLOYER: fake })).mismatchSites).toEqual([]);
+  });
+
+  it("cookie_scope_change_marks_static_stale", async () => {
+    // B139: 別の登録ドメインを足すと共有の範囲(bootstrap に焼く cookieDomains)が変わるので、配信ファイルの世代が進む
+    const o = await setupOwner();
+    const { id: s } = await createSite(o.token, o.workspaceId);
+    const fake = fakeDeployer("pending");
+    await call("POST", `/sites/${s}/publish`, { token: o.token, envOverride: { DEPLOYER: fake } });
+    const before = await siteRow(s);
+    const patch = await call("PATCH", `/sites/${s}`, { token: o.token, body: { allowedOrigins: ["https://www.example.com", "https://shop.example-shop.jp"] }, envOverride: { DEPLOYER: fake } });
+    expect(patch.status).toBe(200);
+    const after = await siteRow(s);
+    expect(after.static_seq).toBeGreaterThan(before.static_seq);
+    expect(after.static_stale).toBe(1);
   });
 
   it("先行の候補を読み直す前に D1 が追いついたサイトは、食い違いに数えない(K5)", async () => {

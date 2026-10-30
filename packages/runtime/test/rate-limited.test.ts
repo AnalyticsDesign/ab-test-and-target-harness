@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { uuidToVisitorId } from "@wtt/core";
 import { createRuntime, type AbApi, type RuntimeDeps } from "../src/runtime";
-import { baseConfig, baseSettings, goalsConfig, namedSettings, remoteConfig, renamedAnalytics } from "./fixtures";
+import { baseConfig, baseSettings, dliteSettings, goalsConfig, namedSettings, remoteConfig, renamedAnalytics } from "./fixtures";
 
 // Plan 12 K11: edge が 429 を返したら、そのページで 1 回だけ dataLayer に ab_error を積む(適用と送信は止めない)
 
@@ -81,7 +81,7 @@ it("event だけが 429 のときも積む(decision は成功)", async () => {
 
 it("D-lite の decision が 429 でも積む", async () => {
   const f = routedFetch(() => res(429));
-  createRuntime(makeDeps(f.fn), { config: baseConfig, settings: { ...baseSettings, mode: "B" } });
+  createRuntime(makeDeps(f.fn), { config: baseConfig, settings: dliteSettings });
   await flush();
   expect(f.calls[0]!.url).toBe("/__ab/decision");
   expect(abErrors(dataLayer())).toEqual([RATE_LIMITED]);
@@ -136,7 +136,7 @@ it("同意が無い(required で未許可)ときは送信そのものが無い�
 
 it("撤回の送信(kind: consent)が 429 でも積まない", async () => {
   const f = routedFetch((_url, body) => (body.kind === "consent" ? res(429) : res(200, { v: 3, experiments: [] })));
-  const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: { ...baseSettings, mode: "B" } });
+  const api = createRuntime(makeDeps(f.fn), { config: baseConfig, settings: dliteSettings });
   await flush();
   api.consent(false);
   await flush();

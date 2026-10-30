@@ -2,6 +2,12 @@ import { test, expect } from "./fixtures";
 import { randomUUID } from "node:crypto";
 import { uuidToVisitorId } from "@wtt/core";
 import { findVisitor, presetVisitor, readDataLayer } from "./helpers";
+import { EXAMPLE_HOST, EXAMPLE_ORIGIN } from "./results-key";
+
+// B139: D-lite(Mode B の /__ab/*)は、https かつ hosts に載ったホスト名(ポート無し)のページだけが使う経路(runtime の onEdgePath)。
+// 本番と同じ経路を試すので、ローカルの HTTPS の入口(playwright.config.ts の図)の Cloudflare 経由のホストで開く
+test.use({ baseURL: EXAMPLE_ORIGIN });
+const preset = (context: Parameters<typeof presetVisitor>[0], id: string) => presetVisitor(context, id, { httpOnly: true, domain: EXAMPLE_HOST });
 
 test("d_lite_runtime_never_writes_document_cookie", async ({ context, page }) => {
   // spec §9.6: D-lite の Identity Cookie は edge 所有(HttpOnly)。runtime は document.cookie を読みも書きもしない。
@@ -21,7 +27,10 @@ test("d_lite_runtime_never_writes_document_cookie", async ({ context, page }) =>
   await page.goto("/dlite.html");
   await expect.poll(async () => (await context.cookies()).find((c) => c.name === "_ab_vid")).toBeTruthy();
   const vid = (await context.cookies()).find((c) => c.name === "_ab_vid")!;
-  expect(vid.httpOnly).toBe(true); // edge の Set-Cookie 由来である証明
+  // B139: この Site は共有の範囲(cookieDomains ["example.test"])を焼いてあるので、edge は Domain 付き・HttpOnly なしで書く(HttpOnly はホスト限定のときだけ)。
+  // edge の Set-Cookie 由来であることは、下の「runtime の setter が 0 回なのに Cookie がある」で証明する(HttpOnly の有無には頼らない)
+  expect(vid.domain).toBe(".example.test");
+  expect(vid.httpOnly).toBe(false);
   const counts = await page.evaluate(() => ({
     writes: (window as unknown as { __cookieWrites: number }).__cookieWrites,
     reads: (window as unknown as { __cookieReads: number }).__cookieReads,
@@ -32,7 +41,7 @@ test("d_lite_runtime_never_writes_document_cookie", async ({ context, page }) =>
 
 test("d-lite applies changes based on the edge-owned cookie", async ({ context, page }) => {
   // exp_dlite は persistAssignment: true(Plan 10 B6)なので事前 Cookie の割当は DO にも保存される。variant / weight を変えると wrangler dev の残った DO が旧 variant を固定し得る → その場合は .wrangler/state を消す
-  await presetVisitor(context, findVisitor("exp_dlite", "B"), { httpOnly: true });
+  await preset(context, findVisitor("exp_dlite", "B"));
   await page.goto("/dlite.html");
   await expect(page.locator(".hero-title")).toHaveText("D-lite B");
 });
@@ -54,7 +63,7 @@ test("d_lite_goal_is_recorded_via_ab_event_with_cookie_identity_only", async ({ 
   // Plan 5 繰越(backlog B6)。204 は黙殺経路(Cookie 不正・未知の goalId)でも返るので、記録されたことは
   // converted(g_dlite_buy) を条件にする exp_dlite_converted がリロード後に適用されることで観測する(r1 CL-Medium-1)
   const vid = uuidToVisitorId(randomUUID())!; // 他テストと Profile を共有しない新しい訪問者
-  await presetVisitor(context, vid, { httpOnly: true });
+  await preset(context, vid);
   await Promise.all([page.waitForResponse((r) => r.url().includes("/__ab/decision")), page.goto("/dlite.html")]);
   await expect(page.locator(".old-banner")).toHaveText("旧バナー"); // まだ converted ではない
   const [req] = await Promise.all([page.waitForRequest((r) => r.url().includes("/__ab/event") && r.method() === "POST"), page.click("#buy")]);

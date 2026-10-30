@@ -76,7 +76,7 @@ export function activateScripts(doc: Document, roots: Element[], nonce: string |
       old.replaceWith(next);
       clones.push(next);
     } catch (e) {
-      console.debug("wtt: script activation failed", e);
+      console.debug("wtt: script", e);
     }
   }
   return clones;

@@ -12,7 +12,7 @@ import { capacityLevel } from "../evaluation-plan";
 import { collectUntilMap } from "../results/collect-until";
 import { enqueuePurgeQuery, kickOffPurgeForSites } from "../results/purge";
 import { retentionConflicts, retentionShrinkError } from "../retention";
-import { loadSite, requireWorkspaceRole } from "../roles";
+import { canViewWorkspace, loadSite, requireWorkspaceRole } from "../roles";
 import { siteJson, SiteJsonSchema } from "../serialize";
 import { bootstrapSettingsChanged, reconcileStatic, requestStaticDeploy, requestStaticRemoval, staticRemoveConflict, staticRemoveFailed } from "../static-delivery";
 import { touchSite } from "../validation";
@@ -30,6 +30,21 @@ import {
   releaseHosts,
 } from "../site-settings";
 import { readCloudflarePlan } from "../instance-settings";
+import {
+  claimHolder,
+  claimsGrow,
+  claimsOf,
+  claimStatements,
+  findSharingConflict,
+  findSharingConflicts,
+  isClaimConflict,
+  SHARING_CONFLICT_CREATE_HINT,
+  SHARING_CONFLICT_HINT,
+  sharingConflictError,
+  siteScopedCookieName,
+  type SharingConflict,
+} from "../sharing-conflict";
+import type { Context } from "hono";
 
 export const siteRoutes = new Hono<AppEnv>();
 
@@ -50,6 +65,26 @@ const SiteGetSchema = SiteJsonSchema.extend({
     .nullable()
     .describe("計測用のデータベースの使用量(導入全体。15 分ごとに測る)。まだ測っていなければ null"),
 });
+
+/** B139(spec Q29): 作成の応答。衝突を避けるために共有か Cookie 名を変えたときだけ sharingAdjusted を足す */
+const SiteCreatedSchema = SiteJsonSchema.extend({
+  sharingAdjusted: z
+    .object({
+      reason: z.literal("conflict").describe("同じ登録ドメインの別のサイトと、訪問者 ID の Cookie がぶつかった"),
+      shareSubdomains: z.boolean().describe("作ったサイトの共有の切り替え(相手が共有していなければ false にして作る)"),
+      visitorCookieName: z.string().describe("作ったサイトの訪問者 ID の Cookie 名(相手が共有していれば、サイト ID を付けた名前に変えて作る)"),
+    })
+    .optional()
+    .describe("訪問者 ID の Cookie が同じ登録ドメインの別のサイトとぶつかったため、共有をオフにするか Cookie 名を変えて作ったときだけ返す。何を変えたかを利用者に知らせる"),
+});
+
+/** 衝突の相手から 422 sharing_conflict を作る。相手のワークスペースを見られる人にだけサイト名を出す(spec Q23) */
+async function conflictError(c: Context<AppEnv>, conflict: Pick<SharingConflict, "siteId" | "workspaceId" | "domain"> | null, hint: string) {
+  if (!conflict) return sharingConflictError(null, null, hint);
+  const visible = await canViewWorkspace(c, conflict.workspaceId);
+  const name = visible ? ((await c.get("db").selectFrom("sites").select("name").where("id", "=", conflict.siteId).executeTakeFirst())?.name ?? null) : null;
+  return sharingConflictError(conflict.domain, name, hint);
+}
 
 siteRoutes.get(
   "/workspaces/:wid/sites",
@@ -78,7 +113,7 @@ siteRoutes.post(
     summary: "サイトを作成(管理者以上)",
     security: [{ bearer: [] }],
     responses: {
-      201: { description: "作成したサイト", content: { "application/json": { schema: resolver(SiteJsonSchema) } } },
+      201: { description: "作成したサイト", content: { "application/json": { schema: resolver(SiteCreatedSchema) } } },
       ...errorResponses(400, 401, 403, 404, 409, 422, 503),
     },
   }),
@@ -99,7 +134,7 @@ siteRoutes.post(
     const base: SiteRow = {
       id, workspace_id: wid, name: body.name, domain: body.domain, mode: "A", id_source: "ab", site_salt: randomToken(16),
       allowed_origins_json: JSON.stringify([`https://${body.domain}`]), hosts_json: "[]", retention_days: body.retentionDays,
-      consent_mode: body.consentMode, decision_timeout_ms: 1000, visitor_cookie_name: "_ab_vid", uuid_cookie_enabled: 0, uuid_cookie_name: "_ab_uuid",
+      consent_mode: body.consentMode, decision_timeout_ms: 1000, visitor_cookie_name: body.visitorCookieName ?? "_ab_vid", uuid_cookie_enabled: 0, uuid_cookie_name: body.uuidCookieName ?? "_ab_uuid",
       previous_cookie_names_json: "[]", forget_on_revoke: 1, timezone: "Asia/Tokyo", analytics_json: null, ga4_property_id: null, bigquery_dataset: null, bridge_secret: null, bridge_secret_prev: null, bridge_secret_rotated_at: null,
       active_version: null, active_kv_stale: 0, last_activated_at: null, content_updated_at: now, created_at: now, updated_at: now,
       // 列の既定と同じ値(世代の epoch は created_at になる)
@@ -110,14 +145,45 @@ siteRoutes.post(
       collect_until_dirty: 0,
       // plan12 K10: null = Cloudflare のプランの既定
       new_profile_budget_per_day: null,
+      // B139: 新しい Site は共有をオンで作る。自動の移行(既存の行だけ)の対象にはしない
+      share_subdomains: 1, previous_cookie_domains_json: "[]", share_migration_pending: 0,
     };
-    const { next, error } = applySitePatch(base, {
-      mode: body.mode, hosts: body.mode === "B" ? [body.domain] : [],
-      visitorCookieName: body.visitorCookieName, uuidCookieEnabled: body.uuidCookieEnabled, uuidCookieName: body.uuidCookieName,
-    }, now);
+    // Cookie 名は base に直接入れる(patch で渡すと、新しいサイトなのに既定の名前を旧名として残し、旧名の後始末と共有の衝突の検査の対象にしてしまう)
+    const patch = { mode: body.mode, hosts: body.mode === "B" ? [body.domain] : [], uuidCookieEnabled: body.uuidCookieEnabled };
+    let { next, error } = applySitePatch(base, patch, now);
     if (error) throw error;
-    // 順序: sites 行(FK の親)→ host 所有権 → KV。claimHosts が 409 なら sites 行を消して返す(review r2 CX-High-6)
-    await db.insertInto("sites").values(next).execute();
+    // B139(spec Q29): 同じ導入の別のサイトと訪問者 ID の Cookie がぶつかるなら、作成は止めずに 1 回だけ調整する。
+    // 相手が共有していれば Cookie 名をサイト ID 付きに変え(共有はオンのまま。共有をオフにしても解けない)、相手が共有していなければ共有をオフにして作る
+    const nowSec = Math.floor(now / 1000);
+    const conflicts = await findSharingConflicts(c.env.DB, next, nowSec);
+    let adjusted = false;
+    if (conflicts.length > 0) {
+      adjusted = true;
+      if (conflicts.some((x) => x.otherShares)) {
+        const uuidClash = next.uuid_cookie_enabled === 1 && conflicts.some((x) => x.otherNames.includes(next.uuid_cookie_name));
+        const renamed: SiteRow = {
+          ...base,
+          visitor_cookie_name: await siteScopedCookieName("_ab_vid", id),
+          uuid_cookie_name: uuidClash ? await siteScopedCookieName("_ab_uuid", id) : base.uuid_cookie_name,
+        };
+        ({ next, error } = applySitePatch(renamed, patch, now));
+        if (error) throw error;
+      } else {
+        next = { ...next, share_subdomains: 0 };
+      }
+      // 調整は 1 回だけ。それでも残る(その名前が手で付けられていた)ときは 422 にして、作り直しを案内する
+      const left = await findSharingConflict(c.env.DB, next, nowSec);
+      if (left) throw await conflictError(c, left, SHARING_CONFLICT_CREATE_HINT);
+    }
+    // 順序: sites 行(FK の親)+ 共有の予約(同じ batch。同時の作成で予約に負けたら行も残さず 422)→ host 所有権 → KV。
+    // claimHosts が 409 なら sites 行を消して返す(review r2 CX-High-6。予約は FK の CASCADE で消える)
+    const claims = claimsOf(next, nowSec);
+    try {
+      await c.env.DB.batch([toStatement(c.env, db.insertInto("sites").values(next)), ...claimStatements(c.env.DB, next.id, claims, nowSec)]);
+    } catch (e) {
+      if (isClaimConflict(e)) throw await conflictError(c, await claimHolder(c.env.DB, next.id, claims, nowSec), SHARING_CONFLICT_CREATE_HINT);
+      throw e;
+    }
     try {
       await claimHosts(db, next.id, JSON.parse(next.hosts_json));
     } catch (e) {
@@ -134,7 +200,8 @@ siteRoutes.post(
       await deleteSiteRecords(c.env, db, next, []).catch(() => {});
       throw e;
     }
-    return c.json(siteJson(next), 201);
+    const sharingAdjusted = adjusted ? { reason: "conflict" as const, shareSubdomains: next.share_subdomains === 1, visitorCookieName: next.visitor_cookie_name } : undefined;
+    return c.json({ ...siteJson(next), ...(sharingAdjusted ? { sharingAdjusted } : {}) }, 201);
   },
 );
 
@@ -205,8 +272,14 @@ siteRoutes.patch(
   }),
   async (c) => {
     const { site } = await loadSite(c, c.req.param("sid"), "admin");
-    const { next, error } = applySitePatch(site, c.req.valid("json"), Date.now());
+    const body = c.req.valid("json");
+    const nowMs = Date.now();
+    const nowSec = Math.floor(nowMs / 1000);
+    const { next, error } = applySitePatch(site, body, nowMs);
     if (error) throw error;
+    // B139: 共有の切り替えを含む保存は、利用者が選んだ値として自動の移行の対象から外す(同じ batch で印を 0 にする)
+    const choosesSharing = body.shareSubdomains !== undefined;
+    if (choosesSharing) next.share_migration_pending = 0;
     // D9 ②(設計書 §6.6): 計測用 D1 が無い導入では、結果の記録を有効にする操作を拒む(既存の導入先の更新で、D1 を作る前に有効にしても壊れない)。
     // 判定は無効 → 有効の切り替えだけ(有効のまま D1 が外れた Site で、ほかの設定の保存まで止めない)。無効にする向きは受ける
     if (next.results_enabled === 1 && site.results_enabled === 0 && !resultsStore(c.env))
@@ -240,33 +313,80 @@ siteRoutes.patch(
       await putSiteRecords(c.env, site, extras).catch(() => {});
       await releaseHosts(c.env, db, site.id, addedHosts).catch(() => {});
     };
-    // (1) 衝突検査(D1)。(2) KV の put(新しい設定と新しい hosts。消さない)。(3) site_hosts の入れ替えと sites の更新を 1 batch。
-    // (4) 外した host の KV を releaseHosts で消す(D1 の確定の後。plan12 K14 (c))。
-    // activation = KV put なので KV が先。失敗すれば D1 は旧値のまま(= 503 で再試行できる)
+    // (1) 衝突検査(D1)。host の取り合いと、訪問者 ID の Cookie の共有の衝突(B139 spec §6.4・Q23。予約の表は (3) の batch で必ず塞ぐ)
     await assertHostsFree(db, next.id, nextHosts);
-    try {
-      await putSiteRecords(c.env, next, extras);
-    } catch (e) {
-      await restoreKv(); // settings は書けたが host の put で落ちた、など途中まで進んだ場合
-      throw e;
-    }
+    const conflict = await findSharingConflict(c.env.DB, next, nowSec);
+    if (conflict) throw await conflictError(c, conflict, SHARING_CONFLICT_HINT);
     // 決定 52 (5) / plan K4: bootstrap に焼く設定(訪問者 ID など)が変わり、公開中の版があるときは、保存の UPDATE と同じ文で配信ファイルの印を立てる
     // (出し直しの依頼の前に処理が止まっても印が残り、GET の自己修復が拾う)
     const staticChanged = next.active_version !== null && bootstrapSettingsChanged(site, next);
-    try {
-      await c.env.DB.batch([
+    const oldClaims = claimsOf(site, nowSec);
+    const newClaims = claimsOf(next, nowSec);
+    const pendingStmt = choosesSharing ? [c.env.DB.prepare("update sites set share_migration_pending = 0 where id = ?").bind(next.id)] : [];
+    // (3) site_hosts の入れ替え・共有の予約の入れ替え・sites の更新を 1 batch
+    const writeD1 = () =>
+      c.env.DB.batch([
         c.env.DB.prepare("delete from site_hosts where site_id = ?").bind(next.id),
         ...nextHosts.map((h) => c.env.DB.prepare("insert into site_hosts (host, site_id) values (?, ?)").bind(h, next.id)),
+        ...claimStatements(c.env.DB, next.id, newClaims, nowSec),
+        ...pendingStmt,
         ...compileUpdate(c.env, db, next, { markStaticStale: staticChanged }),
       ]);
-    } catch (e) {
-      await restoreKv();
+    /** batch の失敗を封筒にする。予約の主キーの違反 = 同時の保存で共有の衝突に負けた(422)。それ以外は host の取り合い(409) */
+    const batchError = async (e: unknown): Promise<ApiError> => {
+      if (isClaimConflict(e)) return conflictError(c, await claimHolder(c.env.DB, next.id, newClaims, nowSec), SHARING_CONFLICT_HINT);
       // review r2 finding 4: 409 は errorHandler の 5xx ログにも乗らないので、生の例外(D1 の制約名やテーブル名を
       // 含み得る)を封筒の message に流していた ── spec §13.5 の「message は日本語の文」に反するだけでなく、
       // その内部情報を外部エージェント含む全クライアントにそのまま返してしまう。ここで診断用に一度だけログし、
       // 応答には日本語の文だけを積む
       console.error("host_in_use (batch)", e);
-      throw new ApiError(409, "host_in_use", { message: "ホスト名の登録が競合しました", hint: "再試行してください" });
+      return new ApiError(409, "host_in_use", { message: "ホスト名の登録が競合しました", hint: "再試行してください" });
+    };
+    if (claimsGrow(oldClaims, newClaims)) {
+      // B139(spec Q28): 予約の集合に足すものがある保存(共有の開始・範囲の追加・正本名の変更・UUID Cookie の有効化や改名)は、D1 を先に確定してから KV を書く。
+      // 予約に負けた保存の設定は KV に一度も載らない。KV の書き込みが失敗したら D1 を戻す
+      try {
+        await writeD1();
+      } catch (e) {
+        throw await batchError(e);
+      }
+      try {
+        await putSiteRecords(c.env, next, extras);
+      } catch (e) {
+        // 先に D1 を旧値に戻す(releaseHosts は D1 に持ち主が居ない host だけを消すので、戻した後に呼ぶ)。予約は戻す間に他のサイトが取った組を飛ばす。
+        // 配信ファイルの世代は戻さない(印が立ったままなら、旧い設定で作り直すだけ)。
+        // 戻す batch 自体が落ちたら、D1 は新しい値のまま。KV は戻さず(D1 と比べる Cron が D1 に合わせる)500 にする
+        try {
+          await c.env.DB.batch([
+            c.env.DB.prepare("delete from site_hosts where site_id = ?").bind(site.id),
+            ...prevHosts.map((h) => c.env.DB.prepare("insert or ignore into site_hosts (host, site_id) values (?, ?)").bind(h, site.id)),
+            ...claimStatements(c.env.DB, site.id, oldClaims, nowSec, { orIgnore: true }),
+            c.env.DB.prepare("update sites set share_migration_pending = ? where id = ?").bind(site.share_migration_pending, site.id),
+            ...compileUpdate(c.env, db, site),
+          ]);
+        } catch (err) {
+          console.error(`site ${site.id}: restoring D1 after a failed settings write failed`, err);
+          throw new ApiError(500, "internal");
+        }
+        await restoreKv();
+        throw e;
+      }
+    } else {
+      // (2) KV の put(新しい設定と新しい hosts。消さない)→ (3) D1 の batch。
+      // (4) 外した host の KV を releaseHosts で消す(D1 の確定の後。plan12 K14 (c))。
+      // activation = KV put なので KV が先。失敗すれば D1 は旧値のまま(= 503 で再試行できる)
+      try {
+        await putSiteRecords(c.env, next, extras);
+      } catch (e) {
+        await restoreKv(); // settings は書けたが host の put で落ちた、など途中まで進んだ場合
+        throw e;
+      }
+      try {
+        await writeD1();
+      } catch (e) {
+        await restoreKv();
+        throw await batchError(e);
+      }
     }
     // D1 が確定したので、外した host の KV を消す。D1 の site_hosts に持ち主が居ないものだけ(別の Site が取った host は消さない)。
     // 確定済みなので失敗しても保存は成功として返す(KV に残った mapping は、その host を取る Site の PATCH が上書きする)

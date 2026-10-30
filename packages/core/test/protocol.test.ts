@@ -44,6 +44,19 @@ describe("results events (決定 51、設計書 §6.3)", () => {
     expect(EventBodySchema.safeParse({ type: "conversion", v: 1, goalId: "g", runIds: [] }).success).toBe(false);
     expect(EventBodySchema.safeParse({ type: "conversion", v: 1, goalId: "g", runIds: Array(21).fill(runId) }).success).toBe(false);
   });
+  it("goal-only conversion (v2) takes 1 to 20 goalIds (B139 §5.2)", () => {
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 2, goalIds: ["g"] }).success).toBe(true);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 2, goalIds: ["g"], visitorId: "x" }).success).toBe(true);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 2, goalIds: Array(20).fill("g") }).success).toBe(true);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 2, goalIds: [] }).success).toBe(false);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 2, goalIds: Array(21).fill("g") }).success).toBe(false);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 2, goalIds: [""] }).success).toBe(false);
+    // 版と形の組み合わせは混ぜない(v2 に runIds、v1 に goalIds)
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 2, goalIds: ["g"], runIds: [runId] }).success).toBe(false);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 1, goalIds: ["g"] }).success).toBe(false);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 3, goalIds: ["g"] }).success).toBe(false);
+    expect(EventBodySchema.safeParse({ type: "conversion", v: 2, goalIds: ["g"], x: 1 }).success).toBe(false);
+  });
   it("rejects unknown version and extra keys", () => {
     expect(EventBodySchema.safeParse({ type: "participant", v: 2, runId, variantId: "b", device: "mobile", applied: "ok" }).success).toBe(false);
     expect(EventBodySchema.safeParse({ type: "conversion", v: 1, goalId: "g", runIds: [runId], x: 1 }).success).toBe(false);

@@ -12,7 +12,7 @@ export const SECTIONS: Array<{ id: SectionId; label: string; heading: string; in
 
 export const SECTION_IDS = SECTIONS.map((s) => s.id) as readonly SectionId[];
 
-const IDENTITY = new Set(["mode", "hosts", "idSource", "byoidCookie", "visitorCookieName", "uuidCookieEnabled", "uuidCookieName"]);
+const IDENTITY = new Set(["mode", "hosts", "idSource", "byoidCookie", "visitorCookieName", "uuidCookieEnabled", "uuidCookieName", "shareSubdomains"]);
 const EXTERNAL = new Set(["ga4PropertyId", "bigqueryDataset"]);
 
 /** 入力欄の name、または control の 422 の path(ドット区切り)から、その欄がある節を引く。不明は先頭の節 */
@@ -29,12 +29,14 @@ export function sectionOfField(name: string): SectionId {
  * - analytics の欄は、422 の種類によって `analytics.` が付く形と付かない形の両方で返る(SiteSettingsForm の analyticsError と同じ理由)
  * - 「参照する Cookie 名」(byoidCookie)は送るときに idSource にまとめるので、エラーは idSource で返る
  * - 配列の欄(allowedOrigins・hosts)は要素ごとに `name.0` の形で返ることがある
+ * - 共有の衝突(422 sharing_conflict)は shareSubdomains で返るが、正本 Cookie 名を変えると解けるので、正本 Cookie 名を変えたときにも消す(B139)
  * 節ごとではなく欄ごとに消す: 節ごとに消すと、同じ節に残っている別の欄のエラーまで消えるため
  */
 export function fieldKeysFor(name: string): (key: string) => boolean {
   const exact = new Set([name]);
   if (name.startsWith("analytics.")) exact.add(name.slice("analytics.".length));
   if (name === "byoidCookie") exact.add("idSource");
+  if (name === "visitorCookieName") exact.add("shareSubdomains");
   const indexed = `${name}.`;
   return (key) => exact.has(key) || key.startsWith(indexed);
 }

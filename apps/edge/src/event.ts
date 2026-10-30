@@ -10,8 +10,10 @@ export type EventOutcome = "recorded" | "ignored" | "failed";
 /** Profile の DO に向かうイベント。結果のイベント(participant / conversion)は呼び出し側が results.ts へ分ける(D9 ②) */
 export type ProfileEventBody = Extract<EventBody, { type: "goal" } | { type: "forget" }>;
 
-/** 結果のイベント(D9 ② 設計書 §6.3)か。`/event` と `/__ab/event` が handleResultsEvent へ分けるのに使う */
-export function isResultsEvent(body: EventBody): body is Extract<EventBody, { type: "participant" } | { type: "conversion" }> {
+export type ResultsEventBody = Extract<EventBody, { type: "participant" } | { type: "conversion" }>;
+
+/** 結果のイベント(D9 ② 設計書 §6.3。目標だけの CV(B139 §5.2)を含む)か。`/event` と `/__ab/event` が結果の受信へ分けるのに使う */
+export function isResultsEvent(body: EventBody): body is ResultsEventBody {
   return body.type === "participant" || body.type === "conversion";
 }
 

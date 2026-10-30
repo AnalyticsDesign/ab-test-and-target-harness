@@ -1,9 +1,10 @@
 import { sql } from "kysely";
 import { z } from "zod";
 import {
-  AnalyticsSettingsSchema, DEFAULT_ANALYTICS, canonicalTimeZone, kvKeys, NEW_PROFILE_BUDGET_DEFAULTS, NEW_PROFILE_INSTANCE_PER_DAY_FREE, SITE_ID_RE, SiteSettingsSchema,
+  AnalyticsSettingsSchema, DEFAULT_ANALYTICS, canonicalTimeZone, kvKeys, markerCookieName, NEW_PROFILE_BUDGET_DEFAULTS, NEW_PROFILE_INSTANCE_PER_DAY_FREE, SITE_ID_RE, SiteSettingsSchema,
   type NewProfileBudget, type SiteSettings,
 } from "@wtt/core";
+import { deriveCookieScopes } from "./cookie-scope";
 import { toStatement, type Db, type SiteRow } from "./db";
 import type { Env } from "./env";
 import { ApiError, validationFailed } from "./errors";
@@ -34,7 +35,7 @@ export const SITE_PATCH_COLUMNS = [
   "retention_days", "consent_mode", "decision_timeout_ms",
   "visitor_cookie_name", "uuid_cookie_enabled", "uuid_cookie_name", "previous_cookie_names_json",
   "forget_on_revoke", "timezone", "analytics_json", "ga4_property_id", "bigquery_dataset",
-  "results_enabled", "results_retention_days", "new_profile_budget_per_day", "updated_at",
+  "results_enabled", "results_retention_days", "new_profile_budget_per_day", "share_subdomains", "previous_cookie_domains_json", "updated_at",
 ] as const satisfies readonly (keyof SiteRow)[];
 
 /** Kysely の `compile()`(`sql` / `parameters`)を D1 の prepared statement 配列に写す(batch = 1 トランザクション用) */
@@ -112,6 +113,10 @@ export const SitePatchSchema = z.strictObject({
   visitorCookieName: z.string().optional(),
   uuidCookieEnabled: z.boolean().optional(),
   uuidCookieName: z.string().optional(),
+  shareSubdomains: z
+    .boolean()
+    .optional()
+    .describe("訪問者 ID の Cookie を、同じ登録ドメイン(例: example.com)のサブドメインのあいだで共有する(既定 true)。タグを置くホスト(hosts と allowedOrigins のホスト)を登録ドメインごとにまとめ、まとまりごとに Domain 属性を付けて発行する。false はホストごとの Cookie。切り替えは設置タグの配信ファイルを作り直して反映する"),
   // 検証は core の AnalyticsSettingsSchema に委ねる(失敗を validation_failed ではなく 422 invalid_analytics で返すため、ここでは unknown)
   analytics: z.unknown().optional().describe("外部計測の名前(dataLayer の命名設定)。全フィールド optional、未指定は既定値。`dataLayerName` は push 先の配列の名前(既定 `dataLayer`。GTM のスニペットで名前を変えているサイトは同じ名前にする)。不正なら 422 invalid_analytics"),
   // 決定 34: 外部 ID(資格情報ではない)。null で消去。site-settings record には載せない
@@ -122,6 +127,39 @@ export type SitePatch = z.infer<typeof SitePatchSchema>;
 
 type PrevName = { name: string; until: number };
 const prevNames = (row: SiteRow): PrevName[] => JSON.parse(row.previous_cookie_names_json) as PrevName[];
+type PrevDomain = { domain: string; until: number };
+const prevDomains = (row: SiteRow): PrevDomain[] => JSON.parse(row.previous_cookie_domains_json) as PrevDomain[];
+
+/**
+ * B139 §3.6: 共有の範囲の前後を比べ、前の範囲の一覧を作り直す(previousCookieNames の扱いにならう)。
+ * 期限切れを外し、消えた範囲を until 付きで足し、今の範囲を外す(edge / runtime が今の発行先を後始末で消さないように。
+ * 「オン → オフ → オン」「まとまりの削除 → 再追加」でも Domain 付きの Cookie が 1 つ残り、ID を引き継ぐ)
+ */
+function nextPrevDomains(row: SiteRow, next: SiteRow, nowSec: number): PrevDomain[] {
+  const before = deriveCookieScopes(row).scopes;
+  const after = deriveCookieScopes(next).scopes;
+  const until = nowSec + next.retention_days * 86400;
+  const removed = before.filter((d) => !after.includes(d));
+  const kept = prevDomains(row).filter((p) => p.until > nowSec && !removed.includes(p.domain));
+  return [...kept, ...removed.map((domain) => ({ domain, until }))].filter((p) => !after.includes(p.domain));
+}
+
+/**
+ * B139 §3.2: 印の Cookie(`<正本名>_js`。今の名前と旧名から作ったもの)と、ほかの Cookie 名がぶつかっていないか。ぶつかった名前を返す。
+ * core の SiteSettingsSchema の refine と同じ規則を、KV の parse より前に 422 cookie_name_in_use で返すために見る
+ */
+function markerClash(next: SiteRow, previous: PrevName[]): string | null {
+  const marker = markerCookieName(next.visitor_cookie_name);
+  const oldMarkers = previous.map((p) => markerCookieName(p.name));
+  const markers = [marker, ...oldMarkers];
+  if (markers.includes(next.uuid_cookie_name)) return next.uuid_cookie_name;
+  // 正本名が旧名の印と同じだと、旧名の後始末が今の ID を消す。今の印が旧名と同じだと、旧名の後始末が今の印を消す
+  if (oldMarkers.includes(next.visitor_cookie_name)) return next.visitor_cookie_name;
+  if (previous.some((p) => p.name === marker)) return marker;
+  const ref = next.id_source.startsWith("cookie:") ? next.id_source.slice("cookie:".length) : null;
+  if (ref !== null && markers.includes(ref)) return ref;
+  return null;
+}
 
 /** D1 行 → site-settings record(spec §5.4 / §9.6)。row が不正なら throw(保存経路が検証済みのため到達しない) */
 export function siteToSettings(row: SiteRow): SiteSettings {
@@ -149,6 +187,7 @@ export function applySitePatch(row: SiteRow, patch: SitePatch, nowMs: number): {
   if (patch.resultsEnabled !== undefined) next.results_enabled = patch.resultsEnabled ? 1 : 0;
   if (patch.resultsRetentionDays !== undefined) next.results_retention_days = patch.resultsRetentionDays;
   if (patch.newProfileBudgetPerDay !== undefined) next.new_profile_budget_per_day = patch.newProfileBudgetPerDay;
+  if (patch.shareSubdomains !== undefined) next.share_subdomains = patch.shareSubdomains ? 1 : 0;
   if (patch.timezone !== undefined) {
     // 大文字小文字だけを一覧の綴りにそろえて保存する(asia/tokyo → Asia/Tokyo。別名は置き換えない)。オフセット形式は IANA 名ではないので受けない(plan ② P14)
     const tz = canonicalTimeZone(patch.timezone);
@@ -182,6 +221,11 @@ export function applySitePatch(row: SiteRow, patch: SitePatch, nowMs: number): {
   // 有効化で再び名前を使うなら、旧名リストから外す(自分が出力する Cookie を自分で消さない)
   if (next.uuid_cookie_enabled === 1) previous = previous.filter((p) => p.name !== next.uuid_cookie_name);
   next.previous_cookie_names_json = JSON.stringify(previous);
+  const clash = markerClash(next, previous);
+  if (clash !== null)
+    return { next, error: new ApiError(422, "cookie_name_in_use", { name: clash, message: "この Cookie 名は使えません", hint: "訪問者 ID の Cookie 名(今の名前と保持期限内の旧名)の末尾に _js を付けた名前は、このツールが印として使うため、ほかの Cookie 名にできません" }) };
+  // hosts・allowedOrigins・共有の切り替え・保持期間を反映した後で、前の共有の範囲を作り直す
+  next.previous_cookie_domains_json = JSON.stringify(nextPrevDomains(row, next, nowSec));
 
   if (patch.ga4PropertyId !== undefined) next.ga4_property_id = patch.ga4PropertyId;
   if (patch.bigqueryDataset !== undefined) next.bigquery_dataset = patch.bigqueryDataset;
@@ -229,7 +273,9 @@ function settingsInput(row: SiteRow): unknown {
     settingsVersion: 1, siteId: row.id, mode: row.mode, idSource: row.id_source,
     allowedOrigins: JSON.parse(row.allowed_origins_json), hosts: JSON.parse(row.hosts_json),
     visitorCookieName: row.visitor_cookie_name, uuidCookieEnabled: row.uuid_cookie_enabled === 1, uuidCookieName: row.uuid_cookie_name,
-    previousCookieNames: prevNames(row), decisionTimeoutMs: row.decision_timeout_ms, consentMode: row.consent_mode,
+    previousCookieNames: prevNames(row),
+    shareSubdomains: row.share_subdomains === 1, cookieDomains: deriveCookieScopes(row).scopes, previousCookieDomains: prevDomains(row),
+    decisionTimeoutMs: row.decision_timeout_ms, consentMode: row.consent_mode,
     analytics: row.analytics_json ? JSON.parse(row.analytics_json) : DEFAULT_ANALYTICS,
     retentionDays: row.retention_days, // spec §8.3: DO の alarm 期限は record で edge に配送する(決定 37)
     forgetOnRevoke: row.forget_on_revoke === 1,

@@ -15,6 +15,7 @@ import {
 } from "@wtt/core";
 import app from "../src/index";
 import { forgetResults, handleResultsEvent, visitorKey } from "../src/results";
+import { recordGoalConversion } from "../src/goal-conversion";
 import { PROFILE_KEY, profileStub } from "../src/profile";
 import { budgetStub } from "../src/results-budget";
 import { healthBuffer, healthStub, hourOf, resetHealthBufferForTest } from "../src/results-health";
@@ -453,5 +454,373 @@ describe("results forget (D9 ② Task 7)", () => {
     spy.mockRestore();
     expect(await rows("participants")).toHaveLength(2);
     expect(await rows("conversions")).toHaveLength(2);
+  });
+});
+
+// B139 §5(Q14・Q22・Q30): 目標だけの CV。run は D1 の参加の記録から引く。/__ab/decision と type:"goal" に便乗させる
+describe("goal-only conversions (B139 §5)", () => {
+  const HOST = "site.example"; // ORIGIN のホスト。Mode B の Cloudflare 経由のドメイン
+  const pvGoal = (id: string, value: string) => ({ id, name: id, type: "PAGEVIEW", config: { page: { op: "contains", value } } });
+  /** CUSTOM の g_buy に、ページの表示の目標を 2 つ足した config(needsProfile = true) */
+  const goalConfig = (version: number, runs: Record<string, string> = { exp_a: RUN_A, exp_b: RUN_B, exp_p: RUN_P }) => ({
+    ...config(version),
+    goals: [{ id: "g_buy", name: "Buy", type: "CUSTOM", config: {} }, pvGoal("g_thanks", "/thanks"), pvGoal("g_done", "/thanks/done")],
+    results: { forget: true, runs },
+  });
+  /** route 経由の書き込みは今の時刻で予算を使うので、受け取る枠を小さくして同じ日の予算を使い切らない */
+  const routeEnv: Partial<Env> = { RESULTS_LEASE_ROWS: "1", DECISION_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as Env["DECISION_RATE_LIMITER"] };
+  async function fetchAt(url: string, body: unknown, opts: { cookie?: string; origin?: string | null; envOverride?: Partial<Env> } = {}): Promise<Response> {
+    const headers = new Headers({ "Content-Type": "application/json" });
+    if (opts.origin !== null) headers.set("Origin", opts.origin ?? ORIGIN);
+    if (opts.cookie) headers.set("Cookie", opts.cookie);
+    const ctx = createExecutionContext();
+    const res = await app.fetch(new Request(url, { method: "POST", headers, body: JSON.stringify(body) }), { ...env, ...routeEnv, ...opts.envOverride }, ctx);
+    await waitOnExecutionContext(ctx); // 便乗の記録(waitUntil)を済ませる
+    return res;
+  }
+  const abDecision = (path: string, cookie: string, envOverride: Partial<Env> = {}, v = 1) =>
+    fetchAt(`https://${HOST}/__ab/decision`, { v, url: `https://${HOST}${path}`, referrer: "", device: "mobile" }, { cookie, origin: null, envOverride });
+  const abEvent = (body: unknown, cookie: string, envOverride: Partial<Env> = {}) => fetchAt(`https://${HOST}/__ab/event`, body, { cookie, origin: null, envOverride });
+  const v1Event = (body: unknown, envOverride: Partial<Env> = {}, origin?: string | null) => fetchAt(`https://edge.example/v1/sites/${SITE}/event`, body, { envOverride, origin });
+  const goalCv = (goalIds: string[]) => ({ type: "conversion", v: 2, goalIds });
+  /** 参加の行を直接入れる(受信の経路を通すと isolate の枠を受け取ってしまい、予算の停止の確かめを乱す) */
+  async function seedParticipant(vid: string, runId: string, siteId = SITE): Promise<void> {
+    const key = (await visitorKey(env, siteId, vid))!;
+    await db().prepare("INSERT INTO participants (run_id, visitor_key, site_id, variant_id, exposed_at, device, applied) VALUES (?1, ?2, ?3, 'vA', 1, 'desktop', 'ok')").bind(runId, key, siteId).run();
+  }
+  const cvRows = () => db().prepare("SELECT run_id, goal_id, visitor_key FROM conversions ORDER BY run_id, goal_id").all<{ run_id: string; goal_id: string; visitor_key: ArrayBuffer }>().then((r) => r.results);
+  const cvPairs = async () => (await cvRows()).map((r) => `${r.run_id.slice(0, 1)}:${r.goal_id}`);
+  const ctxOf = (now: number, envOverride: Partial<Env> = {}) => ({ env: { ...env, ...envOverride }, ctx: createExecutionContext(), siteId: SITE, now });
+  async function record(goalIds: string[], vid: string, now: number, envOverride: Partial<Env> = {}) {
+    const c = ctxOf(now, envOverride);
+    const out = await recordGoalConversion(c, settings(), goalIds, vid);
+    await waitOnExecutionContext(c.ctx);
+    return out;
+  }
+  /** SELECT(参加の記録を引く文)だけを失敗させる・数える D1 */
+  const lookupDb = (opts: { fail: boolean; onSelect?: () => void }): D1Database =>
+    ({
+      prepare: (sql: string) => {
+        if (!sql.trimStart().startsWith("SELECT")) return db().prepare(sql);
+        opts.onSelect?.();
+        if (!opts.fail) return db().prepare(sql);
+        const boom = async () => { throw new Error("D1_ERROR: lookup failed"); };
+        const stmt = { all: boom, first: boom, raw: boom, run: boom };
+        return { ...stmt, bind: () => stmt };
+      },
+      batch: (stmts: D1PreparedStatement[]) => db().batch(stmts),
+    }) as unknown as D1Database;
+  /** HealthBuffer を手で送らずに ResultsHealth を読む(便乗の経路が flush を waitUntil に登録したかを見る) */
+  const healthNow = async (runId: string, now: number) =>
+    (await healthStub(env, SITE).read(runId, hourOf(now), hourOf(now) + HOUR)).reduce((a, r) => a + r.failed, 0);
+  const goalCount = async (vid: string, goalId: string) =>
+    (await runInDurableObject(profileStub(env, SITE, vid), (_i, s) => s.storage.get<{ goals: Record<string, { count: number }> }>(PROFILE_KEY)))?.goals[goalId]?.count ?? 0;
+
+  beforeEach(async () => {
+    await env.CONFIG_KV.put(kvKeys.host(HOST), SITE);
+    await env.CONFIG_KV.put(kvKeys.settings(SITE), JSON.stringify({ settingsVersion: 1, siteId: SITE, mode: "B", hosts: [HOST], allowedOrigins: [ORIGIN] }));
+    await env.CONFIG_KV.put(kvKeys.config(SITE, 1), JSON.stringify(goalConfig(1)));
+    __resetEdgeCaches();
+  });
+
+  it("goal_only_cv_counts_paused_run", async () => {
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_P); // 一時停止中(experiments[] に無いが results.runs にある)
+    expect(await record(["g_buy"], vid, day(21))).toEqual({ result: "stored" });
+    expect(await cvPairs()).toEqual(["p:g_buy"]);
+  });
+
+  it("goal_only_cv_ignored_without_participation", async () => {
+    const vid = generateVisitorId();
+    await seedParticipant(generateVisitorId(), RUN_A); // 別の人の参加
+    await seedParticipant(vid, RUN_A, "site_other"); // 同じ ID の別の Site の参加(visitor_key が違う)
+    expect(await record(["g_buy"], vid, day(21))).toEqual({ result: "ignored" });
+    expect(await cvRows()).toEqual([]);
+    expect(await failedCount(RUN_A, day(21))).toBe(0);
+  });
+
+  it("unknown goals are ignored and duplicated goal ids are written once", async () => {
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    expect(await record(["g_nope"], vid, day(21))).toEqual({ result: "ignored", retry: false });
+    expect(await record(["g_buy", "g_buy", "g_nope"], vid, day(21))).toEqual({ result: "stored" });
+    expect(await cvPairs()).toEqual(["a:g_buy"]);
+  });
+
+  it("runs past collect until and runs not in active config are not written", async () => {
+    const vid = generateVisitorId();
+    const now = day(21);
+    await seedParticipant(vid, RUN_A);
+    await seedParticipant(vid, RUN_B);
+    await seedParticipant(vid, RUN_X); // active の config の results.runs に無い run
+    const c = ctxOf(now);
+    expect(await recordGoalConversion(c, settings({ resultsCollectUntil: { [RUN_A]: now } }), ["g_buy"], vid)).toEqual({ result: "stored" });
+    await waitOnExecutionContext(c.ctx);
+    expect(await cvPairs()).toEqual(["b:g_buy"]);
+  });
+
+  it("participant_lookup_failure_does_not_write", async () => {
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await record(["g_buy"], vid, day(22), { RESULTS_DB: lookupDb({ fail: true }) })).toEqual({ result: "failed" });
+    // route でも 200 / failed(今の書き込みの失敗と同じ)
+    const res = await v1Event({ ...goalCv(["g_buy"]), visitorId: vid }, { RESULTS_DB: lookupDb({ fail: true }) });
+    spy.mockRestore();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ result: "failed" });
+    expect(await cvRows()).toEqual([]);
+  });
+
+  it("participant_lookup_failure_counts_health_per_run", async () => {
+    const vid = generateVisitorId();
+    const now = day(23);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await record(["g_buy", "g_thanks"], vid, now, { RESULTS_DB: lookupDb({ fail: true }) })).toEqual({ result: "failed" });
+    spy.mockRestore();
+    // 目標の数ではなく、対象の results.runs の各 run に 1 ずつ
+    expect(await failedCount(RUN_A, now)).toBe(1);
+    expect(await failedCount(RUN_B, now)).toBe(1);
+    expect(await failedCount(RUN_P, now)).toBe(1);
+    expect(await failedCount(RUN_X, now)).toBe(0);
+  });
+
+  it("missing RESULTS_DB fails like a write failure", async () => {
+    const vid = generateVisitorId();
+    const now = day(23) + HOUR;
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await record(["g_buy"], vid, now, { RESULTS_DB: undefined })).toEqual({ result: "failed" });
+    spy.mockRestore();
+    expect(await failedCount(RUN_A, now)).toBe(1);
+  });
+
+  it("goal_only_cv_stopped_sets_halt_until", async () => {
+    const vid = generateVisitorId();
+    const now = day(24);
+    await seedParticipant(vid, RUN_A);
+    const { writeBudget } = await budgetStub(env).status(now);
+    expect((await budgetStub(env).lease(new Date(now).toISOString().slice(0, 10), writeBudget, now)).ok).toBe(true); // その日の予算を配り終える
+    expect(await record(["g_buy"], vid, now)).toEqual({ result: "stopped", until: nextUtcMidnight(now), retry: false });
+    expect(await cvRows()).toEqual([]);
+    expect(await failedCount(RUN_A, now)).toBe(0); // 停止は失敗に数えない
+    // 停止を知った isolate は、D1 を引かずに stopped を返す
+    let selects = 0;
+    expect(await record(["g_buy"], vid, now + 1, { RESULTS_DB: lookupDb({ fail: false, onSelect: () => selects++ }) })).toEqual({ result: "stopped", until: nextUtcMidnight(now), retry: false });
+    expect(selects).toBe(0);
+  });
+
+  it("goal_only_cv_does_not_write_beyond_lease", async () => {
+    const vid = generateVisitorId();
+    const now = day(25);
+    await seedParticipant(vid, RUN_A);
+    await seedParticipant(vid, RUN_B);
+    // 見込み = 3 行 × 2 目標 × 2 run = 12 行。予算の DO が 11 行しか配れないと、1 行も書かずに止まる
+    let asked = 0;
+    const short = fakeBudgetNs({ lease: async (d: string, rows: number) => { asked = rows; return { ok: true, day: d, rows: 11 }; }, check: async () => ({ stoppedUntil: null }) });
+    expect(await record(["g_buy", "g_thanks"], vid, now, { RESULTS_BUDGET: short, RESULTS_LEASE_ROWS: "1" })).toEqual({ result: "stopped", until: nextUtcMidnight(now), retry: false });
+    expect(asked).toBe(12);
+    expect(await cvRows()).toEqual([]);
+    // 本物の予算では、見込みの 12 行を 1 回で受け取り、4 行(目標 × run)を書く
+    resetLeaseHolderForTest();
+    expect(await record(["g_buy", "g_thanks"], vid, now, { RESULTS_LEASE_ROWS: "1" })).toEqual({ result: "stored" });
+    expect((await budgetStub(env).status(now)).writeUsed).toBe(12);
+    expect(await cvPairs()).toEqual(["a:g_buy", "a:g_thanks", "b:g_buy", "b:g_thanks"]);
+  });
+
+  it("goal_only_cv_batch_has_one_statement_per_goal", async () => {
+    // 2 目標 × 3 run = 6 行を、目標ごとの 2 文で書く(run の数で文を増やさない。D1 の 1 回の呼び出しの文の上限のため)
+    const vid = generateVisitorId();
+    const now = day(26);
+    for (const r of [RUN_A, RUN_B, RUN_P]) await seedParticipant(vid, r);
+    await seedParticipant(vid, RUN_X); // results.runs に無い run には入れない
+    const batches: number[] = [];
+    const counting = {
+      prepare: (sql: string) => db().prepare(sql),
+      batch: (stmts: D1PreparedStatement[]) => { batches.push(stmts.length); return db().batch(stmts); },
+    } as unknown as D1Database;
+    expect(await record(["g_buy", "g_thanks"], vid, now, { RESULTS_DB: counting, RESULTS_LEASE_ROWS: "1" })).toEqual({ result: "stored" });
+    expect(batches).toEqual([2]);
+    expect(await cvPairs()).toEqual(["a:g_buy", "a:g_thanks", "b:g_buy", "b:g_thanks", "p:g_buy", "p:g_thanks"]);
+    expect((await budgetStub(env).status(now)).writeUsed).toBe(3 * 2 * 3); // 見込みは目標 × run のまま
+  });
+
+  it("legacy_run_specified_cv_still_accepted", async () => {
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    const res = await v1Event({ ...conversion([RUN_A, RUN_X]), visitorId: vid });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ result: "stored", runs: { [RUN_A]: { result: "stored" }, [RUN_X]: { result: "ignored" } } });
+    expect(await cvPairs()).toEqual(["a:g_buy"]);
+  });
+
+  it("goal_only_cv_on_v1_from_outside_domain", async () => {
+    // Mode B のサイトの /v1/(Cloudflare 外のドメインのページ)。Origin は allowedOrigins の完全一致
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    const res = await v1Event({ ...goalCv(["g_buy"]), visitorId: vid });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+    expect(res.headers.getSetCookie()).toEqual([]);
+    expect(await res.json()).toEqual({ result: "stored" });
+    expect(await cvPairs()).toEqual(["a:g_buy"]);
+    // 一覧に無い Origin は拒む
+    expect((await v1Event({ ...goalCv(["g_buy"]), visitorId: vid }, {}, "https://evil.example")).status).toBe(403);
+  });
+
+  it("v2_conversion_requires_visitor_id_on_v1", async () => {
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    expect((await v1Event(goalCv(["g_buy"]))).status).toBe(400);
+    expect((await v1Event({ ...goalCv(["g_buy"]), visitorId: "A".repeat(22) })).status).toBe(400);
+    expect(await cvRows()).toEqual([]);
+    expect((await v1Event({ ...goalCv(["g_buy"]), visitorId: vid })).status).toBe(200); // 正しい ID なら受ける
+  });
+
+  it("v2_conversion_ignores_body_identity_on_ab", async () => {
+    const vid = generateVisitorId();
+    const other = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    await seedParticipant(other, RUN_B);
+    const res = await abEvent({ ...goalCv(["g_buy"]), visitorId: other }, `_ab_vid=${vid}`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ result: "stored" });
+    const cs = await cvRows();
+    expect(cs.map((r) => r.run_id)).toEqual([RUN_A]); // Cookie の ID(vid)の参加の run だけ
+    expect(bytes(cs[0]!.visitor_key)).toEqual((await visitorKey(env, SITE, vid))!);
+  });
+
+  it("pageview_goal_recorded_by_edge_on_decision_request", async () => {
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    const res = await abDecision("/thanks", `_ab_vid=${vid}`);
+    expect(res.status).toBe(200);
+    const out = (await res.json()) as Record<string, unknown>;
+    expect(Object.keys(out).sort()).toEqual(["experiments", "v", "vh"]); // 記録の結果は載せない
+    expect(await cvPairs()).toEqual(["a:g_thanks"]);
+    // 目標に当たらないページでは記録しない
+    expect((await abDecision("/other", `_ab_vid=${vid}`)).status).toBe(200);
+    expect(await cvPairs()).toEqual(["a:g_thanks"]);
+  });
+
+  it("multiple_pageview_goals_share_one_conversion_request", async () => {
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    let selects = 0;
+    expect((await abDecision("/thanks/done", `_ab_vid=${vid}`, { RESULTS_DB: lookupDb({ fail: false, onSelect: () => selects++ }) })).status).toBe(200);
+    expect(selects).toBe(1);
+    expect(await cvPairs()).toEqual(["a:g_done", "a:g_thanks"]);
+  });
+
+  it("decision_response_unchanged_when_cv_collection_fails", async () => {
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    const cookie = `_ab_vid=${vid}`;
+    const ok = await abDecision("/thanks", cookie);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const broken = await abDecision("/thanks", cookie, { RESULTS_DB: lookupDb({ fail: true }) });
+    const brokenWrite = await abDecision("/thanks", cookie, { RESULTS_DB: failingDb("D1_ERROR: network connection lost") });
+    spy.mockRestore();
+    for (const res of [broken, brokenWrite]) {
+      expect(res.status).toBe(ok.status);
+      expect(res.headers.getSetCookie()).toEqual(ok.headers.getSetCookie());
+    }
+    const body = await ok.json();
+    expect(await broken.json()).toEqual(body);
+    expect(await brokenWrite.json()).toEqual(body);
+  });
+
+  it("piggyback failure reaches ResultsHealth without later events", async () => {
+    const vid = generateVisitorId();
+    const now = Date.now();
+    const before = await healthNow(RUN_A, now);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await abDecision("/thanks", `_ab_vid=${vid}`, { RESULTS_DB: lookupDb({ fail: true }) })).status).toBe(200);
+    spy.mockRestore();
+    expect(await healthNow(RUN_A, now)).toBe(before + 1); // flushIfDue を waitUntil に登録している
+  });
+
+  it("pageview_cv_uses_active_config_with_stale_decision_version", async () => {
+    // 版 1 にだけ RUN_A がある。active は版 2(RUN_B だけ)。decision の要求の版は古い 1
+    await env.CONFIG_KV.put(kvKeys.config(SITE, 2), JSON.stringify(goalConfig(2, { exp_b: RUN_B })));
+    await env.CONFIG_KV.put(kvKeys.config(SITE, 1), JSON.stringify(goalConfig(1, { exp_a: RUN_A })));
+    await env.CONFIG_KV.put(kvKeys.active(SITE), "2");
+    __resetEdgeCaches();
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    await seedParticipant(vid, RUN_B);
+    expect((await abDecision("/thanks", `_ab_vid=${vid}`, {}, 1)).status).toBe(200);
+    expect(await cvPairs()).toEqual(["b:g_thanks"]);
+  });
+
+  it("no piggyback when active config has no results runs", async () => {
+    await env.CONFIG_KV.put(kvKeys.config(SITE, 1), JSON.stringify(goalConfig(1, {})));
+    __resetEdgeCaches();
+    const vid = generateVisitorId();
+    let selects = 0;
+    const counting = { RESULTS_DB: lookupDb({ fail: false, onSelect: () => selects++ }) };
+    expect((await abDecision("/thanks", `_ab_vid=${vid}`, counting)).status).toBe(200);
+    expect((await abEvent({ type: "goal", goalId: "g_buy" }, `_ab_vid=${vid}`, counting)).status).toBe(204);
+    expect((await abEvent(goalCv(["g_buy"]), `_ab_vid=${vid}`, counting)).status).toBe(200);
+    expect(selects).toBe(0);
+  });
+
+  it("goal_event_also_records_results_cv_when_needs_profile", async () => {
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    // Cloudflare 経由のドメイン(/__ab/event)
+    expect((await abEvent({ type: "goal", goalId: "g_buy" }, `_ab_vid=${vid}`)).status).toBe(204);
+    expect(await goalCount(vid, "g_buy")).toBe(1);
+    expect(await cvPairs()).toEqual(["a:g_buy"]);
+    // Mode A / Cloudflare 外のドメイン(/v1/)
+    const vid2 = generateVisitorId();
+    await seedParticipant(vid2, RUN_B);
+    expect((await v1Event({ type: "goal", goalId: "g_buy", visitorId: vid2 })).status).toBe(204);
+    expect(await goalCount(vid2, "g_buy")).toBe(1);
+    expect(await cvPairs()).toEqual(["a:g_buy", "b:g_buy"]);
+  });
+
+  it("goal event on a Cloudflare host leaves pageview goals to the decision request", async () => {
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    let selects = 0;
+    expect((await abEvent({ type: "goal", goalId: "g_thanks" }, `_ab_vid=${vid}`, { RESULTS_DB: lookupDb({ fail: false, onSelect: () => selects++ }) })).status).toBe(204);
+    expect(selects).toBe(0); // D1 を引かない
+    expect(await goalCount(vid, "g_thanks")).toBe(1); // 履歴は今のとおり記録する
+    expect(await cvRows()).toEqual([]);
+    // /v1/ ではページの表示の目標も記録する(decision では記録しないため)
+    expect((await v1Event({ type: "goal", goalId: "g_thanks", visitorId: vid })).status).toBe(204);
+    expect(await cvPairs()).toEqual(["a:g_thanks"]);
+  });
+
+  it("goal_profile_recorded_when_cv_collection_fails", async () => {
+    const vid = generateVisitorId();
+    await seedParticipant(vid, RUN_A);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await v1Event({ type: "goal", goalId: "g_buy", visitorId: vid }, { RESULTS_DB: lookupDb({ fail: true }) });
+    const resAb = await abEvent({ type: "goal", goalId: "g_buy" }, `_ab_vid=${vid}`, { RESULTS_DB: failingDb("D1_ERROR: network connection lost") });
+    spy.mockRestore();
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe("");
+    expect(resAb.status).toBe(204);
+    expect(await goalCount(vid, "g_buy")).toBe(2);
+    expect(await cvRows()).toEqual([]);
+    // Profile が失敗しても CV は記録する(互いの失敗に影響されない)。goal の応答は今のとおり 503
+    const brokenProfile = { idFromName: () => ({}) as DurableObjectId, get: () => ({ recordGoal: async () => { throw new Error("do down"); } }) } as unknown as Env["VISITOR_PROFILE"];
+    const spy2 = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res503 = await v1Event({ type: "goal", goalId: "g_buy", visitorId: vid }, { VISITOR_PROFILE: brokenProfile });
+    spy2.mockRestore();
+    expect(res503.status).toBe(503);
+    expect(await cvPairs()).toEqual(["a:g_buy"]);
+  });
+
+  it("needs_profile_pageview_goal_before_participation_is_ignored", async () => {
+    // Q30: ページを開いた時点のページの表示の目標の goal は、同じページの参加より先に届く。そのページで初めて参加した 1 回は入らない
+    const vid = generateVisitorId();
+    expect((await v1Event({ type: "goal", goalId: "g_thanks", visitorId: vid })).status).toBe(204);
+    expect(await (await v1Event({ ...participant(RUN_A, assigned(expA, vid)), visitorId: vid })).json()).toEqual({ result: "stored" });
+    expect(await cvRows()).toEqual([]);
+    // 次のページ(参加の後)の達成は入る
+    expect((await v1Event({ type: "goal", goalId: "g_thanks", visitorId: vid })).status).toBe(204);
+    expect(await cvPairs()).toEqual(["a:g_thanks"]);
   });
 });

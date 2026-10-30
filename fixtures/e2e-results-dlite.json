@@ -3,7 +3,7 @@
   "siteSalt": "results-dlite-salt-0001",
   "settings": {
     "mode": "B",
-    "hosts": ["localhost"],
+    "hosts": ["results.example.test"],
     "visitorCookieName": "_wttd_vid",
     "uuidCookieName": "_wttd_uuid"
   },

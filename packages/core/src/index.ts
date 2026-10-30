@@ -1,6 +1,7 @@
 export const CORE_VERSION = "0.0.0";
 export * from "./hash";
 export * from "./id";
+export * from "./visitor-cookie"; // zod-free(runtime が import する)
 export * from "./ua"; // zod-free(runtime が import する)
 export * from "./time"; // zod-free
 export * from "./regex-run"; // zod-free

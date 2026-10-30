@@ -2,9 +2,10 @@ import type { CompiledConfig, Device, ResultOutcome, ResultsEventResponse, Runti
 
 /**
  * D9 ②(設計書 §6.1・§6.2、K9): 結果の参加・後から失敗・回復・CV の送信と、送信済みの印。
- * 印は localStorage の 1 キー(`<訪問者 ID の Cookie 名>_r`)に `{ v: 1, i, p: { runId: "variantId:o|f|r|x" }, c: { runId: goalId[] }, s? }`。
- * o = 適用成功・f = 失敗・r = 失敗の後に回復・x = 送り直さない ignored(以後その run には何も送らない)、s = 予算の停止の期限(edge が決めた until)。
- * 送信は run ごとに直列(前の送信が settle してから次を決める)。CV は参加の送信の settle を待ってから送り先を決める。
+ * 印は localStorage の 1 キー(`<訪問者 ID の Cookie 名>_r`)に `{ v: 1, i, p: { runId: "variantId:o|f|r|x" }, s? }`。
+ * o = 適用成功・f = 失敗・r = 失敗の後に回復・x = 送り直さない ignored(以後その run に参加を送らない)、s = 予算の停止の期限(edge が決めた until)。
+ * B139(設計書 §5.2・Q19・Q22): CV は目標だけで送り(記録する run は edge が参加の行から決める)、CV の印 c は読まず書かない(前の形の c は書き直すときに落とす)。
+ * 送信は run ごとに直列(前の送信が settle してから次を決める)。CV は同じページの参加の送信の settle を待ってから送る。
  * 入口(participant / applyFailed / applied / endScan / conversion)は例外を投げない(エンジンはコールバックの例外を隔離しない)。
  * `send` は reject しないこと(runtime が 2xx で JSON を読めないもの・通信の失敗を null にする)。送信中の Promise は runtime の inflightEvents が持つ
  */
@@ -14,10 +15,10 @@ export type ResultsSender = {
   applyFailed(experimentId: string): void;
   applied(experimentId: string): void;
   endScan(): void;
-  conversion(goalId: string): void;
+  conversion(goalId: string, edgePath: boolean, isPageview: boolean): void;
   clear(): void;
 };
-type Marks = { v: 1; i: string; p: Record<string, string>; c: Record<string, string[]>; s?: number };
+type Marks = { v: 1; i: string; p: Record<string, string>; s?: number };
 type Body = Record<string, unknown>;
 
 // K9: これを超える印は捨てる(読むときは読まずに送り直し、書くときはキーを消してメモリだけで持つ)。
@@ -53,7 +54,7 @@ export function createResultsSender(o: {
   const runs = o.config.results?.runs ?? {}; // experimentId → runId
   const live = new Set(Object.values(runs));
   const key = o.settings.visitorCookieName + "_r";
-  let M: Marks = { v: 1, i: "", p: {}, c: {} };
+  let M: Marks = { v: 1, i: "", p: {} };
   let hash: string | null = null; // null = localStorage を読みも書きもしない(メモリだけで重複を防ぐ。K9)
   let dead = false; // 撤回の後(届いた応答でも印を書かない)
   let open!: () => void;
@@ -63,6 +64,8 @@ export function createResultsSender(o: {
   const seen = new Map<string, [string, Device]>(); // この scan で参加の契機を受けた experiment → [variantId, device]
   const failed = new Set<string>(); // ページの中で適用の失敗を受けた experiment
   const lateKeys = new Set<string>(); // 待っている・送った後から失敗と回復(run + 種類。送ったものは残してページの中で 1 回だけ)
+  const goals = new Set<string>(); // このページで CV を積んだ目標(同じページの同じ目標は 1 回。Q19)
+  let cvs: string[] = []; // まだ送っていない目標(同じマイクロタスクの間に受けたもの = ページを開いたときの目標を 1 回にまとめる)
 
   /** 送らない: 撤回の後か、予算の停止の期限(s)の前 */
   const halt = (): boolean => dead || (M.s ?? 0) > o.now();
@@ -125,9 +128,9 @@ export function createResultsSender(o: {
         const j = raw && raw.length <= MAX_CHARS ? (JSON.parse(raw) as Marks) : null;
         // i が違えば印をすべて捨てて送り直す。results.runs に無い run(終わったテスト)と形の違う項目は捨てる(壊れた印で止まらない)
         const pick = (x: object, ok: (v: unknown) => boolean) => Object.fromEntries(Object.entries(x).filter(([r, v]) => live.has(r) && ok(v)));
-        if (j?.v === 1 && j.i === h) M = { v: 1, i: h, p: pick(j.p, (v) => typeof v == "string"), c: pick(j.c, Array.isArray), s: j.s } as Marks;
+        if (j?.v === 1 && j.i === h) M = { v: 1, i: h, p: pick(j.p, (v) => typeof v == "string"), s: j.s };
       } catch {
-        // 読めない・形が違う(p や c が null など)なら印なし
+        // 読めない・形が違う(p が null など)なら印なし
       }
       M.i = h as string; // null のときは書かないので使わない
       if ((M.s ?? 0) <= o.now()) delete M.s;
@@ -158,19 +161,19 @@ export function createResultsSender(o: {
       }
       seen.clear();
     },
-    conversion(goalId) {
+    conversion(goalId, edgePath, isPageview) {
+      // 送らない: Cloudflare 経由のドメインのページの表示(edge が decision で記録)・needsProfile(edge が type:"goal" で記録)・
+      // 結果を集めるテストが無い・このページで積んだ目標
+      if ((edgePath && isPageview) || o.config.needsProfile || !live.size || goals.has(goalId)) return;
+      goals.add(goalId);
+      if (cvs.push(goalId) > 1) return; // 積んだ送信がまだ走っていない(同じ回で送る)
       cvChain = cvChain
         .then(async () => {
-          await Promise.all(Object.values(chain)); // 参加の送信中の run は settle を待つ(保存されなかった run は印が無いので外れる)
-          const ids = Object.keys(M.p).filter((r) => M.p[r]!.slice(-1) !== "x" && !M.c[r]?.includes(goalId));
+          await Promise.all(Object.values(chain)); // 同じページの参加の送信の settle を待つ(edge が参加の行から run を決める)
+          const ids = cvs;
+          cvs = [];
           for (let i = 0; i < ids.length && !halt(); i += 20) {
-            const part = ids.slice(i, i + 20);
-            const r = await o.send({ type: "conversion", v: 1, goalId, runIds: part });
-            for (const run of part) {
-              const x = r?.runs?.[run];
-              if (x?.result === "stored" || x?.retry === false) (M.c[run] ??= []).push(goalId);
-              stopOn(x);
-            }
+            stopOn(await o.send({ type: "conversion", v: 2, goalIds: ids.slice(i, i + 20) }));
             save();
           }
         })

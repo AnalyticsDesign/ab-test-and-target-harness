@@ -1,10 +1,12 @@
 import type { Page, Request, Response } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { freshVisitor, presetVisitor, queryResults, visitorKeySql } from "./helpers";
-import { RESULTS_ORIGIN } from "./results-key";
+import { RESULTS_HOST, RESULTS_HTTPS_ORIGIN, RESULTS_ORIGIN } from "./results-key";
 
 // D9 ②(設計書 §6.1〜§6.4・K25): 結果の参加・CV が計測用 D1(ローカルの wtt-results)に入り、撤回で消えること。
 // この spec は結果の E2E 用の edge と sample-site(RESULTS_ORIGIN)だけを使う(ほかの spec と状態・レート制限を共有しない。理由は results-key.ts)。
+// D-lite のケースだけは、B139 から https の入口(RESULTS_HTTPS_ORIGIN。同じ edge の Cloudflare 経由のホスト。playwright.config.ts の図)で開く。
+// D-lite の経路(/__ab/*)は https かつ hosts に載ったホスト名のページだけが使うため。
 // D1 はローカルの状態が実行をまたいで残るので、毎回新しい訪問者で行を作り、行は visitor_key(E2E の鍵で計算)で絞って読む
 
 const MODE_A = { site: "site_results", cookie: "_wttr_vid", run: "e2eResultsModeA0000001", lateRun: "e2eResultsLate00000001", goal: "g_results_buy" };
@@ -46,45 +48,47 @@ test("mode_a_participant_and_conversion_reach_results_d1_once", async ({ context
   await expect(page.locator(".hero-title")).toHaveText("結果 B");
   // 目標(CLICK)→ CV。edge は参加の行がある run にだけ CV を入れる
   const [c] = await Promise.all([waitResults(page, "conversion"), page.click("#buy")]);
-  expect(c.request().postDataJSON()).toMatchObject({ goalId: MODE_A.goal, runIds: [MODE_A.run], visitorId: vid });
-  expect(((await c.json()) as { runs: Record<string, unknown> }).runs[MODE_A.run]).toEqual({ result: "stored" });
+  // B139 §5.2: CV は目標だけ(版 2)。run は edge が D1 の参加の記録から引く。/v1/ (Mode A)は本文に visitorId を載せる。応答は全体の結果だけ
+  expect(c.request().postDataJSON()).toEqual({ type: "conversion", v: 2, goalIds: [MODE_A.goal], visitorId: vid });
+  expect(await c.json()).toEqual({ result: "stored" });
   const key = visitorKeySql(MODE_A.site, vid);
   expect(await participantsOf(MODE_A.site, key)).toEqual([{ run_id: MODE_A.run, variant_id: "vB", device: "desktop", applied: "ok", mixed: 0 }]);
   expect(await conversionsOf(key)).toEqual([{ run_id: MODE_A.run, goal_id: MODE_A.goal }]);
-  // 開き直し: 送信済みの印(localStorage)があるので、参加も同じ目標の CV も送らない(D1 の一意制約に頼らず、送信そのものが無いことを見る)
+  // 開き直し: 送信済みの印(localStorage)があるので参加は送らない(D1 の一意制約に頼らず、送信そのものが無いことを見る)。
+  // B139 から CV の印は持たない(目標を達成するたびに目標だけの CV を送り、edge が主キーで重複を捨てる)ので、CV は 1 回送られ、行は 1 つのまま
   const sent = trackResults(page);
   await page.reload();
   await expect(page.locator(".hero-title")).toHaveText("結果 B");
-  await page.click("#buy");
-  await page.waitForTimeout(500);
-  expect(sent).toEqual([]);
+  await Promise.all([waitResults(page, "conversion"), page.click("#buy")]); // 2 回目の CV の応答を待ってから行を見る(固定の待ち時間にしない)
+  expect(sent.filter((b) => b.includes('"type":"participant"'))).toEqual([]);
+  expect(sent.filter((b) => b.includes('"type":"conversion"'))).toHaveLength(1);
   expect(await participantsOf(MODE_A.site, key)).toHaveLength(1);
   expect(await conversionsOf(key)).toHaveLength(1);
 });
 
 test("d_lite_participant_and_conversion_reach_results_d1_with_cookie_identity", async ({ context, page }) => {
   const vid = freshVisitor("exp_results_dlite", "B");
-  await presetVisitor(context, vid, { name: DLITE.cookie, httpOnly: true }); // D-lite の正本は edge 所有の HttpOnly Cookie
-  const [p] = await Promise.all([waitResults(page, "participant"), page.goto("/results-dlite.html")]);
+  await presetVisitor(context, vid, { name: DLITE.cookie, httpOnly: true, domain: RESULTS_HOST }); // D-lite の正本は edge 所有の HttpOnly Cookie
+  const [p] = await Promise.all([waitResults(page, "participant"), page.goto(`${RESULTS_HTTPS_ORIGIN}/results-dlite.html`)]);
   const body = p.request().postDataJSON() as Record<string, unknown>;
   expect(body).toMatchObject({ runId: DLITE.run, variantId: "vB", device: "desktop", applied: "ok" });
   expect(body).not.toHaveProperty("visitorId"); // D-lite は Cookie が正(本文に ID を載せない)
   expect(await p.json()).toEqual({ result: "stored" });
   await expect(page.locator(".hero-title")).toHaveText("結果 D-lite B");
   const [c] = await Promise.all([waitResults(page, "conversion"), page.click("#buy")]);
-  expect(c.request().postDataJSON()).not.toHaveProperty("visitorId");
-  expect(((await c.json()) as { runs: Record<string, unknown> }).runs[DLITE.run]).toEqual({ result: "stored" });
+  expect(c.request().postDataJSON()).toEqual({ type: "conversion", v: 2, goalIds: [DLITE.goal] }); // D-lite は Cookie が正(本文に visitorId を載せない)
+  expect(await c.json()).toEqual({ result: "stored" });
   // 行は Cookie の ID の HMAC で入る
   const key = visitorKeySql(DLITE.site, vid);
   expect(await participantsOf(DLITE.site, key)).toEqual([{ run_id: DLITE.run, variant_id: "vB", device: "desktop", applied: "ok", mixed: 0 }]);
   expect(await conversionsOf(key)).toEqual([{ run_id: DLITE.run, goal_id: DLITE.goal }]);
-  // 開き直し: 印(i = decision の応答の vh)が同じ訪問者のものなので送らない
+  // 開き直し: 印(i = decision の応答の vh)が同じ訪問者のものなので参加は送らない。CV は目標のたびに送り(印なし)、edge が重複を捨てて行は 1 つのまま
   const sent = trackResults(page);
   await page.reload();
   await expect(page.locator(".hero-title")).toHaveText("結果 D-lite B");
-  await page.click("#buy");
-  await page.waitForTimeout(500);
-  expect(sent).toEqual([]);
+  await Promise.all([waitResults(page, "conversion"), page.click("#buy")]); // 2 回目の CV の応答を待ってから行を見る(固定の待ち時間にしない)
+  expect(sent.filter((b) => b.includes('"type":"participant"'))).toEqual([]);
+  expect(sent.filter((b) => b.includes('"type":"conversion"'))).toHaveLength(1);
   expect(await participantsOf(DLITE.site, key)).toHaveLength(1);
   expect(await conversionsOf(key)).toHaveLength(1);
 });
@@ -111,8 +115,8 @@ test("mode_a_revoke_deletes_participant_and_conversion_rows", async ({ context, 
 
 test("d_lite_revoke_deletes_participant_and_conversion_rows", async ({ context, page }) => {
   const vid = freshVisitor("exp_results_dlite", "B");
-  await presetVisitor(context, vid, { name: DLITE.cookie, httpOnly: true });
-  await Promise.all([waitResults(page, "participant"), page.goto("/results-dlite.html")]);
+  await presetVisitor(context, vid, { name: DLITE.cookie, httpOnly: true, domain: RESULTS_HOST });
+  await Promise.all([waitResults(page, "participant"), page.goto(`${RESULTS_HTTPS_ORIGIN}/results-dlite.html`)]);
   await Promise.all([waitResults(page, "conversion"), page.click("#buy")]);
   const key = visitorKeySql(DLITE.site, vid);
   expect(await participantsOf(DLITE.site, key)).toHaveLength(1);

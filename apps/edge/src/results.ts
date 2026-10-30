@@ -16,7 +16,7 @@ import { leaseHolder, type LeaseTicket } from "./results-lease";
 import { loadActiveVersion, loadConfig } from "./store";
 
 /**
- * 結果の参加・CV の受信(D9 ② Task 6・設計書 §6.4・K8・K10・K11)。
+ * 結果の参加・CV の受信(D9 ② Task 6・設計書 §6.4・K8・K10・K11)。目標だけの CV(B139 §5)は goal-conversion.ts。
  *
  * 判定はすべて D1 に書く前に行う。順は:
  * 1. active な config と `results`(無ければ一時的な ignored)
@@ -27,8 +27,11 @@ import { loadActiveVersion, loadConfig } from "./store";
  * 6. 予算の枠(LeaseHolder.take)。停止中は stopped、予算の DO に届かなければ failed を数える(K10。停止期間には数えない)
  * 7. 設計書 §6.4 の SQL を 1 回の batch。`meta.rows_written` で枠を精算する。D1 の日次上限のエラーはその場で停止にする
  *
- * take → batch → settle は応答の前に済ませる(waitUntil に回さない)。LeaseHolder は受け取り中の Promise を要求の間で
- * 共有するので、途中で中断された要求が枠を使いかけのまま残さないため。waitUntil に回すのは失敗の記録の送信と d1_limit の停止だけ。
+ * 送られた参加・CV の受信では、take → batch → settle を応答の前に済ませる(waitUntil に回すのは失敗の記録の送信と d1_limit の停止だけ)。
+ * 便乗の CV(B139 §5.2 の Q22。/__ab/decision と type:"goal")だけは、配信の応答を待たせないよう take → batch → settle を
+ * まとめて waitUntil の中で最後まで行う。LeaseHolder は受け取り中の Promise を要求の間で共有するが、返らない呼び出しは
+ * results-lease.ts の 5 秒の切り離し(INFLIGHT_TIMEOUT_MS)で外すので、waitUntil が打ち切られても後の要求は止まらない。
+ * 打ち切られた batch の枠は精算されずに使ったまま残る(安全側)。
  *
  * 失敗を数える(HealthBuffer.count)のは、config の `results.runs` で確かめた run だけ(送られた任意の runId で
  * isolate のメモリを増やさない)。Site ID は呼び出し側が SITE_ID_RE と settings の存在で確かめている
@@ -59,11 +62,11 @@ const MIN_KEY_BYTES = 32;
 const D1_DAILY_LIMIT_RE = /daily row write limit/i;
 
 // 応答の runs で同じオブジェクトを共有するので凍らせる(どこかで書き換えると別の応答にも効いてしまう)
-const IGNORED: ResultOutcome = Object.freeze({ result: "ignored" }); // 一時的(config が古いことがある。次のページで送り直す)
-const IGNORED_FINAL: ResultOutcome = Object.freeze({ result: "ignored", retry: false }); // 変わらない理由。送り直さない
-const FAILED: ResultOutcome = Object.freeze({ result: "failed" });
+export const IGNORED: ResultOutcome = Object.freeze({ result: "ignored" }); // 一時的(config が古いことがある。次のページで送り直す)
+export const IGNORED_FINAL: ResultOutcome = Object.freeze({ result: "ignored", retry: false }); // 変わらない理由。送り直さない
+export const FAILED: ResultOutcome = Object.freeze({ result: "failed" });
 const STORED: ResultOutcome = Object.freeze({ result: "stored" });
-const stopped = (until: number): ResultOutcome => ({ result: "stopped", until });
+export const stopped = (until: number): ResultOutcome => ({ result: "stopped", until });
 
 // ---- 訪問者の鍵(HMAC)
 
@@ -145,9 +148,11 @@ export async function forgetResults(env: Env, siteId: string, visitorId: string)
 // ---- 受信
 
 /** 使うのは waitUntil だけ(Hono の c.executionCtx と workers-types の ExecutionContext の両方を受ける) */
-type WaitUntil = Pick<ExecutionContext, "waitUntil">;
-type Ctx = { env: Env; ctx: WaitUntil; siteId: string; now: number };
+export type WaitUntil = Pick<ExecutionContext, "waitUntil">;
+/** 受信 1 回の文脈(目標だけの CV の goal-conversion.ts も使う) */
+export type Ctx = { env: Env; ctx: WaitUntil; siteId: string; now: number };
 
+/** run 指定の CV(版 1)と参加の受信。目標だけの CV(版 2)は goal-conversion.ts の recordGoalConversion */
 export async function handleResultsEvent(
   env: Env,
   ctx: WaitUntil,
@@ -166,14 +171,14 @@ export async function handleResultsEvent(
 }
 
 /** active な compiled config の `results` があるものだけ(無ければ null = 一時的な ignored) */
-async function activeResultsConfig(env: Env, siteId: string): Promise<(CompiledConfig & { results: NonNullable<CompiledConfig["results"]> }) | null> {
+export async function activeResultsConfig(env: Env, siteId: string): Promise<(CompiledConfig & { results: NonNullable<CompiledConfig["results"]> }) | null> {
   const version = await loadActiveVersion(env, siteId);
   const config = version === null ? null : await loadConfig(env, siteId, version);
   return config?.results ? (config as CompiledConfig & { results: NonNullable<CompiledConfig["results"]> }) : null;
 }
 
 /** その run の収集の締め切りを過ぎたか(締め切りちょうども受けない。設計書 §5.3) */
-const pastCollectUntil = (settings: SiteSettings, runId: string, now: number): boolean => {
+export const pastCollectUntil = (settings: SiteSettings, runId: string, now: number): boolean => {
   const until = settings.resultsCollectUntil?.[runId];
   return until !== undefined && until <= now;
 };
@@ -249,7 +254,7 @@ async function receiveConversion(c: Ctx, settings: SiteSettings, body: Conversio
 }
 
 /** 鍵の計算で例外が出たときも書かない(failed として数える) */
-async function keyOrNull(c: Ctx, visitorId: string): Promise<Uint8Array | null> {
+export async function keyOrNull(c: Ctx, visitorId: string): Promise<Uint8Array | null> {
   try {
     return await visitorKey(c.env, c.siteId, visitorId);
   } catch (e) {
@@ -262,14 +267,14 @@ type WriteResult = { outcome: ResultOutcome; overall: ResultsEventResponse };
 const single = (o: ResultOutcome): WriteResult => ({ outcome: o, overall: o });
 
 /** 書かずに failed を数える(run ごとに 1 件。設計書 §6.7) */
-function failAll(c: Ctx, runIds: string[]): WriteResult {
+export function failAll(c: Ctx, runIds: string[]): WriteResult {
   const health = healthBuffer();
   for (const runId of runIds) health.count(c.siteId, runId, c.now);
   return single(FAILED);
 }
 
 /** 枠を受け取り、1 回の batch で書き、`meta.rows_written` で精算する */
-async function write(c: Ctx, db: D1Database, stmts: D1PreparedStatement[], runIds: string[], estimate: number): Promise<WriteResult> {
+export async function write(c: Ctx, db: D1Database, stmts: D1PreparedStatement[], runIds: string[], estimate: number): Promise<WriteResult> {
   const holder = leaseHolder(c.env);
   const lease = await holder.take(estimate, c.now);
   if (lease.kind === "stopped") return single(stopped(lease.until));

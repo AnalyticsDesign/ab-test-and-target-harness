@@ -58,7 +58,11 @@ test("forget_on_revoke_deletes_profile", async ({ context, page }) => {
   await page.goto("/profile.html");
   await expect(page.locator(".hero-title")).toHaveText("visited B"); // 履歴あり
   const [forgetRes] = await Promise.all([
-    page.waitForResponse((r) => r.url().includes("/event") && String(r.request().postData()).includes('"forget"')),
+    // B139 Q31: Mode C でも runtime が書く正本の Cookie(22 字)の ID と派生 ID(43 字)の 2 つに forget を送る。順は応答の速さで入れ替わるので、派生 ID の方を選ぶ
+    page.waitForResponse((r) => {
+      if (!r.url().includes("/event") || !String(r.request().postData()).includes('"forget"')) return false;
+      return (r.request().postDataJSON() as { visitorId: string }).visitorId.length === 43;
+    }),
     consent(page, false),
   ]);
   expect(forgetRes.status()).toBe(204);

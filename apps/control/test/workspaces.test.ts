@@ -601,8 +601,8 @@ describe("workspaces / invitations / members", () => {
 describe("workspace summary (backlog B35)", () => {
   it("summarizes each workspace with the role, member count and running experiments per site", async () => {
     const owner = await setupOwner();
-    const a = await createSite(owner.token, owner.workspaceId, { name: "A", domain: "a.example.com" });
-    const b = await createSite(owner.token, owner.workspaceId, { name: "B", domain: "b.example.com" });
+    const a = await createSite(owner.token, owner.workspaceId, { name: "A", domain: "a.example-a.com" });
+    const b = await createSite(owner.token, owner.workspaceId, { name: "B", domain: "b.example-b.com" });
     const running = await createExperiment(owner.token, a.id);
     const publishedOnly = await createExperiment(owner.token, a.id);
     await createExperiment(owner.token, a.id); // 下書きのまま = 数えない
@@ -619,8 +619,8 @@ describe("workspace summary (backlog B35)", () => {
         role: "owner",
         memberCount: 2,
         sites: [
-          { id: a.id, name: "A", domain: "a.example.com", runningCount: 2 },
-          { id: b.id, name: "B", domain: "b.example.com", runningCount: 0 },
+          { id: a.id, name: "A", domain: "a.example-a.com", runningCount: 2 },
+          { id: b.id, name: "B", domain: "b.example-b.com", runningCount: 0 },
         ],
       },
     ]);

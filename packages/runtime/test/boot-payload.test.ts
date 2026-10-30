@@ -36,6 +36,30 @@ describe("parseBootPayload (plan 3 task 2 — final implementation, no zod)", ()
     expect(result).toEqual({ config: validConfig, settings: validSettings });
   });
 
+  it("boot_payload_rejects_malformed_cookie_domains", () => {
+    // B139 §4.1: edgeHosts・cookieDomains は文字列の配列、previousCookieDomains は { domain, until } の配列。違えば起動しない(fail-closed)
+    const bad: Array<Record<string, unknown>> = [
+      { edgeHosts: "www.example.com" },
+      { edgeHosts: [1] },
+      { cookieDomains: {} },
+      { cookieDomains: [null] },
+      { previousCookieDomains: "example.com" },
+      { previousCookieDomains: ["example.com"] },
+      { previousCookieDomains: [{ domain: "example.com" }] },
+      { previousCookieDomains: [{ domain: 1, until: 1 }] },
+      { previousCookieDomains: [{ domain: "example.com", until: "1" }] },
+      { previousCookieDomains: [null] },
+    ];
+    for (const extra of bad) expect(parseBootPayload({ config: validConfig, settings: { ...validSettings, ...extra } }), JSON.stringify(extra)).toBeNull();
+  });
+
+  it("boot_payload_accepts_missing_sharing_fields", () => {
+    // 3 項目が無い配信ファイル(焼き直し前)は、そのまま起動する(読む所は空の配列として扱う)
+    expect(parseBootPayload({ config: validConfig, settings: validSettings })).toEqual({ config: validConfig, settings: validSettings });
+    const withFields = { ...validSettings, edgeHosts: ["www.example.com"], cookieDomains: ["example.com"], previousCookieDomains: [{ domain: "old.test", until: 1 }] };
+    expect(parseBootPayload({ config: validConfig, settings: withFields })).toEqual({ config: validConfig, settings: withFields });
+  });
+
   it("apiBase は任意の文字列。無ければ省き、文字列でなければ boot 全体を拒否する(決定 52 (7))", () => {
     expect(parseBootPayload({ config: validConfig, settings: validSettings, apiBase: "https://edge.example" })).toEqual({ config: validConfig, settings: validSettings, apiBase: "https://edge.example" });
     expect(parseBootPayload({ config: validConfig, settings: validSettings })).toEqual({ config: validConfig, settings: validSettings });

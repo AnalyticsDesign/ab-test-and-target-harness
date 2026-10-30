@@ -152,17 +152,27 @@ describe("POST /v1/sites/:siteId/decision", () => {
     expect((await post("/v1/sites/site_d/decision", okBody(), { origin: null })).status).toBe(403);
     expect((await post("/v1/sites/site_d/decision", okBody(), { origin: "*" })).status).toBe(403);
   });
-  it("mode_b_site_rejects_browser_direct_decision", async () => {
+  it("v1_accepts_mode_b_site_from_listed_origin", async () => {
+    // B139 §4.2: Mode B のサイトも /v1/ を受ける(外部ホストのページ用)。Origin は allowedOrigins の完全一致
     await env.CONFIG_KV.put(kvKeys.settings("site_dl"), JSON.stringify({ settingsVersion: 1, siteId: "site_dl", mode: "B", hosts: ["site.example"], allowedOrigins: [ORIGIN] }));
-    expect((await post("/v1/sites/site_dl/decision", okBody())).status).toBe(404);
-    // OPTIONS preflight も Mode B は 404(§7.1: ブラウザ直接経路は Mode A のみ、POST/OPTIONS 両方)
-    const ctx = createExecutionContext();
-    const pre = await app.fetch(
-      new Request("https://edge.example/v1/sites/site_dl/decision", { method: "OPTIONS", headers: { Origin: ORIGIN } }),
-      env, ctx,
-    );
-    await waitOnExecutionContext(ctx);
-    expect(pre.status).toBe(404);
+    const ok = await post("/v1/sites/site_dl/decision", okBody());
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+    expect(ok.headers.getSetCookie()).toEqual([]); // /v1/ は Cookie を発行しない(ID は runtime が本文で送る)
+    // 一覧に無い Origin は Mode A と同じ拒否
+    expect((await post("/v1/sites/site_dl/decision", okBody(), { origin: "https://evil.example" })).status).toBe(403);
+    expect((await post("/v1/sites/site_dl/decision", okBody(), { origin: null })).status).toBe(403);
+    // OPTIONS preflight も同じ
+    const preflight = async (origin: string) => {
+      const ctx = createExecutionContext();
+      const res = await app.fetch(new Request("https://edge.example/v1/sites/site_dl/decision", { method: "OPTIONS", headers: { Origin: origin } }), env, ctx);
+      await waitOnExecutionContext(ctx);
+      return res;
+    };
+    const pre = await preflight(ORIGIN);
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+    expect((await preflight("https://evil.example")).status).toBe(403);
   });
   it("error_responses_cors_policy(ACAO は Origin 検証通過後の 200 のみ)", async () => {
     const res400 = await post("/v1/sites/site_d/decision", { ...okBody(), visitorId: "A".repeat(22) });

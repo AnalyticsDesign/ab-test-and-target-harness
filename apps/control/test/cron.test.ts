@@ -333,7 +333,8 @@ describe("site-settings-refresh (plan12 K10)", () => {
     const { kv, puts } = countingKv();
     expect(await runCron({ ...testEnv, CONFIG_KV: kv }, T, [siteSettingsRefreshJob])).toEqual([{ job: "site-settings-refresh", outcome: "ran" }]);
     expect((await kvJson(a.id)).newProfileBudget).toEqual({ perDay: 20_000, instancePerDay: 20_000 });
-    expect(puts).toEqual([kvKeys.settings(a.id)]); // b は同じなので put しない
+    // b は同じなので put しない(B139: 共有の自動の移行の完了の印 meta:install は runCron の最初に書くので除く)
+    expect(puts.filter((k) => k !== kvKeys.installMarker)).toEqual([kvKeys.settings(a.id)]);
     expect(await kvRaw(b.id)).not.toBeNull();
   });
 
@@ -377,7 +378,7 @@ describe("site-settings-refresh (plan12 K10)", () => {
   it("carries the position over to the next day unless it is END", async () => {
     const owner = await setupOwner();
     const ids: string[] = [];
-    for (let i = 0; i < 3; i++) ids.push((await createSite(owner.token, owner.workspaceId, { domain: `c${i}.example.com` })).id);
+    for (let i = 0; i < 3; i++) ids.push((await createSite(owner.token, owner.workspaceId, { domain: `c.example-c${i}.com` })).id);
     ids.sort();
     for (const id of ids) await stripBudget(id);
     // 前日に途中まで回った(ids[0] まで)。今日はその続きから: ids[0] は触らず、ids[1]・ids[2] を直す
@@ -396,7 +397,7 @@ describe("site-settings-refresh (plan12 K10)", () => {
   it("covers more sites than one page across runs and records success only at the end", async () => {
     const owner = await setupOwner();
     const ids: string[] = [];
-    for (let i = 0; i < 12; i++) ids.push((await createSite(owner.token, owner.workspaceId, { domain: `s${i}.example.com` })).id);
+    for (let i = 0; i < 12; i++) ids.push((await createSite(owner.token, owner.workspaceId, { domain: `s.example-s${i}.com` })).id);
     for (const id of ids) await stripBudget(id);
     const first = await runCron(testEnv, T, [siteSettingsRefreshJob]);
     expect(first).toEqual([{ job: "site-settings-refresh", outcome: "continued" }]);

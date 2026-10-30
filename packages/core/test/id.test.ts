@@ -27,8 +27,15 @@ describe("UUIDv7(決定 49、設計書 §7.1)と正本の表記変換", () => {
   });
   it("先頭 48 bit は発行時刻の Unix ミリ秒(注入した乱数・時刻でも version / variant は固定)", () => {
     const id = generateVisitorId((b) => b.fill(0), 0x0123456789ab);
-    expect(visitorIdToUuid(id)).toBe("01234567-89ab-7000-8000-000000000000");
-    expect(visitorIdIssuedAt(id)).toBe(0x0123456789ab);
+    // 時刻は 1 時間に切り捨てて入る(0x0123456789ab -> 0x012345322f80)
+    expect(visitorIdToUuid(id)).toBe("01234532-2f80-7000-8000-000000000000");
+    expect(visitorIdIssuedAt(id)).toBe(Math.floor(0x0123456789ab / 3_600_000) * 3_600_000);
+  });
+  it("visitor_id_timestamp_truncated_to_hour", () => {
+    const now = Date.UTC(2026, 9, 28, 13, 47, 12, 345);
+    const id = generateVisitorId((b) => b.fill(7), now);
+    expect(visitorIdIssuedAt(id)).toBe(Date.UTC(2026, 9, 28, 13, 0, 0, 0));
+    expect(isCanonicalModeAId(id)).toBe(true);
   });
   it("visitorIdIssuedAt: v7 は発行時刻、v4(v1.0 より前に発行)と Mode A 以外は null", () => {
     const now = Date.UTC(2026, 9, 2);

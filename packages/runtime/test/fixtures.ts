@@ -29,6 +29,9 @@ export const baseSettings: RuntimeSettings = {
   previousCookieNames: [], decisionTimeoutMs: 1000, consentMode: "implicit",
 };
 
+/** B139: Mode B で、ページのホスト(happy-dom の https://site.test)が Cloudflare 経由のドメインの一覧にある = 今の D-lite の経路(/__ab/*) */
+export const dliteSettings: RuntimeSettings = { ...baseSettings, mode: "B", edgeHosts: ["site.test"] };
+
 /** spec §10.9: 名前を変えたサイト設定。baseSettings(analytics 無し = 旧 record)と対で使う */
 export const renamedAnalytics: AnalyticsSettings = {
   dataLayerName: "dataLayer",

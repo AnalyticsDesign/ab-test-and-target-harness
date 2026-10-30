@@ -2721,6 +2721,30 @@
                 },
                 "workspaceId": {
                   "type": "string"
+                },
+                "cookieGroups": {
+                  "items": {
+                    "properties": {
+                      "domain": {
+                        "type": "string"
+                      },
+                      "hosts": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "domain",
+                      "hosts"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "shareSubdomains": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -2731,6 +2755,7 @@
                 "bigqueryDataset",
                 "consentMode",
                 "contentUpdatedAt",
+                "cookieGroups",
                 "createdAt",
                 "decisionTimeoutMs",
                 "domain",
@@ -2749,6 +2774,7 @@
                 "resultsEnabled",
                 "resultsRetentionDays",
                 "retentionDays",
+                "shareSubdomains",
                 "staticMismatch",
                 "staticRemoving",
                 "staticStale",
@@ -3202,6 +3228,30 @@
                 },
                 "workspaceId": {
                   "type": "string"
+                },
+                "cookieGroups": {
+                  "items": {
+                    "properties": {
+                      "domain": {
+                        "type": "string"
+                      },
+                      "hosts": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "domain",
+                      "hosts"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "shareSubdomains": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -3212,6 +3262,7 @@
                 "bigqueryDataset",
                 "consentMode",
                 "contentUpdatedAt",
+                "cookieGroups",
                 "createdAt",
                 "decisionTimeoutMs",
                 "domain",
@@ -3228,6 +3279,7 @@
                 "resultsEnabled",
                 "resultsRetentionDays",
                 "retentionDays",
+                "shareSubdomains",
                 "staticRemoving",
                 "staticStale",
                 "timezone",
@@ -3566,6 +3618,9 @@
                 },
                 "visitorCookieName": {
                   "type": "string"
+                },
+                "shareSubdomains": {
+                  "type": "boolean"
                 }
               },
               "type": "object"
@@ -25975,6 +26030,30 @@
                   },
                   "workspaceId": {
                     "type": "string"
+                  },
+                  "cookieGroups": {
+                    "items": {
+                      "properties": {
+                        "domain": {
+                          "type": "string"
+                        },
+                        "hosts": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "domain",
+                        "hosts"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "shareSubdomains": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -25985,6 +26064,7 @@
                   "bigqueryDataset",
                   "consentMode",
                   "contentUpdatedAt",
+                  "cookieGroups",
                   "createdAt",
                   "decisionTimeoutMs",
                   "domain",
@@ -26001,6 +26081,7 @@
                   "resultsEnabled",
                   "resultsRetentionDays",
                   "retentionDays",
+                  "shareSubdomains",
                   "staticRemoving",
                   "staticStale",
                   "timezone",
@@ -26292,6 +26373,50 @@
                 },
                 "workspaceId": {
                   "type": "string"
+                },
+                "cookieGroups": {
+                  "items": {
+                    "properties": {
+                      "domain": {
+                        "type": "string"
+                      },
+                      "hosts": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "domain",
+                      "hosts"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "shareSubdomains": {
+                  "type": "boolean"
+                },
+                "sharingAdjusted": {
+                  "properties": {
+                    "reason": {
+                      "const": "conflict",
+                      "type": "string"
+                    },
+                    "shareSubdomains": {
+                      "type": "boolean"
+                    },
+                    "visitorCookieName": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "shareSubdomains",
+                    "visitorCookieName"
+                  ],
+                  "type": "object"
                 }
               },
               "required": [
@@ -26302,6 +26427,7 @@
                 "bigqueryDataset",
                 "consentMode",
                 "contentUpdatedAt",
+                "cookieGroups",
                 "createdAt",
                 "decisionTimeoutMs",
                 "domain",
@@ -26318,6 +26444,7 @@
                 "resultsEnabled",
                 "resultsRetentionDays",
                 "retentionDays",
+                "shareSubdomains",
                 "staticRemoving",
                 "staticStale",
                 "timezone",

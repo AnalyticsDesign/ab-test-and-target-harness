@@ -68,7 +68,7 @@ test("instance admins see the static delivery banner while deploys fail, members
     // 専用の Site と実験を BFF から作る(結果を記録しない設定にしてから開始する。fixtures.ts の createSite と同じ)。
     // 初めての公開なので配信ファイルの中身が変わり、配置は必ず偽の API を呼ぶ(前回と同じ中身なら API を呼ばずに済ませるため、既存の Site では失敗を起こせない)
     const ctl = (method: "POST" | "PATCH", path: string, data: unknown) => page.request.fetch(`${ADMIN_URL}/api/control${path}`, { method, headers: controlHeaders(), data });
-    expect((await ctl("POST", `/workspaces/${wid}/sites`, { name: SITE_STATIC.name, domain: "static.e2e.example", id: SITE_STATIC.id })).status()).toBe(201);
+    expect((await ctl("POST", `/workspaces/${wid}/sites`, { name: SITE_STATIC.name, domain: "static.e2e-static.example", id: SITE_STATIC.id })).status()).toBe(201); // B139: 他の spec のサイトと登録ドメインを分ける(同じ登録ドメインだと作成で訪問者 ID の Cookie 名が自動で変わる)
     expect((await ctl("PATCH", `/sites/${SITE_STATIC.id}`, { resultsEnabled: false })).status()).toBe(200);
     expect((await ctl("POST", `/sites/${SITE_STATIC.id}/experiments`, { ...EXPERIMENT_STATIC, urlMatch: { op: "contains", value: "/" } })).status()).toBe(201);
 

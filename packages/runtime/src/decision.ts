@@ -5,12 +5,20 @@ import type { CompiledConfig, PageContext, RuntimeSettings } from "@wtt/core";
 export type DecisionOutcome = { experiments: Array<{ id: string; variant: string }>; vh?: string } | null;
 
 /**
+ * B139 §4.1: 今の D-lite の経路(/__ab/*、Cookie は edge が持つ)を使うか。Mode B で、https かつ host(ポート込み)が
+ * Cloudflare 経由のドメインの一覧にあるときだけ真。偽なら Mode A の経路(/v1/、本文に visitorId、Cookie は runtime が書く)
+ */
+export const onEdgePath = (settings: RuntimeSettings, loc: { protocol: string; host: string }): boolean =>
+  settings.mode === "B" && loc.protocol === "https:" && (settings.edgeHosts ?? []).includes(loc.host);
+
+/**
  * spec §7.1: Mode A + needsProfile=false はブラウザ内評価(リクエストなし)。
  * needsProfile=true は URL が Experiment か patterns に一致する場合のみ送る(履歴記録のため patterns 単独一致でも送る)。
- * D-lite(mode B)は毎ページビュー送る — Cookie の Max-Age 再延長が decision 応答に乗るため(§9.6)
+ * D-lite(Cloudflare 経由のドメイン = edgePath)は毎ページビュー送る — Cookie の Max-Age 再延長が decision 応答に乗るため(§9.6)。
+ * Mode B の Cloudflare 外のドメインは Mode A と同じ(B139 §4.1)
  */
-export function needsRemoteDecision(settings: RuntimeSettings, config: CompiledConfig, url: string): boolean {
-  if (settings.mode === "B") return true;
+export function needsRemoteDecision(edgePath: boolean, config: CompiledConfig, url: string): boolean {
+  if (edgePath) return true;
   if (!config.needsProfile) return false;
   if (config.experiments.some((e) => matchesUrl(url, e.urlMatch))) return true;
   return Object.values(config.patterns).some((p) => matchesUrl(url, p));

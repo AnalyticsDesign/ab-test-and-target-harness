@@ -71,7 +71,7 @@
 | `導入の形` | **迷ったら `A: JS Cookie(タグ 1 本)`**。もう一方の `B: サーバー発行 Cookie` は Safari 対策の選択肢で、後から移せる([8 節](#8-mode-c-と-mode-b)) |
 | `同意の扱い`(設定のキーは `consentMode`) | **CMP が無ければ「同意を待たずに動かす」(既定。`implicit`)のまま**。同意を得るまで何も動かしたくない場合だけ「訪問者が同意するまで動かさない」(`required`)([7 節](#7-consent-の配線cmp-を使うサイト)) |
 
-作ったら、左メニューの下の「設定」→「サイト設定」の「一般」で **`受け付けるサイトのアドレス(Origin)`**(設定のキーは `allowedOrigins`)を確認する。`ドメイン(ホスト名)` から `https://<ドメイン>` が自動で入っている。同じタグを複数のホストのページに置く場合(例 `example.com` と `www.example.com`)は、1 行に 1 つずつ全部を書く。末尾のスラッシュやパスは付けない。ここに無い origin のページからの要求は拒否される(403)。edge がページと別のホストにある構成では、ブラウザの開発者ツールで、この拒否は判定の要求の CORS のエラーとして見える。この値はページの origin から決まるので、edge の位置にかかわらず既定値のままでよい(edge を別のドメインに置く構成でも、入れるのはページの origin で、edge のホストではない)。
+作ったら、左メニューの下の「設定」→「サイト設定」の「一般」で **`受け付けるサイトのアドレス(Origin)`**(設定のキーは `allowedOrigins`)を確認する。`ドメイン(ホスト名)` から `https://<ドメイン>` が自動で入っている。同じタグを複数のホストのページに置く場合(例 `example.com` と `www.example.com`)は、1 行に 1 つずつ全部を書く。末尾のスラッシュやパスは付けない。ここに無い origin のページからの要求は拒否される(403)。edge がページと別のホストにある構成では、ブラウザの開発者ツールで、この拒否は判定の要求の CORS のエラーとして見える。この値はページの origin から決まるので、edge の位置にかかわらず既定値のままでよい(edge を別のドメインに置く構成でも、入れるのはページの origin で、edge のホストではない)。Mode B のサイトで、`/__ab/*` の Route を置かないホスト(Cloudflare 外のドメイン)のページにタグを置くときも、そのホストの origin をここに足す([8 節](#サブドメインをまたいで-id-を共有する))。
 
 ほかの設定項目はすべて既定のままでよい。一覧と意味は [11 節](#11-サイト設定項目の全一覧)。分析用の外部 ID(GA4 プロパティ ID / BigQuery データセット)は、分析を始めるときに[分析ガイド 2 節 (d)](analytics.md#d-サイトに外部-id-を設定する)で設定する。
 
@@ -204,7 +204,7 @@ JSON に含まれないもの: 4.1 の GA4 カスタムディメンション(GA4
 1. **エクスペリエンスが適用されている**: パターンの変更がページに見える。割当を引き直して、別のパターンも出ることを確かめる。引き直し方は Mode で違う:
    - **Mode A**: DevTools → Application → Cookies で `_ab_vid` を削除して再読み込みする
    - **Mode C**: 参照している既存 Cookie の値が違う別のテスト利用者(または別のブラウザプロファイル)で開く。**本番の認証 Cookie を削除・改変しない**
-   - **Mode B**: DevTools → Application → Cookies で正本 Cookie を削除する(HttpOnly なので `document.cookie` からは消せない)
+   - **Mode B**: DevTools → Application → Cookies で正本 Cookie を削除する(`サブドメインをまたいだ共有` がオフなら HttpOnly なので `document.cookie` からは消せない。オン(既定)なら `document.cookie` からも読めるが、削除は DevTools で行う)
 2. **Cookie が発行されている**: DevTools → Application → Cookies に `_ab_vid` がある(サイト設定の `正本 Cookie 名` を変えていればその名前)
 3. **`dataLayer` に `ab_exposure` が入っている**: DevTools の Console で `dataLayer`(サイト設定の `dataLayer の変数名` を変えていればその名前)と入力して展開する。`ab_exposure` が **エクスペリエンスごとに 1 件**(二重に出ていない)で、`ab_experiment_id` / `ab_variant_id` が期待どおり。目標を踏んだら `ab_conversion` も同様に見る
 4. **GA4 に届いている**: GTM のプレビューを有効にした状態でページを開き、GA4 → 管理 → **DebugView** に `ab_exposure` / `ab_conversion` が現れ、4.1 のパラメータが付いている
@@ -221,7 +221,7 @@ runtime は失敗を `console.debug`(`wtt: …` で始まる)に出す。Chrome 
 |---|---|---|
 | タグの URL が `not found` | そのサイトを一度でも公開したか / サイト ID の綴り | エクスペリエンスを開始する(自動で公開される)。反映は 1 分ほど |
 | タグの URL でサイトの 404 ページが出る | 配信専用の Worker の Route | [デプロイガイド 2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker) |
-| `_ab_vid` が作られない | タグが読み込まれているか(DevTools → Network で `<siteId>.js` が 200)/ `consentMode` が `required` で同意待ちになっていないか / `window.__ab` に `denied` を置いていないか | [7 節](#7-consent-の配線cmp-を使うサイト)。Mode B の Cookie は HttpOnly なので Application → Cookies で見る |
+| `_ab_vid` が作られない | タグが読み込まれているか(DevTools → Network で `<siteId>.js` が 200)/ `consentMode` が `required` で同意待ちになっていないか / `window.__ab` に `denied` を置いていないか | [7 節](#7-consent-の配線cmp-を使うサイト)。`サブドメインをまたいだ共有` がオフの Mode B の Cookie は HttpOnly なので、`document.cookie` ではなく Application → Cookies で見る |
 | Network で `/v1/sites/<siteId>/decision` が 403(この通信は[履歴条件](#9-履歴条件と-visitor-profile)を使うサイトでだけ起きる) | ページの origin が `allowedOrigins` に完全一致しているか(`https://`・ポート・`www` の有無) | [2 節](#2-サイトを作る)の `allowedOrigins` に追加する |
 | Network で `/v1/sites/<siteId>/decision` が 404 | 要求の宛先(Network の Request URL のホスト)で edge が公開されているか。公開の仕方は導入構成で決まる: 設置サイトのゾーンに置く構成では `<設置ホスト>/v1/*` の Route、別のドメインに置く構成では `<edge のホスト>` の Custom Domain、`*.workers.dev` の構成では `wtt-edge.<アカウントのサブドメイン>.workers.dev` | [デプロイガイド 2.3](deploy.md#23-route-を書く) |
 | 元の表示が一瞬見えてから切り替わる(チラつく) | タグに `async` / `defer` が付いていないか / GTM 経由で入れていないか / CSS の変更か(CSS の変更は prehide しない) | [3 節](#3-タグを置く)のとおり viewport の meta の直後に同期で置く |
@@ -274,7 +274,7 @@ runtime は失敗を `console.debug`(`wtt: …` で始まる)に出す。Chrome 
 ### 撤回したときに起きること
 
 - **Mode A**: `document.cookie` から正本 Cookie と UUID Cookie(有効時)を削除する
-- **Mode B**: 正本 Cookie は HttpOnly で edge が持っているので、`AB.consent(false)` が `/__ab/decision` に撤回を 1 回送り、edge が Cookie を消す。**呼ばれなければ Cookie は消えない**。ページ読み込み時点の状態が `denied` のページでは、`AB.consent(false)` を呼んでも状態が変わらないので、撤回を送らない(Cookie は残る。[8 節](#8-mode-c-と-mode-b)の「ページ読み込み時点で `denied` の場合」と同じ)。撤回のときにページを読み直す CMP では、読み直す前に `AB.consent(false)` を呼ぶ。撤回は edge のレート制限(binding)より前に処理するので、その制限では止まらない。ただしゾーンの WAF の上限に触れている IP からは、WAF が edge より前で止めるので、撤回が届かないことがある
+- **Mode B**: 正本 Cookie は edge が発行しているので、`AB.consent(false)` が `/__ab/decision` に撤回を 1 回送り、edge が Cookie を消す(共有の範囲の Cookie、ホスト限定の Cookie、前の範囲の Cookie、目印の Cookie をすべて消す)。**呼ばれなければ Cookie は消えない**。ページ読み込み時点の状態が `denied` のページでは、`AB.consent(false)` を呼んでも状態が変わらないので、撤回を送らない(Cookie は残る。[8 節](#8-mode-c-と-mode-b)の「ページ読み込み時点で `denied` の場合」と同じ)。撤回のときにページを読み直す CMP では、読み直す前に `AB.consent(false)` を呼ぶ。撤回は edge のレート制限(binding)より前に処理するので、その制限では止まらない。ただしゾーンの WAF の上限に触れている IP からは、WAF が edge より前で止めるので、撤回が届かないことがある。Route の無いホスト(Cloudflare 外のドメイン)のページでは、Mode A と同じく、タグが JavaScript で Cookie を消し、削除要求を edge の `/v1/sites/<siteId>/event` に送る
 - 撤回後に再び `AB.consent(true)` が呼ばれると、**新しい ID で**やり直す(前の ID は復元しない)。**Mode C は例外**で、サイトの既存 Cookie から作る ID なので同じ ID に戻る([8 節](#8-mode-c-と-mode-b))
 - 適用済みの変更は、撤回しても元に戻らない
 - **テストの結果の記録**(サイト設定の「結果を記録する」が有効なサイト): 結果の送信は、上の `consentMode` の表で「動く」状態のときだけ行う(既定の `implicit` では `pending` も含む。`denied` と同意待ちの間は送らない)。撤回すると、送信をやめ、ブラウザの送信済みの印(`localStorage`。[14 節](#14-外部送信規律への対応))を消す。`撤回時に訪問者プロフィールを削除(forgetOnRevoke)` が on なら、計測用のデータベースにあるその訪問者の結果の記録(テストの参加と目標の達成)も消す。Mode A と Mode C は下の削除要求で、Mode B は `/__ab/decision` への撤回で消す。撤回の直前に送った結果の送信が削除より後に届いた場合は、その行が残ることがある。Mode C は撤回しても ID が変わらないので、再び同意した後の送信は新しい記録になる(撤回前の記録は消えている)。ただし、撤回の直前の送信が削除より後に届いたときと、計測用のデータベースの削除が失敗したとき(撤回は成功として扱い、やり直さない。残った記録は保持期間で消える)は、撤回前の記録が残り、Mode C では再び同意した後の記録とつながることがある
@@ -288,7 +288,7 @@ Mode は「訪問者 ID を何で持つか」の違い。**迷ったら Mode A**
 |---|---|---|---|---|
 | **A: JS Cookie** | タグが JavaScript で Cookie を書く(毎ページビューで延長) | **7 日間サイトを訪れないと消える**([13 節](#13-ブラウザの制約)) | タグ 1 本 | 実サイトで検証済み |
 | **C: BYOID**(`訪問者 ID の取得元` = `cookie:<名>`) | サイトの既存 Cookie(会員 ID など)から作る。ツールは発行しない | 元の Cookie に依存。サイトが JavaScript で書いた Cookie なら A と同じ | タグ 1 本 + サイト設定 | E2E 検証済み(`fixtures/e2e-byoid.json`)・実サイト未検証 |
-| **B: サーバー発行 Cookie**(旧称 D-lite) | サイトと同じゾーンの Workers Route を通して、edge が HTTP の `Set-Cookie`(HttpOnly)で発行する | 7 日ルールの対象外(同じゾーンの Route からの `Set-Cookie` が Safari で 7 日を超えて残ることを実機で確認済み) | タグ 1 本 + `/__ab/*` の Route。サイトが Cloudflare のゾーン配下にあることが前提 | E2E 検証済み(`fixtures/demo-dlite.json`)・実サイトで検証済み |
+| **B: サーバー発行 Cookie**(旧称 D-lite) | サイトと同じゾーンの Workers Route を通して、edge が HTTP の `Set-Cookie` で発行する(共有がオフなら HttpOnly) | 7 日ルールの対象外(同じゾーンの Route からの `Set-Cookie` が Safari で 7 日を超えて残ることを実機で確認済み。ただし確認したのは HttpOnly 付きの Cookie で、`サブドメインをまたいだ共有` がオンのときに発行する HttpOnly なしの Cookie は実機では未確認。どちらも edge の `Set-Cookie` なので同じ扱いになる見込み) | タグ 1 本 + `/__ab/*` の Route。サイトが Cloudflare のゾーン配下にあることが前提 | E2E 検証済み(`fixtures/demo-dlite.json`)・実サイトで検証済み(共有がオフの構成) |
 
 A から B へは後から移せるが、Cookie の発行元が変わるので訪問者 ID は作り直しになる(全訪問者の割当がリセットされる)。
 
@@ -328,9 +328,27 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 
 `hosts`・Route・疎通確認の URL は、すべて `<ページのホスト>` に揃える。タグは Mode B の decision / event を `/__ab/…` の相対 URL で送るので、タグを別のホストから配っていても `/__ab/*` はページのホスト側に要る。
 
-- タグは `/__ab/decision` に訪問者 ID を含めずに送り、edge が `Set-Cookie`(HttpOnly)で正本 Cookie を発行する。ID は JavaScript から読めない
+- タグは `/__ab/decision` に訪問者 ID を含めずに送り、edge が `Set-Cookie` で正本 Cookie を発行する。`サブドメインをまたいだ共有` がオフなら、ホスト限定の HttpOnly で JavaScript から読めない。オン(既定)なら、`Domain` を付けた HttpOnly なしの Cookie になり、JavaScript から読める([下の小節](#サブドメインをまたいで-id-を共有する))
 - 同意の撤回で Cookie が消えるのは、`AB.consent(false)` が呼ばれたときだけ([7 節](#7-consent-の配線cmp-を使うサイト))。ページ読み込み時点で `denied` の場合は通信そのものを行わないため、既に発行された Cookie は残る(Cookie 自体の有効期限は 1 年)。`retentionDays` が決めるのはサーバー側の Visitor Profile の寿命で、Cookie ではない
 - `撤回時に訪問者プロフィールを削除(forgetOnRevoke)` は、Mode B では訪問者プロフィールの削除には効かない(結果の記録の削除には効く。[7 節](#7-consent-の配線cmp-を使うサイト))
+
+### サブドメインをまたいで ID を共有する
+
+訪問者 ID の Cookie を、登録ドメイン(サブドメインを付けないドメイン。例 `example.com`)の下のどのホストでも読めるように発行する設定。サイト設定の `サブドメインをまたいだ共有`(設定のキーと API の項目は `shareSubdomains`)で切り替える。**新しいサイトは既定でオン。** 更新前から使っているサイトは、更新の後に control の定期処理が順にオンにする(同じ導入の別のサイトと Cookie がぶつかるサイトはオフのまま。確かめ方は CHANGELOG の「更新時の作業」)。
+
+申し込みフォームなどが別のサブドメインにあると、ID の Cookie がホストごとに別では、フォームでの目標の達成がテストの参加と結び付かない。共有がオンなら、`www.example.com` で参加した人がフォームの `form.example.com` で達成した目標も、同じ ID で記録できる(結果を記録するサイト)。
+
+- **共有の範囲**: タグを置くホスト(`hosts` と `受け付けるサイトのアドレス(Origin)` のホスト。http とポート付きの Origin は開発用なので除く)を登録ドメインでまとめ、まとまりごとに Cookie の `Domain` へ登録ドメインを入れる。管理画面では、訪問者 ID の節の「訪問者 ID の共有」カードに、まとまりの一覧と ID の Cookie の状態が出る
+- **登録ドメインが違うドメイン**(`example.com` と `example-shop.jp`)の間では、ブラウザが Cookie を渡さないので ID は別になる。テストはどちらのドメインでも出るが、片方で参加して他方で達成した目標は結果に入らない。両方から読める既存の Cookie がある場合は Mode C を使う
+- **Mode A**: 今までどおりタグが JavaScript で Cookie を書く。共有がオンなら `Domain` が付く
+- **Mode B**: Route のあるホスト(Cloudflare 経由のドメイン)では、edge が `Set-Cookie` で発行する。**共有がオンなら HttpOnly を付けず、JavaScript から読める。** オフなら今までと同じホスト限定の HttpOnly。共有をオフにすれば、Cookie の範囲と HttpOnly はこの版より前と同じに戻る(Route の無いホストが `/v1/` に送ることと、目標だけの達成の記録は、共有のオン・オフにかかわらず変わらない)
+- **Mode B で Route の無いホスト(Cloudflare 外のドメイン)**: そのホストの origin を `受け付けるサイトのアドレス(Origin)` に足してタグを置く。タグは Mode A と同じ動きになり、`/__ab/*` ではなく edge の `/v1/sites/<siteId>/…` へ、ID を本文に入れて送る。ID の Cookie が無ければ、タグが JavaScript で発行し、目印の Cookie(`<正本 Cookie 名>_js`)を添える。edge が書いた ID は読むだけで書き直さない(Safari の制限を受けないままにするため)。CSP を出しているページでは、`connect-src` に edge のホストを足す([10 節](#10-コードの変更と-csp))。`hosts` には書かない(Route が無いため)。以前は、`hosts` に無いホストの `/__ab/*` への送信は届かず、テストは黙って出ていなかった。この版からは `受け付けるサイトのアドレス` にそのホストの origin があれば、`/v1/` に送ってテストが出る
+- **Safari**: Cloudflare 外のドメインにしか来ない人の ID は、JavaScript で書く Cookie なので Mode A と同じ扱い(7 日間サイトを訪れないと消える。[13 節](#13-ブラウザの制約))
+- **同意の撤回**: 共有の範囲の Cookie、ホスト限定の Cookie、前の範囲の Cookie、目印の Cookie を、このツールが発行したものだけ消す([7 節](#7-consent-の配線cmp-を使うサイト))
+- **同じ登録ドメインのすべてのホストを信頼することになる。** 共有がオンなら、同じ登録ドメインの兄弟ホストは ID の Cookie を読み書きでき、別の `Path` で植えられた同じ名前の Cookie は、撤回でも消せない。他社が運営するサブドメインや、利用者が中身を作れるサブドメインにも ID が届く。**第三者に任せたサブドメインや、利用者が中身を作れるサブドメインがあるなら、共有をオフにする。** 同じ名前の Cookie が違う値で複数届き、目印で説明がつかないときは、どの値も採らずに新しい ID を発行する(訪問者を、植えられた値に固定されないようにするため)。植えられた人は、ページごとに ID が作り直されることがある
+- **初回の訪問の時刻**: ID の先頭に発行時刻が入っていて、共有がオン(JavaScript から読める)なら、ページ上のすべてのスクリプトが、ID の Cookie から初回の訪問のおおよその時刻を読める。時刻は 1 時間単位に切り捨てて入れる。このため「初回の訪問からの経過」の条件は、実際の初回の訪問より最大 1 時間早く数える(既に発行された ID は、そのまま使う)
+- **同じ導入の別のサイトとのぶつかり**: Cookie にはサイトの印が無いので、同じ登録ドメインのホストを持つ別のサイトと Cookie の名前(正本 Cookie 名・UUID Cookie 名・目印の名前・保持期間の中の旧名)が重なると、互いの ID を取り合う。同じ導入の別のサイト(別のワークスペースを含む)と重なる保存は、422 `sharing_conflict` で断る。**解くには、自分のサイトの正本 Cookie 名(重なるなら UUID Cookie 名)を変える**(正本 Cookie 名を変えると、全訪問者の ID が作り直される)。共有をオフにしても、相手が共有していれば解けない。旧い名前は、そのサイトが共有している登録ドメインでだけ照合し、今の名前はどの登録ドメインでも照合する。このため、共有していないサイトが名前を変えれば、衝突は解ける。名前を変えたサイトが、旧い名前の使っていた登録ドメインで共有を始められるのは、旧い名前の保持期間(`retentionDays`)が過ぎた後になる。別のワークスペースのサイトとぶつかったときは、名前と ID は出さずに「同じ導入の別のワークスペースのサイト」とだけ伝える
+- **サイトを作るとき**: 同じ導入の別のサイトとぶつかるなら、作成は止めず、相手が共有していれば正本 Cookie 名を `_ab_vid_<サイト ID>` に変えて(共有はオンのまま)、相手が共有していなければ共有をオフにして作る。何を変えたかは、作成の応答(`sharingAdjusted`)と設定の画面に出る
 
 ## 9. 履歴条件と Visitor Profile
 
@@ -379,7 +397,7 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 | allowlist 方式(ホストの列挙だけで nonce なし) | 作る inline の `<script>` / `<style>` が通らない。`'unsafe-inline'` を足せば通るが推奨しない — nonce 方式への移行を勧める(他社ツールや GTM も同じ案内をしている) |
 | Trusted Types の強制(`require-trusted-types-for 'script'`) | **非対応**。HTML(`innerHTML` による挿入そのものが拒否される。`<script>` の有無を問わない)と CUSTOM_JS は動かない。TEXT / IMAGE / HIDE / ATTRIBUTE / CSS は動く(`<style>` の `textContent` は Trusted Types の対象外)。失敗はその変更だけに閉じる |
 
-**設置タグや edge が設置サイトと別オリジンの構成**(`*.workers.dev` や別のドメインで公開している)では、`connect-src` に edge のホストを足す(decision / event の送信先)。結果を記録する場合も、テストの参加と目標の達成を同じ edge の `/event` に送るので、`connect-src` に edge のホストが要る(足さないと送信がブラウザで止まり、ツールの側では失敗として数えられない)。設置タグの `script-src` には、設置タグを配るホスト(配信専用の Worker)を allowlist 方式のサイトだけ足す(nonce 方式なら設置タグの nonce で通る)。同一オリジンの構成(設置サイトのゾーンの Route)では不要。
+**設置タグや edge が設置サイトと別オリジンの構成**(`*.workers.dev` や別のドメインで公開している)では、`connect-src` に edge のホストを足す(decision / event の送信先)。結果を記録する場合も、テストの参加と目標の達成を同じ edge の `/event` に送るので、`connect-src` に edge のホストが要る(足さないと送信がブラウザで止まり、ツールの側では失敗として数えられない)。設置タグの `script-src` には、設置タグを配るホスト(配信専用の Worker)を allowlist 方式のサイトだけ足す(nonce 方式なら設置タグの nonce で通る)。同一オリジンの構成(設置サイトのゾーンの Route)では不要。ただし、Mode B で Route の無いホスト(Cloudflare 外のドメイン)のページは、edge の `/v1/` に別のオリジンとして送るので、そのページの CSP の `connect-src` に edge のホストが要る([8 節](#サブドメインをまたいで-id-を共有する))。
 
 別のドメインに置く構成では、設置タグと edge が同じ `<edge のホスト>`(例 `ab.example.net`)にあるので、足すホストはこの 1 つ(`connect-src` と、allowlist 方式なら `script-src`)。`*.workers.dev` の構成では、`connect-src` に edge のホスト(`wtt-edge.<アカウントのサブドメイン>.workers.dev`)、`script-src` に配信専用の Worker のホスト(`wtt-static.<アカウントのサブドメイン>.workers.dev`)と、2 つに分かれる。どちらの別オリジンの構成でも、サイトの `allowedOrigins` にページの origin が要り([2 節](#2-サイトを作る))、Mode B は使えない([8 節](#8-mode-c-と-mode-b))。
 
@@ -406,12 +424,13 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 | `名前` | 一般 | 管理用の表示名 |
 | `サイト ID(任意)` | 作成時のみ | タグの URL(`/s/<サイト ID>.js`)になる。空欄なら自動で決まる。既存のタグを引き継ぐ場合はその ID を指定する。**作成後は変更できない** |
 | `ドメイン(ホスト名)` | 一般 | サイトのホスト名。`受け付けるサイトのアドレス(Origin)` の初期値(`https://<ドメイン>`)になる |
-| `hosts` | 訪問者 ID | Mode B のときだけ表示。1 行 1 ホスト名(小文字。日本語ドメインは punycode)。edge が `/__ab/*` への要求のホストからサイトを引くために使う |
-| `受け付けるサイトのアドレス(Origin。1 行に 1 つ。https://host[:port] の形)` | 一般 | 設定のキーは `allowedOrigins`。1 行 1 origin。**完全形 `https://host[:port]`** で、末尾スラッシュもパスも付けない。Mode A の decision / event はここに一致する Origin だけを受け付ける。空だと全部拒否する(403) |
+| `hosts` | 訪問者 ID | Mode B のときだけ表示。1 行 1 ホスト名(小文字。日本語ドメインは punycode)。edge が `/__ab/*` への要求のホストからサイトを引くために使う。`/__ab/*` の Route を置いたホストだけを書く(Route の無いホストは `受け付けるサイトのアドレス` に書く。[8 節](#サブドメインをまたいで-id-を共有する)) |
+| `受け付けるサイトのアドレス(Origin。1 行に 1 つ。https://host[:port] の形)` | 一般 | 設定のキーは `allowedOrigins`。1 行 1 origin。**完全形 `https://host[:port]`** で、末尾スラッシュもパスも付けない。Mode A の decision / event はここに一致する Origin だけを受け付ける。空だと全部拒否する(403)。`サブドメインをまたいだ共有` の範囲を計算するときの、タグを置くホストにも使う |
 | `導入の形` | 訪問者 ID | `A: JS Cookie(タグ 1 本)` または `B: サーバー発行 Cookie(同じゾーンの Workers Route。サイトが Cloudflare 配下のとき)`。[8 節](#8-mode-c-と-mode-b) |
 | `訪問者 ID の取得元` | 訪問者 ID | `ab`(ツールが発行する匿名 ID = Mode A)または `cookie:<名>`(サイトの既存 Cookie を使う = Mode C / BYOID)。Mode B では `ab` 固定 |
 | `参照する Cookie 名` | 訪問者 ID | Mode C のとき。値は `SHA-256(site_salt + 値)` に変換してから送る。メールアドレスなど値の種類が少ないものは逆算され得るので使わない |
 | `正本 Cookie 名` | 訪問者 ID | 既定 `_ab_vid`。**変えると全訪問者の ID が作り直され、割当がリセットされる**。旧名は `retentionDays` の間、削除対象として記録され、その間は再利用できない |
+| `サブドメインをまたいだ共有`(設定のキーは `shareSubdomains`) | 訪問者 ID | 既定 on。訪問者 ID の Cookie を、登録ドメインの下のどのホストでも読めるように発行する。オンにしている間は、同じ登録ドメインのすべてのホストを信頼することになる。同じ導入の別のサイトと Cookie の名前が重なると、保存は 422 `sharing_conflict` で断られる。API の `GET /sites/<siteId>` は、共有のまとまり(`cookieGroups`。共有がオフなら空)も返す。[8 節](#サブドメインをまたいで-id-を共有する) |
 | `UUID Cookie(外部ツール連携用の別名。出力専用)` | 訪問者 ID | 有効にすると、正本の ID から導出した UUIDv4 を別の Cookie(`UUID Cookie 名`、既定 `_ab_uuid`)にも書く。導出した UUID から正本の ID には戻せず、ID の発行時刻も含まない。BYOID(Mode C)の訪問者にも出す。Mode C では割当に使う ID(BYOID のハッシュ。BYOID の Cookie が無ければ匿名 ID)から導出するので、ログインの前後で `_ab_uuid` の値が変わる。ツール自身はこの Cookie を読まない |
 | `タイムゾーン` | 一般 | 既定 `Asia/Tokyo`。IANA の名前(`America/New_York` など)。エクスペリエンスの配信条件の曜日・時間帯の判定に使う(訪問者の端末のタイムゾーンではなくサイトのタイムゾーン)。変えたら次の公開から効く |
 | `同意の扱い` | 一般 | 設定のキーは `consentMode`。`同意を待たずに動かす`(既定。`implicit`)または `訪問者が同意するまで動かさない`(`required`)。[7 節](#7-consent-の配線cmp-を使うサイト) |
@@ -509,7 +528,7 @@ GA4 で `ab_error` のイベント数を見れば、制限に当たったペー�
 
 訪問者 ID は Cookie に持つため、ブラウザごとの Cookie の寿命が、同じ訪問者に同じパターンを出し続けられるかを左右する。
 
-| ブラウザ | JavaScript で書いた Cookie(Mode A / Mode C) | HTTP `Set-Cookie`(Mode B) |
+| ブラウザ | JavaScript で書いた Cookie(Mode A / Mode C。Mode B の Cloudflare 外のドメインを含む) | HTTP `Set-Cookie`(Mode B の Cloudflare 経由のドメイン) |
 |---|---|---|
 | Safari | 「**7 日間サイト操作なし**」で消える(JavaScript で書いた Cookie / localStorage / IndexedDB が対象)。一律 7 日の上限は 2020 年に廃止された。トラッカーと判定されたドメインからのリンク装飾付きの流入では 24 時間 | 真の first-party なら寿命の上限なし。ただし CNAME cloaking や、応答 IP の上位 16 ビットがページと異なる場合(Safari 16.4 以降)は 7 日 |
 | Brave | 2025-08 の v1.83 で JavaScript の Cookie の 7 日上限を撤廃し、HTTP と同じ**最大 180 日**に揃えた。Safari 型の「操作なし N 日で削除」は無い。ただし **Shields の既定設定で GTM / GA4 のスクリプトが遮断される**ため、Brave の訪問者にはエクスペリエンスは出て Cookie も残るが、`ab_exposure` / `ab_conversion` は GA4 に届かない(`dataLayer` への push は行われる)。Brave の訪問者は分析の母数・分子から欠ける前提で読む | 最大 180 日(GA4 の計測は既定で不可) |
@@ -518,7 +537,7 @@ GA4 で `ab_error` のイベント数を見れば、制限に当たったペー�
 
 出典(Brave): [brave-browser issue #48063](https://github.com/brave/brave-browser/issues/48063) / [brave-core PR #30479](https://github.com/brave/brave-core/pull/30479)。
 
-**Safari 対策**は Mode B(サーバー発行 Cookie。[8 節](#8-mode-c-と-mode-b))。同じゾーンの Workers Route から HTTP `Set-Cookie`(HttpOnly)で発行するので、「7 日間サイト操作なし」の対象にならない。サイトが Cloudflare のゾーン配下に無い場合は Mode A のまま運用することになる。定期的に再訪する訪問者が中心のサイトなら 7 日の間隔に収まるが、月 1 回程度しか来ない訪問者が中心のサイトでは、Safari のシェアの分だけ「初回扱い」(割当のリセット = 別のパターンを引き直す)が増える。
+**Safari 対策**は Mode B(サーバー発行 Cookie。[8 節](#8-mode-c-と-mode-b))。同じゾーンの Workers Route から HTTP `Set-Cookie` で発行するので、「7 日間サイト操作なし」の対象にならない(実機で確認したのは HttpOnly 付きの Cookie。`サブドメインをまたいだ共有` がオンのときの HttpOnly なしの Cookie は実機では未確認で、同じ扱いになる見込み)。Route の無いホスト(Cloudflare 外のドメイン)のページでは、タグが JavaScript で ID を書くので、そのホストにしか来ない人の ID は Mode A と同じ扱いになる。サイトが Cloudflare のゾーン配下に無い場合は Mode A のまま運用することになる。定期的に再訪する訪問者が中心のサイトなら 7 日の間隔に収まるが、月 1 回程度しか来ない訪問者が中心のサイトでは、Safari のシェアの分だけ「初回扱い」(割当のリセット = 別のパターンを引き直す)が増える。
 
 プライベートブラウズ / シークレットウィンドウでは、訪問をまたいで識別できない。その場合はセッション内だけの A/B テストとして動く(エラーにはしない)。
 
@@ -532,17 +551,18 @@ GA4 で `ab_error` のイベント数を見れば、制限に当たったペー�
 
 | 送信先 | 送信される情報 | 利用目的 | Cookie |
 |---|---|---|---|
-| 運営者自身の Cloudflare アカウント上で動く Worker(edge)。宛先のホストは導入構成で決まる: 設置サイトのゾーンに置く構成では `<設置ホスト>`、別のドメインに置く構成では `<edge のホスト>`、`*.workers.dev` の構成では `wtt-edge.<アカウントのサブドメイン>.workers.dev`。第三者への送信ではない | **decision**(エクスペリエンスの割当の要求): `v`(設定のバージョン)、`url`(閲覧中のページの URL。クエリ・フラグメントを含む)、`referrer`(参照元の URL)、`device`(`desktop` / `mobile` / `tablet` の判定結果)、`viewport`(ブラウザの表示領域の幅・高さ)、`browser`(ブラウザの判定結果)、`os`(OS の判定結果)、`firstVisitAt`(初回の訪問時刻。匿名の ID の発行時刻から読み取る)、`visitorId`(Mode A。ツールが発行した匿名の ID。ID の先頭に発行時刻(初回の訪問日時)を含む) | A/B テストの割当(どのパターンを出すか)の決定 | `_ab_vid`(`正本 Cookie 名`。ツールが発行する匿名の識別子。値の先頭に発行時刻(初回の訪問日時)を含む。Mode C でも、初回の訪問の時刻を持つためだけに置く)、`UUID Cookie` を有効にしている場合はその Cookie(正本から導出した UUID) |
-| 同上 | **event**(目標の達成・同意の撤回): `type`(`goal` / `forget`)、`goalId`(達成した目標の識別子。`type` が `goal` のとき)、`visitorId`(Mode A) | A/B テストの効果測定(Conversion の計上)、および同意撤回時のサーバー側の履歴の削除 | 同上 |
-| 同上(**結果を記録するサイトだけ**。サイト設定の「結果を記録する」) | **event の結果の送信**: テストの参加(`type` = `participant`。`runId`(テストの記録の識別子)、`variantId`(表示したパターン)、`device`(`desktop` / `mobile` / `tablet` の判定結果)、`applied`(変更の適用の状態: 成功 / 失敗 / 後から失敗 / 回復))と、目標の達成(`type` = `conversion`。`goalId`、`runIds`(参加しているテストの記録の識別子の一覧))。`visitorId`(Mode A・Mode C) | テストの結果(パターンごとの参加者と目標の達成)の集計。保存先は運営者の Cloudflare アカウントの計測用のデータベース(D1)で、訪問者 ID はそのまま保存せず、鍵付きのハッシュ(HMAC-SHA-256)にして保存する。保存の期間は、テストの記録を終えた時点(評価時点と終了の早い方)からサイト設定の保持期間(既定 90 日)を過ぎた後、書き込みの予算に余裕のある日に消すまで(大きなテストは消し終えるまで数日かかる)。集計した結果(パターンごとの人数と CV の数など)は、参加者ごとの記録を消した後も管理画面に残る | 同上。ほかにブラウザの `localStorage` に送信済みの印を 1 つ置く(下の注記) |
+| 運営者自身の Cloudflare アカウント上で動く Worker(edge)。宛先のホストは導入構成で決まる: 設置サイトのゾーンに置く構成では `<設置ホスト>`、別のドメインに置く構成では `<edge のホスト>`、`*.workers.dev` の構成では `wtt-edge.<アカウントのサブドメイン>.workers.dev`。Mode B で `/__ab/*` の Route の無いホスト(Cloudflare 外のドメイン)のページからは、Mode A と同じく、edge の公開 origin の `/v1/sites/<siteId>/…` に送る。第三者への送信ではない | **decision**(エクスペリエンスの割当の要求): `v`(設定のバージョン)、`url`(閲覧中のページの URL。クエリ・フラグメントを含む)、`referrer`(参照元の URL)、`device`(`desktop` / `mobile` / `tablet` の判定結果)、`viewport`(ブラウザの表示領域の幅・高さ)、`browser`(ブラウザの判定結果)、`os`(OS の判定結果)、`firstVisitAt`(初回の訪問時刻。匿名の ID の発行時刻から読み取る。1 時間単位に切り捨てた値)、`visitorId`(Mode A と、Mode B で Route の無いホスト。ツールが発行した匿名の ID。ID の先頭に発行時刻(初回の訪問日時。1 時間単位に切り捨てた値)を含む) | A/B テストの割当(どのパターンを出すか)の決定 | `_ab_vid`(`正本 Cookie 名`。ツールが発行する匿名の識別子。値の先頭に発行時刻(初回の訪問日時。1 時間単位に切り捨てた値)を含む。Mode C でも、初回の訪問の時刻を持つためだけに置く)、`UUID Cookie` を有効にしている場合はその Cookie(正本から導出した UUID)、Mode B で Route の無いホストでは、タグが JavaScript で発行した ID を見分けるための目印の Cookie(`<正本 Cookie 名>_js`。ID と同じ値)。`サブドメインをまたいだ共有` がオンなら、これらの Cookie に `Domain`(登録ドメイン)を付ける |
+| 同上 | **event**(目標の達成・同意の撤回): `type`(`goal` / `forget`)、`goalId`(達成した目標の識別子。`type` が `goal` のとき)、`visitorId`(Mode A と、Mode B で Route の無いホスト) | A/B テストの効果測定(Conversion の計上)、および同意撤回時のサーバー側の履歴の削除 | 同上 |
+| 同上(**結果を記録するサイトだけ**。サイト設定の「結果を記録する」) | **event の結果の送信**: テストの参加(`type` = `participant`。`runId`(テストの記録の識別子)、`variantId`(表示したパターン)、`device`(`desktop` / `mobile` / `tablet` の判定結果)、`applied`(変更の適用の状態: 成功 / 失敗 / 後から失敗 / 回復))と、目標の達成(`type` = `conversion`。`goalIds`(達成した目標の識別子の一覧)。どのテストに記録するかは送らず、edge が、その訪問者がテストに参加した記録から決める)。`visitorId`(Mode A・Mode C、Mode B で Route の無いホスト) | テストの結果(パターンごとの参加者と目標の達成)の集計。保存先は運営者の Cloudflare アカウントの計測用のデータベース(D1)で、訪問者 ID はそのまま保存せず、鍵付きのハッシュ(HMAC-SHA-256)にして保存する。保存の期間は、テストの記録を終えた時点(評価時点と終了の早い方)からサイト設定の保持期間(既定 90 日)を過ぎた後、書き込みの予算に余裕のある日に消すまで(大きなテストは消し終えるまで数日かかる)。集計した結果(パターンごとの人数と CV の数など)は、参加者ごとの記録を消した後も管理画面に残る | 同上。ほかにブラウザの `localStorage` に送信済みの印を 1 つ置く(下の注記) |
 
 - **明示的な拒否(`denied`)の間は、`consentMode` に関係なく Cookie も送信も発生しない。** `window.__ab` の事前状態が `denied` の場合と、`AB.consent(false)` で撤回された後がこれにあたる。`pending`(同意も拒否もまだ)で止まるのは `consentMode: "required"` のサイトだけで、**既定の `consentMode: "implicit"` では `pending` を無視してすぐに動き、上の表の送信を行う**。同意を得てから送信を始める形にするには `required` を選ぶ([7 節](#7-consent-の配線cmp-を使うサイト))
 - **ツールは氏名・メールアドレスなどの入力項目を持たない。** 訪問者 ID はツールが発行する乱数、または Mode C ではサイトの既存 ID を `SHA-256(site_salt + 値)` に変換した値([8 節](#8-mode-c-と-mode-b)。変換元が個人データの場合の扱いは同節を参照)
 - **ただし `url`(閲覧中のページの URL)と `referrer` は加工せずにそのまま送る。** URL のクエリやフラグメントに個人情報(メールアドレス、氏名、会員 ID など)が含まれるページに設置すると、それも送信内容に含まれる。設置するページの URL 設計を確認し、含まれ得るなら公表用の情報一覧にその旨を書く
 - **Mode C** でも匿名の Cookie(`_ab_vid`)を置く。識別には使わず、判定の要求にはこの ID を含めず初回の訪問時刻(`firstVisitAt`)だけを送る([8 節](#8-mode-c-と-mode-b))
-- **Mode B** では、HTTP `Set-Cookie` で発行した HttpOnly Cookie が `/__ab/*` への要求に自動的に付く(`visitorId` は本文に含めない。この Cookie の値にも発行時刻(初回の訪問日時)が含まれる)
-- **結果を記録するサイトの送信**は、訪問者 × テストの参加の初回(と、その後に適用が失敗・回復したときに 1 回ずつ)と、訪問者 × テスト × 目標の達成の初回だけ(ページビューごとではない)。送るのは、実行中か一時停止中のテストだけで、パーソナライズでは送らない。プレビューでも送らない。edge が受けた時刻を記録し、ブラウザの時計は使わない
-- **送信済みの印(`localStorage`)**: 結果を記録するサイトでは、同じ参加・達成を何度も送らないために、`<訪問者 ID の Cookie 名>_r`(既定 `_ab_vid_r`)のキーに JSON を 1 つ置く。中身は、訪問者 ID の短いハッシュ(ID が変わったかを見分けるためだけの値)、テストの記録の識別子ごとの表示したパターンと適用の状態、送った目標の識別子、記録を止めている期限。印は、同意の撤回・訪問者 ID の変化(ハッシュが違えば全部捨てる)・終わったテスト(次のページで捨てる)で消える。`localStorage` を使えない環境と、Mode A・Mode C の http のページ(ハッシュの計算に使うブラウザの暗号の機能が無い)では置かず、ページの中のメモリだけで重複を防ぐ(ページを開くたびに送り直すが、記録は 1 件にまとまる)
+- **Mode B** では、HTTP `Set-Cookie` で発行した Cookie が `/__ab/*` への要求に自動的に付く(`visitorId` は本文に含めない。この Cookie の値にも発行時刻(初回の訪問日時。1 時間単位に切り捨てた値)が含まれる)。`サブドメインをまたいだ共有` がオフなら HttpOnly で、オン(既定)なら JavaScript から読める。**ID の Cookie から、初回の訪問のおおよその時刻(1 時間単位)が読める**ことも、公表用の情報に含める。共有がオンのときは、ページ上の他のスクリプトも読める
+- **Mode B で Route の無いホスト**(Cloudflare 外のドメイン)のページは、Mode A と同じく、edge の `/v1/sites/<siteId>/…` に訪問者 ID を本文に入れて送る。ID の Cookie が無ければタグが JavaScript で発行する
+- **結果を記録するサイトの送信**は、訪問者 × テストの参加の初回(と、その後に適用が失敗・回復したときに 1 回ずつ)と、目標の達成(同じページを開いている間は、同じ目標を 1 回だけ。ページを開き直せばまた送る。edge が重複を 1 件にまとめる)。ただし、Mode B で Route のあるホストでは、ページの表示の目標はタグが送らず、edge が判定の要求(`/__ab/decision`)を受けたときに記録する。履歴の条件を使うサイトで、目標の達成を受けた edge は、履歴の記録とあわせて結果の記録にも書く。送るのは、実行中か一時停止中のテストだけで、パーソナライズでは送らない。プレビューでも送らない。edge が受けた時刻を記録し、ブラウザの時計は使わない
+- **送信済みの印(`localStorage`)**: 結果を記録するサイトでは、同じ参加・達成を何度も送らないために、`<訪問者 ID の Cookie 名>_r`(既定 `_ab_vid_r`)のキーに JSON を 1 つ置く。中身は、訪問者 ID の短いハッシュ(ID が変わったかを見分けるためだけの値)、テストの記録の識別子ごとの表示したパターンと適用の状態、記録を止めている期限。印は、同意の撤回・訪問者 ID の変化(ハッシュが違えば全部捨てる)・終わったテスト(次のページで捨てる)で消える。`localStorage` を使えない環境と、Mode A・Mode C の http のページ(ハッシュの計算に使うブラウザの暗号の機能が無い)では置かず、ページの中のメモリだけで重複を防ぐ(ページを開くたびに送り直すが、記録は 1 件にまとまる)
 - **保存した結果の記録の削除**: 保持期間を過ぎた記録(上の保存の期間のとおり)と、同意を撤回した訪問者の記録(`撤回時に訪問者プロフィールを削除(forgetOnRevoke)` が on のとき。すぐに消す)を消す。エクスペリエンス・サイトを削除したときも、その記録を削除の直後から順に消す。消した後も、Cloudflare の D1 の Time Travel の保持期間(Workers Free は 7 日、Workers Paid は 30 日)のあいだは過去の時点として残り、運営者が取った書き出し(export)にも残る
 - **プレビューを設置タグ経由で開いたときだけ**、設置タグと同じオリジンからスクリプト 1 本(`/s/preview/<hash>.js`)を追加で読む(設置タグの nonce 付き)。これは読み込みだけで、訪問者の情報を送らない。通常の訪問者は読まない
 - **GA4 / GTM への送信はこのツールの送信ではない。** タグはサイトの `dataLayer` に push するだけで、そこから先は GTM のタグが送る。GA4 / GTM は運営者の外部送信ポリシーに既に書かれているはずの送信先で、このツールが増やすのはイベント名とパラメータ([12 節](#12-datalayer-の契約と命名の規則))だけ

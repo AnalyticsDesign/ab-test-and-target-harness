@@ -33,6 +33,8 @@ packages/core/test/.tmp-*.json
 packages/core/test/.tmp-static/
 # fixture CLI(--static-dir)が焼く bootstrap。E2E の sample-site が /s/* で配る
 packages/sample-site/.static/
+# E2E の HTTPS 用の自己署名の証明書(サーバーが実行時に作る。テスト専用)
+packages/sample-site/.tls/
 apps/edge/.kv/
 packages/core/test/.tmp-newdir*/
 # admin E2E で control と edge が共有する wrangler のローカル状態(D1 / KV / R2)。実行のたびに作り直す

@@ -3,7 +3,7 @@ import { timeZoneOptions } from "@/lib/time-zones";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ConfirmProvider";
-import { api, describeError, fieldErrors } from "@/lib/client";
+import { ApiClientError, api, describeError, fieldErrors } from "@/lib/client";
 import { budgetFromInput, NEW_PROFILE_BUDGET_HINT, NEW_PROFILE_BUDGET_LABEL } from "@/lib/new-profile-budget";
 import { capacityWarning, cspNotice, resultsToggleNotice, splitCode } from "@/lib/results-settings";
 import { clearSettingsSection, sectionOfHref, setSectionErrors, setSettingsSection, syncSettingsSection, useSettingsSection } from "@/lib/settings-section";
@@ -18,6 +18,8 @@ import { Picker } from "../ui/Picker";
 import { Combo } from "../ui/Combo";
 import { InstallTag } from "./InstallTag";
 import { DangerZone } from "./DangerZone";
+import { SharingCard } from "./SharingCard";
+import { sharingPatch, withSharingHint, type SharingAdjusted } from "./sharing-notice";
 import { SECTIONS, fieldKeysFor, firstInvalidSection, sectionOfField, type SectionId } from "./sections";
 
 /** 節の見出し(B31 ⑥)。文字の正は sections.ts の SECTIONS */
@@ -52,6 +54,7 @@ export function SiteSettingsForm({
   edgeOrigin,
   runningTests,
   runningRecordedTests,
+  sharingAdjusted = null,
 }: {
   site: Site;
   canAdmin: boolean;
@@ -64,6 +67,8 @@ export function SiteSettingsForm({
   /** 切り替えの確認に使う件数(エクスペリエンスの一覧から数える) */
   runningTests: number;
   runningRecordedTests: number;
+  /** 作成で衝突を避けるために共有か Cookie 名を変えたとき、その知らせ(作成の直後の 1 回だけ。sharingNoticeFor で突き合わせた値) */
+  sharingAdjusted?: SharingAdjusted | null;
 }) {
   const router = useRouter();
   const ask = useConfirm();
@@ -108,6 +113,8 @@ export function SiteSettingsForm({
   const [resultsOn, setResultsOn] = useState(site.resultsEnabled);
   // D9 ③(plan ③ K18): 計測用のデータベースの使用量が 80% 以上なら警告、95% 以上なら記録を止めている知らせ(測る前は出さない)
   const capacity = capacityWarning(site.resultsCapacity);
+  // B139: 共有のチェック。カードの状態の表示が入力中の値で変わり、無効のチェックは FormData に載らないので state で持つ
+  const [share, setShare] = useState(site.shareSubdomains);
   const [idSourceKind, setIdSourceKind] = useState<"ab" | "cookie">(site.idSource === "ab" ? "ab" : "cookie");
   const lines = (v: string) => String(v).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   // Analytics のフィールド error は control 側の 422 コードによって key の形が違う(どちらも path は配列):
@@ -204,6 +211,8 @@ export function SiteSettingsForm({
       // 空欄 = null で、使用状況の設定のプランの既定に戻す
       newProfileBudgetPerDay: budgetFromInput(fd.get("newProfileBudgetPerDay")),
       visitorCookieName,
+      // B139: 共有は変えたときだけ送る(理由は sharingPatch のコメント)
+      ...sharingPatch(share, site.shareSubdomains),
       uuidCookieEnabled: fd.get("uuidCookieEnabled") === "on",
       uuidCookieName: fd.get("uuidCookieName"),
       analytics,
@@ -222,7 +231,8 @@ export function SiteSettingsForm({
       router.refresh();
     } catch (err) {
       setError(describeError(err));
-      const fe = fieldErrors(err);
+      // 共有の衝突は、直し方(hint)もチェックの欄の下に出す
+      const fe = err instanceof ApiClientError ? withSharingHint(fieldErrors(err), err.code, err.extra.hint) : fieldErrors(err);
       setFields(fe);
       const first = Object.keys(fe)[0];
       if (first) setSettingsSection(sectionOfField(first));
@@ -421,7 +431,17 @@ export function SiteSettingsForm({
           >
             <input name="visitorCookieName" defaultValue={site.visitorCookieName} disabled={ro} required />
           </Field>
-          <Field label="UUID Cookie(外部ツール連携用の別名。出力専用)" hint="訪問者 ID から導出した UUID(元の ID には戻せません)。BYOID の訪問者にも出します" error={fields.uuidCookieEnabled}>
+          <Field
+            label="UUID Cookie(外部ツール連携用の別名。出力専用)"
+            hint={
+              <>
+                訪問者 ID から導出した UUID(元の ID には戻せません)。BYOID の訪問者にも出します
+                <br />
+                ID を共有すると、UUID Cookie も同じ範囲で読めます
+              </>
+            }
+            error={fields.uuidCookieEnabled}
+          >
             <span className="row">
               <input name="uuidCookieEnabled" type="checkbox" defaultChecked={site.uuidCookieEnabled} disabled={ro} /> 有効にする
             </span>
@@ -441,6 +461,18 @@ export function SiteSettingsForm({
             </p>
           ) : null}
         </section>
+        {/* B139: 訪問者 ID の節の 2 枚目のカード。同じ節なので hidden の条件は 1 枚目と同じ */}
+        <SharingCard
+          site={site}
+          share={share}
+          mode={mode}
+          disabled={ro}
+          error={fields.shareSubdomains}
+          className={switched ? "card enter" : "card"}
+          hidden={section !== "identity"}
+          adjusted={sharingAdjusted}
+          onShareChange={setShare}
+        />
         <section className={switched ? "card enter" : "card"} hidden={section !== "naming"}>
           <h2>{heading("naming")}</h2>
           <Field
