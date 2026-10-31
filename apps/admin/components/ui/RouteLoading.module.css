@@ -1,0 +1,8 @@
+/* サイドバーの右の列にじかに出るとき: 上部バー(TopBar.module.css の .bar)と同じ高さ・色の空の帯と、本文と同じ余白(AppShell.module.css の .inner) */
+.bar { flex-shrink: 0; height: 52px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.body { padding: 32px; }
+/* 本文(<main>)の中に出るとき(サイトの中の画面どうしの移動)は、上部バーも本文の余白ももうあるので足さない */
+main .bar { display: none; }
+main .body { padding: 0; }
+/* 文字は少し遅らせて出す: すぐ届く画面では空白が一瞬あるだけで、文字が点滅しない。動きは画面切替と同じ(globals.css の wtt-enter・--dur) */
+.text { color: var(--muted); font-size: 12.5px; animation: wtt-enter var(--dur) var(--ease-out) 300ms both; }

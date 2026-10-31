@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { Icon } from "./Icon";
 import { CopyButton } from "./CopyButton";
 import { Crumb } from "./Crumb";
@@ -22,7 +22,7 @@ export function TopBar({ crumbs, publish }: { crumbs: Array<{ label: string; hre
         {all.map((c, i) => (
           <Fragment key={`${i}-${c.label}`}>
             {i > 0 ? <span className={styles.sep}>/</span> : null}
-            {c.href ? <Link href={c.href}>{c.label}</Link> : <span>{c.label}</span>}
+            {c.href ? <AppLink href={c.href}>{c.label}</AppLink> : <span>{c.label}</span>}
           </Fragment>
         ))}
         {publish ? (
@@ -43,10 +43,10 @@ export function TopBar({ crumbs, publish }: { crumbs: Array<{ label: string; hre
           <VersionChip siteId={publish.siteId} activeVersion={publish.activeVersion} historyHref={publish.historyHref} />
           {publish.hasUnpublished ? <span className={styles.unpublished}>· 未公開の編集あり</span> : null}
           {publish.canPublish ? (
-            <Link href={publish.href} className={publish.hasUnpublished ? "btn btn-primary" : "btn"} data-testid="topbar-publish" data-variant={publish.hasUnpublished ? "primary" : "secondary"}>
+            <AppLink href={publish.href} className={publish.hasUnpublished ? "btn btn-primary" : "btn"} data-testid="topbar-publish" data-variant={publish.hasUnpublished ? "primary" : "secondary"}>
               <Icon name="upload" />
               公開
-            </Link>
+            </AppLink>
           ) : (
             <>
               {/* 押せない理由は見える文で添える(決まり 2.6。title だけではキーボード・タッチ・読み上げに届かない)。ボタンの左に置く(2.3) */}

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { requireUser } from "@/lib/control";
-import { loadCapabilities, loadSummary } from "@/lib/loaders";
+import { allInOrder, loadCapabilities, loadSummary } from "@/lib/loaders";
 import { shouldShowBreakGlassBanner } from "@/lib/capabilities";
 import { BreakGlassBanner } from "@/components/BreakGlassBanner";
 import { CapabilitiesBanners } from "@/components/CapabilitiesBanners";
@@ -22,9 +22,8 @@ import { SettingsOriginProvider } from "@/components/ui/SettingsOrigin";
  * それ以外の設定の画面(画面表示・システム管理者・使用状況)は summary を使わないので、切り替えの一覧が空になるだけ
  */
 export default async function AuthedLayout({ children }: { children: ReactNode }) {
-  const user = await requireUser();
-  // 2 つは互いに依らないので並べて読む
-  const [caps, summary] = await Promise.all([loadCapabilities(), loadSummary()]);
+  // 3 つは互いに依らないので並べて読む。失敗は並べた順に判定する(未ログインは requireUser の redirect が先)
+  const [user, caps, summary] = await allInOrder([requireUser(), loadCapabilities(), loadSummary()]);
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
       {/* 凍結(全員の操作に関わるので一番上)と版の帯。取り直しは CapabilitiesBanners の 1 回を共有する。どちらも無いときも常にマウントする(開いていた画面にも取り直しで帯が出るように) */}

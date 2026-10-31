@@ -1,6 +1,6 @@
 "use client";
 import { Fragment, useState } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { api, describeError } from "@/lib/client";
 import { deleteBlocked, runningIn } from "@/lib/workspaces";
 import type { WorkspaceSummary } from "@/lib/types";
@@ -56,7 +56,7 @@ export function WorkspacesAdmin({ workspaces, focusNew }: { workspaces: Workspac
                 <Fragment key={w.id}>
                   <tr>
                     <td>
-                      <Link href={`/w/${w.id}`}>{w.name}</Link>
+                      <AppLink href={`/w/${w.id}`}>{w.name}</AppLink>
                     </td>
                     <td className="num">{w.sites.length}</td>
                     {/* memberCount は管理者以上のときだけ数(システム管理者は全ワークスペースのオーナーなので通常は数が来る) */}

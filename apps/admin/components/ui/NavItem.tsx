@@ -1,5 +1,5 @@
 "use client";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import type { MouseEvent } from "react";
 import { Icon, type IconName } from "./Icon";
 import styles from "./Sidebar.module.css";
@@ -33,8 +33,8 @@ export function NavItem({
   marked?: boolean;
 }) {
   return (
-    // prefetch は false のときだけ渡す(未指定 = フレームワークの既定のまま)
-    <Link
+    // prefetch は false のときだけ渡す(未指定 = AppLink の既定。マウスが乗った・フォーカスしたときだけ先読みする)
+    <AppLink
       href={href}
       prefetch={prefetch}
       className={danger ? `${styles.item} ${styles.danger}` : styles.item}
@@ -45,6 +45,6 @@ export function NavItem({
       <Icon name={icon} />
       {label}
       {marked ? <span className={styles.mark} role="img" aria-label="この節に入力エラーがあります" /> : null}
-    </Link>
+    </AppLink>
   );
 }

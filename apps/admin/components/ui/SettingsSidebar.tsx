@@ -1,6 +1,6 @@
 "use client";
 import { Fragment, type MouseEvent } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import { backLabel, resolveOrigin, settingsGroups, switchSettingsHref, type SettingsItem, type SettingsPage } from "@/lib/nav";
 import { isPlainLeftClick } from "@/lib/leave-guard";
@@ -68,12 +68,12 @@ export function SettingsSidebar({ page, instanceAdmin }: { page: SettingsPage; i
 
   return (
     <>
-      <Link href={resolved.backHref} className={styles.back}>
+      <AppLink href={resolved.backHref} className={styles.back}>
         <Icon name="left" size={14} />
         戻る
         {/* 名前は戻り先から決める(開いた場所と戻り先が違うことがある。例: ホームのカードからメンバーの画面へ入ったとき) */}
         <span className={styles.backTo}>{backLabel(resolved, workspaces)}</span>
-      </Link>
+      </AppLink>
       {/* 枠でサイトを選ぶと、サイト設定の画面なら同じ節のまま、ほかの画面ならそのサイトのサイト設定の一般へ(ユーザーの決定 5)。
           開いた場所は押したときに書かない: provider が画面の移動から更新する(離脱の確認で onClick が走らない経路でも働くため) */}
       {switcherWs ? (

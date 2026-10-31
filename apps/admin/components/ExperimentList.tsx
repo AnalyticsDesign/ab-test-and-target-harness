@@ -1,7 +1,7 @@
 "use client";
 import { describePageMatch } from "@/lib/page-match";
 import { useState } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import type { Experiment } from "@/lib/types";
 import { FILTER_JA, STATUS_FILTERS, STATUS_JA, STATUS_TONE, countByFilter, filterExperiments, type StatusFilter } from "@/lib/experiment-filter";
 import { KIND_JA } from "@/lib/experiment-kind";
@@ -18,9 +18,9 @@ export function ExperimentList({ wid, sid, experiments, canPublish, initialFilte
     return (
       <p className="muted">
         エクスペリエンスはまだありません。最初に、サイトのページへ導入タグを貼ります。{" "}
-        <Link href={`/w/${wid}/sites/${sid}/settings?section=tag`} data-testid="empty-install-tag">
+        <AppLink href={`/w/${wid}/sites/${sid}/settings?section=tag`} data-testid="empty-install-tag">
           導入タグを開く
-        </Link>
+        </AppLink>
       </p>
     );
   }
@@ -66,7 +66,7 @@ export function ExperimentList({ wid, sid, experiments, canPublish, initialFilte
               return (
                 <tr key={e.id} data-testid={`experiment-row-${e.id}`}>
                   <td>
-                    <Link href={`/w/${wid}/sites/${sid}/experiments/${e.id}`}>{e.name}</Link>
+                    <AppLink href={`/w/${wid}/sites/${sid}/experiments/${e.id}`}>{e.name}</AppLink>
                     <div className="row" style={{ gap: 8 }}>
                       <span className="muted mono">{e.id}</span>
                       {e.unpublished ? <span className="badge badge-warn">未公開の編集あり</span> : null}

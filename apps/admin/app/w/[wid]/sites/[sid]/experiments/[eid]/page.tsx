@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { controlFetch, requireUser } from "@/lib/control";
-import { loadCapabilities, loadSite, loadWorkspaces } from "@/lib/loaders";
+import { allInOrder, loadCapabilities, loadSite, loadWorkspaces } from "@/lib/loaders";
 import { tabsFor } from "@/lib/experiment-draft";
 import type { PlanView } from "@/lib/evaluation-plan";
 import { STATUS_JA, STATUS_TONE } from "@/lib/experiment-filter";
@@ -15,16 +15,24 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPill } from "@/components/ui/StatusPill";
 
 export default async function ExperimentPage({ params, searchParams }: { params: Promise<{ wid: string; sid: string; eid: string }>; searchParams: Promise<{ tab?: string | string[]; variant?: string | string[]; duplicated?: string | string[]; analyticsFailed?: string | string[] }> }) {
-  await requireUser();
   const { wid, sid, eid } = await params;
-  const ws = (await loadWorkspaces()).find((w) => w.id === wid);
-  const exp = await controlFetch<Experiment>(`/sites/${sid}/experiments/${eid}`);
+  // 互いに依らない取得は並べて読む(allInOrder。失敗は並べた順に判定するので、未ログインは今までどおりログインへ)
+  // 対象が無いときも site・目標・オーディエンスを取りに行くが、使うのは下の notFound の判定の後だけ。
+  // 決定 43 (6): capabilities は実験編集画面で 1 回読む。失敗は「有効」側(control が 409 / 422 で最終判定する)
+  const [, workspaces, exp, siteRes, goalsRes, audiencesRes, caps] = await allInOrder([
+    requireUser(),
+    loadWorkspaces(),
+    controlFetch<Experiment>(`/sites/${sid}/experiments/${eid}`),
+    loadSite(sid),
+    controlFetch<Goal[]>(`/sites/${sid}/goals`),
+    controlFetch<Audience[]>(`/sites/${sid}/audiences`),
+    loadCapabilities(),
+  ]);
+  const ws = workspaces.find((w) => w.id === wid);
   if (!ws || exp.status !== 200) notFound();
-  const site = (await loadSite(sid)).data;
-  const goals = (await controlFetch<Goal[]>(`/sites/${sid}/goals`)).data;
-  const audiences = (await controlFetch<Audience[]>(`/sites/${sid}/audiences`)).data;
-  // 決定 43 (6): 実験編集画面で 1 回読む。失敗は「有効」側(control が 409 / 422 で最終判定する)
-  const caps = await loadCapabilities();
+  const site = siteRes.data;
+  const goals = goalsRes.data;
+  const audiences = audiencesRes.data;
   const canPublish = ws.role === "owner" || ws.role === "admin";
   // D9 ③ Task 14: 評価計画はテストだけ(パーソナライズは 404)。読めなければ null(タブで「読めませんでした」を出す)
   const planRes = exp.data.kind === "test" ? await controlFetch<PlanView>(`/sites/${sid}/experiments/${eid}/evaluation-plan`) : null;

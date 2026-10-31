@@ -1,5 +1,5 @@
 "use client";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { useEffect, useState } from "react";
 import { api, ApiClientError } from "@/lib/client";
 import type { UsageReport, UsageSettingsView } from "@/lib/types";
@@ -51,7 +51,7 @@ export function UsageSummary({ instanceAdmin }: { instanceAdmin: boolean }) {
         <h2 id="home-usage" style={{ margin: 0 }}>使用状況</h2>
         {view.adminLine ? (
           <span className="muted" style={{ marginLeft: "auto" }}>
-            {settings ? settingsLine(settings) : ""} (<Link href="/w/me/usage" prefetch={false}>変更</Link>)
+            {settings ? settingsLine(settings) : ""} (<AppLink href="/w/me/usage" prefetch={false}>変更</AppLink>)
           </span>
         ) : null}
       </div>
@@ -71,7 +71,7 @@ export function UsageSummary({ instanceAdmin }: { instanceAdmin: boolean }) {
             </p>
           ) : null}
           <UsageTable report={view.report} limit={topResources(view.report, 3)} />
-          {view.adminLine ? <Link href="/w/me/usage" prefetch={false}>詳細</Link> : null}
+          {view.adminLine ? <AppLink href="/w/me/usage" prefetch={false}>詳細</AppLink> : null}
         </>
       ) : null}
     </section>

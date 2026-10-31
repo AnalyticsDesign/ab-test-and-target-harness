@@ -1,7 +1,7 @@
 // apps/admin/components/ApiKeysPanel.tsx(自分の API キー。決定 54 (11)、決定 55。発行・一覧・失効はユーザー自身が管理画面から)
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { api, describeError } from "@/lib/client";
@@ -164,7 +164,7 @@ export function ApiKeysPanel({ keys, workspaces, amInstanceAdmin }: { keys: ApiK
           <ul>
             {managed.map((w) => (
               <li key={w.id}>
-                <Link href={`/w/${w.id}/api-keys`}>{w.name} のメンバーの API キー</Link>
+                <AppLink href={`/w/${w.id}/api-keys`}>{w.name} のメンバーの API キー</AppLink>
               </li>
             ))}
           </ul>

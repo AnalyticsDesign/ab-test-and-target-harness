@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ConfirmProvider";
+import { useRefreshAndWait } from "@/lib/use-refresh-and-wait";
 import { api, describeError } from "@/lib/client";
 import { STATUS_JA } from "@/lib/experiment-filter";
 import { comparisonsOf, type PlanView } from "@/lib/evaluation-plan";
@@ -71,7 +71,8 @@ export function StatusButtons({
   /** サイトのタイムゾーン(終了のモーダルの評価時点の日付) */
   timeZone: string;
 }) {
-  const router = useRouter();
+  // 状態の変更の後の読み直し。反映の前に押したリンクは反映の後に回る(lib/refresh-wait.ts。CE-R9)
+  const refreshAndWait = useRefreshAndWait();
   const ask = useConfirm();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
@@ -203,7 +204,7 @@ export function StatusButtons({
                     : { text: `状態は ${STATUS_JA[n.to]} に変わりましたが、公開に失敗しました(${r.publish.error}: ${r.publish.message})。上部の「公開」から再試行してください`, error: true },
                 );
                 setWarnings(startWarnings(r.warnings));
-                router.refresh();
+                void refreshAndWait();
               } catch (e) {
                 // 409 invalid_transition(評価計画・パターンの設定が変わった競合など)は control の hint をそのまま出す
                 setMsg({ text: describeError(e), error: true });
@@ -233,7 +234,7 @@ export function StatusButtons({
           onDone={(messages, created) => {
             setStopping(false);
             setStopNotices({ messages, created });
-            router.refresh();
+            void refreshAndWait();
           }}
         />
       ) : null}

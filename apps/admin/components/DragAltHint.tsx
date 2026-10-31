@@ -1,5 +1,5 @@
 "use client";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { useDragAlternatives } from "@/lib/a11y";
 
 /**
@@ -11,7 +11,7 @@ export function DragAltHint() {
   if (on) return null;
   return (
     <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-      ドラッグ操作が難しい場合は、<Link href="/w/me/display">設定 &gt; 画面表示</Link> でボタン操作に切り替えられます
+      ドラッグ操作が難しい場合は、<AppLink href="/w/me/display">設定 &gt; 画面表示</AppLink> でボタン操作に切り替えられます
     </p>
   );
 }

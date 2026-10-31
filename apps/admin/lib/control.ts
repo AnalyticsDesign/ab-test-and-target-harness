@@ -1,7 +1,9 @@
+import { cache } from "react";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { API_CONTRACT_VERSION, CLIENT_IP_HEADER, CLIENT_VERSION_HEADER, lowerClientVersion } from "@wtt/core";
 import { controlBinding } from "./control-binding";
+import { sendOncePerRender } from "./control-dedupe";
 import type { SessionUser } from "./types";
 
 /**
@@ -40,6 +42,7 @@ export type ControlRequestInit = RequestInit & {
  * - binding(wrangler.jsonc の services)があれば `env.CONTROL.fetch`、無い構成(手元の `next dev` を含む)だけ公開 URL の fetch。
  *   binding があるのに throw したら null(呼び出し元は 502 control_unreachable にする)で、公開 URL には戻さない
  *   (黙って戻すと、利用者ごとのレート制限の枠が気づかれずに全員 1 枠に戻るため)
+ * - ページの描画中の同じ GET は 1 回だけ送る(`sendOncePerRender`。書き込みはまとめず、その要求の覚えを捨てる)
  * - 届かなかったときは throw せず null を返す。binding の相手が無いときに返る 503 などの応答は、そのまま返す(手を加えない)
  */
 export async function controlRequest(path: string, init: ControlRequestInit = {}): Promise<Response | null> {
@@ -55,7 +58,14 @@ export async function controlRequest(path: string, init: ControlRequestInit = {}
     if (clientIp) headers.set(CLIENT_IP_HEADER, clientIp);
     const url = `${controlUrl()}${path}`;
     const requestInit: RequestInit = { ...rest, headers, cache: "no-store" };
-    return binding ? await binding.fetch(new Request(url, requestInit)) : await fetch(url, requestInit);
+    // ページの描画中の同じ GET は 1 回だけ送る(lib/control-dedupe.ts。binding の fetch は vinext の fetch のまとめの外を通るため)
+    return await sendOncePerRender(url, requestInit, async () => {
+      try {
+        return binding ? await binding.fetch(new Request(url, requestInit)) : await fetch(url, requestInit);
+      } catch {
+        return null;
+      }
+    });
   } catch {
     return null;
   }
@@ -207,11 +217,15 @@ export async function controlFetch<T>(path: string, init: RequestInit = {}): Pro
   return { status: res.status, data };
 }
 
-export async function requireUser(): Promise<SessionUser> {
+/**
+ * ログイン中の利用者。取れなければ /login へ redirect する(throw)。
+ * React の cache で包み、同じ描画(1 リクエスト)の中の layout とページが 1 つの結果(redirect の throw も含む)を使う(admin speed B)
+ */
+export const requireUser = cache(async (): Promise<SessionUser> => {
   const r = await controlFetch<SessionUser>("/me");
   if (r.status !== 200) redirect("/login");
   return r.data;
-}
+});
 
 /**
  * セッション Cookie の属性(Global Constraints)。HttpOnly なので JS からは読めず、BFF だけが Bearer に載せ替える。

@@ -102,12 +102,12 @@ export const HERO_TEXT = "E2E から書き換え";
  * admin BFF は接続元 IP を転送しないので(決定 35 (4))、この E2E のすべての無認証 POST は control からは
  * 同じ IP に見え、経路ごとに 1 枠を共有する(apps/control/src/app.ts)。
  *
- * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 30 回(`login(` の呼び出しの実数。publish-flow 10 / audience-flow 10 /
+ * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 31 回(`login(` の呼び出しの実数。publish-flow 10 / audience-flow 10 /
  * version-banner 2 / experiment-kind-flow 1 / login-screen 1 / results-flow 1 / invite-flow 1 / static-delivery 1 / results-settings 1 /
- * variant-ui 1 / write-freeze 1、うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 /
+ * variant-ui 1 / write-freeze 1 / request-count 1、うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 /
  * 招待受諾 2 回(invite-flow 1 / static-delivery 1。`acceptInvite()` は受諾でセッションを得るので、招待されたメンバーの sign-in は数えない)/
  * `break-glass/reset-link` 1 回 / `reset-password` 1 回。
- * 1 実行の sign-in の合計(30)は上限(30 回 / 10 秒。`apps/control/wrangler.jsonc` の AUTH_RATE_LIMITER)と同じで、合計だけでは
+ * 1 実行の sign-in の合計(31)は上限(30 回 / 10 秒。`apps/control/wrangler.jsonc` の AUTH_RATE_LIMITER)を超えていて、合計だけでは
  * 10 秒窓に収まるとは言えない。今は `workers: 1` で直列に走り、各 `login()` の間に画面の遷移とテストの操作が入るので、1 つの 10 秒窓に
  * 入る sign-in は合計よりずっと少ない(窓ごとの実数は測っていない)。これ以上ログインを増やすなら、
  * 各テストでログインし直すのをやめて `storageState` でセッションを引き回すこと(ログインの検証は 1 本残せばよい)。
@@ -274,6 +274,9 @@ export async function createExperiment(page: Page, experiment: { id: string; nam
   await page.fill('input[name="value"]', "/");
   await page.click('button[type="submit"]');
   await expect(page).toHaveURL(new RegExp(`/experiments/${experiment.id}$`));
+  // 作成の後は全画面の遷移(ExperimentCreateForm)なので、続けて入力する前にハイドレーションを待つ
+  // (本文は loading.tsx の境界の中で外枠より後にハイドレーションされ、その前の入力は React に届かない)
+  await waitForHydration(page);
 }
 
 /**
@@ -347,6 +350,21 @@ async function firstOf(
  */
 export async function waitForHydration(page: Page): Promise<void> {
   await expect(page.locator("html")).toHaveAttribute("data-hydrated", "1");
+  // 本文のハイドレーションも待つ: 画面のフォルダの loading.tsx があると本文は Suspense の境界の中にあり、React は外枠を先にハイドレーションして
+  // (HydrationMark の effect はここで走る)、境界の中は後の別の処理で行う。その間の本文は onClick が付いていない。
+  // React はハイドレーションした要素に `__reactFiber$…` のプロパティを付けるので、<main> の中の要素すべてに付くまで待つ。
+  // dangerouslySetInnerHTML で入れた中身(ヘルプの本文など)には付かないので、その下は見ない。<main> の無い画面(ログインなど)は見ない
+  await page.waitForFunction(() => {
+    const has = (el: Element, prefix: string) => Object.keys(el).find((k) => k.startsWith(prefix));
+    const insideRawHtml = (el: Element): boolean => {
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        const key = has(p, "__reactProps$");
+        if (key && (p as unknown as Record<string, { dangerouslySetInnerHTML?: unknown }>)[key]?.dangerouslySetInnerHTML) return true;
+      }
+      return false;
+    };
+    return [...document.querySelectorAll("main, main *")].every((el) => has(el, "__reactFiber$") || insideRawHtml(el));
+  });
 }
 
 /**

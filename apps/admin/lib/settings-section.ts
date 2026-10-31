@@ -18,6 +18,7 @@
 import { useSyncExternalStore } from "react";
 import { SECTION_IDS, type SectionId } from "@/components/settings/sections";
 import { pickParam, replaceParam } from "./url-state";
+import { deferUntilRefreshed } from "./refresh-wait";
 
 /** URL の search(`?section=...`)から節を引く。無い・知らない値は一般の節。重なったら先頭 */
 export function readSection(search: string): SectionId {
@@ -67,8 +68,12 @@ function subscribeSection(listener: () => void): () => void {
 
 /** 節を切り替える(URL にも写す。一般の節は section を付けない)。replaceParam は URL_PARAM_EVENT を出すので、設定を開いた場所の記憶もこれを見る */
 export function setSettingsSection(id: SectionId): void {
-  replaceParam("section", id === "general" ? null : id);
-  emitSection(id);
+  // 保存の後の読み直しが画面に反映される前に切り替えると、反映が節を一般に戻す(管理画面の速さの記録 4 節・CE-R9)。
+  // その間だけ切り替えを反映の後に回す(lib/refresh-wait.ts。後から押した節が前のものに替わる)
+  deferUntilRefreshed("settings-section", () => {
+    replaceParam("section", id === "general" ? null : id);
+    emitSection(id);
+  });
 }
 
 /** URL を書き換えずに store の値だけを入れる(フォームが initialSection を入れるのに使う) */

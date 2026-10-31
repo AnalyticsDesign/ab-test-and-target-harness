@@ -1,6 +1,6 @@
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { requireUser } from "@/lib/control";
-import { requireSummary } from "@/lib/loaders";
+import { allInOrder, requireSummary } from "@/lib/loaders";
 import { Content } from "@/components/ui/AppShell";
 import { TopBar } from "@/components/ui/TopBar";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -13,8 +13,8 @@ import { UsageSummary } from "@/components/usage/UsageSummary";
  * 外枠(サイドバー)は app/w/layout.tsx が描く。summary が取れなければ画面全体のエラー(requireSummary が例外にする)。使用状況(D10)の要約はワークスペースの節の下(クライアントで読む)
  */
 export default async function HomePage() {
-  const user = await requireUser();
-  const workspaces = await requireSummary();
+  // 並べて読む。失敗は並べた順に判定する(未ログインはエラーの画面ではなくログインへ)
+  const [user, workspaces] = await allInOrder([requireUser(), requireSummary()]);
   return (
     <>
       <TopBar crumbs={[]} />
@@ -34,9 +34,9 @@ export default async function HomePage() {
               </h2>
               <span className="muted">{workspaces.length}</span>
               {user.instanceAdmin ? (
-                <Link className="btn" href="/w/me/workspaces?new=1" style={{ marginLeft: "auto" }}>
+                <AppLink className="btn" href="/w/me/workspaces?new=1" style={{ marginLeft: "auto" }}>
                   新しいワークスペース
-                </Link>
+                </AppLink>
               ) : null}
             </div>
             <WorkspaceCards workspaces={workspaces} />

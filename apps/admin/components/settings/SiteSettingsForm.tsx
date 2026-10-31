@@ -3,6 +3,7 @@ import { timeZoneOptions } from "@/lib/time-zones";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ConfirmProvider";
+import { useRefreshAndWait } from "@/lib/use-refresh-and-wait";
 import { ApiClientError, api, describeError, fieldErrors } from "@/lib/client";
 import { budgetFromInput, NEW_PROFILE_BUDGET_HINT, NEW_PROFILE_BUDGET_LABEL } from "@/lib/new-profile-budget";
 import { capacityWarning, cspNotice, resultsToggleNotice, splitCode } from "@/lib/results-settings";
@@ -71,6 +72,7 @@ export function SiteSettingsForm({
   sharingAdjusted?: SharingAdjusted | null;
 }) {
   const router = useRouter();
+  const refreshAndWait = useRefreshAndWait();
   const ask = useConfirm();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -228,7 +230,8 @@ export function SiteSettingsForm({
       await api("PATCH", `/sites/${site.id}`, body);
       setSaved(true);
       setDirty(false);
-      router.refresh();
+      // 保存の後の読み直し。反映の前に押した節・リンクは反映の後に回る(lib/refresh-wait.ts。管理画面の速さの記録 4 節・CE-R9)
+      void refreshAndWait();
     } catch (err) {
       setError(describeError(err));
       // 共有の衝突は、直し方(hint)もチェックの欄の下に出す

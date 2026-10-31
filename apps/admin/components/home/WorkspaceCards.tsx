@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { roleLabel } from "@/lib/roles";
 import type { WorkspaceSummary } from "@/lib/types";
 import styles from "./WorkspaceCards.module.css";
@@ -10,7 +10,7 @@ export function WorkspaceCards({ workspaces }: { workspaces: WorkspaceSummary[] 
       {workspaces.map((w) => (
         <div key={w.id} className={styles.card} data-testid="workspace-card">
           <div className={styles.head}>
-            <Link href={`/w/${w.id}`}>{w.name}</Link>
+            <AppLink href={`/w/${w.id}`}>{w.name}</AppLink>
             <span className="badge">{roleLabel(w.role)}</span>
           </div>
           <span className="muted">
@@ -19,7 +19,7 @@ export function WorkspaceCards({ workspaces }: { workspaces: WorkspaceSummary[] 
             {w.memberCount !== null ? (
               <>
                 {" · "}
-                <Link href={`/w/${w.id}/members`}>メンバー {w.memberCount}</Link>
+                <AppLink href={`/w/${w.id}/members`}>メンバー {w.memberCount}</AppLink>
               </>
             ) : null}
           </span>
@@ -29,7 +29,7 @@ export function WorkspaceCards({ workspaces }: { workspaces: WorkspaceSummary[] 
             <ul className={styles.sites}>
               {w.sites.map((s) => (
                 <li key={s.id}>
-                  <Link href={`/w/${w.id}/sites/${s.id}`}>{s.name}</Link>
+                  <AppLink href={`/w/${w.id}/sites/${s.id}`}>{s.name}</AppLink>
                   <span className="muted">配信中 {s.runningCount}</span>
                   <span className={`${styles.domain} mono`}>{s.domain}</span>
                 </li>

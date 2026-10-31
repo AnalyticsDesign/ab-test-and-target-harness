@@ -288,6 +288,8 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await expect(saveState).toHaveText("未保存の変更あり");
     await expect(page.locator('input[name="domain"]')).toBeVisible();
     await expect(page.getByTestId("code-block")).toHaveCount(0);
+    // 保存の直後(読み直しの反映を待たずに)次の節へ切り替える。読み直しの反映の前の切り替えは、反映の後に回る(lib/refresh-wait.ts)ので、
+    // 下の「切り替えの枠の href が ?section=tag で終わる」が、保存の直後の節の切り替えの見張りになる(以前は refresh の応答を待っていた。管理画面の速さの記録 4 節)
     await page.getByRole("button", { name: "保存" }).click();
     await expect(page.getByText("保存しました")).toBeVisible();
     await expect(page.locator('input[name="domain"]')).toBeVisible();
@@ -297,8 +299,11 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     // 変更の無い状態(上で保存済み)から始める(未保存だと離脱の確認が挟まる)
     const switcherButton = nav.getByRole("button", { name: /^ワークスペースとサイトの切り替え/ });
     await page.getByTestId("section-tag").click();
+    await expect(page.getByTestId("code-block")).toBeVisible();
     await switcherButton.click();
-    await switcher.getByRole("link", { name: new RegExp(`^${SITE_UNPUBLISHED.name}`) }).click();
+    const unpubLink = switcher.getByRole("link", { name: new RegExp(`^${SITE_UNPUBLISHED.name}`) });
+    await expect(unpubLink).toHaveAttribute("href", /\/settings\?section=tag$/); // 押す前に、今の節(導入タグ)が href に入っていること
+    await unpubLink.click();
     await expect(page).toHaveURL(new RegExp(`/sites/${SITE_UNPUBLISHED.id}/settings\\?section=tag$`));
     await expect(page.getByTestId("code-block")).toContainText(`/s/${SITE_UNPUBLISHED.id}.js`);
     // 見ているのは「サイトを切り替えたあと、前のサイトの値が残らない」という見えるふるまい(key による再マウントそのものの証明ではない。

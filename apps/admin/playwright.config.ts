@@ -94,6 +94,12 @@ export default defineConfig({
     { name: "variant-ui", testMatch: /variant-ui\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // D9 ③: 結果の記録の流れ(評価計画 → 開始 → edge への参加・CV → 結果のタブ → 終了と採用 → 複製の下書き)。専用のサイトを作る
     { name: "results-flow", testMatch: /results-flow\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    // 管理画面の速さ: 主な画面(ホーム〜公開履歴の 11 画面)を開くときの control への要求の回数と上限(admin の wrangler dev の手元の観測で数える)。専用のサイトを作る
+    { name: "request-count", testMatch: /request-count\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    // 管理画面の速さ(最終レビュー CX-R1): 読み込み中の枠が、別のサイト・ワークスペースの上部バーを出さない。専用のサイト 4 つと、2 つ目のワークスペースを作る
+    // 管理画面の速さ CE-R9: 書き込みの後の読み直しの反映の前に押した遷移・節の切り替えが、捨てられない・戻されない(読み直しを遅らせて窓を決まって作る)。専用のサイトを作る
+    { name: "refresh-race", testMatch: /refresh-race\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    { name: "shell-reuse", testMatch: /shell-reuse\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // 7o K14: 設置タグの配信ファイルの帯と全サイトの作り直し。偽の API を一時的に失敗にする(終わりに必ず戻す)。専用のサイトを作り、メンバーを 1 人招待する。
     // 失敗の窓がほかの project の公開に重ならないよう最後に置く(workers: 1 なので並んで走らない)
     { name: "static-delivery", testMatch: /static-delivery\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },

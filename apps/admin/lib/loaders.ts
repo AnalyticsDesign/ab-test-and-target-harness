@@ -21,3 +21,16 @@ export const loadWorkspaces = cache(async (): Promise<Workspace[]> => (await req
 export const loadSites = cache(async (wid: string) => controlFetch<Site[]>(`/workspaces/${wid}/sites`));
 export const loadSite = cache(async (sid: string) => controlFetch<Site>(`/sites/${sid}`));
 export const loadCapabilities = cache(async () => resolveCapabilities(await controlFetch<Capabilities>("/capabilities")));
+
+/**
+ * 互いに依らない取得を並べて始め、結果は**並べた順に**判定する(admin speed B)。
+ * Promise.all は時間で最初に reject したものを投げるので、どれが先に失敗するかで出る画面が変わる
+ * (例: 未ログインで requireUser の redirect("/login") と requireSummary の例外が同時に起きると、ログインではなくエラーの画面が出うる)。
+ * allSettled で全部を待ってから左から見て、最初の reject の理由をそのまま投げる(redirect・notFound の印を保つ)。
+ * 直列に await していたときと同じものが投げられ、後ろの reject が未処理のまま残ることも無い
+ */
+export async function allInOrder<T extends readonly unknown[] | []>(promises: T): Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }> {
+  const settled = await Promise.allSettled(promises);
+  for (const s of settled) if (s.status === "rejected") throw s.reason;
+  return settled.map((s) => (s as PromiseFulfilledResult<unknown>).value) as { -readonly [K in keyof T]: Awaited<T[K]> };
+}

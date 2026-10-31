@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { audienceMatches } from "@/lib/audience-filter";
 import { dslHasHistory, makeNames, summarizeDsl } from "@/lib/conditions";
 import type { Audience, Goal } from "@/lib/types";
@@ -23,9 +23,9 @@ export function AudienceList({ wid, siteId, audiences, goals, canEdit }: { wid: 
         meta={`${audiences.length} 件`}
         actions={
           canEdit ? (
-            <Link className="btn btn-primary" href={`${base}/new`}>
+            <AppLink className="btn btn-primary" href={`${base}/new`}>
               新しいオーディエンス
-            </Link>
+            </AppLink>
           ) : null
         }
       />
@@ -46,9 +46,9 @@ export function AudienceList({ wid, siteId, audiences, goals, canEdit }: { wid: 
             {rows.map(({ a, summary }) => (
               <tr key={a.id}>
                 <td>
-                  <Link className={styles.listName} href={`${base}/${a.id}`}>
+                  <AppLink className={styles.listName} href={`${base}/${a.id}`}>
                     {a.name}
-                  </Link>
+                  </AppLink>
                   <div className="muted mono">{a.id}</div>
                 </td>
                 <td>{summary}</td>

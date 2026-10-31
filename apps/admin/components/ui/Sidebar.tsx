@@ -1,6 +1,6 @@
 "use client";
 import type { MouseEvent } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import type { SessionUser } from "@/lib/types";
 import { SITE_NAV, activeSegment, originOfPath, resolveOrigin, settingsEntryHref, sidebarContext, type SettingsOrigin } from "@/lib/nav";
@@ -51,9 +51,9 @@ export function Sidebar({ user }: { user: SessionUser }) {
         <SettingsSidebar page={ctx.page} instanceAdmin={instanceAdmin} />
       ) : (
         <>
-          <Link href="/w" className={styles.logo}>
+          <AppLink href="/w" className={styles.logo}>
             AB Test and Target Harness
-          </Link>
+          </AppLink>
           {ws ? <ContextSwitcher workspaces={workspaces} wid={ws.id} sid={ctx.kind === "site" ? ctx.sid : null} /> : null}
           {ctx.kind === "home" ? <NavItem href="/w" icon="home" label="ホーム" current /> : null}
           {ws && ctx.kind === "workspace" ? <NavItem href={`/w/${ws.id}`} icon="grid" label="サイト一覧" current={pathname === `/w/${ws.id}`} /> : null}

@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { useRouter } from "next/navigation";
 import { api, describeError } from "@/lib/client";
 import { STATUS_JA, STATUS_TONE } from "@/lib/experiment-filter";
@@ -157,9 +157,9 @@ export function PublishPanel({ wid, site, preview, canPublish }: { wid: string; 
               >
                 {busy ? "公開中…" : nothing ? "公開する(変更なしでも再試行できます)" : "公開する"}
               </button>
-              <Link className="btn" href={base}>
+              <AppLink className="btn" href={base}>
                 キャンセル
-              </Link>
+              </AppLink>
             </div>
           ) : (
             <p className="muted">公開は管理者以上が行います</p>
@@ -185,7 +185,7 @@ export function PublishPanel({ wid, site, preview, canPublish }: { wid: string; 
       {result?.ok && result.warnings.length > 0 ? <p className="banner-warn">警告: {result.warnings.map((w) => `${w.path}: ${w.message}`).join(" / ")}</p> : null}
       {result?.ok ? (
         <p>
-          <Link href={`${base}/history`}>公開履歴を見る</Link>
+          <AppLink href={`${base}/history`}>公開履歴を見る</AppLink>
         </p>
       ) : null}
       {error ? <p className="error-box">{error}</p> : null}

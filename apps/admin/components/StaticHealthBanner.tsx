@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import { startCapabilitiesPoll } from "@/lib/capabilities-poll";
 import { api, ApiClientError } from "@/lib/client";
@@ -72,9 +72,9 @@ export function StaticHealthBanner() {
       <span>{text}</span>
       {pathname === STATUS_PAGE ? null : (
         // 先読みしない(行き先の画面がデプロイ専用の Worker に問い合わせる)
-        <Link href={STATUS_PAGE} prefetch={false}>
+        <AppLink href={STATUS_PAGE} prefetch={false}>
           状態を見る
-        </Link>
+        </AppLink>
       )}
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import { api, ApiClientError } from "@/lib/client";
 import { publishRowStatus, recentPublishes } from "@/lib/publish-status";
@@ -149,7 +149,7 @@ export function VersionChip({ siteId, activeVersion, historyHref }: { siteId: st
             </ul>
           ) : null}
           <div className={styles.foot}>
-            <Link href={historyHref}>すべての公開履歴 →</Link>
+            <AppLink href={historyHref}>すべての公開履歴 →</AppLink>
           </div>
         </div>
       ) : null}

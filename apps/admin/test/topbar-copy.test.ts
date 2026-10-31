@@ -5,8 +5,8 @@ import { TopBar, type PublishState } from "@/components/ui/TopBar";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { COPIED_MS, copyIconName, copyText, type CopiedTimer } from "@/components/ui/CopyButton";
 
-// Crumb(画面名)と版の札は pathname を読む。ルーターの外で描くので差し替える
-vi.mock("next/navigation", () => ({ usePathname: () => "/w/w1/sites/s1/experiments" }));
+// Crumb(画面名)と版の札は pathname を読み、リンク(AppLink)は先読みのために useRouter を読む。ルーターの外で描くので差し替える
+vi.mock("next/navigation", () => ({ usePathname: () => "/w/w1/sites/s1/experiments", useRouter: () => ({ prefetch: () => {} }) }));
 
 /** サイト ID は最長 64 文字。省略表示(CSS の ellipsis)で縮んでも、DOM には全文が残っていることを見る */
 const LONG_ID = "s".repeat(32) + "-" + "x".repeat(31);

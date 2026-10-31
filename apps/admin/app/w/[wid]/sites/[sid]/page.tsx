@@ -1,6 +1,6 @@
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { controlFetch, requireUser } from "@/lib/control";
-import { loadSite, loadWorkspaces } from "@/lib/loaders";
+import { allInOrder, loadSite, loadWorkspaces } from "@/lib/loaders";
 import type { Experiment, PublishRow } from "@/lib/types";
 import { STATUS_FILTERS } from "@/lib/experiment-filter";
 import { pickParam } from "@/lib/url-state";
@@ -11,12 +11,19 @@ import { Icon } from "@/components/ui/Icon";
 
 /** Site 概要 = 実験の一覧 + 作成リンク + 公開状況の要約(Site ナビ・未公開バナーは親の layout.tsx が担う) */
 export default async function SitePage({ params, searchParams }: { params: Promise<{ wid: string; sid: string }>; searchParams: Promise<{ status?: string | string[] }> }) {
-  await requireUser();
   const { wid, sid } = await params;
-  const ws = (await loadWorkspaces()).find((w) => w.id === wid);
-  const site = (await loadSite(sid)).data;
-  const experiments = (await controlFetch<Experiment[]>(`/sites/${sid}/experiments`)).data;
-  const publishes = (await controlFetch<PublishRow[]>(`/sites/${sid}/publishes`)).data;
+  // 互いに依らない取得は並べて読む(allInOrder。失敗は並べた順に判定するので、未ログインは今までどおりログインへ)
+  const [, workspaces, siteRes, experimentsRes, publishesRes] = await allInOrder([
+    requireUser(),
+    loadWorkspaces(),
+    loadSite(sid),
+    controlFetch<Experiment[]>(`/sites/${sid}/experiments`),
+    controlFetch<PublishRow[]>(`/sites/${sid}/publishes`),
+  ]);
+  const ws = workspaces.find((w) => w.id === wid);
+  const site = siteRes.data;
+  const experiments = experimentsRes.data;
+  const publishes = publishesRes.data;
   const canEdit = ws?.role !== "viewer";
   const canPublish = ws?.role === "owner" || ws?.role === "admin";
   const initialFilter = pickParam((await searchParams).status, STATUS_FILTERS, "all");
@@ -35,9 +42,9 @@ export default async function SitePage({ params, searchParams }: { params: Promi
         }
         actions={
           canEdit ? (
-            <Link className="btn btn-primary" href={`/w/${wid}/sites/${sid}/experiments/new`}>
+            <AppLink className="btn btn-primary" href={`/w/${wid}/sites/${sid}/experiments/new`}>
               <Icon name="plus" /> 新しいエクスペリエンス
-            </Link>
+            </AppLink>
           ) : null
         }
       />

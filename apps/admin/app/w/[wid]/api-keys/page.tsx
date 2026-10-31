@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { controlFetch, requireUser } from "@/lib/control";
-import { loadWorkspaces } from "@/lib/loaders";
+import { allInOrder, loadWorkspaces } from "@/lib/loaders";
 import { canManage } from "@/lib/roles";
 import type { WorkspaceApiKey } from "@/lib/types";
 import { WorkspaceApiKeysPanel } from "@/components/WorkspaceApiKeysPanel";
@@ -10,9 +10,11 @@ import { PageHeader } from "@/components/ui/PageHeader";
 
 /** メンバーの API キー(決定 54 (6)、決定 48 (8) の一覧)。メンバー画面の下から独立させた。管理者以上だけ */
 export default async function WorkspaceApiKeysPage({ params }: { params: Promise<{ wid: string }> }) {
-  const me = await requireUser();
   const { wid } = await params;
-  const ws = (await loadWorkspaces()).find((w) => w.id === wid);
+  // 互いに依らない取得は並べて読む(allInOrder。失敗は並べた順に判定するので、未ログインは今までどおりログインへ)。
+  // キーの一覧は下の権限の判定の後で取る(管理者でない人の分は取らない)
+  const [me, workspaces] = await allInOrder([requireUser(), loadWorkspaces()]);
+  const ws = workspaces.find((w) => w.id === wid);
   if (!ws) notFound();
   const crumbs = [{ label: ws.name, href: `/w/${wid}` }, { label: "メンバーの API キー" }];
   if (!canManage(ws.role)) {

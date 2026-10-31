@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import { roleLabel } from "@/lib/roles";
 import { popoverPosition, searchContexts, siteTopHref } from "@/lib/switcher";
@@ -115,10 +115,10 @@ export function ContextSwitcher({
             <div className={styles.ctxCol}>
               {hits.length === 0 ? <div className={styles.ctxEmpty}>一致するワークスペース・サイトはありません</div> : null}
               {hits.map((h) => (
-                <Link key={h.href} href={h.href} className={styles.ctxOpt}>
+                <AppLink key={h.href} href={h.href} className={styles.ctxOpt}>
                   <span>{h.label}</span>
                   <small>{h.sub}</small>
-                </Link>
+                </AppLink>
               ))}
             </div>
           ) : (
@@ -126,9 +126,9 @@ export function ContextSwitcher({
               <div className={styles.ctxCol}>
                 <h3 className={styles.ctxHead}>
                   ワークスペース
-                  <Link href="/w" aria-label="ワークスペース一覧">
+                  <AppLink href="/w" aria-label="ワークスペース一覧">
                     一覧
-                  </Link>
+                  </AppLink>
                 </h3>
                 {workspaces.map((w) => (
                   <button key={w.id} type="button" className={styles.ctxOpt} aria-pressed={w.id === picked.id} aria-current={w.id === ws.id ? "true" : undefined} onClick={() => setPickedId(w.id)}>
@@ -142,16 +142,16 @@ export function ContextSwitcher({
               <div className={styles.ctxCol}>
                 <h3 className={styles.ctxHead}>
                   サイト
-                  <Link href={`/w/${picked.id}`} aria-label="サイト一覧">
+                  <AppLink href={`/w/${picked.id}`} aria-label="サイト一覧">
                     一覧
-                  </Link>
+                  </AppLink>
                 </h3>
                 {picked.sites.length === 0 ? <div className={styles.ctxEmpty}>このワークスペースにはサイトがありません</div> : null}
                 {picked.sites.map((s) => (
-                  <Link key={s.id} href={siteHref(picked.id, s.id)} className={styles.ctxOpt} aria-current={s.id === sid && picked.id === ws.id ? "true" : undefined}>
+                  <AppLink key={s.id} href={siteHref(picked.id, s.id)} className={styles.ctxOpt} aria-current={s.id === sid && picked.id === ws.id ? "true" : undefined}>
                     <span>{s.name}</span>
                     <small>{s.domain}</small>
-                  </Link>
+                  </AppLink>
                 ))}
               </div>
             </div>
