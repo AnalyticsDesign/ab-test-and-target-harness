@@ -13,7 +13,7 @@
   "dependencies": {
     "@wtt/core": "workspace:*",
     "hono": "^4.13.5",
-    "zod": "^4.5.4"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.11",
