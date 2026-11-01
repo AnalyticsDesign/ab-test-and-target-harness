@@ -89,6 +89,8 @@ export type InstanceSettingRow = { key: string; value: string; updated_at: numbe
 
 /** migrations/0014_results_collection.sql(D9 ②)。一度開始したエクスペリエンスを削除した後の ID(設計書 §6.3) */
 export type RetiredExperimentIdRow = { site_id: string; experiment_id: string; retired_at: number };
+/** migrations/0021_retired_site_ids.sql(B155)。削除したサイトの ID。別のワークスペースの取り直しを断る。retired_at は epoch ミリ秒。FK なし(サイト・ワークスペースの削除で消さない) */
+export type RetiredSiteIdRow = { id: string; workspace_id: string; retired_at: number };
 /**
  * 同上。Publish で公開された収集の状態が変わった時刻(設計書 §6.6)。id は SQLite の rowid(足すときは省く)。
  * enabled = その公開の Site の results_enabled(results.runs にテストを載せる設定か)。runs が空かどうかではない(B110:
@@ -152,6 +154,7 @@ export interface Tables {
   assets: AssetRow;
   publishes: PublishRow;
   retired_experiment_ids: RetiredExperimentIdRow;
+  retired_site_ids: RetiredSiteIdRow;
   results_collection_log: ResultsCollectionLogRow;
   cron_job_runs: CronJobRunRow;
   evaluation_plans: EvaluationPlanRow;

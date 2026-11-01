@@ -61,7 +61,7 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 |---|---|---|
 | `GET /workspaces` | 認証のみ | 自分が所属する Workspace(Role 付き) |
 | `POST /workspaces` | システム管理者 | ワークスペースを作る(システム管理者全員がオーナー)。それ以外・上限付きの API キーは 403 `forbidden` |
-| `DELETE /workspaces/:wid` | システム管理者 | Workspace を削除。最後に残った 1 つは削除できない(409 `last_workspace`)。実行中のエクスペリエンスがあれば 409 `workspace_has_running_experiments` |
+| `DELETE /workspaces/:wid` | システム管理者 | Workspace を削除。最後に残った 1 つは削除できない(409 `last_workspace`)。実行中のエクスペリエンスがあれば 409 `workspace_has_running_experiments`。配下のサイトの ID は、削除と同じ処理の中で D1 のトリガーが `retired_site_ids` に残し、以後はシステム管理者だけが作り直せる(`POST /workspaces/:wid/sites` の 409 `site_id_taken`) |
 | `GET /workspaces/:wid/members` | ADMIN | Member 一覧 |
 | `PATCH /workspaces/:wid/members/:memberId` | ADMIN | Role 変更(owner の付け外しは OWNER のみ)。システム管理者は 409 `instance_admin_member` |
 | `DELETE /workspaces/:wid/members/:memberId` | ADMIN | Member を外す(owner を外せるのは OWNER のみ)。システム管理者は 409 `instance_admin_member` |
@@ -81,10 +81,10 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 | ルート | Role | 内容 |
 |---|---|---|
 | `GET /workspaces/:wid/sites` | VIEWER | Workspace 配下の Site 一覧 |
-| `POST /workspaces/:wid/sites` | ADMIN | Site を作成(計測用 D1 の binding があれば「結果を記録する」を有効で作る) |
+| `POST /workspaces/:wid/sites` | ADMIN | Site を作成(計測用 D1 の binding があれば「結果を記録する」を有効で作る)。削除した Site の ID は、そのサイトがあった Workspace でだけ作り直せる。別の Workspace からは 409 `site_id_taken`。元の Workspace を見られる人(その Workspace のメンバー。多くの場合はシステム管理者)にだけ `reason: "retired_elsewhere"` と詳しい文を返し、見られない人には今ある Site と同じ応答(`reason` なし)を返す。Workspace ごと削除した Site の ID は、システム管理者だけが作れる(D1 のトリガーが別の Workspace の INSERT を断る) |
 | `GET /sites/:sid` | VIEWER | Site 1 件(+ `hasUnpublishedChanges` / `activeKvStale` / `staticStale` / `staticRemoving` / `resultsCapacity`(計測用 D1 の大きさと `ok` / `warning`(80% 以上)/ `stopped`(95% 以上))) |
 | `PATCH /sites/:sid` | ADMIN | Site 設定を更新(Identity / Analytics 命名は KV 即時反映で Publish 不要)。`resultsEnabled`(結果を記録する。切り替えは未公開の変更に数え、次の Publish で効く)と `resultsRetentionDays`(個票の保持期間 7〜365 日、既定 90)。計測用 D1 の binding が無い導入で無効 → 有効にすると 409 `results_store_missing` |
-| `DELETE /sites/:sid` | OWNER | Site を削除(KV の settings / host / active / config と R2 の画像(binding があるとき)も消す) |
+| `DELETE /sites/:sid` | OWNER | Site を削除(KV の settings / host / active / config と R2 の画像(binding があるとき)も消す)。削除した Site の ID は `retired_site_ids` に残し(D1 のトリガー。期限なし)、別の Workspace では使えなくなる。同じ ID で作り直しても、削除した Site の結果の消去の待ち行列(`results_purge_queue`)は取り消さない |
 
 ### オーディエンス / Goal
 

@@ -40,12 +40,13 @@ const writtenBy = (r: D1Result): number => Math.max(r.meta?.rows_written ?? 0, r
 
 export async function purgeRun(env: Env, siteId: string, runId: string, maxRows: number, now: number, guard: WriteGuard): Promise<{ done: boolean; rowsWritten: number }> {
   const db = getDb(env);
-  // K6: Site・Workspace の削除で積んだ行は、Site の行が無いことを確かめてから消す。残っていれば(削除が取りやめになった等)queue の行だけを消す
-  // (個票は Site のエクスペリエンスの run として、期限の削除が扱う)
+  // K6・B155(G26 (d)): Site・Workspace の削除で積んだ行は、その run がまだ Site のエクスペリエンスにあるとき(= 削除が取りやめになった)だけ
+  // queue の行だけを消す(個票は Site のエクスペリエンスの run として、期限の削除が扱う)。「Site の行がある」では判定しない:
+  // 同じ ID で作り直したサイトは同じ run_id を持たない(run_id は開始ごとの乱数)ので、作り直しで個票が残らないようにする
   const queued = await db.selectFrom("results_purge_queue").select("reason").where("site_id", "=", siteId).where("run_id", "=", runId).executeTakeFirst();
   if (queued && (queued.reason === "site_deleted" || queued.reason === "workspace_deleted")) {
-    const site = await db.selectFrom("sites").select("id").where("id", "=", siteId).executeTakeFirst();
-    if (site) {
+    const live = await db.selectFrom("experiments").select("id").where("site_id", "=", siteId).where("run_id", "=", runId).executeTakeFirst();
+    if (live) {
       await guard();
       await db.deleteFrom("results_purge_queue").where("site_id", "=", siteId).where("run_id", "=", runId).execute();
       return { done: true, rowsWritten: 0 };

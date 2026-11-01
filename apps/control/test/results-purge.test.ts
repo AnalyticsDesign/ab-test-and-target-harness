@@ -210,6 +210,23 @@ describe("results purge queue and forget (D9 ③ K6・K12)", () => {
     expect((await experimentRow(sid, "exp_keep")).results_purged_at).toBeNull();
   });
 
+  // B155(G26 (d)): 判定は「その run がまだ Site のエクスペリエンスにあるか」。同じ ID で作り直したサイトは同じ run_id を持たない
+  test("site_deleted_queue_survives_recreate_with_same_id", async () => {
+    const owner = await setupOwner();
+    const sid = await recordingSite(owner);
+    const runId = await startedTest(owner, sid, "exp_re", { archive: true });
+    await seedResults(rowsFor(runId, sid, 6));
+    expect((await call("DELETE", `/sites/${sid}`, { token: owner.token, envOverride: RESULTS_STORE })).status).toBe(204);
+    expect((await queueRows()).map((r) => [r.site_id, r.run_id, r.reason])).toEqual([[sid, runId, "site_deleted"]]);
+    // 同じ WS で同じ ID を作り直す(別の WS からは退役の 409。同じ WS からは作れる)
+    const again = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id: sid, name: "Again", domain: "again.example.com" }, envOverride: RESULTS_STORE });
+    expect(again.status).toBe(201);
+    const budget = fakeResultsBudget();
+    expect(await purgeRun(purgeEnv(budget), sid, runId, 10_000, NOW, apiGuard(purgeEnv(budget)))).toEqual({ done: true, rowsWritten: 12 });
+    expect(await countRows(runId)).toEqual({ participants: 0, conversions: 0 });
+    expect(await queueRows()).toEqual([]);
+  });
+
   test("消し終えたらエクスペリエンスが残っていれば results_purged_at を入れる(期限の削除の形)", async () => {
     const owner = await setupOwner();
     const sid = await recordingSite(owner);

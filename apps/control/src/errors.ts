@@ -76,6 +76,8 @@ export const notFound = () => new ApiError(404, "not_found");
 /** 利用者向けの文言に出すロールの名前(画面の用語。英語の識別子は required / role / highest などのフィールドに残る) */
 export const ROLE_JA: Record<string, string> = { owner: "オーナー", admin: "管理者", editor: "編集者", viewer: "閲覧者" };
 export const forbidden = (required: string) => new ApiError(403, "forbidden", { required, hint: `${ROLE_JA[required] ?? required}以上のロールが必要です` });
+/** 同じ ID のサイトがある 409。退役の ID を見られない人への断りも同じ本文にする(B155 Q7。id 以外を変えない) */
+export const siteIdTaken = (id: string) => new ApiError(409, "site_id_taken", { id, message: "このサイト ID は既に使われています", hint: "別の ID を指定してください" });
 /**
  * Standard Schema(hono-openapi の `validator` フックが渡す形)の issue。zod の `ZodError.issues` とほぼ同形だが、
  * path の要素が `PropertyKey` ではなく `{ key }` のこともある(Standard Schema の PathSegment)

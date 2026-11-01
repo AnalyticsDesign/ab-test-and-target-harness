@@ -4,7 +4,7 @@ import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
 import { resultsStore } from "../capabilities";
 import { toStatement, type SiteRow } from "../db";
-import { ApiError, validationFailed } from "../errors";
+import { ApiError, siteIdTaken, validationFailed } from "../errors";
 import { newId, randomToken } from "../ids";
 import { errorResponses } from "../openapi";
 import { reconcileActive } from "../publish";
@@ -12,7 +12,8 @@ import { capacityLevel } from "../evaluation-plan";
 import { collectUntilMap } from "../results/collect-until";
 import { enqueuePurgeQuery, kickOffPurgeForSites } from "../results/purge";
 import { retentionConflicts, retentionShrinkError } from "../retention";
-import { canViewWorkspace, loadSite, requireWorkspaceRole } from "../roles";
+import { actsAsInstanceAdmin, canViewWorkspace, loadSite, requireWorkspaceRole } from "../roles";
+import { isRetiredSiteIdAbort, readSiteIdState, reassignRetiredStatement, retiredSiteIdTaken } from "../retired-sites";
 import { siteJson, SiteJsonSchema } from "../serialize";
 import { bootstrapSettingsChanged, reconcileStatic, requestStaticDeploy, requestStaticRemoval, staticRemoveConflict, staticRemoveFailed } from "../static-delivery";
 import { touchSite } from "../validation";
@@ -111,6 +112,8 @@ siteRoutes.post(
   describeRoute({
     tags: ["sites"],
     summary: "サイトを作成(管理者以上)",
+    description:
+      "削除したサイトの ID は、そのサイトがあったワークスペースでだけ作り直せる。別のワークスペースからは 409 `site_id_taken`。元のワークスペースを見られる人にだけ `reason` が `retired_elsewhere` になり、見られない人には今あるサイトと同じ応答を返す。ワークスペースごと削除したサイトの ID は、システム管理者だけが作れる",
     security: [{ bearer: [] }],
     responses: {
       201: { description: "作成したサイト", content: { "application/json": { schema: resolver(SiteCreatedSchema) } } },
@@ -128,8 +131,15 @@ siteRoutes.post(
     const db = c.get("db");
     const now = Date.now();
     const id = body.id ?? newId("site");
-    if (await db.selectFrom("sites").select("id").where("id", "=", id).executeTakeFirst())
-      throw new ApiError(409, "site_id_taken", { id, message: "このサイト ID は既に使われています", hint: "別の ID を指定してください" });
+    // B155(G26): 同じ ID のサイトと、退役の行(とその元のワークスペースの有無)を 1 文で読む(往復は今までの確かめと同じ 1 回)
+    const state = await readSiteIdState(c.env.DB, id);
+    if (state.live) throw siteIdTaken(id);
+    let reclaimFrom: string | null = null; // システム管理者の取り直しのときだけ、確かめで読んだ元のワークスペース(batch の先頭で付け替える。Q10)
+    if (state.retiredWorkspaceId !== null && state.retiredWorkspaceId !== wid) {
+      if (state.retiredWorkspaceExists) throw await retiredSiteIdTaken(c, id, state.retiredWorkspaceId, "elsewhere"); // 見られるかの確かめの往復はこの枝だけ(Q7)
+      if (!(await actsAsInstanceAdmin(c))) throw await retiredSiteIdTaken(c, id, state.retiredWorkspaceId, "admin_only"); // 往復が増えるのはこの枝だけ
+      reclaimFrom = state.retiredWorkspaceId;
+    }
     // spec §4.1: allowedOrigins は domain から初期値。Mode B(サーバー発行 Cookie、旧称 D-lite)は hosts = [domain]
     const base: SiteRow = {
       id, workspace_id: wid, name: body.name, domain: body.domain, mode: "A", id_source: "ab", site_salt: randomToken(16),
@@ -178,10 +188,25 @@ siteRoutes.post(
     // 順序: sites 行(FK の親)+ 共有の予約(同じ batch。同時の作成で予約に負けたら行も残さず 422)→ host 所有権 → KV。
     // claimHosts が 409 なら sites 行を消して返す(review r2 CX-High-6。予約は FK の CASCADE で消える)
     const claims = claimsOf(next, nowSec);
+    // B155: 取り直しの付け替えは INSERT の前(守りの文は置かない。別のワークスペースの退役の ID への INSERT は D1 のトリガーが断る。Q10)
     try {
-      await c.env.DB.batch([toStatement(c.env, db.insertInto("sites").values(next)), ...claimStatements(c.env.DB, next.id, claims, nowSec)]);
+      await c.env.DB.batch([
+        ...(reclaimFrom !== null ? [reassignRetiredStatement(c.env.DB, id, wid, reclaimFrom)] : []),
+        toStatement(c.env, db.insertInto("sites").values(next)),
+        ...claimStatements(c.env.DB, next.id, claims, nowSec),
+      ]);
     } catch (e) {
+      // ここまで KV にも host にも何も書いていない
       if (isClaimConflict(e)) throw await conflictError(c, await claimHolder(c.env.DB, next.id, claims, nowSec), SHARING_CONFLICT_CREATE_HINT);
+      if (isRetiredSiteIdAbort(e)) {
+        // 確かめの後の重なりでトリガーが断った(とてもまれ)。409 の文を決めるために 1 回だけ読み直す
+        const again = await readSiteIdState(c.env.DB, id);
+        // 今サイトがある・退役の行が作る先のもの(断られた後に別の要求が同じ ID を取り直した)・行が無い → 今あるサイトと同じ 409
+        if (again.live || again.retiredWorkspaceId === null || again.retiredWorkspaceId === wid) throw siteIdTaken(id);
+        throw await retiredSiteIdTaken(c, id, again.retiredWorkspaceId, again.retiredWorkspaceExists ? "elsewhere" : "admin_only");
+      }
+      // B155 Review Focus 5: 同じ新しい ID の作成の重なりで負けた側(sites の主キーの違反)は 500 ではなく 409
+      if (/UNIQUE constraint failed: sites\.id/.test(String(e))) throw siteIdTaken(id);
       throw e;
     }
     try {

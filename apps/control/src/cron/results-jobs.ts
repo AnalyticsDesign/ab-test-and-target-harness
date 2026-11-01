@@ -555,14 +555,14 @@ export function purgeAllowance(st: { writeBudget: number; writeUsed: number }, n
 }
 
 /**
- * purgeRun の 1 回の呼び出しのクエリの見込み: queue の読み取り 1(Site・Workspace の削除なら Site の確かめ 1)+ 繰り返しごとに
+ * purgeRun の 1 回の呼び出しのクエリの見込み: queue の読み取り 1(Site・Workspace の削除なら run_id の確かめ 1)+ 繰り返しごとに
  * 残りの確かめ 1・参加の DELETE 1・CV の DELETE 1 + 最後の確かめ 1 + 消し終えた記録(凍結の確かめ 1 + batch 1)
  */
 const PURGE_FIXED_COST = 1 + 1 + 1 + 1;
 const PURGE_ROUND_COST = 3;
 /** 消し終えた後の自前の書き込み(締め切りの書き直しの印 1) */
 const PURGE_AFTER_COST = 1;
-/** Site・Workspace の削除で積んだ行は、purgeRun が先に Site の有無を確かめる(1) */
+/** Site・Workspace の削除で積んだ行は、purgeRun が先に「その run がまだ Site のエクスペリエンスにあるか」を確かめる(1。B155 で Site の行の確かめから替えた。主キー (site_id, id) の先頭で引く 1 回) */
 const PURGE_SITE_CHECK_COST = 1;
 const siteCheckCost = (reason: string) => (reason === "site_deleted" || reason === "workspace_deleted" ? PURGE_SITE_CHECK_COST : 0);
 /** 孤児を消す直前に wtt-control を読み直す(1) */
@@ -602,7 +602,7 @@ export const resultsPurgeJob: CronJob = {
     const guard = ctx.assertNotFrozen;
 
     /**
-     * 1 run を消す。戻り値は段の 1 件の結果。extraCost = purgeRun の前後の決まった読み書き(Site の確かめ・孤児の確かめ直し)、
+     * 1 run を消す。戻り値は段の 1 件の結果。extraCost = purgeRun の前後の決まった読み書き(run_id の確かめ・孤児の確かめ直し)、
      * after = 消し終えた後の自前の書き込み(PURGE_AFTER_COST)、precheck = 消す直前の確かめ(false なら消さずに次へ)
      */
     const purge = async (
