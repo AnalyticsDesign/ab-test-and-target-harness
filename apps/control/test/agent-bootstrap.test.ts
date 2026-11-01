@@ -64,7 +64,7 @@ describe("GET /sites/:sid/experiments/:eid/draft-bootstrap (spec §13.10)", () =
     expect(JSON.stringify(boot.config)).toContain("下書きの文言");
     expect(JSON.stringify(boot.config)).not.toContain("公開済み");
     expect(boot.config.prehide.exp_draft).toEqual([".draft-title"]);
-    expect(boot.settings.visitorCookieName).toBe("_ab_vid"); // §5.4 の runtime 向けサブセット
+    expect(boot.settings.visitorCookieName).toBe("_wtt_vid"); // §5.4 の runtime 向けサブセット
 
     // 配信中の config には下書きは入っていない(Publish していないので当然)
     const site = await json<{ activeVersion: number }>(await call("GET", `/sites/${sid}`, { token: owner.token }));

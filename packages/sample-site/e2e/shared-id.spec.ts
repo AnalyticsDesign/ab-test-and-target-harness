@@ -26,11 +26,11 @@ test("shared_id_connects_cloudflare_and_outside_hosts", async ({ context, page }
   const [decision] = await Promise.all([page.waitForResponse((r) => r.url().includes("/__ab/decision")), page.goto(`${EXAMPLE_ORIGIN}/dlite.html`)]);
   expect(decision.status()).toBe(200);
   const setCookies = (await decision.headersArray()).filter((h) => h.name.toLowerCase() === "set-cookie").map((h) => h.value);
-  const issued = setCookies.find((v) => v.startsWith("_ab_vid="));
+  const issued = setCookies.find((v) => v.startsWith("_wtt_vid="));
   expect(issued, "edge が ID の Cookie を書いていない").toBeDefined();
   expect(issued).toContain("Domain=example.test"); // 共有の範囲 = 登録ドメイン
   expect(issued).not.toMatch(/HttpOnly/i); // 別ホストの JavaScript が読めるように HttpOnly を付けない
-  const cookie = (await context.cookies()).find((c) => c.name === "_ab_vid");
+  const cookie = (await context.cookies()).find((c) => c.name === "_wtt_vid");
   expect(cookie).toMatchObject({ domain: ".example.test", httpOnly: false, secure: true, path: "/" });
   const vid = cookie!.value;
   const key = visitorKeySql(SITE, vid);
@@ -42,7 +42,7 @@ test("shared_id_connects_cloudflare_and_outside_hosts", async ({ context, page }
   visit = "form";
   const [form] = await Promise.all([page.waitForResponse((r) => r.url().includes(`/v1/sites/${SITE}/decision`)), page.goto(`${FORM_ORIGIN}/dlite.html`)]);
   expect(form.status()).toBe(200);
-  expect(await page.evaluate(() => document.cookie.split("; ").find((c) => c.startsWith("_ab_vid=")))).toBe(`_ab_vid=${vid}`);
+  expect(await page.evaluate(() => document.cookie.split("; ").find((c) => c.startsWith("_wtt_vid=")))).toBe(`_wtt_vid=${vid}`);
   expect((form.request().postDataJSON() as { visitorId?: string }).visitorId).toBe(vid); // 本文の ID も同じ(Mode A の経路)
 
   // 3. 目標を達成 → /v1/ へ。この Site は履歴の条件(hist: converted)を持つ = needsProfile なので、runtime は目標の /event(type: "goal")だけを送り、

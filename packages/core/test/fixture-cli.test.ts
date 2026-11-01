@@ -70,7 +70,7 @@ describe("fixture CLI", () => {
     expect(byKey.get("site:site_demo:active")).toBe("1");
     const settings = SiteSettingsSchema.parse(JSON.parse(byKey.get("site:site_demo:settings")!));
     expect(settings.siteId).toBe("site_demo");
-    expect(settings.visitorCookieName).toBe("_ab_vid");
+    expect(settings.visitorCookieName).toBe("_wtt_vid");
     expect(settings.uuidCookieEnabled).toBe(true); // fixtures/demo.json は E2E harness 用に明示 true(plan 3 task 8)
     expect(settings.hosts).toEqual([]);
     expect(entries.some((e) => e.key.startsWith("host:"))).toBe(false);
@@ -107,7 +107,7 @@ describe("fixture CLI", () => {
     const badPath = `${ROOT}/packages/core/test/.tmp-badsettings.json`;
     const outPath = `${ROOT}/packages/core/test/.tmp-out3.json`;
     const bad = JSON.parse(readFileSync(`${ROOT}/fixtures/demo.json`, "utf8"));
-    bad.settings = { uuidCookieName: "_ab_vid" }; // 正本名と同名 → refine 違反
+    bad.settings = { uuidCookieName: "_wtt_vid" }; // 正本名と同名 → refine 違反
     writeFileSync(badPath, JSON.stringify(bad));
     rmSync(outPath, { force: true });
     try {

@@ -40,7 +40,7 @@ test("no_cookie_or_network_before_consent", async ({ context, page }) => {
   // grant で通常起動する(gate が本物であることの対照)
   await grant(page);
   await expect(page.locator(".hero-title")).toHaveText("同意後のコピー");
-  await expect.poll(() => cookieValue(context, "_ab_vid")).toBeTruthy();
+  await expect.poll(() => cookieValue(context, "_wtt_vid")).toBeTruthy();
   expect(requests).toEqual([]); // spec §7.1: Mode A + needsProfile: false はローカル評価のみで decision を送らない(実配信路上の zero-request 特性)
 });
 
@@ -48,10 +48,10 @@ test("mode_a_sets_derived_uuid_cookie_with_matching_attributes", async ({ contex
   // spec §5.4 / 決定 49 §7.2: UUID Cookie は正本から導出した UUIDv4 で、Path / Max-Age / Secure / SameSite が正本と同一、HttpOnly なし
   await page.goto("/consent.html");
   await grant(page);
-  await expect.poll(() => cookieValue(context, "_ab_uuid")).toBeTruthy();
+  await expect.poll(() => cookieValue(context, "_wtt_uuid")).toBeTruthy();
   const cookies = await context.cookies();
-  const vid = cookies.find((c) => c.name === "_ab_vid")!;
-  const uuid = cookies.find((c) => c.name === "_ab_uuid")!;
+  const vid = cookies.find((c) => c.name === "_wtt_vid")!;
+  const uuid = cookies.find((c) => c.name === "_wtt_uuid")!;
   const salt = (JSON.parse(readFileSync(new URL("../../../fixtures/e2e-consent.json", import.meta.url), "utf8")) as { siteSalt: string }).siteSalt;
   expect(uuid.value).toBe(await deriveExternalUuid(salt, vid.value));
   for (const c of [vid, uuid]) {
@@ -67,9 +67,9 @@ test("revoke_removes_configured_canonical_and_uuid_cookies", async ({ context, p
   // spec §16: denied への遷移で、設定された正本 Cookie と UUID Cookie の両方を削除する
   await page.goto("/consent.html");
   await grant(page);
-  await expect.poll(() => cookieValue(context, "_ab_uuid")).toBeTruthy();
+  await expect.poll(() => cookieValue(context, "_wtt_uuid")).toBeTruthy();
   await revoke(page);
-  await expect.poll(async () => (await context.cookies()).filter((c) => c.name === "_ab_vid" || c.name === "_ab_uuid")).toEqual([]);
+  await expect.poll(async () => (await context.cookies()).filter((c) => c.name === "_wtt_vid" || c.name === "_wtt_uuid")).toEqual([]);
 });
 
 test("revoke_stops_updates_and_removes_mode_a_cookie", async ({ context, page }) => {
@@ -78,7 +78,7 @@ test("revoke_stops_updates_and_removes_mode_a_cookie", async ({ context, page })
   await grant(page);
   await expect(page.locator(".hero-title")).toHaveText("同意後のコピー");
   await revoke(page);
-  await expect.poll(() => cookieValue(context, "_ab_vid")).toBeUndefined();
+  await expect.poll(() => cookieValue(context, "_wtt_vid")).toBeUndefined();
   await page.click("#rerender"); // 原状に戻す再レンダリング
   await page.waitForTimeout(300);
   await expect(page.locator(".hero-title")).toHaveText("GA4を基礎から学ぶ"); // 再適用されない(updates 停止)
@@ -94,11 +94,11 @@ test("regrant_after_revoke_does_not_restore_old_identity", async ({ context, pag
   // spec §16: revoke 後に再 granted になったら新しい ID を発行する(旧 Identity は復元しない)
   await page.goto("/consent.html");
   await grant(page);
-  await expect.poll(() => cookieValue(context, "_ab_vid")).toBeTruthy();
-  const oldId = (await cookieValue(context, "_ab_vid"))!;
+  await expect.poll(() => cookieValue(context, "_wtt_vid")).toBeTruthy();
+  const oldId = (await cookieValue(context, "_wtt_vid"))!;
   await revoke(page);
-  await expect.poll(() => cookieValue(context, "_ab_vid")).toBeUndefined();
+  await expect.poll(() => cookieValue(context, "_wtt_vid")).toBeUndefined();
   await grant(page);
-  await expect.poll(() => cookieValue(context, "_ab_vid")).toBeTruthy();
-  expect(await cookieValue(context, "_ab_vid")).not.toBe(oldId);
+  await expect.poll(() => cookieValue(context, "_wtt_vid")).toBeTruthy();
+  expect(await cookieValue(context, "_wtt_vid")).not.toBe(oldId);
 });

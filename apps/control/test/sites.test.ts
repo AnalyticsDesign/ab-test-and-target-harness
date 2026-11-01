@@ -16,7 +16,7 @@ describe("sites", () => {
     const { id } = await createSite(token, workspaceId, { id: "site_one", domain: "www.example.com" });
     expect(id).toBe("site_one");
     const site = await json(await call("GET", "/sites/site_one", { token }));
-    expect(site).toMatchObject({ id: "site_one", mode: "A", idSource: "ab", consentMode: "implicit", visitorCookieName: "_ab_vid", uuidCookieEnabled: false, allowedOrigins: ["https://www.example.com"], hosts: [], analytics: { extraKey: "ab_extra" } });
+    expect(site).toMatchObject({ id: "site_one", mode: "A", idSource: "ab", consentMode: "implicit", visitorCookieName: "_wtt_vid", uuidCookieName: "_wtt_uuid", uuidCookieEnabled: false, allowedOrigins: ["https://www.example.com"], hosts: [], analytics: { extraKey: "ab_extra" } });
     expect(site.siteSalt).toBeUndefined();
     // 時刻の単位: createdAt / updatedAt / contentUpdatedAt は epoch ミリ秒(epoch 秒なのは previousCookieNames.until だけ)
     const now = Date.now();
@@ -28,6 +28,10 @@ describe("sites", () => {
     expect(s?.allowedOrigins).toEqual(["https://www.example.com"]);
     expect(s?.settingsVersion).toBe(1);
     expect(await env.CONFIG_KV.get(kvKeys.active("site_one"))).toBeNull(); // config はまだ無い(settings が先、config は Publish)
+    // B174: 新しいサイトの Cookie の既定の名前は _wtt_(D1 の行にも明示して保存する。今あるサイトは D1 に保存した名前のまま)
+    const row = await siteRow("site_one");
+    expect([row.visitor_cookie_name, row.uuid_cookie_name]).toEqual(["_wtt_vid", "_wtt_uuid"]);
+    expect([s?.visitorCookieName, s?.uuidCookieName]).toEqual(["_wtt_vid", "_wtt_uuid"]);
   });
   it("tenant_isolation_cross_workspace_404", async () => {
     const owner = await setupOwner();
@@ -52,13 +56,13 @@ describe("sites", () => {
   it("renaming the canonical cookie keeps the old name in previousCookieNames and rejects reuse while alive", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id } = await createSite(token, workspaceId, { retentionDays: 30 });
-    expect((await call("PATCH", `/sites/${id}`, { token, body: { visitorCookieName: "_wtt_vid" } })).status).toBe(200);
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { visitorCookieName: "_new_vid" } })).status).toBe(200);
     const s = await kvSettings(id);
-    expect(s?.visitorCookieName).toBe("_wtt_vid");
-    expect(s?.previousCookieNames.map((p) => p.name)).toEqual(["_ab_vid"]);
+    expect(s?.visitorCookieName).toBe("_new_vid");
+    expect(s?.previousCookieNames.map((p) => p.name)).toEqual(["_wtt_vid"]);
     expect(s!.previousCookieNames[0]!.until).toBeGreaterThan(Math.floor(Date.now() / 1000) + 29 * 86400);
     // 決定 29: 生きている旧名への戻しは 422(正本・UUID とも)
-    const back = await call("PATCH", `/sites/${id}`, { token, body: { visitorCookieName: "_ab_vid" } });
+    const back = await call("PATCH", `/sites/${id}`, { token, body: { visitorCookieName: "_wtt_vid" } });
     expect(back.status).toBe(422);
     // review r2 finding 3: expectEnvelope は封筒を ErrorEnvelopeSchema(決定 34、/openapi.json の契約)で
     // パースする。path が(あれば)配列であることもここで固定される
@@ -67,20 +71,20 @@ describe("sites", () => {
     // message は封筒の必須項目(日本語)。code をそのまま出さない(Task 11 で管理画面から実地確認して見つかった回帰)
     expect(backBody.message).not.toBe("cookie_name_in_use");
     expect(backBody.message).toBeTruthy();
-    expect((await call("PATCH", `/sites/${id}`, { token, body: { uuidCookieEnabled: true, uuidCookieName: "_ab_vid" } })).status).toBe(422);
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { uuidCookieEnabled: true, uuidCookieName: "_wtt_vid" } })).status).toBe(422);
     // 失敗した PATCH は KV も D1 も変えない
-    expect((await kvSettings(id))?.visitorCookieName).toBe("_wtt_vid");
+    expect((await kvSettings(id))?.visitorCookieName).toBe("_new_vid");
   });
   it("disabling the uuid cookie records its old name for deletion", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id } = await createSite(token, workspaceId, { uuidCookieEnabled: true });
     expect((await call("PATCH", `/sites/${id}`, { token, body: { uuidCookieEnabled: false } })).status).toBe(200);
-    expect((await kvSettings(id))?.previousCookieNames.map((p) => p.name)).toEqual(["_ab_uuid"]);
+    expect((await kvSettings(id))?.previousCookieNames.map((p) => p.name)).toEqual(["_wtt_uuid"]);
   });
   it("byoid conflicts and mode B with byoid are 422 with machine readable codes", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id } = await createSite(token, workspaceId);
-    let res = await call("PATCH", `/sites/${id}`, { token, body: { idSource: "cookie:_ab_vid" } });
+    let res = await call("PATCH", `/sites/${id}`, { token, body: { idSource: "cookie:_wtt_vid" } });
     expect(res.status).toBe(422);
     const byoidBody = (await expectEnvelope(res)) as { error: string; message: string };
     expect(byoidBody.error).toBe("byoid_cookie_name_conflict");
@@ -194,7 +198,7 @@ describe("sites", () => {
     // failingD1Insert(Task 1 の helpers)は site_hosts への insert を含む batch 全体を失敗させる
     const { token, workspaceId } = await setupOwner();
     const { id } = await createSite(token, workspaceId, { id: "site_hb" });
-    const res = await call("PATCH", `/sites/${id}`, { token, body: { hosts: ["hb.example.com"], visitorCookieName: "_wtt_vid" }, envOverride: { DB: failingD1Insert(env.DB, "site_hosts") } });
+    const res = await call("PATCH", `/sites/${id}`, { token, body: { hosts: ["hb.example.com"], visitorCookieName: "_new_vid" }, envOverride: { DB: failingD1Insert(env.DB, "site_hosts") } });
     expect(res.status).toBe(409);
     // review r2 finding 4: この catch はかつて生の例外(String(e))を message に流していた。
     // ErrorEnvelopeSchema には string 型としか宣言していないので通ってしまう ── ここで日本語文字を含む
@@ -209,7 +213,7 @@ describe("sites", () => {
     // KV だけが先に進んだまま残ると、次の PATCH が旧行から再導出して配信中の Cookie 名を
     // previousCookieNames にも載せずに捨ててしまう(= 全訪問者の再バケット)
     const s = await kvSettings(id);
-    expect(s?.visitorCookieName).toBe("_ab_vid");
+    expect(s?.visitorCookieName).toBe("_wtt_vid");
     expect(s?.visitorCookieName).toBe(site.visitorCookieName);
     expect(s?.previousCookieNames).toEqual([]);
     expect(s?.hosts).toEqual([]);
@@ -220,7 +224,7 @@ describe("sites", () => {
     const { id } = await createSite(token, workspaceId, { id: "site_hostfail" });
     const res = await call("PATCH", `/sites/${id}`, {
       token,
-      body: { hosts: ["hf.example.com"], visitorCookieName: "_wtt_vid" },
+      body: { hosts: ["hf.example.com"], visitorCookieName: "_new_vid" },
       envOverride: { CONFIG_KV: failingKv(/^host:/) },
     });
     expect(res.status).toBe(503);
@@ -228,9 +232,9 @@ describe("sites", () => {
     expect(hostKvBody.error).toBe("settings_write_failed");
     expect(hostKvBody.message).toBe("設定の保存に失敗しました");
     const site = await json(await call("GET", `/sites/${id}`, { token }));
-    expect(site.visitorCookieName).toBe("_ab_vid"); // D1 は旧値のまま
+    expect(site.visitorCookieName).toBe("_wtt_vid"); // D1 は旧値のまま
     const s = await kvSettings(id);
-    expect(s?.visitorCookieName).toBe("_ab_vid"); // KV も旧値に戻っている
+    expect(s?.visitorCookieName).toBe("_wtt_vid"); // KV も旧値に戻っている
     expect(s?.previousCookieNames).toEqual([]);
     expect(s?.hosts).toEqual([]);
     expect(await env.CONFIG_KV.get(kvKeys.host("hf.example.com"))).toBeNull();
@@ -534,18 +538,18 @@ describe("cookie sharing scopes (B139)", () => {
       expect((await expectEnvelope(res)).error).toBe("cookie_name_in_use");
     };
     // 今の正本名から作った印と同じ UUID Cookie 名
-    await expect422({ uuidCookieName: "_ab_vid_js" });
-    // 旧名から作った印と同じ UUID Cookie 名
-    expect((await call("PATCH", `/sites/${id}`, { token, body: { visitorCookieName: "_wtt_vid" } })).status).toBe(200);
-    await expect422({ uuidCookieName: "_ab_vid_js" });
     await expect422({ uuidCookieName: "_wtt_vid_js" });
+    // 旧名から作った印と同じ UUID Cookie 名
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { visitorCookieName: "_new_vid" } })).status).toBe(200);
+    await expect422({ uuidCookieName: "_wtt_vid_js" });
+    await expect422({ uuidCookieName: "_new_vid_js" });
   });
 
   it("visitor_cookie_rename_must_not_collide_with_marker_names", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id } = await createSite(token, workspaceId, { retentionDays: 30 });
     // "x" → "x_js": 旧名から作った印が今の正本名になる(旧名の後始末が今の ID を消す)
-    const a = await call("PATCH", `/sites/${id}`, { token, body: { visitorCookieName: "_ab_vid_js" } });
+    const a = await call("PATCH", `/sites/${id}`, { token, body: { visitorCookieName: "_wtt_vid_js" } });
     expect(a.status).toBe(422);
     expect((await expectEnvelope(a)).error).toBe("cookie_name_in_use");
     // "x_js" → "x" の向き: 今の正本名から作った印が旧名と同じになる

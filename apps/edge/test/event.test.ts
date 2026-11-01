@@ -211,7 +211,7 @@ describe("/event と新しい Profile の予算(plan12 K9)・binding の 429(K11
 describe("POST /__ab/event (D-lite, spec §9.2 / §9.6)", () => {
   it("uses the cookie identity, never issues cookies, and records the goal", async () => {
     const vid = generateVisitorId();
-    const res = await send("/__ab/event", { type: "goal", goalId: "g_lead" }, { host: HOST, cookie: `_ab_vid=${vid}`, origin: null });
+    const res = await send("/__ab/event", { type: "goal", goalId: "g_lead" }, { host: HOST, cookie: `_wtt_vid=${vid}`, origin: null });
     expect(res.status).toBe(204);
     expect(res.headers.getSetCookie()).toEqual([]); // §15.1: event は Cookie に作用しない
     expect((await readProfile("site_dl", vid))!.goals.g_lead!.count).toBe(1);
@@ -223,22 +223,22 @@ describe("POST /__ab/event (D-lite, spec §9.2 / §9.6)", () => {
     expect(res.headers.getSetCookie()).toEqual([]);
     expect(touched).toBe(0);
     // 不正な Cookie 値も同じ(再利用も発行もしない)
-    expect((await send("/__ab/event", { type: "goal", goalId: "g_lead" }, { host: HOST, origin: null, cookie: `_ab_vid=${"A".repeat(22)}`, envOverride: { VISITOR_PROFILE: doSpy(() => touched++) } })).status).toBe(204);
+    expect((await send("/__ab/event", { type: "goal", goalId: "g_lead" }, { host: HOST, origin: null, cookie: `_wtt_vid=${"A".repeat(22)}`, envOverride: { VISITOR_PROFILE: doSpy(() => touched++) } })).status).toBe(204);
     expect(touched).toBe(0);
   });
   it("body の visitorId は無視し、unknown host / mode A は 404", async () => {
     const vid = generateVisitorId();
     const other = generateVisitorId();
-    await send("/__ab/event", { type: "goal", goalId: "g_lead", visitorId: other }, { host: HOST, cookie: `_ab_vid=${vid}`, origin: null });
+    await send("/__ab/event", { type: "goal", goalId: "g_lead", visitorId: other }, { host: HOST, cookie: `_wtt_vid=${vid}`, origin: null });
     expect((await readProfile("site_dl", vid))!.goals.g_lead!.count).toBe(1);
     expect(await readProfile("site_dl", other)).toBeUndefined();
     expect((await send("/__ab/event", { type: "goal", goalId: "g_lead" }, { host: "unknown.example", origin: null })).status).toBe(404);
   });
   it("d_lite_event_ignores_forget_without_touching_the_profile", async () => {
     const vid = generateVisitorId();
-    await send("/__ab/event", { type: "goal", goalId: "g_lead" }, { host: HOST, cookie: `_ab_vid=${vid}`, origin: null });
+    await send("/__ab/event", { type: "goal", goalId: "g_lead" }, { host: HOST, cookie: `_wtt_vid=${vid}`, origin: null });
     let touched = 0;
-    const res = await send("/__ab/event", { type: "forget" }, { host: HOST, cookie: `_ab_vid=${vid}`, origin: null, envOverride: { VISITOR_PROFILE: doSpy(() => touched++) } });
+    const res = await send("/__ab/event", { type: "forget" }, { host: HOST, cookie: `_wtt_vid=${vid}`, origin: null, envOverride: { VISITOR_PROFILE: doSpy(() => touched++) } });
     expect(res.status).toBe(204);
     expect(touched).toBe(0);
     expect((await readProfile("site_dl", vid))!.goals.g_lead!.count).toBe(1); // 消えていない

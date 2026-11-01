@@ -5,7 +5,7 @@ test("mode A secure cookie works on http://localhost (smoke — 落ちたら環�
   // Secure 属性付き document.cookie 書込が localhost(trustworthy origin)で有効なことの canary。
   // ここが落ちる場合は runtime ではなく、プロキシ / seed / ブラウザの Secure Cookie 制約を先に切り分ける
   await page.goto("/");
-  await expect.poll(async () => (await context.cookies()).some((c) => c.name === "_ab_vid")).toBe(true);
+  await expect.poll(async () => (await context.cookies()).some((c) => c.name === "_wtt_vid")).toBe(true);
 });
 
 test("vB visitor sees replaced copy, hidden banner, swapped CTA and image (real runtime)", async ({ context, page }) => {

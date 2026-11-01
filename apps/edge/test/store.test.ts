@@ -13,7 +13,7 @@ describe("store", () => {
     await env.CONFIG_KV.put(kvKeys.settings("s1"), JSON.stringify({ settingsVersion: 1, siteId: "s1" }));
     await env.CONFIG_KV.put(kvKeys.settings("s_bad"), "{ not json");
     await env.CONFIG_KV.put(kvKeys.settings("s_v2"), JSON.stringify({ settingsVersion: 2, siteId: "s_v2" }));
-    expect((await loadSettings(env, "s1"))?.visitorCookieName).toBe("_ab_vid");
+    expect((await loadSettings(env, "s1"))?.visitorCookieName).toBe("_wtt_vid");
     expect(await loadSettings(env, "s_bad")).toBeNull();
     expect(await loadSettings(env, "s_v2")).toBeNull();
   });

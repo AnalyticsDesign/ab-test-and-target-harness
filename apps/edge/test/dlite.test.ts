@@ -55,7 +55,7 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
   it("issues canonical cookie (HttpOnly) when missing and evaluates with it", async () => {
     const res = await post(decisionBody());
     expect(res.status).toBe(200);
-    const set = cookieByName(res, "_ab_vid")!;
+    const set = cookieByName(res, "_wtt_vid")!;
     expect(set).toContain("Path=/");
     expect(set).toContain("Max-Age=31536000");
     expect(set).toContain("Secure");
@@ -68,7 +68,7 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
   });
   it("uuid_cookie_disabled_by_default", async () => {
     const res = await post(decisionBody());
-    expect(cookieByName(res, "_ab_uuid")).toBeUndefined(); // 既定オフ(spec §5.4)
+    expect(cookieByName(res, "_wtt_uuid")).toBeUndefined(); // 既定オフ(spec §5.4)
   });
   it("d_lite_requires_mode_b_and_host_membership", async () => {
     await seedSettings({ mode: "A" });
@@ -102,52 +102,52 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
   it("d_lite_reissues_existing_cookies_with_fresh_max_age", async () => {
     await seedSettings({ uuidCookieEnabled: true });
     const vid = generateVisitorId();
-    const res = await post(decisionBody(), `_ab_vid=${vid}; _ab_uuid=${visitorIdToUuid(vid)}`);
-    const canonical = cookieByName(res, "_ab_vid")!;
+    const res = await post(decisionBody(), `_wtt_vid=${vid}; _wtt_uuid=${visitorIdToUuid(vid)}`);
+    const canonical = cookieByName(res, "_wtt_vid")!;
     expect(cookieValue(canonical)).toBe(vid); // 既存 Cookie は必ず再利用(spec §5.4)
     expect(canonical).toContain("Max-Age=31536000");
-    const uuid = cookieByName(res, "_ab_uuid")!;
+    const uuid = cookieByName(res, "_wtt_uuid")!;
     expect(cookieValue(uuid)).toBe(await deriveExternalUuid("salt_test", vid)); // 正本から導出した v4(決定 49 §7.2)
     expect(uuid).not.toContain("HttpOnly"); // JS 可読が目的(spec §5.4)
     expect(uuid).toContain("Max-Age=31536000");
   });
   it("invalid canonical cookie is not reused (spec §5.4: 再利用せず新規発行)", async () => {
-    const res = await post(decisionBody(), `_ab_vid=${"A".repeat(22)}`);
-    const vid = cookieValue(cookieByName(res, "_ab_vid")!);
+    const res = await post(decisionBody(), `_wtt_vid=${"A".repeat(22)}`);
+    const vid = cookieValue(cookieByName(res, "_wtt_vid")!);
     expect(vid).not.toBe("A".repeat(22));
     expect(isCanonicalModeAId(vid)).toBe(true);
   });
   it("uuid_cookie_cannot_seed_canonical_identity", async () => {
     await seedSettings({ uuidCookieEnabled: true });
     const foreign = "12345678-1234-4123-8123-123456789abc";
-    const res = await post(decisionBody(), `_ab_uuid=${foreign}`);
-    const vid = cookieValue(cookieByName(res, "_ab_vid")!);
+    const res = await post(decisionBody(), `_wtt_uuid=${foreign}`);
+    const vid = cookieValue(cookieByName(res, "_wtt_vid")!);
     expect(vid).not.toBe(uuidToVisitorId(foreign)); // UUID Cookie は読まない = 復元しない
-    expect(cookieValue(cookieByName(res, "_ab_uuid")!)).toBe(await deriveExternalUuid("salt_test", vid)); // 新 ID から導出して上書き
+    expect(cookieValue(cookieByName(res, "_wtt_uuid")!)).toBe(await deriveExternalUuid("salt_test", vid)); // 新 ID から導出して上書き
   });
   it("tampered_uuid_cookie_is_overwritten_from_canonical", async () => {
     await seedSettings({ uuidCookieEnabled: true });
     const vid = generateVisitorId();
-    const res = await post(decisionBody(), `_ab_vid=${vid}; _ab_uuid=12345678-1234-4123-8123-123456789abc`);
-    expect(cookieValue(cookieByName(res, "_ab_uuid")!)).toBe(await deriveExternalUuid("salt_test", vid));
+    const res = await post(decisionBody(), `_wtt_vid=${vid}; _wtt_uuid=12345678-1234-4123-8123-123456789abc`);
+    expect(cookieValue(cookieByName(res, "_wtt_uuid")!)).toBe(await deriveExternalUuid("salt_test", vid));
   });
   it("rename_deletes_old_cookie_and_never_revives_old_identity", async () => {
     // edge 半分(runtime 半分は Plan 3)
-    await seedSettings({ visitorCookieName: "_ab_vid2", previousCookieNames: [{ name: "_ab_vid", until: 2000000000 }] });
+    await seedSettings({ visitorCookieName: "_wtt_vid2", previousCookieNames: [{ name: "_wtt_vid", until: 2000000000 }] });
     const oldId = generateVisitorId();
-    const res = await post(decisionBody(), `_ab_vid=${oldId}`);
-    const del = cookieByName(res, "_ab_vid")!;
+    const res = await post(decisionBody(), `_wtt_vid=${oldId}`);
+    const del = cookieByName(res, "_wtt_vid")!;
     expect(del).toContain("Max-Age=0"); // 旧名は再利用せず削除(spec §5.4 migration)
-    const newSet = cookieByName(res, "_ab_vid2")!;
+    const newSet = cookieByName(res, "_wtt_vid2")!;
     expect(cookieValue(newSet)).not.toBe(oldId);
   });
   it("disable_uuid_cookie_deletes_previous_alias", async () => {
     // edge 半分(runtime 半分は Plan 3)
-    await seedSettings({ uuidCookieEnabled: false, previousCookieNames: [{ name: "_ab_uuid", until: 2000000000 }] });
+    await seedSettings({ uuidCookieEnabled: false, previousCookieNames: [{ name: "_wtt_uuid", until: 2000000000 }] });
     const vid = generateVisitorId();
-    const res = await post(decisionBody(), `_ab_vid=${vid}; _ab_uuid=${visitorIdToUuid(vid)}`);
-    expect(cookieByName(res, "_ab_uuid")).toContain("Max-Age=0");
-    expect(cookieValue(cookieByName(res, "_ab_vid")!)).toBe(vid);
+    const res = await post(decisionBody(), `_wtt_vid=${vid}; _wtt_uuid=${visitorIdToUuid(vid)}`);
+    expect(cookieByName(res, "_wtt_uuid")).toContain("Max-Age=0");
+    expect(cookieValue(cookieByName(res, "_wtt_vid")!)).toBe(vid);
   });
   it("configured_cookie_names_are_used_by_runtime_and_edge", async () => {
     // edge 半分(runtime 半分は Plan 3)
@@ -155,7 +155,7 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
     const res = await post(decisionBody());
     expect(cookieByName(res, "_my_id")).toBeDefined();
     expect(cookieByName(res, "_my_uuid")).toBeDefined();
-    expect(cookieByName(res, "_ab_vid")).toBeUndefined();
+    expect(cookieByName(res, "_wtt_vid")).toBeUndefined();
   });
   it("d_lite_revoke_clears_both_cookies", async () => {
     // DO へ転送しない = 204 で完結(spec §16)。B139 §3.5: 範囲付きの側・ホスト限定の側の両方と、印の Cookie も消す
@@ -163,17 +163,17 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
     const vid = generateVisitorId();
     let touched = 0;
     const spy = new Proxy(env.VISITOR_PROFILE, { get(t, p) { const v = Reflect.get(t, p); if (p === "idFromName" || p === "get") touched++; return typeof v === "function" ? v.bind(t) : v; } }) as Env["VISITOR_PROFILE"];
-    const res = await post({ kind: "consent", value: "denied" }, `_ab_vid=${vid}; _ab_uuid=${visitorIdToUuid(vid)}`, { VISITOR_PROFILE: spy });
+    const res = await post({ kind: "consent", value: "denied" }, `_wtt_vid=${vid}; _wtt_uuid=${visitorIdToUuid(vid)}`, { VISITOR_PROFILE: spy });
     expect(touched).toBe(0); // §16: revoke は DO 非接触(Plan 5 の最終証明)
     expect(res.status).toBe(204);
     // 削除も発行時と同じ属性(ホスト限定の正本は HttpOnly、範囲付きの正本・UUID・印は HttpOnly なし)
     expect(res.headers.getSetCookie().sort()).toEqual([
-      `_ab_uuid=; Path=/; Domain=${HOST}; Max-Age=0; Secure; SameSite=Lax`,
-      "_ab_uuid=; Path=/; Max-Age=0; Secure; SameSite=Lax",
-      `_ab_vid=; Path=/; Domain=${HOST}; Max-Age=0; Secure; SameSite=Lax`,
-      "_ab_vid=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
-      `_ab_vid_js=; Path=/; Domain=${HOST}; Max-Age=0; Secure; SameSite=Lax`,
-      "_ab_vid_js=; Path=/; Max-Age=0; Secure; SameSite=Lax",
+      `_wtt_uuid=; Path=/; Domain=${HOST}; Max-Age=0; Secure; SameSite=Lax`,
+      "_wtt_uuid=; Path=/; Max-Age=0; Secure; SameSite=Lax",
+      `_wtt_vid=; Path=/; Domain=${HOST}; Max-Age=0; Secure; SameSite=Lax`,
+      "_wtt_vid=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
+      `_wtt_vid_js=; Path=/; Domain=${HOST}; Max-Age=0; Secure; SameSite=Lax`,
+      "_wtt_vid_js=; Path=/; Max-Age=0; Secure; SameSite=Lax",
     ].sort());
     for (const sc of res.headers.getSetCookie()) expect(sc).not.toContain("Max-Age=31536000"); // 新規発行しない
   });
@@ -188,9 +188,9 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
     expect(keys).toEqual(["unknown"]); // CF-Connecting-IP が無ければ共通の鍵(/v1/sites/* と同じ)
     keys = [];
     const vid = generateVisitorId();
-    const rev = await post({ kind: "consent", value: "denied" }, `_ab_vid=${vid}`, limited);
+    const rev = await post({ kind: "consent", value: "denied" }, `_wtt_vid=${vid}`, limited);
     expect(rev.status).toBe(204);
-    expect(cookieByName(rev, "_ab_vid")).toContain("Max-Age=0");
+    expect(cookieByName(rev, "_wtt_vid")).toContain("Max-Age=0");
     expect(keys).toEqual([]); // 撤回には制限を掛けない
     // 制限に掛からなければ今までどおり
     expect((await post(decisionBody(), undefined, { DECISION_RATE_LIMITER: { limit: async () => ({ success: true }) } })).status).toBe(200);
@@ -198,8 +198,8 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
   it("unknown version keeps Set-Cookie and returns empty experiments (spec §9.3 のエラー時挙動に整合)", async () => {
     const res = await post({ ...decisionBody(), v: 9 });
     expect(res.status).toBe(200);
-    expect((await res.json()) as object).toEqual({ v: 9, experiments: [], vh: await shortVisitorHash(cookieValue(cookieByName(res, "_ab_vid")!)) });
-    expect(cookieByName(res, "_ab_vid")).toBeDefined();
+    expect((await res.json()) as object).toEqual({ v: 9, experiments: [], vh: await shortVisitorHash(cookieValue(cookieByName(res, "_wtt_vid")!)) });
+    expect(cookieByName(res, "_wtt_vid")).toBeDefined();
   });
   it("unknown host 404 / bad body 400", async () => {
     const ctx = createExecutionContext();
@@ -212,7 +212,7 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
   it("d-lite decision uses the cookie identity for the profile (spec §9.6 + §7.4)", async () => {
     await env.CONFIG_KV.put(kvKeys.config("site_p", 2), JSON.stringify({ ...cfg, version: 2, needsProfile: true, patterns: { p_lp: { op: "contains", value: "/lp" } }, experiments: [{ ...exp, targeting: { hist: "visited", pattern: "p_lp" } }] }));
     const vid = generateVisitorId();
-    const res = await post({ ...decisionBody(), v: 2 }, `_ab_vid=${vid}`);
+    const res = await post({ ...decisionBody(), v: 2 }, `_wtt_vid=${vid}`);
     expect((await res.json()) as object).toEqual({ v: 2, experiments: [{ id: "exp_001", variant: pickVariant(exp, vid) }], vh: await shortVisitorHash(vid) });
     const p = await runInDurableObject(profileStub(env, "site_p", vid), (_i, state) => state.storage.get<ProfileRecord>(PROFILE_KEY));
     expect(p!.pages.p_lp!.count).toBe(1);
@@ -224,18 +224,18 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
     const res = await post({ ...decisionBody(), v: 2 }, undefined, { VISITOR_PROFILE: broken });
     spy.mockRestore();
     expect(res.status).toBe(503);
-    const set = cookieByName(res, "_ab_vid")!;
+    const set = cookieByName(res, "_wtt_vid")!;
     expect(set).toContain("Max-Age=31536000"); // DO 障害でも Identity は発行する(CL-High-1)
     expect(isCanonicalModeAId(cookieValue(set))).toBe(true);
   });
-  it("d_lite_without_active_config_does_not_set_uuid_cookie(salt が分からなければ _ab_uuid を出さない。正本の発行は続く)", async () => {
+  it("d_lite_without_active_config_does_not_set_uuid_cookie(salt が分からなければ _wtt_uuid を出さない。正本の発行は続く)", async () => {
     await seedSettings({ uuidCookieEnabled: true });
     await env.CONFIG_KV.delete(kvKeys.active("site_p"));
     __resetEdgeCaches();
     const res = await post(decisionBody());
     expect(res.status).toBe(200);
-    expect(cookieByName(res, "_ab_vid")).toBeDefined();
-    expect(cookieByName(res, "_ab_uuid")).toBeUndefined();
+    expect(cookieByName(res, "_wtt_vid")).toBeDefined();
+    expect(cookieByName(res, "_wtt_uuid")).toBeUndefined();
   });
   it("D-lite は正本 Cookie(UUIDv7)の発行時刻を初回の訪問に使う(v4 の Cookie は発行時刻が不明 = 古い訪問者)", async () => {
     const config = compile({
@@ -249,11 +249,11 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
     await env.CONFIG_KV.put(kvKeys.config("site_p", 1), JSON.stringify(config));
     __resetEdgeCaches();
     const fresh = await post(decisionBody());
-    const vid = cookieValue(cookieByName(fresh, "_ab_vid")!);
+    const vid = cookieValue(cookieByName(fresh, "_wtt_vid")!);
     expect(typeof visitorIdIssuedAt(vid)).toBe("number"); // 新しく発行するのは v7
     expect(((await fresh.json()) as { experiments: unknown[] }).experiments).toHaveLength(1);
     const v4 = uuidToVisitorId("12345678-1234-4123-8123-123456789abc")!;
-    const old = await post(decisionBody(), `_ab_vid=${v4}`);
+    const old = await post(decisionBody(), `_wtt_vid=${v4}`);
     expect(((await old.json()) as { experiments: unknown[] }).experiments).toEqual([]);
   });
 });
@@ -289,7 +289,7 @@ describe("D-lite shared visitor cookie (B139 §3)", () => {
   it("shared_cookie_has_no_httponly_when_sharing_on", async () => {
     const res = await postAt(W, shared, decisionBody());
     expect(res.status).toBe(200);
-    const [set] = issued(res, "_ab_vid");
+    const [set] = issued(res, "_wtt_vid");
     expect(set).toContain("; Domain=example.com;");
     expect(set).not.toContain("HttpOnly"); // Q20
     expect(set).toContain("Path=/");
@@ -300,15 +300,15 @@ describe("D-lite shared visitor cookie (B139 §3)", () => {
 
   it("sharing_off_keeps_host_only_httponly", async () => {
     const vid = generateVisitorId();
-    const res = await postAt(W, { ...shared, shareSubdomains: false }, decisionBody(), `_ab_vid=${vid}`);
-    expect(issued(res, "_ab_vid")).toEqual([`_ab_vid=${vid}; Path=/; Max-Age=31536000; Secure; HttpOnly; SameSite=Lax`]); // 今と同じ文字列
+    const res = await postAt(W, { ...shared, shareSubdomains: false }, decisionBody(), `_wtt_vid=${vid}`);
+    expect(issued(res, "_wtt_vid")).toEqual([`_wtt_vid=${vid}; Path=/; Max-Age=31536000; Secure; HttpOnly; SameSite=Lax`]); // 今と同じ文字列
     expect(all(res).some((c) => c.includes("Domain="))).toBe(false); // 共有オフは今の範囲を消さない(後始末は前の範囲だけ)
   });
 
   it("legacy_runtime_without_scopes_keeps_host_only_cookie", async () => {
     // 更新の途中で control がまだ cookieDomains を書いていない KV の設定(shareSubdomains は既定の true)
     const res = await postAt(W, {}, decisionBody());
-    const [set] = issued(res, "_ab_vid");
+    const [set] = issued(res, "_wtt_vid");
     expect(set).not.toContain("Domain=");
     expect(set).toContain("HttpOnly");
     expect(all(res).filter((c) => c.includes("Max-Age=0"))).toEqual([]); // 発行先がホスト限定なので消すものは無い
@@ -316,48 +316,48 @@ describe("D-lite shared visitor cookie (B139 §3)", () => {
 
   it("edge_deletes_host_only_copy_even_when_single_value", async () => {
     const vid = generateVisitorId();
-    const res = await postAt(W, shared, decisionBody(), `_ab_vid=${vid}`);
-    expect(cookieValue(issued(res, "_ab_vid")[0]!)).toBe(vid); // 値は引き継ぐ
-    expect(all(res)).toContain("_ab_vid=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"); // ホスト限定の正本(発行時は HttpOnly)
-    expect(deletedDomains(res, "_ab_vid")).toEqual([null]); // 今の発行先(example.com)は消さない
-    expect(deletedDomains(res, "_ab_vid_js")).toEqual([null]); // 印はホスト限定の側だけ(届いていないので範囲付きは消さない)
+    const res = await postAt(W, shared, decisionBody(), `_wtt_vid=${vid}`);
+    expect(cookieValue(issued(res, "_wtt_vid")[0]!)).toBe(vid); // 値は引き継ぐ
+    expect(all(res)).toContain("_wtt_vid=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"); // ホスト限定の正本(発行時は HttpOnly)
+    expect(deletedDomains(res, "_wtt_vid")).toEqual([null]); // 今の発行先(example.com)は消さない
+    expect(deletedDomains(res, "_wtt_vid_js")).toEqual([null]); // 印はホスト限定の側だけ(届いていないので範囲付きは消さない)
   });
 
   it("edge_reissues_and_deletes_marker_on_cloudflare_host", async () => {
     const vid = generateVisitorId();
-    const res = await postAt(W, shared, decisionBody(), `_ab_vid=${vid}; _ab_vid_js=${vid}`);
-    const [set] = issued(res, "_ab_vid");
+    const res = await postAt(W, shared, decisionBody(), `_wtt_vid=${vid}; _wtt_vid_js=${vid}`);
+    const [set] = issued(res, "_wtt_vid");
     expect(cookieValue(set!)).toBe(vid);
     expect(set).toContain("; Domain=example.com;");
-    expect(issued(res, "_ab_vid_js")).toEqual([]); // 印は発行しない
-    expect(deletedDomains(res, "_ab_vid_js").sort()).toEqual(["example.com", null].sort());
+    expect(issued(res, "_wtt_vid_js")).toEqual([]); // 印は発行しない
+    expect(deletedDomains(res, "_wtt_vid_js").sort()).toEqual(["example.com", null].sort());
     // 規則 2: 2 種類のうち片方が印と同じなら、もう片方(サーバーが書いた古い ID)
     const server = generateVisitorId();
     const js = generateVisitorId();
-    const res2 = await postAt(W, shared, decisionBody(), `_ab_vid=${js}; _ab_vid=${server}; _ab_vid_js=${js}`);
-    expect(cookieValue(issued(res2, "_ab_vid")[0]!)).toBe(server);
+    const res2 = await postAt(W, shared, decisionBody(), `_wtt_vid=${js}; _wtt_vid=${server}; _wtt_vid_js=${js}`);
+    expect(cookieValue(issued(res2, "_wtt_vid")[0]!)).toBe(server);
   });
 
   it("planted_long_path_cookie_does_not_fix_visitor_id", async () => {
     const attacker = generateVisitorId();
     const legit = generateVisitorId();
-    const res = await postAt(W, shared, decisionBody(), `_ab_vid=${attacker}; _ab_vid=${legit}`);
-    const vid = cookieValue(issued(res, "_ab_vid")[0]!);
+    const res = await postAt(W, shared, decisionBody(), `_wtt_vid=${attacker}; _wtt_vid=${legit}`);
+    const vid = cookieValue(issued(res, "_wtt_vid")[0]!);
     expect(isCanonicalModeAId(vid)).toBe(true);
     expect(vid).not.toBe(attacker);
     expect(vid).not.toBe(legit);
     // 共有オフのサイトでも同じ(印の規則は使わない)
-    const off = await postAt(W, { ...shared, shareSubdomains: false }, decisionBody(), `_ab_vid=${attacker}; _ab_vid=${legit}; _ab_vid_js=${legit}`);
-    expect([attacker, legit]).not.toContain(cookieValue(issued(off, "_ab_vid")[0]!));
+    const off = await postAt(W, { ...shared, shareSubdomains: false }, decisionBody(), `_wtt_vid=${attacker}; _wtt_vid=${legit}; _wtt_vid_js=${legit}`);
+    expect([attacker, legit]).not.toContain(cookieValue(issued(off, "_wtt_vid")[0]!));
   });
 
   it("edge_rule3_deletes_host_only_previous_and_marker", async () => {
     const a = generateVisitorId();
     const b = generateVisitorId();
-    const res = await postAt(W, { ...shared, previousCookieDomains: [{ domain: W, until: FUTURE }] }, decisionBody(), `_ab_vid=${a}; _ab_vid=${b}; _ab_vid_js=${generateVisitorId()}`);
-    expect([a, b]).not.toContain(cookieValue(issued(res, "_ab_vid")[0]!));
-    expect(deletedDomains(res, "_ab_vid").sort()).toEqual([W, null].sort());
-    expect(deletedDomains(res, "_ab_vid_js").sort()).toEqual(["example.com", W, null].sort());
+    const res = await postAt(W, { ...shared, previousCookieDomains: [{ domain: W, until: FUTURE }] }, decisionBody(), `_wtt_vid=${a}; _wtt_vid=${b}; _wtt_vid_js=${generateVisitorId()}`);
+    expect([a, b]).not.toContain(cookieValue(issued(res, "_wtt_vid")[0]!));
+    expect(deletedDomains(res, "_wtt_vid").sort()).toEqual([W, null].sort());
+    expect(deletedDomains(res, "_wtt_vid_js").sort()).toEqual(["example.com", W, null].sort());
   });
 
   it("previous_range_cookie_deleted_within_retention", async () => {
@@ -372,10 +372,10 @@ describe("D-lite shared visitor cookie (B139 §3)", () => {
         { domain: "app.old.example.com", until: PAST }, // 保持期間を過ぎた範囲は無視
       ],
     }, decisionBody());
-    expect(deletedDomains(res, "_ab_vid").sort()).toEqual(["old.example.com", null].sort());
-    expect(deletedDomains(res, "_ab_uuid").sort()).toEqual(["old.example.com", null].sort());
-    expect(deletedDomains(res, "_ab_vid_js").sort()).toEqual(["old.example.com", null].sort());
-    expect(all(res).find((c) => c.startsWith("_ab_vid=;") && c.includes("Domain=old.example.com"))).not.toContain("HttpOnly"); // 範囲付きは HttpOnly なしで書いた
+    expect(deletedDomains(res, "_wtt_vid").sort()).toEqual(["old.example.com", null].sort());
+    expect(deletedDomains(res, "_wtt_uuid").sort()).toEqual(["old.example.com", null].sort());
+    expect(deletedDomains(res, "_wtt_vid_js").sort()).toEqual(["old.example.com", null].sort());
+    expect(all(res).find((c) => c.startsWith("_wtt_vid=;") && c.includes("Domain=old.example.com"))).not.toContain("HttpOnly"); // 範囲付きは HttpOnly なしで書いた
   });
 
   it("previous_ranges_are_capped_at_4_newest_first", async () => {
@@ -383,16 +383,16 @@ describe("D-lite shared visitor cookie (B139 §3)", () => {
     const ranges = ["a.b.c.d.e.example.com", "b.c.d.e.example.com", "c.d.e.example.com", "d.e.example.com", "e.example.com", "example.com"];
     const res = await postAt(host, { previousCookieDomains: ranges.map((domain, i) => ({ domain, until: FUTURE + i })) }, decisionBody());
     // 発行先はホスト限定(cookieDomains が空)。前の範囲は until の新しい順に 4 つ
-    expect(deletedDomains(res, "_ab_vid")).toEqual(["example.com", "e.example.com", "d.e.example.com", "c.d.e.example.com"]);
+    expect(deletedDomains(res, "_wtt_vid")).toEqual(["example.com", "e.example.com", "d.e.example.com", "c.d.e.example.com"]);
   });
 
   it("uuid_cookie_shares_domain_and_never_httponly", async () => {
     const on = await postAt(W, { ...shared, uuidCookieEnabled: true }, decisionBody());
-    const [uOn] = issued(on, "_ab_uuid");
+    const [uOn] = issued(on, "_wtt_uuid");
     expect(uOn).toContain("; Domain=example.com;");
     expect(uOn).not.toContain("HttpOnly");
     const off = await postAt(W, { ...shared, uuidCookieEnabled: true, shareSubdomains: false }, decisionBody());
-    const [uOff] = issued(off, "_ab_uuid");
+    const [uOff] = issued(off, "_wtt_uuid");
     expect(uOff).not.toContain("Domain=");
     expect(uOff).not.toContain("HttpOnly");
   });
@@ -401,29 +401,29 @@ describe("D-lite shared visitor cookie (B139 §3)", () => {
     const old = generateVisitorId();
     const res = await postAt(W, {
       ...shared,
-      visitorCookieName: "_ab_vid2",
-      previousCookieNames: [{ name: "_ab_vid", until: FUTURE }],
+      visitorCookieName: "_wtt_vid2",
+      previousCookieNames: [{ name: "_wtt_vid", until: FUTURE }],
       previousCookieDomains: [{ domain: W, until: FUTURE }],
-    }, decisionBody(), `_ab_vid=${old}; _ab_vid_js=${old}`);
-    expect(cookieValue(issued(res, "_ab_vid2")[0]!)).not.toBe(old); // 旧名は再利用しない
-    expect(deletedDomains(res, "_ab_vid").sort()).toEqual(["example.com", W, null].sort());
-    expect(deletedDomains(res, "_ab_vid_js").sort()).toEqual(["example.com", W, null].sort());
+    }, decisionBody(), `_wtt_vid=${old}; _wtt_vid_js=${old}`);
+    expect(cookieValue(issued(res, "_wtt_vid2")[0]!)).not.toBe(old); // 旧名は再利用しない
+    expect(deletedDomains(res, "_wtt_vid").sort()).toEqual(["example.com", W, null].sort());
+    expect(deletedDomains(res, "_wtt_vid_js").sort()).toEqual(["example.com", W, null].sort());
   });
 
   it("revoke_deletes_all_sides_on_edge", async () => {
     const vid = generateVisitorId();
-    const res = await postAt(W, { ...shared, uuidCookieEnabled: true, previousCookieDomains: [{ domain: W, until: FUTURE }, { domain: "example.org", until: FUTURE }] }, { kind: "consent", value: "denied" }, `_ab_vid=${vid}`);
+    const res = await postAt(W, { ...shared, uuidCookieEnabled: true, previousCookieDomains: [{ domain: W, until: FUTURE }, { domain: "example.org", until: FUTURE }] }, { kind: "consent", value: "denied" }, `_wtt_vid=${vid}`);
     expect(res.status).toBe(204);
-    for (const name of ["_ab_vid", "_ab_uuid", "_ab_vid_js"]) expect(deletedDomains(res, name).sort()).toEqual(["example.com", W, null].sort());
+    for (const name of ["_wtt_vid", "_wtt_uuid", "_wtt_vid_js"]) expect(deletedDomains(res, name).sort()).toEqual(["example.com", W, null].sort());
     expect(all(res).every((c) => c.includes("Max-Age=0"))).toBe(true);
-    expect(all(res)).toContain("_ab_vid=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax");
-    expect(all(res)).toContain("_ab_vid=; Path=/; Domain=example.com; Max-Age=0; Secure; SameSite=Lax");
+    expect(all(res)).toContain("_wtt_vid=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax");
+    expect(all(res)).toContain("_wtt_vid=; Path=/; Domain=example.com; Max-Age=0; Secure; SameSite=Lax");
   });
 
   it("revoke_cleans_renamed_cookie_marker", async () => {
-    const res = await postAt(W, { ...shared, visitorCookieName: "_ab_vid2", previousCookieNames: [{ name: "_ab_vid", until: FUTURE }] }, { kind: "consent", value: "denied" }, `_ab_vid_js=${generateVisitorId()}`);
-    expect(deletedDomains(res, "_ab_vid_js").sort()).toEqual(["example.com", null].sort());
-    expect(deletedDomains(res, "_ab_vid2_js").sort()).toEqual(["example.com", null].sort());
+    const res = await postAt(W, { ...shared, visitorCookieName: "_wtt_vid2", previousCookieNames: [{ name: "_wtt_vid", until: FUTURE }] }, { kind: "consent", value: "denied" }, `_wtt_vid_js=${generateVisitorId()}`);
+    expect(deletedDomains(res, "_wtt_vid_js").sort()).toEqual(["example.com", null].sort());
+    expect(deletedDomains(res, "_wtt_vid2_js").sort()).toEqual(["example.com", null].sort());
   });
 });
 
@@ -453,7 +453,7 @@ describe("D-lite results (D9 ②)", () => {
   it("d_lite_participant_is_stored_with_the_cookie_identity", async () => {
     const vid = generateVisitorId();
     const other = generateVisitorId(); // body の visitorId は無視する(Cookie が正)
-    const res = await postEvent({ type: "participant", v: 1, runId: RUN, variantId: pickVariant(exp, vid), device: "mobile", applied: "ok", visitorId: other }, `_ab_vid=${vid}`);
+    const res = await postEvent({ type: "participant", v: 1, runId: RUN, variantId: pickVariant(exp, vid), device: "mobile", applied: "ok", visitorId: other }, `_wtt_vid=${vid}`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ result: "stored" });
     expect(res.headers.getSetCookie()).toEqual([]);
@@ -461,7 +461,7 @@ describe("D-lite results (D9 ②)", () => {
     expect(row).toMatchObject({ site_id: "site_p", variant_id: pickVariant(exp, vid), device: "mobile" });
     expect([...new Uint8Array(row!.visitor_key as ArrayBuffer | number[])]).toEqual([...(await visitorKey(env, "site_p", vid))!]);
     // CV も同じ Cookie の ID で
-    const cv = await postEvent({ type: "conversion", v: 1, goalId: "g_buy", runIds: [RUN] }, `_ab_vid=${vid}`);
+    const cv = await postEvent({ type: "conversion", v: 1, goalId: "g_buy", runIds: [RUN] }, `_wtt_vid=${vid}`);
     expect(await cv.json()).toEqual({ result: "stored", runs: { [RUN]: { result: "stored" } } });
     expect((await env.RESULTS_DB!.prepare("SELECT COUNT(*) AS n FROM conversions WHERE run_id = ?").bind(RUN).first<{ n: number }>())!.n).toBe(1);
   });
@@ -481,9 +481,9 @@ describe("D-lite results (D9 ②)", () => {
   it("dlite consent revoke deletes results rows", async () => {
     const vid = generateVisitorId();
     await seedRows(vid);
-    const res = await post({ kind: "consent", value: "denied" }, `_ab_vid=${vid}`);
+    const res = await post({ kind: "consent", value: "denied" }, `_wtt_vid=${vid}`);
     expect(res.status).toBe(204);
-    expect(cookieByName(res, "_ab_vid")).toContain("Max-Age=0"); // Cookie の削除は今のとおり
+    expect(cookieByName(res, "_wtt_vid")).toContain("Max-Age=0"); // Cookie の削除は今のとおり
     expect(await count("conversions")).toBe(0);
     // 別の Site の同じ ID の行は残る
     expect(await env.RESULTS_DB!.prepare("SELECT site_id FROM participants").all<{ site_id: string }>().then((r) => r.results)).toEqual([{ site_id: "site_other" }]);
@@ -494,9 +494,9 @@ describe("D-lite results (D9 ②)", () => {
     __resetEdgeCaches();
     const vid = generateVisitorId();
     await seedRows(vid);
-    const res = await post({ kind: "consent", value: "denied" }, `_ab_vid=${vid}`);
+    const res = await post({ kind: "consent", value: "denied" }, `_wtt_vid=${vid}`);
     expect(res.status).toBe(204);
-    expect(cookieByName(res, "_ab_vid")).toContain("Max-Age=0");
+    expect(cookieByName(res, "_wtt_vid")).toContain("Max-Age=0");
     expect(await count("participants")).toBe(2);
     expect(await count("conversions")).toBe(1);
   });
@@ -504,7 +504,7 @@ describe("D-lite results (D9 ②)", () => {
   it("dlite consent revoke without a canonical cookie deletes nothing and still returns 204", async () => {
     const vid = generateVisitorId();
     await seedRows(vid);
-    const res = await post({ kind: "consent", value: "denied" }, "_ab_vid=not-a-canonical-id");
+    const res = await post({ kind: "consent", value: "denied" }, "_wtt_vid=not-a-canonical-id");
     expect(res.status).toBe(204);
     expect(await count("participants")).toBe(2);
   });
@@ -514,10 +514,10 @@ describe("D-lite results (D9 ②)", () => {
     await seedRows(vid);
     const failing = { prepare: (sql: string) => env.RESULTS_DB!.prepare(sql), batch: async () => { throw new Error("D1_ERROR: down"); } } as unknown as D1Database;
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const res = await post({ kind: "consent", value: "denied" }, `_ab_vid=${vid}`, { RESULTS_DB: failing });
+    const res = await post({ kind: "consent", value: "denied" }, `_wtt_vid=${vid}`, { RESULTS_DB: failing });
     spy.mockRestore();
     expect(res.status).toBe(204);
-    expect(cookieByName(res, "_ab_vid")).toContain("Max-Age=0");
+    expect(cookieByName(res, "_wtt_vid")).toContain("Max-Age=0");
   });
 
   it("revoke_forgets_all_canonical_values", async () => {
@@ -527,7 +527,7 @@ describe("D-lite results (D9 ②)", () => {
     await seedRows(a);
     await seedRows(b);
     expect(await count("participants")).toBe(4);
-    const res = await post({ kind: "consent", value: "denied" }, `_ab_vid=${a}; _ab_vid=not-canonical; _ab_vid=${b}`);
+    const res = await post({ kind: "consent", value: "denied" }, `_wtt_vid=${a}; _wtt_vid=not-canonical; _wtt_vid=${b}`);
     expect(res.status).toBe(204);
     expect(await count("conversions")).toBe(0);
     expect(await env.RESULTS_DB!.prepare("SELECT site_id FROM participants").all<{ site_id: string }>().then((r) => r.results)).toEqual([{ site_id: "site_other" }, { site_id: "site_other" }]);
@@ -535,7 +535,7 @@ describe("D-lite results (D9 ②)", () => {
 
   it("d_lite_event_with_ambiguous_cookies_is_ignored_with_204", async () => {
     // B139 §3.4 規則 3: 値が 2 種類並ぶ(印で説明がつかない)ときは、どちらの ID でも記録しない
-    const res = await postEvent({ type: "participant", v: 1, runId: RUN, variantId: "vA", device: "mobile", applied: "ok" }, `_ab_vid=${generateVisitorId()}; _ab_vid=${generateVisitorId()}`);
+    const res = await postEvent({ type: "participant", v: 1, runId: RUN, variantId: "vA", device: "mobile", applied: "ok" }, `_wtt_vid=${generateVisitorId()}; _wtt_vid=${generateVisitorId()}`);
     expect(res.status).toBe(204);
     expect(res.headers.getSetCookie()).toEqual([]);
     expect(await count("participants")).toBe(0);
@@ -546,7 +546,7 @@ describe("D-lite results (D9 ②)", () => {
     __resetEdgeCaches();
     const server = generateVisitorId();
     const js = generateVisitorId();
-    const res = await postEvent({ type: "participant", v: 1, runId: RUN, variantId: pickVariant(exp, server), device: "mobile", applied: "ok" }, `_ab_vid=${js}; _ab_vid=${server}; _ab_vid_js=${js}`);
+    const res = await postEvent({ type: "participant", v: 1, runId: RUN, variantId: pickVariant(exp, server), device: "mobile", applied: "ok" }, `_wtt_vid=${js}; _wtt_vid=${server}; _wtt_vid_js=${js}`);
     expect(await res.json()).toEqual({ result: "stored" });
     const row = await env.RESULTS_DB!.prepare("SELECT visitor_key FROM participants WHERE run_id = ?").bind(RUN).first<Record<string, unknown>>();
     expect([...new Uint8Array(row!.visitor_key as ArrayBuffer | number[])]).toEqual([...(await visitorKey(env, "site_p", server))!]);
@@ -560,7 +560,7 @@ describe("D-lite results (D9 ②)", () => {
 
   it("d_lite_decision_returns_vh_of_the_cookie_identity", async () => {
     const vid = generateVisitorId();
-    const res = await post({ ...decisionBody(), v: 3 }, `_ab_vid=${vid}`);
+    const res = await post({ ...decisionBody(), v: 3 }, `_wtt_vid=${vid}`);
     const out = (await res.json()) as { vh?: string };
     expect(out.vh).toBe(await shortVisitorHash(vid));
     expect(out.vh).toMatch(/^[A-Za-z0-9_-]{11}$/);

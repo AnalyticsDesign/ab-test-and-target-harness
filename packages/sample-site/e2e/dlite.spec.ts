@@ -25,8 +25,8 @@ test("d_lite_runtime_never_writes_document_cookie", async ({ context, page }) =>
     });
   });
   await page.goto("/dlite.html");
-  await expect.poll(async () => (await context.cookies()).find((c) => c.name === "_ab_vid")).toBeTruthy();
-  const vid = (await context.cookies()).find((c) => c.name === "_ab_vid")!;
+  await expect.poll(async () => (await context.cookies()).find((c) => c.name === "_wtt_vid")).toBeTruthy();
+  const vid = (await context.cookies()).find((c) => c.name === "_wtt_vid")!;
   // B139: この Site は共有の範囲(cookieDomains ["example.test"])を焼いてあるので、edge は Domain 付き・HttpOnly なしで書く(HttpOnly はホスト限定のときだけ)。
   // edge の Set-Cookie 由来であることは、下の「runtime の setter が 0 回なのに Cookie がある」で証明する(HttpOnly の有無には頼らない)
   expect(vid.domain).toBe(".example.test");
@@ -49,13 +49,13 @@ test("d-lite applies changes based on the edge-owned cookie", async ({ context, 
 test("d-lite revoke posts consent body and clears the edge cookie", async ({ context, page }) => {
   // spec §16: D-lite の revoke は /__ab/decision へ consent body を 1 回送り、edge が Max-Age=0 を返す
   await page.goto("/dlite.html");
-  await expect.poll(async () => (await context.cookies()).some((c) => c.name === "_ab_vid")).toBe(true);
+  await expect.poll(async () => (await context.cookies()).some((c) => c.name === "_wtt_vid")).toBe(true);
   const [req] = await Promise.all([
     page.waitForRequest((r) => r.url().includes("/__ab/decision") && r.method() === "POST" && String(r.postData()).includes("consent")),
     page.evaluate(() => (window as unknown as { AB: { consent(g: boolean): void } }).AB.consent(false)),
   ]);
   expect(req.postDataJSON()).toEqual({ kind: "consent", value: "denied" });
-  await expect.poll(async () => (await context.cookies()).some((c) => c.name === "_ab_vid")).toBe(false);
+  await expect.poll(async () => (await context.cookies()).some((c) => c.name === "_wtt_vid")).toBe(false);
 });
 
 test("d_lite_goal_is_recorded_via_ab_event_with_cookie_identity_only", async ({ context, page }) => {

@@ -12,10 +12,10 @@ test("mode C hashes the site cookie and drives the assignment (spec §4.3)", asy
   await expect(page.locator(".hero-title")).toHaveText(expected === "vB" ? "BYOID B" : "GA4を基礎から学ぶ");
   expect(await page.evaluate(() => (window as unknown as { AB: { getAssignments(): Record<string, string> } }).AB.getAssignments())).toEqual({ exp_byoid: expected });
   // 決定 49 §7.4: Mode C でも参考用の匿名 Cookie(UUIDv7)を置く。識別(割当)は BYOID のハッシュのまま。生値も送らない(このサイトは needsProfile なしでリクエスト自体ゼロ)
-  expect((await context.cookies()).find((c) => c.name === "_ab_vid")?.value).toMatch(/^[A-Za-z0-9_-]{22}$/);
+  expect((await context.cookies()).find((c) => c.name === "_wtt_vid")?.value).toMatch(/^[A-Za-z0-9_-]{22}$/);
 });
 
 test("mode C falls back to an anonymous id when the site cookie is absent (spec §4.3)", async ({ context, page }) => {
   await page.goto("/byoid.html");
-  await expect.poll(async () => (await context.cookies()).find((c) => c.name === "_ab_vid")?.value).toMatch(/^[A-Za-z0-9_-]{22}$/);
+  await expect.poll(async () => (await context.cookies()).find((c) => c.name === "_wtt_vid")?.value).toMatch(/^[A-Za-z0-9_-]{22}$/);
 });

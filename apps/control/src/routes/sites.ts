@@ -79,6 +79,13 @@ const SiteCreatedSchema = SiteJsonSchema.extend({
     .describe("訪問者 ID の Cookie が同じ登録ドメインの別のサイトとぶつかったため、共有をオフにするか Cookie 名を変えて作ったときだけ返す。何を変えたかを利用者に知らせる"),
 });
 
+/**
+ * B174: 新しいサイトの Cookie の既定の名前(`_ab` の接頭辞は、ほかのツールの Cookie と名前がぶつかりうるため `_wtt` にした)。
+ * 作成では D1 の行に明示して保存するので、今あるサイト(`_ab_vid` など)は D1 に保存した名前のまま変わらない(0003 の列の既定は使わない)
+ */
+const DEFAULT_VISITOR_COOKIE_NAME = "_wtt_vid";
+const DEFAULT_UUID_COOKIE_NAME = "_wtt_uuid";
+
 /** 衝突の相手から 422 sharing_conflict を作る。相手のワークスペースを見られる人にだけサイト名を出す(spec Q23) */
 async function conflictError(c: Context<AppEnv>, conflict: Pick<SharingConflict, "siteId" | "workspaceId" | "domain"> | null, hint: string) {
   if (!conflict) return sharingConflictError(null, null, hint);
@@ -144,7 +151,7 @@ siteRoutes.post(
     const base: SiteRow = {
       id, workspace_id: wid, name: body.name, domain: body.domain, mode: "A", id_source: "ab", site_salt: randomToken(16),
       allowed_origins_json: JSON.stringify([`https://${body.domain}`]), hosts_json: "[]", retention_days: body.retentionDays,
-      consent_mode: body.consentMode, decision_timeout_ms: 1000, visitor_cookie_name: body.visitorCookieName ?? "_ab_vid", uuid_cookie_enabled: 0, uuid_cookie_name: body.uuidCookieName ?? "_ab_uuid",
+      consent_mode: body.consentMode, decision_timeout_ms: 1000, visitor_cookie_name: body.visitorCookieName ?? DEFAULT_VISITOR_COOKIE_NAME, uuid_cookie_enabled: 0, uuid_cookie_name: body.uuidCookieName ?? DEFAULT_UUID_COOKIE_NAME,
       previous_cookie_names_json: "[]", forget_on_revoke: 1, timezone: "Asia/Tokyo", analytics_json: null, ga4_property_id: null, bigquery_dataset: null, bridge_secret: null, bridge_secret_prev: null, bridge_secret_rotated_at: null,
       active_version: null, active_kv_stale: 0, last_activated_at: null, content_updated_at: now, created_at: now, updated_at: now,
       // 列の既定と同じ値(世代の epoch は created_at になる)
@@ -173,8 +180,8 @@ siteRoutes.post(
         const uuidClash = next.uuid_cookie_enabled === 1 && conflicts.some((x) => x.otherNames.includes(next.uuid_cookie_name));
         const renamed: SiteRow = {
           ...base,
-          visitor_cookie_name: await siteScopedCookieName("_ab_vid", id),
-          uuid_cookie_name: uuidClash ? await siteScopedCookieName("_ab_uuid", id) : base.uuid_cookie_name,
+          visitor_cookie_name: await siteScopedCookieName(DEFAULT_VISITOR_COOKIE_NAME, id),
+          uuid_cookie_name: uuidClash ? await siteScopedCookieName(DEFAULT_UUID_COOKIE_NAME, id) : base.uuid_cookie_name,
         };
         ({ next, error } = applySitePatch(renamed, patch, now));
         if (error) throw error;

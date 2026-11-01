@@ -40,9 +40,10 @@ export const SiteSettingsSchema = z
       .default("ab"),
     allowedOrigins: z.array(z.string().refine(isExactOrigin, { message: "must be an exact http(s) origin" })).default([]), // 完全一致のみ。空 = ブラウザ直接経路は全拒否(spec §4.1。形式は決定 29)
     hosts: z.array(z.string().regex(/^[a-z0-9.-]+$/)).default([]), // D-lite の Workers Route ホスト名。小文字・IDN は punycode(spec §9.6、決定 29)
-    visitorCookieName: CookieName.default("_ab_vid"),
+    // B174: 名前の既定は新しいサイトの既定(_wtt_)。control は記録に D1 の名前を必ず書くので、今あるサイト(_ab_vid など)はこの既定に頼らない
+    visitorCookieName: CookieName.default("_wtt_vid"),
     uuidCookieEnabled: z.boolean().default(false),
-    uuidCookieName: CookieName.default("_ab_uuid"),
+    uuidCookieName: CookieName.default("_wtt_uuid"),
     previousCookieNames: z.array(z.strictObject({ name: CookieName, until: z.number().int() })).default([]), // until = 保持期限(epoch 秒)。edge は参照せず control が prune する(spec §5.4)。生きているエントリと同名への変更は control が 422 で拒否(決定 29)
     // B139: 訪問者 ID の Cookie をサブドメイン間で共有する(既定 ON)。strict のため、これらを書く前に edge を deploy する
     shareSubdomains: z.boolean().default(true),

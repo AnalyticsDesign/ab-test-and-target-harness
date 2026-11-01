@@ -51,7 +51,7 @@ test("preview_report_marks_unmatched_selector", async ({ context, page }) => {
   // 完全隔離: 他の Experiment は動かない / Exposure なし / Cookie なし / decision 通信なし
   await expect(page.locator(".hero-title")).toHaveText("GA4を基礎から学ぶ");
   expect((await readDataLayer(page)).filter((e) => e.event === "ab_exposure")).toHaveLength(0);
-  expect((await context.cookies()).find((c) => c.name === "_ab_vid")).toBeUndefined();
+  expect((await context.cookies()).find((c) => c.name === "_wtt_vid")).toBeUndefined();
   expect(decisionCalls).toEqual([]);
   // CSS Change は preview でも注入される(見た目を本番と揃える)
   await expect(page.locator("style[data-ab-experiment='exp_preview'][data-ab-change='c_css']")).toHaveCount(1);
@@ -60,13 +60,13 @@ test("preview_report_marks_unmatched_selector", async ({ context, page }) => {
 test("preview は未知の実験を報告し、通常表示では null を返す", async ({ context, page }) => {
   await page.goto("/preview.html#__ab_preview=exp_nope:vB");
   expect(await report(page)).toEqual([{ experimentId: "exp_nope", variantId: "vB", changes: [], error: "unknown experiment or variant" }]);
-  expect((await context.cookies()).find((c) => c.name === "_ab_vid")).toBeUndefined();
+  expect((await context.cookies()).find((c) => c.name === "_wtt_vid")).toBeUndefined();
 
   // 通常表示: getPreviewReport は null、Exposure は出て Cookie も作られる(本番経路は無傷)
   await page.goto("/preview.html");
   expect(await report(page)).toBeNull();
   await expect.poll(async () => (await readDataLayer(page)).some((e) => e.event === "ab_exposure")).toBe(true);
-  await expect.poll(async () => (await context.cookies()).some((c) => c.name === "_ab_vid")).toBe(true);
+  await expect.poll(async () => (await context.cookies()).some((c) => c.name === "_wtt_vid")).toBe(true);
 });
 
 test("preview_empty_hash_stays_isolated", async ({ context, page }) => {
@@ -78,7 +78,7 @@ test("preview_empty_hash_stays_isolated", async ({ context, page }) => {
   await page.waitForLoadState("load");
   await page.waitForTimeout(500); // 通常経路なら Exposure と Cookie が出ているだけの時間を置く
   expect((await readDataLayer(page)).filter((e) => e.event === "ab_exposure")).toHaveLength(0);
-  expect((await context.cookies()).find((c) => c.name === "_ab_vid")).toBeUndefined();
+  expect((await context.cookies()).find((c) => c.name === "_wtt_vid")).toBeUndefined();
 });
 
 test("draft_bootstrap_injection_wins_over_installed_tag", async ({ context, page }) => {
@@ -98,7 +98,7 @@ test("draft_bootstrap_injection_wins_over_installed_tag", async ({ context, page
   // 隔離も維持: 公開中の exp_hero / exp_preview は動かず、Exposure も Cookie も出ない
   await expect(page.locator(".hero-title")).toHaveText("GA4を基礎から学ぶ");
   expect((await readDataLayer(page)).filter((e) => e.event === "ab_exposure")).toHaveLength(0);
-  expect((await context.cookies()).find((c) => c.name === "_ab_vid")).toBeUndefined();
+  expect((await context.cookies()).find((c) => c.name === "_wtt_vid")).toBeUndefined();
 
   // ページ読込(設置タグの実行)が終わった後も維持される = 二重起動が下書きを上書きしない
   await page.waitForLoadState("load");
@@ -141,5 +141,5 @@ test("draft_bootstrap_preserves_page_csp_nonce", async ({ context, page }) => {
 
   // 隔離は維持: 公開中の実験は動かず、Exposure も Cookie も出ない
   expect((await readDataLayer(page)).filter((e) => e.event === "ab_exposure")).toHaveLength(0);
-  expect((await context.cookies()).find((c) => c.name === "_ab_vid")).toBeUndefined();
+  expect((await context.cookies()).find((c) => c.name === "_wtt_vid")).toBeUndefined();
 });

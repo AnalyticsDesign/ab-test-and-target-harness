@@ -54,7 +54,7 @@ describe("public strings carry no private design references", () => {
   it("error_envelopes_with_hints", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);
-    const byoid = await call("PATCH", `/sites/${sid}`, { token, body: { idSource: "cookie:_ab_vid" } });
+    const byoid = await call("PATCH", `/sites/${sid}`, { token, body: { idSource: "cookie:_wtt_vid" } });
     expect(byoid.status).toBe(422);
     noPrivateRef("byoid_cookie_name_conflict", JSON.stringify(await json(byoid)));
     const modeB = await call("PATCH", `/sites/${sid}`, { token, body: { mode: "B", hosts: ["www.example.com"], idSource: "cookie:sid" } });

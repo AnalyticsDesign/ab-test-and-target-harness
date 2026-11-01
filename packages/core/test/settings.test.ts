@@ -12,9 +12,9 @@ describe("SiteSettings (spec §5.4 site-settings record)", () => {
     expect(s.idSource).toBe("ab");
     expect(s.allowedOrigins).toEqual([]);
     expect(s.hosts).toEqual([]);
-    expect(s.visitorCookieName).toBe("_ab_vid");
+    expect(s.visitorCookieName).toBe("_wtt_vid");
     expect(s.uuidCookieEnabled).toBe(false);
-    expect(s.uuidCookieName).toBe("_ab_uuid");
+    expect(s.uuidCookieName).toBe("_wtt_uuid");
     expect(s.previousCookieNames).toEqual([]);
     expect(s.decisionTimeoutMs).toBe(1000);
     expect(s.consentMode).toBe("implicit");
@@ -62,8 +62,8 @@ describe("SiteSettings (spec §5.4 site-settings record)", () => {
     });
     const r = toRuntimeSettings(s);
     expect(r).toEqual({
-      mode: "A", idSource: "ab", visitorCookieName: "_ab_vid",
-      uuidCookieEnabled: false, uuidCookieName: "_ab_uuid",
+      mode: "A", idSource: "ab", visitorCookieName: "_wtt_vid",
+      uuidCookieEnabled: false, uuidCookieName: "_wtt_uuid",
       previousCookieNames: ["_old"], decisionTimeoutMs: 1000, consentMode: "implicit",
       analytics: DEFAULT_ANALYTICS, forgetOnRevoke: true,
       edgeHosts: [], cookieDomains: [], previousCookieDomains: [], // B139: Mode A の edgeHosts は []
@@ -146,9 +146,9 @@ describe("idSource validation (decision 29)", () => {
     // spec §4.3(2026-09-01 決定): 参照先が正本と同名だと、フォールバックで自分が書いた匿名 ID を
     // 次の起動で BYOID として読み、同じ訪問者の ID が 22 文字 → 43 文字に変わる
     const base = { settingsVersion: 1, siteId: "site_x" };
-    expect(parseSiteSettings({ ...base, idSource: "cookie:_ab_vid" })).toBeNull();                              // 正本(既定名)
+    expect(parseSiteSettings({ ...base, idSource: "cookie:_wtt_vid" })).toBeNull();                              // 正本(既定名)
     expect(parseSiteSettings({ ...base, idSource: "cookie:my_vid", visitorCookieName: "my_vid" })).toBeNull();  // 正本(変更後の名前)
-    expect(parseSiteSettings({ ...base, idSource: "cookie:_ab_uuid", uuidCookieEnabled: false })).toBeNull();   // UUID 名(無効時も予約された名前として拒否)
+    expect(parseSiteSettings({ ...base, idSource: "cookie:_wtt_uuid", uuidCookieEnabled: false })).toBeNull();   // UUID 名(無効時も予約された名前として拒否)
     expect(parseSiteSettings({ ...base, idSource: "cookie:_old", previousCookieNames: [{ name: "_old", until: 1 }] })).toBeNull(); // 旧名(保持期限は見ない)
     expect(parseSiteSettings({ ...base, idSource: "cookie:_site_session" })).not.toBeNull();                    // 無関係な名前は通る
   });
@@ -230,7 +230,7 @@ describe("共有の設定(B139)", () => {
     expect(toRuntimeSettings(SiteSettingsSchema.parse({ ...base, mode: "A", hosts: ["a.example.com"] })).edgeHosts).toEqual([]);
   });
   it("byoid_cookie_name_must_differ_from_marker", () => {
-    expect(parseSiteSettings({ ...base, idSource: "cookie:_ab_vid_js" })).toBeNull();
+    expect(parseSiteSettings({ ...base, idSource: "cookie:_wtt_vid_js" })).toBeNull();
     expect(parseSiteSettings({ ...base, idSource: "cookie:my_vid_js", visitorCookieName: "my_vid" })).toBeNull();
     expect(parseSiteSettings({ ...base, idSource: "cookie:_ab_vid_js", visitorCookieName: "other" })).not.toBeNull();
   });
@@ -250,8 +250,8 @@ describe("共有の設定(B139)", () => {
     expect(parseSiteSettings({ ...base, visitorCookieName: "a", previousCookieNames: [{ name: "z", until: 1 }] })).not.toBeNull();
   });
   it("uuid_cookie_name_must_differ_from_marker", () => {
-    expect(parseSiteSettings({ ...base, uuidCookieName: markerCookieName("_ab_vid") })).toBeNull();
+    expect(parseSiteSettings({ ...base, uuidCookieName: markerCookieName("_wtt_vid") })).toBeNull();
     expect(parseSiteSettings({ ...base, previousCookieNames: [{ name: "_old", until: 1 }], uuidCookieName: markerCookieName("_old") })).toBeNull();
-    expect(parseSiteSettings({ ...base, uuidCookieName: "_ab_uuid" })).not.toBeNull();
+    expect(parseSiteSettings({ ...base, uuidCookieName: "_wtt_uuid" })).not.toBeNull();
   });
 });

@@ -338,6 +338,16 @@ describe("site-settings-refresh (plan12 K10)", () => {
     expect(await kvRaw(b.id)).not.toBeNull();
   });
 
+  it("writes the Cookie names stored in D1 to KV even when the new-site default differs (B174)", async () => {
+    const owner = await setupOwner();
+    const a = await createSite(owner.token, owner.workspaceId);
+    // B174 の前に作った既存サイト: D1 の行は旧い既定の名前。KV には新しい既定が残っている
+    await env.DB.prepare("update sites set visitor_cookie_name = '_ab_vid', uuid_cookie_name = '_ab_uuid' where id = ?").bind(a.id).run();
+    expect(await kvJson(a.id)).toMatchObject({ visitorCookieName: "_wtt_vid", uuidCookieName: "_wtt_uuid" });
+    await runCron(testEnv, T, [siteSettingsRefreshJob]);
+    expect(await kvJson(a.id)).toMatchObject({ visitorCookieName: "_ab_vid", uuidCookieName: "_ab_uuid" });
+  });
+
   it("repairs a stale value left by the residual patch race (CL-Medium-11)", async () => {
     const owner = await setupOwner();
     const a = await createSite(owner.token, owner.workspaceId);

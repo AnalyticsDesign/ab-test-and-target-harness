@@ -123,7 +123,7 @@ describe("static-deploy", () => {
       expect(await staticInputDigest({ ...base, settings: { ...settings, retentionDays: 30 } })).toBe(a);
     });
     it("bake と同じく parse する。既定値を明示した入力と省いた入力は同じ値", async () => {
-      const explicit = { ...settings, mode: "A", idSource: "ab", visitorCookieName: "_ab_vid" };
+      const explicit = { ...settings, mode: "A", idSource: "ab", visitorCookieName: "_wtt_vid" };
       expect(await staticInputDigest({ ...base, settings: explicit })).toBe(await staticInputDigest(base));
     });
     it("parse できない config か settings は例外にする(別のサイトの値と見分けがつかない digest を作らない)", async () => {

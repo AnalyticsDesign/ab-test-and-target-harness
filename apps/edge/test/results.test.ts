@@ -681,7 +681,7 @@ describe("goal-only conversions (B139 §5)", () => {
     const other = generateVisitorId();
     await seedParticipant(vid, RUN_A);
     await seedParticipant(other, RUN_B);
-    const res = await abEvent({ ...goalCv(["g_buy"]), visitorId: other }, `_ab_vid=${vid}`);
+    const res = await abEvent({ ...goalCv(["g_buy"]), visitorId: other }, `_wtt_vid=${vid}`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ result: "stored" });
     const cs = await cvRows();
@@ -692,13 +692,13 @@ describe("goal-only conversions (B139 §5)", () => {
   it("pageview_goal_recorded_by_edge_on_decision_request", async () => {
     const vid = generateVisitorId();
     await seedParticipant(vid, RUN_A);
-    const res = await abDecision("/thanks", `_ab_vid=${vid}`);
+    const res = await abDecision("/thanks", `_wtt_vid=${vid}`);
     expect(res.status).toBe(200);
     const out = (await res.json()) as Record<string, unknown>;
     expect(Object.keys(out).sort()).toEqual(["experiments", "v", "vh"]); // 記録の結果は載せない
     expect(await cvPairs()).toEqual(["a:g_thanks"]);
     // 目標に当たらないページでは記録しない
-    expect((await abDecision("/other", `_ab_vid=${vid}`)).status).toBe(200);
+    expect((await abDecision("/other", `_wtt_vid=${vid}`)).status).toBe(200);
     expect(await cvPairs()).toEqual(["a:g_thanks"]);
   });
 
@@ -706,7 +706,7 @@ describe("goal-only conversions (B139 §5)", () => {
     const vid = generateVisitorId();
     await seedParticipant(vid, RUN_A);
     let selects = 0;
-    expect((await abDecision("/thanks/done", `_ab_vid=${vid}`, { RESULTS_DB: lookupDb({ fail: false, onSelect: () => selects++ }) })).status).toBe(200);
+    expect((await abDecision("/thanks/done", `_wtt_vid=${vid}`, { RESULTS_DB: lookupDb({ fail: false, onSelect: () => selects++ }) })).status).toBe(200);
     expect(selects).toBe(1);
     expect(await cvPairs()).toEqual(["a:g_done", "a:g_thanks"]);
   });
@@ -714,7 +714,7 @@ describe("goal-only conversions (B139 §5)", () => {
   it("decision_response_unchanged_when_cv_collection_fails", async () => {
     const vid = generateVisitorId();
     await seedParticipant(vid, RUN_A);
-    const cookie = `_ab_vid=${vid}`;
+    const cookie = `_wtt_vid=${vid}`;
     const ok = await abDecision("/thanks", cookie);
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const broken = await abDecision("/thanks", cookie, { RESULTS_DB: lookupDb({ fail: true }) });
@@ -734,7 +734,7 @@ describe("goal-only conversions (B139 §5)", () => {
     const now = Date.now();
     const before = await healthNow(RUN_A, now);
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect((await abDecision("/thanks", `_ab_vid=${vid}`, { RESULTS_DB: lookupDb({ fail: true }) })).status).toBe(200);
+    expect((await abDecision("/thanks", `_wtt_vid=${vid}`, { RESULTS_DB: lookupDb({ fail: true }) })).status).toBe(200);
     spy.mockRestore();
     expect(await healthNow(RUN_A, now)).toBe(before + 1); // flushIfDue を waitUntil に登録している
   });
@@ -748,7 +748,7 @@ describe("goal-only conversions (B139 §5)", () => {
     const vid = generateVisitorId();
     await seedParticipant(vid, RUN_A);
     await seedParticipant(vid, RUN_B);
-    expect((await abDecision("/thanks", `_ab_vid=${vid}`, {}, 1)).status).toBe(200);
+    expect((await abDecision("/thanks", `_wtt_vid=${vid}`, {}, 1)).status).toBe(200);
     expect(await cvPairs()).toEqual(["b:g_thanks"]);
   });
 
@@ -758,9 +758,9 @@ describe("goal-only conversions (B139 §5)", () => {
     const vid = generateVisitorId();
     let selects = 0;
     const counting = { RESULTS_DB: lookupDb({ fail: false, onSelect: () => selects++ }) };
-    expect((await abDecision("/thanks", `_ab_vid=${vid}`, counting)).status).toBe(200);
-    expect((await abEvent({ type: "goal", goalId: "g_buy" }, `_ab_vid=${vid}`, counting)).status).toBe(204);
-    expect((await abEvent(goalCv(["g_buy"]), `_ab_vid=${vid}`, counting)).status).toBe(200);
+    expect((await abDecision("/thanks", `_wtt_vid=${vid}`, counting)).status).toBe(200);
+    expect((await abEvent({ type: "goal", goalId: "g_buy" }, `_wtt_vid=${vid}`, counting)).status).toBe(204);
+    expect((await abEvent(goalCv(["g_buy"]), `_wtt_vid=${vid}`, counting)).status).toBe(200);
     expect(selects).toBe(0);
   });
 
@@ -768,7 +768,7 @@ describe("goal-only conversions (B139 §5)", () => {
     const vid = generateVisitorId();
     await seedParticipant(vid, RUN_A);
     // Cloudflare 経由のドメイン(/__ab/event)
-    expect((await abEvent({ type: "goal", goalId: "g_buy" }, `_ab_vid=${vid}`)).status).toBe(204);
+    expect((await abEvent({ type: "goal", goalId: "g_buy" }, `_wtt_vid=${vid}`)).status).toBe(204);
     expect(await goalCount(vid, "g_buy")).toBe(1);
     expect(await cvPairs()).toEqual(["a:g_buy"]);
     // Mode A / Cloudflare 外のドメイン(/v1/)
@@ -783,7 +783,7 @@ describe("goal-only conversions (B139 §5)", () => {
     const vid = generateVisitorId();
     await seedParticipant(vid, RUN_A);
     let selects = 0;
-    expect((await abEvent({ type: "goal", goalId: "g_thanks" }, `_ab_vid=${vid}`, { RESULTS_DB: lookupDb({ fail: false, onSelect: () => selects++ }) })).status).toBe(204);
+    expect((await abEvent({ type: "goal", goalId: "g_thanks" }, `_wtt_vid=${vid}`, { RESULTS_DB: lookupDb({ fail: false, onSelect: () => selects++ }) })).status).toBe(204);
     expect(selects).toBe(0); // D1 を引かない
     expect(await goalCount(vid, "g_thanks")).toBe(1); // 履歴は今のとおり記録する
     expect(await cvRows()).toEqual([]);
@@ -797,7 +797,7 @@ describe("goal-only conversions (B139 §5)", () => {
     await seedParticipant(vid, RUN_A);
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await v1Event({ type: "goal", goalId: "g_buy", visitorId: vid }, { RESULTS_DB: lookupDb({ fail: true }) });
-    const resAb = await abEvent({ type: "goal", goalId: "g_buy" }, `_ab_vid=${vid}`, { RESULTS_DB: failingDb("D1_ERROR: network connection lost") });
+    const resAb = await abEvent({ type: "goal", goalId: "g_buy" }, `_wtt_vid=${vid}`, { RESULTS_DB: failingDb("D1_ERROR: network connection lost") });
     spy.mockRestore();
     expect(res.status).toBe(204);
     expect(await res.text()).toBe("");

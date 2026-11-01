@@ -31,7 +31,7 @@ describe("bakeBootstrap", () => {
     // spec §5.4: runtime 向けサブセットだけ焼く(hosts / allowedOrigins / siteId は含めない)
     expect(boot.settings.hosts).toBeUndefined();
     expect(boot.settings.allowedOrigins).toBeUndefined();
-    expect(boot.settings.visitorCookieName).toBe("_ab_vid");
+    expect(boot.settings.visitorCookieName).toBe("_wtt_vid");
   });
   it("bake_is_pure_and_does_not_touch_storage", () => {
     const settings = parseSiteSettings({ settingsVersion: 1, siteId: "site_b" })!;

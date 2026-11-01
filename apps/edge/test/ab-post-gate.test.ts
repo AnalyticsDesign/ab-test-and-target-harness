@@ -82,7 +82,7 @@ describe("POST /__ab/* gate (B158, G05)", () => {
     const vid = generateVisitorId();
     await seedRows(vid);
     const { touched, envOverride } = spies();
-    const res = await send("/__ab/decision", { kind: "consent", value: "denied" }, { contentType: "text/plain", cookie: `_ab_vid=${vid}`, envOverride });
+    const res = await send("/__ab/decision", { kind: "consent", value: "denied" }, { contentType: "text/plain", cookie: `_wtt_vid=${vid}`, envOverride });
     expect(res.status).toBe(415);
     expect(res.headers.getSetCookie()).toEqual([]);
     expect(await count("participants")).toBe(1);
@@ -93,7 +93,7 @@ describe("POST /__ab/* gate (B158, G05)", () => {
   it("text/plain event is rejected with 415 without touching DO or results", async () => {
     const vid = generateVisitorId();
     const { touched, envOverride } = spies();
-    const res = await send("/__ab/event", { type: "participant", v: 1, runId: RUN, variantId: "vA", device: "mobile", applied: "ok" }, { contentType: "text/plain", cookie: `_ab_vid=${vid}`, envOverride });
+    const res = await send("/__ab/event", { type: "participant", v: 1, runId: RUN, variantId: "vA", device: "mobile", applied: "ok" }, { contentType: "text/plain", cookie: `_wtt_vid=${vid}`, envOverride });
     expect(res.status).toBe(415);
     expect(res.headers.getSetCookie()).toEqual([]);
     expect(touched.do).toBe(0);
@@ -115,11 +115,11 @@ describe("POST /__ab/* gate (B158, G05)", () => {
     const vid = generateVisitorId();
     await seedRows(vid);
     const { touched, envOverride } = spies();
-    const rev = await send("/__ab/decision", { kind: "consent", value: "denied" }, { fetchSite: site, cookie: `_ab_vid=${vid}`, envOverride });
+    const rev = await send("/__ab/decision", { kind: "consent", value: "denied" }, { fetchSite: site, cookie: `_wtt_vid=${vid}`, envOverride });
     expect(rev.status).toBe(403);
     expect(rev.headers.getSetCookie()).toEqual([]);
     expect(await count("participants")).toBe(1);
-    const ev = await send("/__ab/event", { type: "goal", goalId: "g_buy" }, { fetchSite: site, cookie: `_ab_vid=${vid}`, envOverride });
+    const ev = await send("/__ab/event", { type: "goal", goalId: "g_buy" }, { fetchSite: site, cookie: `_wtt_vid=${vid}`, envOverride });
     expect(ev.status).toBe(403);
     expect(touched.kv).toBe(0);
     expect(touched.do).toBe(0);
@@ -128,13 +128,13 @@ describe("POST /__ab/* gate (B158, G05)", () => {
   it("application/json from the same origin keeps working", async () => {
     const res = await send("/__ab/decision", decisionBody(), { fetchSite: "same-origin" });
     expect(res.status).toBe(200);
-    expect(res.headers.getSetCookie().some((c) => c.startsWith("_ab_vid="))).toBe(true);
+    expect(res.headers.getSetCookie().some((c) => c.startsWith("_wtt_vid="))).toBe(true);
     const vid = generateVisitorId();
     await seedRows(vid);
-    const rev = await send("/__ab/decision", { kind: "consent", value: "denied" }, { fetchSite: "same-origin", cookie: `_ab_vid=${vid}` });
+    const rev = await send("/__ab/decision", { kind: "consent", value: "denied" }, { fetchSite: "same-origin", cookie: `_wtt_vid=${vid}` });
     expect(rev.status).toBe(204);
     expect(await count("participants")).toBe(0);
-    const ev = await send("/__ab/event", { type: "participant", v: 1, runId: RUN, variantId: "vA", device: "mobile", applied: "ok" }, { fetchSite: "same-origin", cookie: `_ab_vid=${vid}` });
+    const ev = await send("/__ab/event", { type: "participant", v: 1, runId: RUN, variantId: "vA", device: "mobile", applied: "ok" }, { fetchSite: "same-origin", cookie: `_wtt_vid=${vid}` });
     expect(ev.status).toBe(200);
   });
 

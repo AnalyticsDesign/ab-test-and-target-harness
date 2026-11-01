@@ -31,7 +31,7 @@ export function freshVisitor(experimentId: string, half: "A" | "B"): string {
 }
 
 /**
- * 既存 Cookie を事前設定して割当を決定論にする(runtime / edge は canonical な既存値を必ず再利用する)。name は Site の visitorCookieName(既定 _ab_vid)。
+ * 既存 Cookie を事前設定して割当を決定論にする(runtime / edge は canonical な既存値を必ず再利用する)。name は Site の visitorCookieName(既定 _wtt_vid)。
  * domain は Cookie を付けるホスト名(既定 localhost。B139 の https の入口では www.example.test などを渡す。https のときは Secure も付ける)
  */
 export async function presetVisitor(
@@ -40,7 +40,7 @@ export async function presetVisitor(
   opts: { httpOnly?: boolean; name?: string; domain?: string } = {},
 ): Promise<void> {
   const domain = opts.domain ?? "localhost";
-  await context.addCookies([{ name: opts.name ?? "_ab_vid", value: id, domain, path: "/", httpOnly: opts.httpOnly ?? false, secure: domain !== "localhost" }]);
+  await context.addCookies([{ name: opts.name ?? "_wtt_vid", value: id, domain, path: "/", httpOnly: opts.httpOnly ?? false, secure: domain !== "localhost" }]);
 }
 
 export async function readDataLayer(page: import("@playwright/test").Page): Promise<Array<Record<string, unknown>>> {
