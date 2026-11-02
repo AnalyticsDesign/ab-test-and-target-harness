@@ -1813,6 +1813,8 @@ pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --json --comm
 
 **`plan: paid` のとき**(【人が行う】。スモークのついでに): 管理画面の左メニューの下の「設定」→「Cloudflare 使用状況」で、プランを Workers Paid にする。使用状況の比べ方が、Free の 1 日の上限から、月の含まれる量の目安に変わる。
 
+**新しい版の知らせ**(【人が行う】): 導入が終わったら、[6.0](#60-新しい版に気づく) のとおり、新しい版の公開を受け取れるようにしておく。自動更新は無く、脆弱性を直した版も知らせを受けないと気づけない。
+
 ### 5.1 エージェント向けの設定(推奨・任意)
 
 導入が終わったら、続けて AI エージェントから control を操作できるようにしておく。方式は REST + API キーで、詳しくは[エージェント向けガイド](agent-guide.md)にある。人に次の 1 問で聞く。答えは 3 の有効期限で使う:
@@ -1845,9 +1847,18 @@ curl -sS "$AB_CONTROL_URL/me" -H "Authorization: Bearer $AB_API_KEY" | jq '{emai
 
 ## 6. 更新(リリースタグ単位)
 
-更新は `git pull` ではなく **tag から tag へ** 行う。流れ: 6.1 現在と目標の確認 → 6.2 取得 → 6.3 凍結を入れてデプロイ → 6.4 確認して凍結を外す。戻すときは 6.5。
+更新は `git pull` ではなく **tag から tag へ** 行う。流れ: 6.0 新しい版に気づく → 6.1 現在と目標の確認 → 6.2 取得 → 6.3 凍結を入れてデプロイ → 6.4 確認して凍結を外す。戻すときは 6.5。
 
 **edge → deployer → control → admin の順にデプロイする。** 理由: core の共有スキーマ(`SiteSettingsSchema` / `CompiledConfigSchema`)は `z.strictObject` で未知フィールドを拒否するため、逆順にすると古い edge が新しい形式の record を parse できず、当該サイトの decision / event が 404(fail-closed)になる。deployer も同じスキーマで検証してから設置タグのファイルを作るので、control より先に更新する。control は edge の Durable Object(`ResultsBudget`・`ResultsHealth`)を参照するので、この点でも edge が先になる。
+
+### 6.0 新しい版に気づく
+
+自動更新の仕組みは無く、新しい版が出ても導入先には何も届かない。導入が終わったら、次のどちらかで新しい版の公開を受け取れるようにしておく(【人が行う】)。
+
+- **GitHub の通知**: 公開リポジトリ(https://github.com/AnalyticsDesign/ab-test-and-target-harness)の画面の右上の **Watch** → **Custom** で **Releases** にチェックを入れ、**Apply** を押す(GitHub の画面は英語の表示だけを書いている)。新しい版の Release が出るたびに、GitHub の通知(設定によってはメール)が届く
+- **フィード**: GitHub のアカウントを使わない場合や、社内のチャットに流したい場合は、Releases のフィード `https://github.com/AnalyticsDesign/ab-test-and-target-harness/releases.atom` を RSS リーダーやチャットの RSS 連携に登録する
+
+届いたら、Release の本文(`CHANGELOG.md` のその版の節と同じ)を読む。版の節の先頭に **「セキュリティの修正」** の項がある版は、脆弱性を直した版で、深刻度・影響する版・更新しない場合の緩和策が書いてある。影響する版を使っているなら、ほかの版より先に、早めに入れ替える。修正は最新のリリースに対して出すので、古い版向けの修正版は無い。
 
 ### 6.1 現在と目標の確認
 
