@@ -76,6 +76,24 @@ export function replaceAnswer(text, key, value, note) {
   return { text: join(lines), written: [line] };
 }
 
+/**
+ * 有効な行(`key: …`)の値を書き換え、行末の説明のコメントは残す(--resolve-zone で dlite_hosts を導き直すときに使う)。
+ * 有効な行が無いか、値が同じなら何もしない
+ */
+export function overwriteKey(text, key, value) {
+  const { lines, join } = splitLines(text);
+  const re = new RegExp(`^${escapeRe(key)}:(.*)$`);
+  const i = lines.findIndex((l) => re.test(l));
+  if (i < 0) return { text, written: [] };
+  const rest = re.exec(lines[i])[1];
+  const line = `${key}: ${formatValue(value)}`;
+  const current = valueOf(rest);
+  if (current !== undefined && formatValue(current) === formatValue(value)) return { text, written: [] };
+  const note = noteOf(rest);
+  lines[i] = note ? `${line}   ${note}` : line;
+  return { text: join(lines), written: [line] };
+}
+
 /** zone_name: auto → ゾーン名、asset_public_base: auto → https://wtt-assets.<ゾーン名>。auto が無ければ何もしない */
 export function resolveZone(text, zone) {
   const { lines, join } = splitLines(text);

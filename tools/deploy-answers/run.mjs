@@ -1,15 +1,44 @@
 // 入口の処理(cli.mjs から呼ぶ純粋関数)。終了コード 0 = 提示・要約・書き込み / 1 = 書式や引数の誤り / 2 = 聞き直す問い・断り
 import { parseAnswers } from "./parse.mjs";
-import { checkAnswers, checkConfigured, isConfigured, isBlank, hostInZone, hostProblem, ACCEPT_VALUES } from "./questions.mjs";
-import { recommend, LIGHTEST, configOf, accountChangeOf } from "./judge.mjs";
+import { checkAnswers, checkConfigured, isConfigured, isBlank, hostInZone, hostProblem, extraHostsOf, dliteOutsideZone, ACCEPT_VALUES } from "./questions.mjs";
+import { recommend, dliteHostsFor, LIGHTEST, configOf, accountChangeOf } from "./judge.mjs";
 import { renderProposals, renderConfigured, renderIssues, renderParseErrors, renderWritten, renderAccountChange } from "./render.mjs";
-import { writeKeys, resolveZone, replaceAnswer } from "./yaml-edit.mjs";
+import { writeKeys, resolveZone, replaceAnswer, overwriteKey } from "./yaml-edit.mjs";
 
 const ORDER = ["edge_address", "zone_name", "asset_public_base", "dlite_hosts", "plan"];
 const CHANGE_NOTE = {
   paid: "元の答え: existing。Workers Paid のため、ドメインなしの構成は新しく作る Free のアカウントに入れる",
   other_workers: "元の答え: existing。止まると困る Worker が無いと確かめられないため、新しく作るアカウントに入れる",
 };
+
+/**
+ * --resolve-zone でゾーンが決まった後の dlite_hosts(B138 (d))。route の構成だけを見る。
+ * 推奨構成のまま(recommend が近似のゾーンで導いた値と同じ)なら、決まったゾーンで導き直して書き換える。
+ * 手で書いた値は書き換えず、ゾーンの外のホストがあれば報告して止める(終了コード 2)。
+ * ゾーンの外の extra_hosts(E2d)は止めずに、Cloudflare 外のドメインとして動くことを知らせる
+ * @returns {{ code: 0, text: string, written: string[], notes: string } | { code: 2, output: string }}
+ */
+function resolveDliteHosts(text, values, zone) {
+  const none = { code: 0, text, written: [], notes: "" };
+  if ((values.edge_address ?? "route") !== "route") return none;
+  const raw = values.dlite_hosts;
+  const current = Array.isArray(raw) ? raw : isBlank(raw) ? [] : [raw];
+  const derived = values.accepted === "recommended" && current.join(",") === recommend(values).dlite_hosts.join(",");
+  let dl = current;
+  let w = { text, written: [] };
+  if (derived) {
+    dl = dliteHostsFor(values, zone);
+    w = overwriteKey(text, "dlite_hosts", dl);
+  } else {
+    const outside = current.find((h) => typeof h !== "string" || !hostInZone(h, zone));
+    if (outside !== undefined) return { code: 2, output: `${dliteOutsideZone(outside, zone)}\n` };
+  }
+  const outsideExtra = dl.length ? extraHostsOf(values).filter((h) => !dl.includes(h)) : [];
+  const notes = outsideExtra.length
+    ? ["", "## ゾーンの外のホスト", "", ...outsideExtra.map((h) => `- ${h} はゾーン ${zone} の外。Cloudflare 外のドメインとして動く(Route は作らない。サイト設定の「タグを置くドメイン」には入れる。Safari での ID の持ちは Mode A と同じ)`), ""].join("\n")
+    : "";
+  return { code: 0, text: w.text, written: w.written, notes };
+}
 
 /**
  * @param {string} text deploy-answers.yaml の中身
@@ -35,8 +64,10 @@ export function run(text, opts = {}) {
     const host = values[hostKey];
     if (typeof host !== "string" || !hostInZone(host, zone))
       return { code: 2, output: `${hostKey}(${host ?? "未記入"})はゾーン ${zone} に属していない。ゾーンを選び直すか、${askAgain} を聞き直す\n` };
-    const r = resolveZone(text, zone);
-    return { code: 0, output: renderWritten(r.written), text: r.text };
+    const d = resolveDliteHosts(text, values, zone);
+    if (d.code) return d;
+    const r = resolveZone(d.text, zone);
+    return { code: 0, output: renderWritten([...r.written, ...d.written]) + d.notes, text: r.text };
   }
 
   if (isConfigured(values)) {

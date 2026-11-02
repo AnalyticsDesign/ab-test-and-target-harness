@@ -476,7 +476,7 @@ AI エージェントに任せる場合、構成は 0.2 の質問と検査スク
 
 - `zone_name: auto` と `asset_public_base: auto` は、0.4 の[ログインの後の確認](#ログインの後の確認)で確定する
 - 未検証と注記された値(`control_protection` の `waf` / `access`)が書かれていたら、進める前に人に確認する
-- ページのホスト(サイトの「タグを置くドメイン」)は入力ファイルには書かず、5 節でサイトを作るときに管理画面で入力する
+- ページのホスト(サイトの「タグを置くドメイン」)は、5 節でサイトを作るときと作った後に管理画面で入力する。入力ファイルの `install_host` と `extra_hosts`(上段の E2d の答え)を、そのまま入れる
 - `dlite_hosts` があるときは、5 節でサイトを作るときに `導入の形` を `B: サーバー発行 Cookie` にする
 
 確認:
@@ -498,12 +498,13 @@ node tools/deploy-answers/cli.mjs; echo "exit=$?"   # 期待: exit=0、「## 指
 | `control_protection` | 7 節 |
 | `edge_waf_rate_limit` / `edge_waf_requests_per_10s` | 2.3(Rate Limiting binding)、2.7 |
 | `admin_address` / `admin_host` | 0.5 の 2(`custom` ならゾーンの設定用トークンを作り、`admin_host` のゾーンを含める)、3.4 `AB_ADMIN_URL`、4.2 |
-| `dlite_hosts` | 2.3 の `/__ab/*` Route |
+| `extra_hosts` | 5 節のサイトの作成の後に、サイト設定の「タグを置くドメイン」に足す。`--accept recommended` で Safari 対策ありなら、ゾーンの中のホストは `dlite_hosts` にも入る |
+| `dlite_hosts` | 2.3 の `/__ab/*` Route。後から足すときは 6.7 |
 | `owner_email` / `workspace_name` | 5 節の初回セットアップ(`POST /setup`)。`owner_email` はログインに使う Google アカウントと同じメールアドレス。`workspace_name` は質問の表に無く、0.5 の人への依頼で一緒に聞いて書く |
 | `usage_visibility` | 5 節の初回セットアップ(`POST /setup` の `usageVisibility`)。使用状況を見られる人(`members` / `instance_admins`)。省略 = `members` |
 | `plan` | 0.5(`paid` で、アカウントがまだ Free なら切り替えを依頼)、5 節(管理画面の使用状況のプラン) |
 | `results_db_name` | 2.2(計測用のデータベースの名前)、3.4 `AB_USAGE_RESOURCES`。既定 `wtt-results` のまま使う。ほかのリソースの名前と同じく固定で、手順とスクリプト(`results:migrate:remote`)はこの名前で書いてある。入力ファイルに書かれていなくても作る |
-| 上段の答え(`features` など)・`accepted` | 検査スクリプトが読む。以下の手順が上段から読むのは `cloudflare_account`(0.4 のアカウントを作る・ログインの後の確認)と `install_host`・`edge_host`・`owner_email` だけ |
+| 上段の答え(`features` など)・`accepted` | 検査スクリプトが読む。以下の手順が上段から読むのは `cloudflare_account`(0.4 のアカウントを作る・ログインの後の確認)と `install_host`・`extra_hosts`・`edge_host`・`owner_email` だけ |
 
 ### 0.3 本体の取得とバージョン
 
@@ -1079,6 +1080,8 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 
 `<設置ホスト>` = `install_host`、`<ゾーン名>` = `zone_name`。`dlite_hosts` に書いたホストごとに `{ "pattern": "<host>/__ab/*", "zone_name": "<ゾーン名>" }` を足す。
 
+`dlite_hosts` のホストが多いときは、ホストごとの行の代わりに、ワイルドカードの `{ "pattern": "*.<ゾーン名>/__ab/*", "zone_name": "<ゾーン名>" }` 1 行に手でまとめてもよい。この形はゾーン名そのもの(`www` などを付けないホスト。例 `example.com`)を含まない(Cloudflare の資料のとおり)。ゾーン名そのもののページにもタグを置くなら、`{ "pattern": "<ゾーン名>/__ab/*", "zone_name": "<ゾーン名>" }` を別に足す。まとめても、サイト設定の「タグを置くドメイン」にはホストを 1 つずつ書く(ワイルドカードは書けない)。後から Mode B のホストを足す手順は [6.7](#67-mode-b-のホストを後から足す)。
+
 パスごとの意味:
 
 - `/v1/*`(必須): decision / event。履歴条件または `persistAssignment` を使うサイト(`needsProfile`)、または結果を記録するサイトで使う。目標は `needsProfile` のサイトでだけ `/event` にも送られる(目標だけでは `needsProfile` にならず、`ab_conversion` は `dataLayer` にのみ出る)。結果を記録するサイトでは、テストの参加と目標の達成を `needsProfile` に関係なく `/event` に送る。設置タグのファイルに edge の宛先(control の `AB_EDGE_ORIGIN`)が書き込まれるので、runtime はそこへ送る
@@ -1253,7 +1256,7 @@ curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/http_r
   - 作らないを選んだら、`deploy-answers.yaml` の `edge_waf_rate_limit` を `false` にする(後の更新で WAF の有無を決めるのがこのキーなので、6.2)。あわせて `apps/edge/wrangler.jsonc` の `limit` を 2.3 の WAF が無い構成の値(`edge_waf_requests_per_10s`)に書き直し、edge を deploy し直す。2.3 では WAF がある構成の値(1000)を書いているため
   - OR で足すなら、しきい値はその既存ルールの回数になる。binding はその回数と 2.3 の規則で比べる。足すのは、**【人に依頼】** ダッシュボードでそのルールを開いて式を書き換えてもらう(下の PUT はレート制限ルールを丸ごと置き換えるので、既存のルールが消える)
 - 式に `/v1/sites/` が既にあり、`/__ab/` も含まれる → 作らずに終わる(再実行時)
-- 式に `/v1/sites/` はあるが `/__ab/` が無い → Mode B のサイトを置かない(入力ファイルの `dlite_hosts` が空)なら、作らずに終わる。Mode B のサイトを置くなら、`/__ab/*` がこのルールの外に残るので、**【人に依頼】** ダッシュボードでそのルールを開き、式に OR で `(starts_with(http.request.uri.path, "/__ab/"))` を足してもらう(下の PUT はレート制限ルールを丸ごと置き換えるので使わない)。足した後に上の GET で式を読み直し、`/__ab/` が入ったことを確かめる。後から `dlite_hosts` を足すときも、この確認をやり直す
+- 式に `/v1/sites/` はあるが `/__ab/` が無い → Mode B のサイトを置かない(入力ファイルの `dlite_hosts` が空)なら、作らずに終わる。Mode B のサイトを置くなら、`/__ab/*` がこのルールの外に残るので、**【人に依頼】** ダッシュボードでそのルールを開き、式に OR で `(starts_with(http.request.uri.path, "/__ab/"))` を足してもらう(下の PUT はレート制限ルールを丸ごと置き換えるので使わない)。足した後に上の GET で式を読み直し、`/__ab/` が入ったことを確かめる。式はパスだけで書くので、ゾーンの中のホストを後から足しても、そのホストの `/__ab/*` もこのルールに入る。後から Mode B のホストを足すとき([6.7](#67-mode-b-のホストを後から足す))は、式に `/__ab/` が入っていることだけを確かめ直す(それまで Mode B のホストが無かった導入では、ここで初めて足すことになる)
 - 上の 2 つのどちらでも、式に `/setup` も含まれる(7.2 で control のパスを足して 1 本にした Free のルール)なら、回数を変えるときも下の PUT を使わない。PUT で置き換えると control のパスが消える。**【人に依頼】** ダッシュボードでそのルールを開いて回数を変えてもらう
 
 ```bash
@@ -1754,6 +1757,8 @@ curl -sS "<control URL>/login-options"   # 期待: {"google":true,"passwordLogin
 
 **サイトを作る**: 管理画面でワークスペースの配下にサイトを作る。ワークスペースはセットアップで 1 つ作られている。作成画面の項目は[サイト導入ガイド 2 節](site-install.md#2-サイトを作る)を参照。サイト ID とパターン ID は作成後に変更できない。
 
+入力ファイルに `extra_hosts`(タグを置くページのほかのホスト)があるときは、Mode A でも Mode B でも、サイトを作った後に、左メニューの下の「設定」→「サイト設定」の「ドメイン」の節の「タグを置くドメイン」に、`extra_hosts` のホストをすべて足して保存する(作成の画面で入れられるのは 1 つ目だけのため)。ゾーンの中のホストも外のホストも足す。Mode B では、`dlite_hosts` に入っている(Route を作った)ホストの札が `Cloudflare 経由(edge が応答しました)` になる。ゾーンの外のホストの札が `Cloudflare 外(edge が応答しません)` になるのは期待どおりで、誤りではない。そのホストは Cloudflare 外のドメインとして、Mode A と同じ動きで動く(テストと目標は動き、Safari では ID が弱い)
+
 `dlite_hosts` があるときは、サイトを作るときに次のとおりにする([サイト導入ガイド 8 節](site-install.md#mode-bサーバー発行-cookie)):
 
 - `タグを置くドメイン(1 つ目)` に `install_host` を入れる(`install_host` が `dlite_hosts` に無いときは、`dlite_hosts` のホストを入れる)
@@ -1763,7 +1768,7 @@ curl -sS "<control URL>/login-options"   # 期待: {"google":true,"passwordLogin
 
 期待と違うとき:
 
-- 札が `Cloudflare 外(edge が応答しません)` → そのホストに `/__ab/*` の Route が無いか、まだ edge に届いていない(2.3)。Route を足してから、ドメインの節でもう一度保存すると確かめ直す
+- `dlite_hosts` のホストの札が `Cloudflare 外(edge が応答しません)` → そのホストに `/__ab/*` の Route が無いか、まだ edge に届いていない(2.3)。Route を足してから、ドメインの節でもう一度保存すると確かめ直す
 - 札が `確かめられませんでした` → 確認の要求が 403・429・5xx を受けたか、時間切れになった。そのドメインは前回の判定のまま(初めてなら Cloudflare 外として動く)。サイトのゾーンの WAF(2.7 のレート制限ルールや、ほかの遮断のルール)が、control からの確認の要求を止めていることがある。2.7 の「遮断を見る」と同じ、ゾーンの Security(セキュリティ)→ Analytics → Events のタブ(Analytics・Events の日本語の表示は未確認)で、`/__ab/ping` への要求が止められていないかを見る。止められていたら、その要求を止めないようにルールを直してから、もう一度保存する
 
 **スモーク**(**【人が行う】** 管理画面の操作): サイトを作る → エクスペリエンスを作る → 開始(成功すると自動で公開される)→ 下の確認 → 終了。エージェントは確認コマンドを用意する。
@@ -2128,6 +2133,33 @@ curl -sS -X POST "<control URL>/workspaces" | jq -r '.error'   # 期待: "unauth
   - 状態を見るコマンドが、表 `instance_settings` が無いという内容のエラーになる → データベースの更新を当てる前に control を deploy している。6.3 の手順 2(`pnpm -C apps/control d1:migrate:remote`)を実行すれば直る。手順 2 より前に手順 3 を実行すると、その間の書き込みはすべて `503 write_frozen` になる
   - 表があり、行が無いのに断られる → D1 の障害を疑い、Cloudflare のダッシュボードで D1 の状態とエラーを確かめる
   - 行があって値が読めない(バナーが「凍結の設定が読めません」)→ 6.6 の「入れる」で値を書き直すか、「外す」で外す
+
+### 6.7 Mode B のホストを後から足す
+
+導入の後に、Mode B(サーバー発行 Cookie)で使うページのホストを増やすときの手順。例: `www.example.com` に加えて、申し込みフォームの `form.example.com` でも Safari 対策を使いたい。版の更新ではないので、6.1〜6.4 は行わない。
+
+Route を置けるのは、導入のゾーン(`zone_name`)の中のホストだけ。ゾーンの外のホストは、手順 4 で「タグを置くドメイン」に足すだけにする。そのホストは Cloudflare 外のドメインとして、Mode A と同じ動きで動く(テストと目標は動き、Safari では ID が弱い)。
+
+1. **入力ファイルの `dlite_hosts` にホストを足し、ゾーンの中かを確かめる。** `deploy-answers.yaml` があれば、`dlite_hosts` の配列にホストを足して `node tools/deploy-answers/cli.mjs; echo "exit=$?"` を実行する。ゾーンの外のホストなら「ゾーン … に属していない」と出るので、`dlite_hosts` から外す(手順 4 の「タグを置くドメイン」には足す)。入力ファイルが無ければ、ホストがゾーン名そのものか、`.<ゾーン名>` で終わることを目で確かめる。あわせて、そのホストが Cloudflare のプロキシを経由していることを確かめる(経由していないと Route が動かない):
+
+   ```bash
+   curl -sI "https://<足すホスト>/" | grep -i '^server:'   # 期待: server: cloudflare
+   ```
+
+2. **2.7 の WAF のルールの式を確かめる。** 式に `/__ab/` が入っていれば、足すホストもルールに入る(式はパスだけで書くため)。入っていなければ、[2.7](#27-waf-rate-limiting-rule推奨) の「期待と違うとき」の `/__ab/` を足す手順を行う(人に依頼する手順なので、待つことがある)。Route より先に行う。Route を置いてから待つと、その間 Route があるのにどのサイトも持っていないホストができる(この節の最後の段落)。
+
+3. **edge の `apps/edge/wrangler.jsonc` に Route を足して、edge を deploy する。** `routes` に `{ "pattern": "<足すホスト>/__ab/*", "zone_name": "<ゾーン名>" }` を足す(ワイルドカードでまとめる書き方は [2.3](#23-route-を書く))。Route はダッシュボードだけで足さない。ダッシュボードで足した Route は、次の `wrangler deploy`(更新のときの edge の deploy を含む)で設定ファイルの内容に置き換わり、消える(Cloudflare の資料のとおり)。設定ファイルに書いておけば、更新のときも 6.2 の退避で残る。deploy は、今動いている版の tag を checkout したまま行う(`git describe --tags --exact-match` が今の版を返すこと。ここで版を変えない)。導入とは別の会話や端末で行うときは、先に 6.1 の先頭のとおり導入先のアカウントを固定し、`pnpm install` を済ませておく:
+
+   ```bash
+   pnpm -C apps/edge exec wrangler deploy
+   ```
+
+   確認: 出力の triggers に `<足すホスト>/__ab/*` が出る。
+
+4. **管理画面でホストを足して保存する。** 左メニューの下の「設定」→「サイト設定」の「ドメイン」の節で、「タグを置くドメイン」にホストを足して保存する。保存のとき、control が一覧のドメインごとに edge が応答するかを確かめる。
+5. **札を確かめる。** 足したホストの行の札が `Cloudflare 経由(edge が応答しました)` になれば終わり。`Cloudflare 外(edge が応答しません)` や `確かめられませんでした` のときは、5 節の「サイトを作る」の「期待と違うとき」を見る。Route を直した後は、もう一度保存すると確かめ直す。
+
+タグを置くドメインが Cloudflare 経由かの確認は、同じ導入のどのサイトの管理者でも、そのホストを自分のサイトの一覧に足して保存すれば行える。そのホストを本当に管理している人かどうかは確かめない。そのため、導入の後に Route を足すときは、そのホストを使うサイトを管理画面で作り終えてから Route を置き(手順 3)、置いたらすぐに手順 4・5 を行う。Route があり、どのサイトの一覧にも Cloudflare 経由として入っていないホストは、ほかのサイトの管理者が先に自分のサイトの一覧に足して、Cloudflare 経由として持ててしまう(一度どれかのサイトが持つと、ほかのサイトの保存は 409 `host_in_use` になる)。最初の導入で 2.3 の Route を 5 節のサイトの作成より先に置くのは、この順で問題ない。その時点では、ほかのサイトの管理者がまだいないため。
 
 ## 7. 無認証入口の防御
 

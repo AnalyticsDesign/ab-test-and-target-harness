@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { recommend, LIGHTEST, configOf, sameConfig, exceedsFree, summaryOf, placementOf, reasonsOf, cannotOf, tasksOf, billingOf, notesOf, accountChangeOf, answersFor, hostOfConfig, FLOOD } from "../judge.mjs";
+import { recommend, dliteHostsFor, LIGHTEST, configOf, sameConfig, exceedsFree, summaryOf, placementOf, reasonsOf, cannotOf, tasksOf, billingOf, notesOf, accountChangeOf, answersFor, hostOfConfig, FLOOD } from "../judge.mjs";
 import { renderProposals } from "../render.mjs";
 
 const base = { features: ["ab"], daily_pv: "under_10k", image_upload: false, cloudflare_account: "none", site_on_cloudflare: "no_site", owner_email: "a@example.com" };
@@ -272,4 +272,37 @@ test("custom-domain の文: 要約・置き場所・理由・人に頼む作業�
   assert.ok(!cannotOf(vo, recommend(vo)).some((x) => x.includes(FLOOD)));
   assert.ok(!has(cannotOf(vu, ru), /WAF/));
   assert.ok(!has(billingOf(recommend(vo)), /悪意のある人/));
+});
+
+// B138: タグを置くほかのホスト(extra_hosts)のうち、ゾーンの中のものに Mode B の Route を作る
+test("dlite_hosts takes extra hosts in the zone when itp", () => {
+  const v = { ...base, ...zone, features: ["itp"], extra_hosts: ["form.example.com", "shop.example.net"] };
+  const r = recommend(v);
+  assert.deepEqual(r.dlite_hosts, ["www.example.com", "form.example.com"]);
+  assert.equal(r.zone_name, "auto");
+  // ゾーンの外のホストは Cloudflare 外のドメインとして動くことを理由の行に出す
+  const reasons = reasonsOf(v, r);
+  assert.ok(has(reasons, /shop\.example\.net は Cloudflare 外のドメインとして、Mode A と同じ動きで動く\(Safari では ID が弱い\)/), reasons.join("\n"));
+  assert.ok(!has(reasons, /form\.example\.com は Cloudflare 外/));
+  // install_host と同じホストを重ねない。2 段の接尾辞(co.jp)の登録ドメインで近似する
+  assert.deepEqual(recommend({ ...v, extra_hosts: ["www.example.com"] }).dlite_hosts, ["www.example.com"]);
+  const jp = { ...v, install_host: "www.example.co.jp", extra_hosts: ["form.example.co.jp", "www.other.co.jp"] };
+  assert.deepEqual(recommend(jp).dlite_hosts, ["www.example.co.jp", "form.example.co.jp"]);
+});
+
+test("dlite_hosts stays empty without itp", () => {
+  const v = { ...base, ...zone, features: ["ab", "history"], extra_hosts: ["form.example.com"] };
+  const r = recommend(v);
+  assert.deepEqual(r.dlite_hosts, []);
+  assert.ok(!has(reasonsOf(v, r), /Cloudflare 外/));
+  // ドメインなし(E2d を聞かない)では extra_hosts を見ない
+  assert.deepEqual(recommend({ ...base, features: ["itp"], site_on_cloudflare: "no", extra_hosts: ["form.example.com"] }).dlite_hosts, []);
+});
+
+test("dliteHostsFor: 決まったゾーンで導き直す(委譲されたサブドメインのゾーン)", () => {
+  const v = { ...base, ...zone, features: ["itp"], install_host: "www.shop.example.com", extra_hosts: ["form.shop.example.com", "www.example.com"] };
+  // 近似(example.com)では両方入るが、ゾーン shop.example.com で導き直すと www.example.com は外れる
+  assert.deepEqual(recommend(v).dlite_hosts, ["www.shop.example.com", "form.shop.example.com", "www.example.com"]);
+  assert.deepEqual(dliteHostsFor(v, "shop.example.com"), ["www.shop.example.com", "form.shop.example.com"]);
+  assert.deepEqual(dliteHostsFor({ ...v, features: ["ab"] }, "shop.example.com"), []);
 });

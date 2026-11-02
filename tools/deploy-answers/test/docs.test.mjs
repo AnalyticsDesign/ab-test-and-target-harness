@@ -35,3 +35,9 @@ test("雛形のまま実行すると、すべての問いが聞き直しにな�
   assert.equal(r.code, 2);
   for (const id of ["N1", "N2", "N3", "E1", "E2", "E3"]) assert.match(r.output, new RegExp(`- ${id}\\(`));
 });
+
+test("質問の表の文書: 条件付きの問いは、進め方の規則の「条件を満たすときだけ聞く」に並ぶ", () => {
+  const rule = read("docs/install-questions.md").split("\n").find((l) => l.includes("条件を満たすときだけ聞く"));
+  assert.ok(rule, "条件付きの問いの規則が無い");
+  for (const q of QUESTIONS.filter((x) => x.when)) assert.ok(rule.includes(q.id), `${q.id} が条件付きの問いの規則に無い`);
+});

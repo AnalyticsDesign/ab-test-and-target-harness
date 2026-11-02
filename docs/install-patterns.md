@@ -98,7 +98,7 @@ Free では Cloudflare の課金通知が使えないので、ダッシュボー
 | 機能 | 使うなら要るもの | 使わないとき |
 |---|---|---|
 | 画像の差し替え(IMAGE の変更) | R2 バケットのカスタムドメイン(例 `assets.<ドメイン>`。ゾーンが Cloudflare にあること) | `dev-assets`(control 経由の配信)で暫定運用できる。画像の配信も Workers のリクエスト数を消費する。**R2 を使わない**(`none`)なら IMAGE の変更は無効になり、サイト上の既存画像の差し替えは ATTRIBUTE の `src` で行う |
-| Mode B(Safari でも同じ訪問者に同じ表示を長く保つ) | 構成 A。`<ページのホスト>/__ab/*` の Route | Mode A(Safari では操作なし 7 日で Cookie が消える)、または Mode C(サイトの会員 ID などを使う)。[サイト導入ガイド 8 節](site-install.md#8-mode-c-と-mode-b) |
+| Mode B(Safari でも同じ訪問者に同じ表示を長く保つ) | 構成 A。`<ページのホスト>/__ab/*` の Route。ページのホストが複数なら、ゾーンの中のホストごとに Route を置く(ワイルドカード 1 本にまとめてもよい。[デプロイガイド 2.3](deploy.md#23-route-を書く))。ゾーンの外のホストには Route を置けず、Cloudflare 外のドメインとして Mode A と同じ動きで動く(テストと目標は動き、Safari では ID が弱い) | Mode A(Safari では操作なし 7 日で Cookie が消える)、または Mode C(サイトの会員 ID などを使う)。[サイト導入ガイド 8 節](site-install.md#8-mode-c-と-mode-b) |
 
 ## 6. 決めた内容をデプロイガイドへ渡す
 
@@ -115,4 +115,5 @@ Free では Cloudflare の課金通知が使えないので、ダッシュボー
 | 入口の守り | `control_protection`(`none` / `waf` / `access`) |
 | edge の WAF ルールと、edge の Rate Limiting binding の値 | `edge_waf_rate_limit` / `edge_waf_requests_per_10s` |
 | Mode B(サーバー発行 Cookie。構成 A のときだけ) | `dlite_hosts` |
+| タグを置くページのほかのホスト(構成 A) | 上段の `extra_hosts`。Mode B を使うなら、そのうちゾーンの中のホストを `dlite_hosts` にも書く |
 | 料金プラン | `plan`(`free` / `paid`。`paid` なら導入の前にダッシュボードで切り替える) |

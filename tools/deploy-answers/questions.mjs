@@ -9,6 +9,9 @@ export const QUESTIONS = [
   { id: "E1b", key: "existing_plan", kind: "enum", values: ["free", "paid"], when: (v) => v.cloudflare_account === "existing" },
   { id: "E2", key: "site_on_cloudflare", kind: "enum", values: ["yes", "no", "no_site"] },
   { id: "E2a", key: "install_host", kind: "host", when: (v) => v.site_on_cloudflare === "yes" },
+  // E2a のほかにタグを置くページのホスト(無ければ none)。サイトの「タグを置くドメイン」に入れ、Safari 対策を選べば
+  // ゾーンの中のものに /__ab/* の Route を作る(dlite_hosts。judge.mjs の recommend)。B138 (a)
+  { id: "E2d", key: "extra_hosts", kind: "host_list_or_none", when: (v) => v.site_on_cloudflare === "yes" },
   {
     id: "E2b",
     key: "other_workers",
@@ -50,6 +53,30 @@ export function hostProblem(v) {
 
 export const hostInZone = (host, zone) => host === zone || host.endsWith(`.${zone}`);
 
+/**
+ * 2 段の接尾辞(登録ドメインが 3 ラベルになるもの)の小さな表。網羅しない近似で、表に無い接尾辞や
+ * 委譲されたサブドメインのゾーンは、ゾーンが決まった後の --resolve-zone で導き直す(run.mjs)
+ */
+const TWO_LEVEL_SUFFIXES = new Set(["co.jp", "ne.jp", "or.jp", "ac.jp", "go.jp", "com.au", "net.au", "org.au", "co.uk", "org.uk", "ac.uk", "co.nz", "co.kr", "com.cn", "com.tw", "com.br", "co.in"]);
+
+/** ホストの登録ドメインの近似(zone_name が auto の間に、同じゾーンかを見るのに使う)。末尾 2 ラベル、2 段の接尾辞なら 3 ラベル */
+export function approxZoneOf(host) {
+  const labels = host.split(".");
+  const n = TWO_LEVEL_SUFFIXES.has(labels.slice(-2).join(".")) ? 3 : 2;
+  return labels.slice(-n).join(".");
+}
+
+/**
+ * E2d の答え(extra_hosts)をホストの配列にする。未記入・none は空。括弧の無い 1 つのホストは 1 件として読む。
+ * 重ねて書いたホストと install_host(E2a)の繰り返しは除く(理由の行・--resolve-zone の知らせ・タグを置くドメインに 1 回だけ出すため)
+ */
+export function extraHostsOf(values) {
+  const raw = values.extra_hosts;
+  if (isBlank(raw) || raw === "none") return [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  return [...new Set(list)].filter((h) => h !== values.install_host);
+}
+
 /** やりたいこと。A/B テスト(ab)は必ず入る */
 export function featuresOf(values) {
   const raw = values.features;
@@ -73,6 +100,14 @@ function valueProblem(q, v) {
       return hostProblem(v);
     case "host_or_none":
       return v === "none" ? null : hostProblem(v);
+    case "host_list_or_none": {
+      if (v === "none") return null;
+      // ブラケット無しのカンマ区切りは文字列 1 個になる。配列の書き方を示す
+      if (typeof v === "string" && v.includes(","))
+        return `複数は [${v.split(",").map((x) => x.trim()).filter(Boolean).join(", ")}] の形で書く(無ければ none)`;
+      const bad = (Array.isArray(v) ? v : [v]).map((h) => [h, hostProblem(h)]).find(([, p]) => p);
+      return bad ? `${bad[0]}: ${bad[1]}` : null;
+    }
     case "email":
       return typeof v === "string" && EMAIL_RE.test(v) ? null : "メールアドレスの形になっていない";
   }
@@ -103,6 +138,10 @@ export function checkAnswers(values) {
 /** 下段の構成(推奨を書き込む 5 キー)か accepted に値があれば、推奨を作らずに書かれた構成を検査する。値が空の行は数えない */
 export const isConfigured = (values) => CONFIG_KEYS.some((k) => !isBlank(values[k])) || !isBlank(values.accepted);
 
+/** dlite_hosts のホストがゾーンの外のときの文(checkConfigured と --resolve-zone で同じ文にする) */
+export const dliteOutsideZone = (host, zone) =>
+  `${host} はゾーン ${zone} に属していない。Route を作れないので dlite_hosts から外す(タグを置くドメインには残す)`;
+
 /** 下段に書かれた構成の検査(--accept の後と、上級者が手で書いたとき) */
 export function checkConfigured(values) {
   const issues = [];
@@ -131,6 +170,11 @@ export function checkConfigured(values) {
   else {
     const bad = dl.map((h) => [h, hostProblem(h)]).find(([, p]) => p);
     if (bad) add("dlite_hosts", `${bad[0]}: ${bad[1]}`);
+    // Route はゾーンの中のホストにしか作れない。ゾーンが auto の間は --resolve-zone で確かめる(B138 (d))
+    else if (dl.length && !isBlank(values.zone_name) && values.zone_name !== "auto") {
+      const outside = dl.find((h) => !hostInZone(h, values.zone_name));
+      if (outside) add("dlite_hosts", dliteOutsideZone(outside, values.zone_name));
+    }
   }
   const plan = values.plan ?? "free";
   if (plan !== "free" && plan !== "paid") add("plan", "free か paid で書く");

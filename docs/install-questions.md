@@ -8,7 +8,7 @@ AI エージェントに導入を任せるとき、エージェントが最初�
 
 - 最初のメッセージで「質問は最大 9 つ。1 つずつ聞くが、分かっているならまとめて答えてもよい」と伝え、4 節の書式を示す
 - `deploy-answers.yaml` に答えが書かれている質問は飛ばす。`<` で始まる値は未記入として聞く
-- 1 問ずつ、表の順に聞く。E1b・E2a・E2b・E2c は、条件を満たすときだけ聞く
+- 1 問ずつ、表の順に聞く。E1b・E2a・E2d・E2b・E2c は、条件を満たすときだけ聞く
 - 質問文と選択肢は表の文言を使う。言い回しを相手に合わせて補ってよいが、選択肢を足したり減らしたりしない。用語は「補足」の列を添えて説明する
 - **構成を勧める判断をしない**。選択肢に推奨の印を付けず、構成の話は検査スクリプトの出力に任せる
 - 答えが選択肢に当てはまらないときは、近い選択肢を示して選び直してもらう(自由に解釈して進めない)
@@ -31,6 +31,7 @@ AI エージェントに導入を任せるとき、エージェントが最初�
 | E1b | (E1 = `existing` のとき)そのアカウントは有料の Workers Paid プランですか | (a) いいえ(無料)= `free` / (b) はい = `paid` / (c) 分からない → 確かめ方: Cloudflare のダッシュボードの Manage account(アカウントの管理)→ Billing(請求)→ Subscriptions(サブスクリプション)に Workers Paid があるか | ドメインなしの構成になる場合に、有料プランのアカウントを避けるために確かめる(理由は構成の提示で説明する) | `existing_plan` |
 | E2 | タグを入れるサイトのドメインは、導入する Cloudflare アカウントで管理していますか | (a) している = `yes` / (b) していない = `no` / (c) 分からない → 確かめ方: `curl -sI https://<ホスト>/` の `server:` が `cloudflare` なら、Cloudflare を通っている(どのアカウントで管理しているかは、ダッシュボードのドメインの一覧で確かめる)/ (d) サイトはまだ無い・試すだけ = `no_site` | ドメイン = `www.example.com` の `example.com` の部分。Cloudflare で管理している = Cloudflare のダッシュボードにそのドメインが追加されていて(Cloudflare ではこれを「ゾーン」と呼ぶ)、サイトへのアクセスが Cloudflare を通っている状態。管理していなくても導入はできる(Cloudflare が用意するアドレスで動かす。後からサイトのドメインを、導入した Cloudflare アカウントに移せば、そのドメインでの動作に[切り替えられる](deploy.md#28-ドメインありへの移行workers-dev--route))。別のドメインを Cloudflare に置けるなら、そのドメインで動かせる(E2c) | `site_on_cloudflare` |
 | E2a | (E2 = `yes` のとき)タグを入れるページのホストは | 自由入力(例 `www.example.com`) | ホスト = ページの URL の `https://` の後ろから、最初の `/` の手前まで | `install_host` |
+| E2d | (E2 = `yes` のとき)タグを入れるページのホストは、E2a のほかにもありますか(複数可) | ホストを並べる(例 `[form.example.com, shop.example.com]`)/ 無ければ `none` | 申し込みフォームなど、別のホストのページにも目標やテストがあるなら書く。ここに書いたホストはサイト設定の「タグを置くドメイン」に入る。Safari 対策(N1 の (c))を選んだときは、E2a と同じゾーンにあるホストに `/__ab/*` の Route を作る。ゾーンの外のホスト(Cloudflare を通らないホスト)でもテストと目標は動くが、Safari での ID の持ちは Mode A と同じになる | `extra_hosts` |
 | E2b | (E1 = `existing`・E1b = `free` で、E2 = `no` か `no_site` のとき)そのアカウントに、止まると困る Worker はありますか | (a) ある = `yes` / (b) ない = `no` / (c) 分からない = `unknown` | Worker = Cloudflare の上で動くプログラム。ほかのサイトやサービスで使っている仕組みがあれば「ある」。万が一、悪意のある人がプログラムで大量のアクセスを送ってきた場合(タグのアドレスはサイトの HTML に書かれるので、誰でも知ることができる)、ドメインなしの構成にはアクセスを制限する仕組み(WAF)を置けないため、無料枠を使い切られ、その日は同じアカウントの Worker がすべて止まる。「ある」「分からない」なら、この製品用に新しいアカウントを作る構成が勧められる。分からなければ「分からない」でよい | `other_workers` |
 | E2c | (E2 = `no` のとき)導入に使う Cloudflare アカウントに追加済みか、これから追加できる別のドメインはありますか。あれば、この製品に使うホスト名を教えてください | (a) ある → ホスト名(例 `ab.example.net`)/ (b) ない = `none` | 別のドメインのホスト(例 `ab.example.net`)で設置タグと計測の送信を受ける構成になる。ドメインを Cloudflare に追加するには、そのドメインのネームサーバーを Cloudflare に切り替える(サイトのドメインとは別なので、サイトには影響しない)。ほかの Cloudflare アカウントで使っているドメインは選ばない(切り替えると、そのドメインで動いているほかのサービスに及ぶ)。サイトとは別のホストになるので、Safari 対策の Mode B は使えない | `edge_host` |
 | E3 | 管理画面にログインする Google アカウントのメールアドレスは | 自由入力 | この後、Google 側でログイン用の設定(OAuth クライアント)を一緒に作る | `owner_email` |
@@ -47,6 +48,7 @@ cloudflare_account:         # none / existing / separate
 existing_plan:              # existing のとき: free / paid
 site_on_cloudflare:         # yes / no / no_site
 install_host:               # site_on_cloudflare: yes のとき(例 www.example.com)
+extra_hosts:                # site_on_cloudflare: yes のとき: ほかにタグを入れるページのホストを並べる(例 [form.example.com, shop.example.com])/ none
 other_workers:              # existing・free でドメインなしのとき: yes / no / unknown
 edge_host:                  # site_on_cloudflare: no のとき: 別のドメインのホスト(例 ab.example.net)/ none
 owner_email:                # Google アカウントのメールアドレス

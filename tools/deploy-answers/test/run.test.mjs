@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { run } from "../run.mjs";
 import { parseAnswers } from "../parse.mjs";
-import { writeKeys, resolveZone } from "../yaml-edit.mjs";
+import { writeKeys, resolveZone, overwriteKey } from "../yaml-edit.mjs";
 
 const LOWER = [
   "# --- 下段 ---",
@@ -15,7 +15,9 @@ const LOWER = [
   "",
 ].join("\n");
 const answers = (over = {}) => {
-  const v = { features: "[ab]", daily_pv: "under_10k", image_upload: "false", cloudflare_account: "none", site_on_cloudflare: "no_site", owner_email: "a@example.com", ...over };
+  // E2 = yes なら E2d(extra_hosts)も聞くので、指定が無ければ none にする
+  const extra = over.site_on_cloudflare === "yes" ? { extra_hosts: "none" } : {};
+  const v = { features: "[ab]", daily_pv: "under_10k", image_upload: "false", cloudflare_account: "none", site_on_cloudflare: "no_site", owner_email: "a@example.com", ...extra, ...over };
   return Object.entries(v).map(([k, x]) => `${k}: ${x}`).join("\n") + "\n" + LOWER;
 };
 
@@ -323,4 +325,72 @@ test("--resolve-zone: custom-domain は edge_host がゾーンに属するかで
   assert.equal(run(`install_host: www.example.org\n${CUSTOM}`, { resolveZone: "example.org" }).code, 2);
   const fixed = CUSTOM.replace("zone_name: auto", "zone_name: example.net");
   assert.equal(run(fixed, { resolveZone: "example.org" }).code, 2);
+});
+
+// B138: --resolve-zone でゾーンが決まった後の dlite_hosts
+const ITP_YES = { features: "[ab, itp]", cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "yes", install_host: "www.example.com" };
+
+test("resolve_zone_keeps_outside_extra_hosts_and_recomputes_dlite", () => {
+  const accepted = run(answers({ ...ITP_YES, extra_hosts: "[form.example.com, shop.example.net]" }), { accept: "recommended" }).text;
+  assert.deepEqual(parseAnswers(accepted).values.dlite_hosts, ["www.example.com", "form.example.com"]);
+  const r = run(accepted, { resolveZone: "example.com" });
+  assert.equal(r.code, 0);
+  const v = parseAnswers(r.text).values;
+  assert.equal(v.zone_name, "example.com");
+  assert.deepEqual(v.dlite_hosts, ["www.example.com", "form.example.com"]);
+  assert.deepEqual(v.extra_hosts, ["form.example.com", "shop.example.net"]);
+  assert.match(r.output, /shop\.example\.net はゾーン example\.com の外。Cloudflare 外のドメインとして動く/);
+  assert.doesNotMatch(r.output, /form\.example\.com はゾーン/);
+  // 重ねて書いたゾーンの外のホストは、知らせに 1 回だけ出す
+  const dup = run(answers({ ...ITP_YES, extra_hosts: "[shop.example.net, www.example.com, shop.example.net]" }), { accept: "recommended" }).text;
+  const d = run(dup, { resolveZone: "example.com" });
+  assert.equal(d.code, 0);
+  assert.equal(d.output.split("shop.example.net はゾーン").length - 1, 1);
+  assert.equal(run(answers({ ...ITP_YES, extra_hosts: "[shop.example.net, shop.example.net]" })).output.split("shop.example.net は Cloudflare 外").length - 1, 1);
+});
+
+test("--resolve-zone: 近似のゾーンで外れた同じゾーンのホストを、決まったゾーンで dlite_hosts に入れ直す", () => {
+  // 委譲されたサブドメインのゾーン: 近似(example.com)では www.example.com も入るが、ゾーン shop.example.com では外れる
+  const accepted = run(answers({ ...ITP_YES, install_host: "www.shop.example.com", extra_hosts: "[form.shop.example.com, www.example.com]" }), { accept: "recommended" }).text;
+  assert.deepEqual(parseAnswers(accepted).values.dlite_hosts, ["www.shop.example.com", "form.shop.example.com", "www.example.com"]);
+  const r = run(accepted, { resolveZone: "shop.example.com" });
+  assert.equal(r.code, 0);
+  assert.deepEqual(parseAnswers(r.text).values.dlite_hosts, ["www.shop.example.com", "form.shop.example.com"]);
+  assert.match(r.text, /^dlite_hosts: \[www\.shop\.example\.com, form\.shop\.example\.com\]   # Mode B$/m);
+  assert.match(r.output, /- dlite_hosts: \[www\.shop\.example\.com, form\.shop\.example\.com\]/);
+  assert.match(r.output, /www\.example\.com はゾーン shop\.example\.com の外/);
+  // 近似の表に無い 2 段の接尾辞(example.gr.jp)でも、決まったゾーンで同じゾーンのホストが入る
+  const gr = run(answers({ ...ITP_YES, install_host: "www.example.gr.jp", extra_hosts: "[form.example.gr.jp]" }), { accept: "recommended" }).text;
+  const g = run(gr, { resolveZone: "example.gr.jp" });
+  assert.equal(g.code, 0);
+  assert.deepEqual(parseAnswers(g.text).values.dlite_hosts, ["www.example.gr.jp", "form.example.gr.jp"]);
+});
+
+test("resolve_zone_reports_dlite_host_outside_zone", () => {
+  // 手で書いた dlite_hosts にゾーンの外のホストがあれば、書き込まずに終了コード 2
+  const text = "owner_email: a@example.com\ninstall_host: www.example.com\nedge_address: route\nzone_name: auto\nasset_public_base: none\ndlite_hosts: [www.example.com, form.example.net]\naccepted: manual\n";
+  const r = run(text, { resolveZone: "example.com" });
+  assert.equal(r.code, 2);
+  assert.equal(r.text, undefined);
+  assert.match(r.output, /form\.example\.net はゾーン example\.com に属していない。Route を作れないので dlite_hosts から外す\(タグを置くドメインには残す\)/);
+  // 手で書いた値は導き直さない
+  const ok = run(text.replace(", form.example.net", ""), { resolveZone: "example.com" });
+  assert.equal(ok.code, 0);
+  assert.deepEqual(parseAnswers(ok.text).values.dlite_hosts, ["www.example.com"]);
+});
+
+test("--resolve-zone: 最軽量構成(dlite_hosts が空)を選んだときは、Safari 対策を選んでいても dlite_hosts を足さない", () => {
+  const text = answers({ ...ITP_YES, extra_hosts: "[form.example.com]" });
+  // 最軽量は workers-dev で zone_name を書かないので、route のまま dlite_hosts だけ空にした了承済みの形で確かめる
+  const accepted = run(text, { accept: "recommended" }).text.replace(/^dlite_hosts: .*$/m, "dlite_hosts: []").replace("accepted: recommended", "accepted: manual");
+  const r = run(accepted, { resolveZone: "example.com" });
+  assert.equal(r.code, 0);
+  assert.deepEqual(parseAnswers(r.text).values.dlite_hosts ?? [], []);
+});
+
+test("overwriteKey: 有効な行を値ごと書き換え、行末の説明のコメントは残す", () => {
+  const r = overwriteKey("a: 1\ndlite_hosts: [x.example.com]   # Mode B\n", "dlite_hosts", ["y.example.com", "z.example.com"]);
+  assert.equal(r.text, "a: 1\ndlite_hosts: [y.example.com, z.example.com]   # Mode B\n");
+  assert.deepEqual(r.written, ["dlite_hosts: [y.example.com, z.example.com]"]);
+  assert.deepEqual(overwriteKey("a: 1\n", "dlite_hosts", []).written, []);
 });

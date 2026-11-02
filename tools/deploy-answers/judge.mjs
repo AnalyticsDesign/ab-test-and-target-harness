@@ -1,5 +1,5 @@
 // 答えから推奨構成と最軽量構成を導く。理由・できないこと・人に頼む作業・課金と止まり方・注意の文言もここで決める
-import { featuresOf, hostProblem } from "./questions.mjs";
+import { featuresOf, hostProblem, hostInZone, approxZoneOf, extraHostsOf } from "./questions.mjs";
 
 /**
  * Free の上限に効く使い方と、Workers Paid を推奨する PV の区分(上限の 7 割を超えうる区分)。
@@ -58,6 +58,15 @@ export function answersFor(values, c) {
 
 /** @typedef {{ edge_address: "route"|"workers-dev"|"custom-domain", zone_name: string|null, asset_public_base: string, dlite_hosts: string[], plan: "free"|"paid" }} Config */
 
+/**
+ * Mode B(サーバー発行 Cookie)の /__ab/* の Route を作るホスト。Safari 対策(itp)を選び、設置サイトのゾーンに載せる構成(E2 = yes)のときだけ、
+ * install_host と、extra_hosts(E2d)のうちゾーン zone の中のもの。ゾーンの外のホストは Cloudflare 外のドメインとして動く(B138 (a))
+ */
+export function dliteHostsFor(values, zone) {
+  if (values.site_on_cloudflare !== "yes" || !featuresOf(values).has("itp")) return [];
+  return [values.install_host, ...extraHostsOf(values).filter((h) => hostInZone(h, zone))];
+}
+
 /** @returns {Config} */
 export function recommend(values) {
   const f = featuresOf(values);
@@ -69,8 +78,9 @@ export function recommend(values) {
     edge_address: route ? "route" : custom ? "custom-domain" : "workers-dev",
     zone_name: zoned ? "auto" : null,
     asset_public_base: values.image_upload !== true ? "none" : zoned ? "auto" : "dev-assets",
-    // Mode B はサイトと同じホストで動くので、設置サイトのゾーンに載せる構成(route)でだけ使える
-    dlite_hosts: route && f.has("itp") ? [values.install_host] : [],
+    // Mode B はサイトと同じホストで動くので、設置サイトのゾーンに載せる構成(route)でだけ使える。
+    // ゾーンはまだ auto なので install_host の登録ドメインの近似で選び、--resolve-zone で決まったゾーンで導き直す(run.mjs)
+    dlite_hosts: route && f.has("itp") ? dliteHostsFor(values, approxZoneOf(values.install_host)) : [],
     plan: "free",
   };
   // ドメインなしで Paid にすると、上限を掛けられないまま第三者に使われた分まで課金されるので、PV では Paid にしない。
@@ -151,7 +161,15 @@ export function reasonsOf(values, c) {
         ? "画像をアップロードするので R2 を使う。ドメインが無いので、管理用の Worker 経由で配る(R2 から直接配るより遅く、Workers の無料枠を使う)"
         : "画像をアップロードするので R2 を使い、wtt-assets.<ゾーン名> のアドレスで配る",
   );
-  if (c.dlite_hosts.length) r.push(`Safari 対策として、${c.dlite_hosts.join(", ")} で Mode B(サーバー発行 Cookie)を使う`);
+  if (c.dlite_hosts.length) {
+    r.push(`Safari 対策として、${c.dlite_hosts.join(", ")} で Mode B(サーバー発行 Cookie)を使う`);
+    // E2d で答えたホストのうち Route を作らないもの(ゾーンの外)
+    const outside = extraHostsOf(values).filter((h) => !c.dlite_hosts.includes(h));
+    if (outside.length) {
+      const recheck = c.zone_name === "auto" ? "。ゾーンが決まった後に確かめ直す" : "";
+      r.push(`${outside.join(", ")} は Cloudflare 外のドメインとして、Mode A と同じ動きで動く(Safari では ID が弱い)${recheck}`);
+    }
+  }
   return r;
 }
 

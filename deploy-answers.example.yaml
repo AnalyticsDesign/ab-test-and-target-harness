@@ -24,6 +24,7 @@ cloudflare_account: <none / existing / separate>                 # E1 Cloudflare
 existing_plan: <free / paid>                                     # E1b cloudflare_account: existing のときだけ。Workers Paid なら paid
 site_on_cloudflare: <yes / no / no_site>                         # E2 タグを入れるサイトのドメインを、導入するアカウントで管理しているか
 install_host: <www.example.com>                                  # E2a site_on_cloudflare: yes のときだけ。タグを入れるページのホスト
+extra_hosts: <[form.example.com] / none>                         # E2d site_on_cloudflare: yes のときだけ。E2a のほかにタグを入れるページのホストを並べる(例 [form.example.com, shop.example.com])。無ければ none。サイト設定の「タグを置くドメイン」に入る
 other_workers: <yes / no / unknown>                              # E2b existing・free でドメインなし(no / no_site)のときだけ。止まると困る Worker が同じアカウントにあるか
 edge_host: <ab.example.net / none>                               # E2c site_on_cloudflare: no のときだけ。導入に使う Cloudflare アカウントに追加済みか、これから追加できる別のドメインで、edge に使うホスト。ほかの Cloudflare アカウントで使っているドメインは選ばない。無ければ none
 owner_email: <you@example.com>                                   # E3 管理画面にログインする Google アカウントのメールアドレス
@@ -32,7 +33,7 @@ owner_email: <you@example.com>                                   # E3 管理画�
 # edge_address: route              # route | workers-dev | custom-domain。route = 設置サイトのゾーンの Workers Route。workers-dev = *.workers.dev で公開(ゾーン不要。WAF・キャッシュ・Mode B(サーバー発行 Cookie)が使えず、Free アカウントかつ止まって困る Workers が同じアカウントに無いことが前提)。custom-domain = Cloudflare に置いた別のドメインのホストで公開(edge_host と zone_name を使う。WAF・キャッシュは使えるが Mode B(サーバー発行 Cookie)は使えない)
 # zone_name: example.com           # route か custom-domain のとき。route のときは install_host、custom-domain のときは edge_host が属する Cloudflare のゾーン。auto = ログインの後に --resolve-zone で確定する
 # asset_public_base: none          # none(R2 を使わない。画像アップロードと IMAGE の変更が無効)/ dev-assets(control 経由)/ auto(https://wtt-assets.<zone_name>)/ https://<R2 のカスタムドメイン>
-# dlite_hosts: []                    # Mode B(サーバー発行 Cookie。旧称 D-lite)を使うページのホスト。書くと <host>/__ab/* の Route を足す
+# dlite_hosts: []                    # Mode B(サーバー発行 Cookie。旧称 D-lite)を使うページのホスト。書くと <host>/__ab/* の Route を足す。zone_name のゾーンの中のホストだけ書ける。--accept recommended は install_host と、extra_hosts のうちゾーンの中のものを書く(ゾーンの外のホストは Cloudflare 外のドメインとして動く)
 # plan: free                       # free | paid。Workers のプラン。paid は導入の前にダッシュボードで切り替える
 # accepted: recommended            # --accept が書く(recommended / lightest / manual)
 
