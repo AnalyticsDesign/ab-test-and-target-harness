@@ -23,6 +23,7 @@ import { app } from "../src/index";
 import { edgeOrigin } from "../src/capabilities";
 import { siteToSettings } from "../src/site-settings";
 import { installHashOf } from "../src/domain-probe";
+import { createWorkspace, grantInstanceAdmin } from "../src/instance-admins";
 import { getDb, type ExperimentRow, type SiteRow } from "../src/db";
 import type { BudgetStatus, Env, LeaseResult, ReadReservation, ResultsBudgetRpc, ResultsHealthRpc, StopPeriod, StopReason } from "../src/env";
 import { ErrorEnvelopeSchema } from "../src/openapi";
@@ -258,23 +259,67 @@ export function uniqueEmail(prefix = "user"): string {
   return `${prefix}${++seq}-${Date.now()}@example.com`;
 }
 
-/** 初回セットアップ: OWNER と Workspace を作る(テスト単位のストレージ隔離なので毎テスト呼べる)。OWNER は Google に link 済みで返る */
+/**
+ * テストの準備を軽くする直書き(2026-11-03、テストの見直し): user・Google の account・session を D1 に直接入れる。
+ * 以前の setupOwner は POST /setup → Google ログインの偽の流れ(start → callback → 交換)の 4 往復で、
+ * /setup の中の sign-up がパスワードの hash(scrypt)を計算し、ほぼ全テスト(639 回)がここから始まるので control のテストの
+ * 所要時間の大半を占めていた。/setup・Google ログイン・招待の受諾の経路そのものは auth.test.ts・oauth.test.ts・
+ * workspaces.test.ts が HTTP で見る(ここを直書きにしても経路の検査は減らない)。
+ * 行の形は本物の経路が作るものに揃える: emailVerified = 1、Google の account(accountId は mockGoogle の sub と同じ)、
+ * session.loginMethod = 'google'、有効期限 7 日(Better Auth の既定)
+ */
+export async function seedUser(email: string, name: string): Promise<string> {
+  const userId = crypto.randomUUID().replace(/-/g, "");
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare(`insert into "user" (id, name, email, "emailVerified", "createdAt", "updatedAt") values (?1, ?2, ?3, 1, ?4, ?4)`).bind(userId, name, email, now),
+    env.DB.prepare(`insert into account (id, "accountId", "providerId", "userId", scope, "createdAt", "updatedAt") values (?1, ?2, 'google', ?3, 'openid email profile', ?4, ?4)`).bind(
+      crypto.randomUUID().replace(/-/g, ""),
+      `g-${email}`,
+      userId,
+      now,
+    ),
+  ]);
+  return userId;
+}
+
+/**
+ * その人のセッションを D1 に直接入れて、Bearer を返す。
+ * 返す値は署名の無い token そのもの(bearer プラグインが自分で署名して Cookie に写す。`sessionTokenOf` を通しても同じ値)
+ */
+export async function seedSession(userId: string): Promise<string> {
+  const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+  const now = Date.now();
+  await env.DB.prepare(
+    `insert into session (id, "expiresAt", token, "createdAt", "updatedAt", "ipAddress", "userAgent", "userId", "loginMethod")
+     values (?1, ?2, ?3, ?4, ?4, '127.0.0.1', 'vitest', ?5, 'google')`,
+  )
+    .bind(crypto.randomUUID().replace(/-/g, ""), new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString(), token, new Date(now).toISOString(), userId)
+    .run();
+  return token;
+}
+
+/**
+ * 初回セットアップ: OWNER と Workspace を作る(テスト単位のストレージ隔離なので毎テスト呼べる)。OWNER は Google に link 済みで返る。
+ * POST /setup と同じ順(システム管理者に登録 → ワークスペース作成 → lock を完了)を、同じ関数(instance-admins.ts)で直接呼ぶ。
+ * /setup の HTTP の経路(トークン・lock・補償)は auth.test.ts が見る
+ */
 export async function setupOwner(): Promise<{ token: string; workspaceId: string; userId: string; email: string }> {
   const email = uniqueEmail("owner");
-  const res = await call("POST", "/setup", {
-    headers: { "x-setup-token": SETUP_TOKEN },
-    body: { email, name: "Owner", workspaceName: "Workspace A" },
-  });
-  expect(res.status).toBe(201);
-  const data = await json<{ workspaceId: string; userId: string }>(res);
-  const { token } = await googleSignIn(email);
-  expect(token).toBeTruthy();
-  return { ...data, token: token!, email };
+  const userId = await seedUser(email, "Owner");
+  await grantInstanceAdmin(testEnv, userId, null);
+  const workspaceId = await createWorkspace(testEnv, "Workspace A");
+  // 以後の POST /setup を閉じる(本物の /setup と同じ完了の行)。素の insert にして、行がもうある(前のテストの残り・
+  // 同じテストでの 2 回目の呼び出し・先に /setup を通した)ときは、上書きせずにここで落とす
+  await env.DB.prepare("insert into setup_lock (id, created_at, completed) values (1, ?1, 1)").bind(Date.now()).run();
+  const token = await seedSession(userId);
+  return { token, workspaceId, userId, email };
 }
 
 /**
  * 招待 → 受諾までを 1 往復で済ませるヘルパ(Task 2 以降のテストが Role 別の Bearer を作るのに使う)。
- * 戻り値の `memberId` は ADMIN 操作(PATCH / DELETE /workspaces/:wid/members/:memberId)の対象に使う
+ * 戻り値の `memberId` は ADMIN 操作(PATCH / DELETE /workspaces/:wid/members/:memberId)の対象に使う。
+ * Google ログインの偽の流れは 1 回 50 ms ほどで(setupOwner が重かったのは /setup のパスワードの hash)、直書きにしない
  */
 export async function inviteAndJoin(
   ownerToken: string,

@@ -9,14 +9,19 @@ on:
 permissions:
   contents: read
 
+# 公開側の repo と手動の実行だけで動かす(E2E は含めない)。
+# test はパッケージごとの job に分ける: 1 つの job で `pnpm test` を回すと、4 コアの runner の上で workerd のテスト(control・edge)が
+# CPU を取り合い、test だけで 24〜38 分かかっていた(2026-11-02・03 の 3 回)。分ければ各 job が自分の runner の CPU を使え、
+# 一番長い job(control)の時間で終わる。パッケージは workspace の source を直接参照するので(build 無し)、job ごとに install だけでよい。
+# 上限(timeout-minutes)は、固まったときに既定の 6 時間まで待たないためのもので、job ごとに決める。
+# 決め方: その job の CI での実測の 1.5〜2 倍を 5 分単位に切り上げる(5 分を下限にする)。実測が変わったら見直す。
+# 2026-11-03 の実測(job 全体): control 12 分 31 秒 → 25 分 / admin 39 秒・edge と deployer 55 秒・check 40 秒 → 5 分 /
+# packages と tools は、その回は core の 1 件の時間切れで落ちたので、ほかの job と同じ 5 分にする
 jobs:
   check:
-    # 公開側の repo と手動の実行だけで動かす(E2E は含めない)
     if: github.repository == 'AnalyticsDesign/ab-test-and-target-harness' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    # 固まったときに既定の 6 時間まで待たないための上限。CI での実測(非公開の repo の runner)の 1.5〜2 倍を 5 分単位に切り上げる。
-    # 2026-11-02 の実測: test 24 分 38 秒、全体 約 26 分(control のテストが 1427 秒。手元の約 4.6 倍)→ 45 分
-    timeout-minutes: 45
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # pnpm の版は package.json の packageManager から読む
@@ -27,5 +32,35 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
-      - run: pnpm test
       - run: pnpm docs:check
+
+  test:
+    if: github.repository == 'AnalyticsDesign/ab-test-and-target-harness' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: control
+            timeout: 25
+            filter: --filter ./apps/control
+          - name: admin
+            timeout: 5
+            filter: --filter ./apps/admin
+          - name: edge, deployer
+            timeout: 5
+            filter: --filter ./apps/edge --filter ./apps/deployer
+          - name: packages, tools
+            timeout: 5
+            filter: --filter ./packages/core --filter ./packages/stats --filter ./packages/runtime --filter ./packages/sample-site --filter ./tools
+    name: test (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm ${{ matrix.filter }} test
