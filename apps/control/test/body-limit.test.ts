@@ -110,9 +110,9 @@ describe("request body limit (G19)", () => {
 
   it("a JSON route under the default limit still works, an oversized one is 413", async () => {
     const owner = await setupOwner();
-    const ok = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "S", domain: "s.example.com" } });
+    const ok = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "S", domains: ["s.example.com"] } });
     expect(ok.status).toBe(201);
-    const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: big, domain: "s.example.com" } });
+    const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: big, domains: ["s.example.com"] } });
     expect(res.status).toBe(413);
     expect((await json(res)).error).toBe("payload_too_large");
   });

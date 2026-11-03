@@ -125,6 +125,8 @@ tr:last-child > td { border-bottom: 0; }
 .card-flush { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); margin-bottom: 16px; overflow: hidden; }
 /* 表の中に Picker を置くカード用: 一覧(.list)が表の下にはみ出しても切れないよう overflow を開け、角の丸みは見出しの背景に移す */
 .card-flush.has-menu { overflow: visible; }
+/* 列の多い表を狭い幅で切らずに、カードの中で横にスクロールさせる */
+.card-flush.scroll-x { overflow-x: auto; }
 .card-flush.has-menu th:first-child { border-top-left-radius: calc(var(--radius-card) - 1px); }
 .card-flush.has-menu th:last-child { border-top-right-radius: calc(var(--radius-card) - 1px); }
 .danger-zone { background: var(--surface); border: 1px solid var(--danger); border-radius: var(--radius-card); padding: 20px; margin-bottom: 16px; }

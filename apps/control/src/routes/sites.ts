@@ -4,7 +4,9 @@ import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
 import { resultsStore } from "../capabilities";
 import { toStatement, type SiteRow } from "../db";
-import { ApiError, siteIdTaken, validationFailed } from "../errors";
+import { ensureInstallMarker, installHashOf, mergeProbeResults, probeDomains, probeOverrideFromEnv, readProbeSettings } from "../domain-probe";
+import type { DomainRow } from "../domains";
+import { ApiError, notFound, siteIdTaken, validationFailed } from "../errors";
 import { newId, randomToken } from "../ids";
 import { errorResponses } from "../openapi";
 import { reconcileActive } from "../publish";
@@ -19,18 +21,20 @@ import { bootstrapSettingsChanged, reconcileStatic, requestStaticDeploy, request
 import { touchSite } from "../validation";
 import { isWriteFrozen } from "../write-freeze";
 import {
+  applyDomainRows,
   applySitePatch,
   assertHostsFree,
   claimHosts,
   compileUpdate,
   deleteSiteAssets,
   deleteSiteRecords,
+  legacyDomainFieldsError,
   SiteCreateSchema,
   SitePatchSchema,
   putSiteRecords,
   releaseHosts,
+  resetVerdictsFromModeA,
 } from "../site-settings";
-import { readCloudflarePlan } from "../instance-settings";
 import {
   claimHolder,
   claimsGrow,
@@ -67,8 +71,31 @@ const SiteGetSchema = SiteJsonSchema.extend({
     .describe("計測用のデータベースの使用量(導入全体。15 分ごとに測る)。まだ測っていなければ null"),
 });
 
+/** B148: 保存・作成で行った、タグを置くドメインが Cloudflare 経由かの確認の結果 */
+const VerdictEnum = z.enum(["edge", "outside", "unknown", "dev"]);
+const DomainChecksSchema = z
+  .object({
+    changes: z
+      .array(z.object({ domain: z.string(), from: VerdictEnum, to: VerdictEnum }))
+      .describe("確認で判定が変わった行(from = 前の判定、to = 今回の判定)。from が edge の行は、その行で配信が届かなくなった可能性がある"),
+    deferred: z.array(z.string()).describe("この保存では確かめなかった行(1 回に確かめる行数の上限・確認の時間切れ)。前の判定のままで、次の保存で確かめる"),
+    unknown: z.array(z.string()).describe("確かめに行ったが答えが得られなかった行(通信の失敗・時間切れ・403・429・5xx)。前の判定のまま"),
+  })
+  .nullable()
+  .describe(
+    "この保存で行った、タグを置くドメインが Cloudflare 経由(このツールの edge に届く)かの確認の結果。確かめるのは Mode B で domains を送った保存、Mode を B にする保存、Mode B の作成(1 行目だけ)。確かめなかった保存は null",
+  );
+type DomainChecks = z.infer<typeof DomainChecksSchema>;
+
+/** 判定の結果を応答の形にする */
+const domainChecksOf = (m: ReturnType<typeof mergeProbeResults>): NonNullable<DomainChecks> => ({ changes: m.changes, deferred: m.deferred, unknown: m.unknown });
+
+/** PATCH の応答。判定の結果(domainChecks)を足す */
+const SiteSavedSchema = SiteJsonSchema.extend({ domainChecks: DomainChecksSchema });
+
 /** B139(spec Q29): 作成の応答。衝突を避けるために共有か Cookie 名を変えたときだけ sharingAdjusted を足す */
 const SiteCreatedSchema = SiteJsonSchema.extend({
+  domainChecks: DomainChecksSchema,
   sharingAdjusted: z
     .object({
       reason: z.literal("conflict").describe("同じ登録ドメインの別のサイトと、訪問者 ID の Cookie がぶつかった"),
@@ -120,6 +147,7 @@ siteRoutes.post(
     tags: ["sites"],
     summary: "サイトを作成(管理者以上)",
     description:
+      "タグを置くドメインは domains(1〜50 行。先頭の行が代表のドメイン)で送る。domain・allowedOrigins・hosts は書き込みでは使えず、送ると 422 `legacy_domain_fields`。" +
       "削除したサイトの ID は、そのサイトがあったワークスペースでだけ作り直せる。別のワークスペースからは 409 `site_id_taken`。元のワークスペースを見られる人にだけ `reason` が `retired_elsewhere` になり、見られない人には今あるサイトと同じ応答を返す。ワークスペースごと削除したサイトの ID は、システム管理者だけが作れる",
     security: [{ bearer: [] }],
     responses: {
@@ -129,7 +157,8 @@ siteRoutes.post(
   }),
   requireSession,
   validator("json", SiteCreateSchema, (r) => {
-    if (!r.success) throw validationFailed(r.error);
+    // B148: 旧い欄(domain・allowedOrigins・hosts)は、知らない欄の検証の失敗より先に、書き換え方を添えて断る
+    if (!r.success) throw legacyDomainFieldsError(r.data) ?? validationFailed(r.error);
   }),
   async (c) => {
     const wid = c.req.param("wid");
@@ -147,10 +176,11 @@ siteRoutes.post(
       if (!(await actsAsInstanceAdmin(c))) throw await retiredSiteIdTaken(c, id, state.retiredWorkspaceId, "admin_only"); // 往復が増えるのはこの枝だけ
       reclaimFrom = state.retiredWorkspaceId;
     }
-    // spec §4.1: allowedOrigins は domain から初期値。Mode B(サーバー発行 Cookie、旧称 D-lite)は hosts = [domain]
+    // B148: タグを置くドメインの一覧は applySitePatch が domains から作り、domain・allowedOrigins・hosts をそこから導く
+    // (Mode B の行が Cloudflare 経由かは判定で決まる。判定するまでは unknown なので hosts は空)
     const base: SiteRow = {
-      id, workspace_id: wid, name: body.name, domain: body.domain, mode: "A", id_source: "ab", site_salt: randomToken(16),
-      allowed_origins_json: JSON.stringify([`https://${body.domain}`]), hosts_json: "[]", retention_days: body.retentionDays,
+      id, workspace_id: wid, name: body.name, domain: "", mode: "A", id_source: "ab", site_salt: randomToken(16),
+      allowed_origins_json: "[]", hosts_json: "[]", domains_json: "[]", retention_days: body.retentionDays,
       consent_mode: body.consentMode, decision_timeout_ms: 1000, visitor_cookie_name: body.visitorCookieName ?? DEFAULT_VISITOR_COOKIE_NAME, uuid_cookie_enabled: 0, uuid_cookie_name: body.uuidCookieName ?? DEFAULT_UUID_COOKIE_NAME,
       previous_cookie_names_json: "[]", forget_on_revoke: 1, timezone: "Asia/Tokyo", analytics_json: null, ga4_property_id: null, bigquery_dataset: null, bridge_secret: null, bridge_secret_prev: null, bridge_secret_rotated_at: null,
       active_version: null, active_kv_stale: 0, last_activated_at: null, content_updated_at: now, created_at: now, updated_at: now,
@@ -166,7 +196,7 @@ siteRoutes.post(
       share_subdomains: 1, previous_cookie_domains_json: "[]", share_migration_pending: 0,
     };
     // Cookie 名は base に直接入れる(patch で渡すと、新しいサイトなのに既定の名前を旧名として残し、旧名の後始末と共有の衝突の検査の対象にしてしまう)
-    const patch = { mode: body.mode, hosts: body.mode === "B" ? [body.domain] : [], uuidCookieEnabled: body.uuidCookieEnabled };
+    const patch = { mode: body.mode, domains: body.domains, uuidCookieEnabled: body.uuidCookieEnabled };
     let { next, error } = applySitePatch(base, patch, now);
     if (error) throw error;
     // B139(spec Q29): 同じ導入の別のサイトと訪問者 ID の Cookie がぶつかるなら、作成は止めずに 1 回だけ調整する。
@@ -191,6 +221,19 @@ siteRoutes.post(
       // 調整は 1 回だけ。それでも残る(その名前が手で付けられていた)ときは 422 にして、作り直しを案内する
       const left = await findSharingConflict(c.env.DB, next, nowSec);
       if (left) throw await conflictError(c, left, SHARING_CONFLICT_CREATE_HINT);
+    }
+    // B148 Task 4: プランと導入の印を instance_settings の 1 回の SELECT で読む(プランは KV の記録にも使う)。
+    // Mode B の作成は 1 行目を確かめる(edge ならホストとして取る)。D1 と KV に書く前に確かめ、結果を当てた行を書く
+    const probeSettings = await readProbeSettings(c.env.DB);
+    let domainChecks: DomainChecks = null;
+    if (next.mode === "B") {
+      const installHash = await installHashOf(await ensureInstallMarker(c.env, c.env.DB, probeSettings.installMarker));
+      const rows = JSON.parse(next.domains_json) as DomainRow[];
+      const merged = mergeProbeResults(rows, await probeDomains(rows.slice(0, 1), { plan: probeSettings.plan, installHash, originOverride: probeOverrideFromEnv(c.env) }), nowSec);
+      ({ next, error } = applyDomainRows(next, merged.rows));
+      if (error) throw error;
+      // 2 行目以降(開発用を除く)は作成では確かめない。次の保存で確かめる行として deferred に入れる
+      domainChecks = { ...domainChecksOf(merged), deferred: [...merged.deferred, ...rows.slice(1).filter((r) => r.verdict !== "dev").map((r) => r.value)] };
     }
     // 順序: sites 行(FK の親)+ 共有の予約(同じ batch。同時の作成で予約に負けたら行も残さず 422)→ host 所有権 → KV。
     // claimHosts が 409 なら sites 行を消して返す(review r2 CX-High-6。予約は FK の CASCADE で消える)
@@ -224,7 +267,7 @@ siteRoutes.post(
     }
     // Plan 2 繰越の順序契約: settings record(+ host)を先に書き、config は Publish で書く
     try {
-      await putSiteRecords(c.env, next, { plan: await readCloudflarePlan(db), collectUntil: {} }); // 新しい Site には run が無い(収集の締め切りの表は空)
+      await putSiteRecords(c.env, next, { plan: probeSettings.plan, collectUntil: {} }); // 新しい Site には run が無い(収集の締め切りの表は空)
     } catch (e) {
       await db.deleteFrom("sites").where("id", "=", next.id).execute(); // site_hosts は CASCADE
       // settings の put だけ成功して host の put で落ちた場合、KV に孤児の settings record が残る。
@@ -233,7 +276,7 @@ siteRoutes.post(
       throw e;
     }
     const sharingAdjusted = adjusted ? { reason: "conflict" as const, shareSubdomains: next.share_subdomains === 1, visitorCookieName: next.visitor_cookie_name } : undefined;
-    return c.json({ ...siteJson(next), ...(sharingAdjusted ? { sharingAdjusted } : {}) }, 201);
+    return c.json({ ...siteJson(next), domainChecks, ...(sharingAdjusted ? { sharingAdjusted } : {}) }, 201);
   },
 );
 
@@ -292,26 +335,49 @@ siteRoutes.patch(
   describeRoute({
     tags: ["sites"],
     summary: "サイト設定を更新(管理者以上)。訪問者 ID / 外部計測の名前は設置タグの配信ファイルを作り直して反映するので、公開は不要。タイムゾーンと結果の記録の切り替えは次の公開で効く",
+    description:
+      "タグを置くドメインは domains で一覧ごと送る(送らなければ今の一覧のまま)。domain・allowedOrigins・hosts は書き込みでは使えず、送ると 422 `legacy_domain_fields`。一覧の行の誤りは 422 `invalid_domains`(issues に行ごとの文)",
     security: [{ bearer: [] }],
     responses: {
-      200: { description: "更新後のサイト", content: { "application/json": { schema: resolver(SiteJsonSchema) } } },
+      200: { description: "更新後のサイト", content: { "application/json": { schema: resolver(SiteSavedSchema) } } },
       ...errorResponses(400, 401, 403, 404, 409, 422, 503),
     },
   }),
   requireSession,
   validator("json", SitePatchSchema, (r) => {
-    if (!r.success) throw validationFailed(r.error);
+    if (!r.success) throw legacyDomainFieldsError(r.data) ?? validationFailed(r.error);
   }),
   async (c) => {
-    const { site } = await loadSite(c, c.req.param("sid"), "admin");
+    // site = 書き込みの元にする行(判定したときは判定の後に読み直した行。戻しもこの行で行う)
+    let { site } = await loadSite(c, c.req.param("sid"), "admin");
     const body = c.req.valid("json");
     const nowMs = Date.now();
     const nowSec = Math.floor(nowMs / 1000);
-    const { next, error } = applySitePatch(site, body, nowMs);
+    let { next, error } = applySitePatch(site, body, nowMs);
     if (error) throw error;
-    // B139: 共有の切り替えを含む保存は、利用者が選んだ値として自動の移行の対象から外す(同じ batch で印を 0 にする)
-    const choosesSharing = body.shareSubdomains !== undefined;
-    if (choosesSharing) next.share_migration_pending = 0;
+    const db = c.get("db");
+    // B148 Task 4: プランと導入の印を instance_settings の 1 回の SELECT で読む(プランは KV の記録にも使う。往復は今までのプランの読み取りと同じ 1 回)
+    const probeSettings = await readProbeSettings(c.env.DB);
+    // 確かめるのは Mode B で domains を含む保存と、Mode を B にする保存だけ(Mode A・B → A・ほかの節だけの保存は fetch 0 回で null)
+    let domainChecks: DomainChecks = null;
+    if (next.mode === "B" && (body.domains !== undefined || site.mode !== "B")) {
+      // 判定は D1 の batch と KV の書き込みの前。導入の印は D1 にあれば D1 に触れない(KV の get 1 回)
+      const installHash = await installHashOf(await ensureInstallMarker(c.env, c.env.DB, probeSettings.installMarker));
+      const results = await probeDomains(JSON.parse(next.domains_json) as DomainRow[], { plan: probeSettings.plan, installHash, originOverride: probeOverrideFromEnv(c.env) });
+      // 判定の間(最大 12 秒)に別の保存が入りうるので、行を読み直して patch を当て直す(D1 +1 往復)。判定の結果は読み直した行の一覧に当てる
+      const latest = await db.selectFrom("sites").selectAll().where("id", "=", site.id).executeTakeFirst();
+      if (!latest) throw notFound();
+      site = latest;
+      // Mode A の間に保存されていた判定(A の前の edge など)は確かめていない扱いにしてから当てる(確かめられなかった行を edge に戻さない)
+      ({ next, error } = applySitePatch(site.mode === "B" ? site : resetVerdictsFromModeA(site), body, nowMs));
+      if (error) throw error;
+      const merged = mergeProbeResults(JSON.parse(next.domains_json) as DomainRow[], results, nowSec);
+      ({ next, error } = applyDomainRows(next, merged.rows));
+      if (error) throw error;
+      domainChecks = domainChecksOf(merged);
+    }
+    // 次の 2 つの検査は書き込みの元にする行(判定したときは読み直した行)と比べる。判定の間に別の保存が保持期間を延ばしたり
+    // 結果の記録を無効にしたりした後で、当て直した patch が検査を通らずに縮める・有効にすることがないように(往復は今までと同じ)
     // D9 ②(設計書 §6.6): 計測用 D1 が無い導入では、結果の記録を有効にする操作を拒む(既存の導入先の更新で、D1 を作る前に有効にしても壊れない)。
     // 判定は無効 → 有効の切り替えだけ(有効のまま D1 が外れた Site で、ほかの設定の保存まで止めない)。無効にする向きは受ける
     if (next.results_enabled === 1 && site.results_enabled === 0 && !resultsStore(c.env))
@@ -320,11 +386,13 @@ siteRoutes.patch(
         message: "結果を記録するためのデータベースが導入されていません",
         hint: "導入ガイドの手順で計測用のデータベースを作り、control を設定し直してから有効にしてください",
       });
-    const db = c.get("db");
     if (next.retention_days < site.retention_days) {
       const conflicts = await retentionConflicts(db, site, next.retention_days);
       if (conflicts.length > 0) throw retentionShrinkError(conflicts, next.retention_days);
     }
+    // B139: 共有の切り替えを含む保存は、利用者が選んだ値として自動の移行の対象から外す(同じ batch で印を 0 にする)
+    const choosesSharing = body.shareSubdomains !== undefined;
+    if (choosesSharing) next.share_migration_pending = 0;
     const nextHosts: string[] = JSON.parse(next.hosts_json);
     /**
      * 失敗した PATCH の KV 後始末: 旧行から settings record と host キーを書き直す。
@@ -332,12 +400,13 @@ siteRoutes.patch(
      * (3) nextHosts のうち旧 hosts に無いキーを releaseHosts(D1 に持ち主が居ないときだけ、自 Site を指すものを delete)、をまとめてやるので、
      * 前進方向に書いた分をちょうど打ち消す。**settings record を戻さないと KV だけが D1 より先に進んだまま残り、
      * 次の PATCH が旧行から再導出して「配信中の Cookie 名」を旧名リストにも載せずに捨ててしまう。**
-     * ベストエフォート(ここで失敗しても元のエラーを返す。その Site の次の PATCH が自己修復する)
+     * ベストエフォート(ここで失敗しても元のエラーを返す)。settings record はその Site の次の保存が書き直すが、ホストのキーは新しいものだけを書くので、
+     * 戻せなかったホストのキーは、そのホストを一覧から外して足し直すまで残る(plan で受け入れた)
      */
     // D9 ③(K11): 収集の締め切りの表は前進・戻しの両方に同じものを付ける(どちらで書いても締め切りを消さない)
     // plan12 K10: 新しい訪問者の予算の既定もプランから同じように付ける。KV に CAS が無いので、この put と D1 の確定の間に書き直し
     // (プランの変更・rewriteCollectUntil)が古い行を読むと古い記録が残りうる(CL-Medium-11)が、site-settings-refresh が翌日までに D1 の値へ直す
-    const extras = { plan: await readCloudflarePlan(db), collectUntil: await collectUntilMap(db, site.id) };
+    const extras = { plan: probeSettings.plan, collectUntil: await collectUntilMap(db, site.id) };
     const prevHosts: string[] = JSON.parse(site.hosts_json);
     const addedHosts = nextHosts.filter((h) => !prevHosts.includes(h));
     const removedHosts = prevHosts.filter((h) => !nextHosts.includes(h));
@@ -383,7 +452,7 @@ siteRoutes.patch(
         throw await batchError(e);
       }
       try {
-        await putSiteRecords(c.env, next, extras);
+        await putSiteRecords(c.env, next, extras, { previousHosts: prevHosts });
       } catch (e) {
         // 先に D1 を旧値に戻す(releaseHosts は D1 に持ち主が居ない host だけを消すので、戻した後に呼ぶ)。予約は戻す間に他のサイトが取った組を飛ばす。
         // 配信ファイルの世代は戻さない(印が立ったままなら、旧い設定で作り直すだけ)。
@@ -408,7 +477,7 @@ siteRoutes.patch(
       // (4) 外した host の KV を releaseHosts で消す(D1 の確定の後。plan12 K14 (c))。
       // activation = KV put なので KV が先。失敗すれば D1 は旧値のまま(= 503 で再試行できる)
       try {
-        await putSiteRecords(c.env, next, extras);
+        await putSiteRecords(c.env, next, extras, { previousHosts: prevHosts });
       } catch (e) {
         await restoreKv(); // settings は書けたが host の put で落ちた、など途中まで進んだ場合
         throw e;
@@ -434,7 +503,7 @@ siteRoutes.patch(
       await requestStaticDeploy(c.env, db, next.id);
       Object.assign(next, await db.selectFrom("sites").select(["static_seq", "static_stale", "static_epoch", "static_served_version", "static_prev_served_version", "static_served_at"]).where("id", "=", next.id).executeTakeFirstOrThrow());
     }
-    return c.json(siteJson(next));
+    return c.json({ ...siteJson(next), domainChecks });
   },
 );
 

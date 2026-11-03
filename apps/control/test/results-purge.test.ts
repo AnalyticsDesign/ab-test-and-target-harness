@@ -33,7 +33,7 @@ type Owner = Awaited<ReturnType<typeof setupOwner>>;
 
 /** 結果を記録する Site(計測用 D1 がある導入で作る = results_enabled 1) */
 async function recordingSite(owner: Owner, workspaceId = owner.workspaceId): Promise<string> {
-  const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token: owner.token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+  const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token: owner.token, body: { name: "Site", domains: ["www.example.com"] }, envOverride: RESULTS_STORE });
   expect(res.status).toBe(201);
   const { id } = await json<{ id: string }>(res);
   expect((await siteRow(id)).results_enabled).toBe(1);
@@ -219,7 +219,7 @@ describe("results purge queue and forget (D9 ③ K6・K12)", () => {
     expect((await call("DELETE", `/sites/${sid}`, { token: owner.token, envOverride: RESULTS_STORE })).status).toBe(204);
     expect((await queueRows()).map((r) => [r.site_id, r.run_id, r.reason])).toEqual([[sid, runId, "site_deleted"]]);
     // 同じ WS で同じ ID を作り直す(別の WS からは退役の 409。同じ WS からは作れる)
-    const again = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id: sid, name: "Again", domain: "again.example.com" }, envOverride: RESULTS_STORE });
+    const again = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id: sid, name: "Again", domains: ["again.example.com"] }, envOverride: RESULTS_STORE });
     expect(again.status).toBe(201);
     const budget = fakeResultsBudget();
     expect(await purgeRun(purgeEnv(budget), sid, runId, 10_000, NOW, apiGuard(purgeEnv(budget)))).toEqual({ done: true, rowsWritten: 12 });

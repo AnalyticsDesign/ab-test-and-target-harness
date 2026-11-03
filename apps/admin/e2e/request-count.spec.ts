@@ -11,6 +11,7 @@ import { ADMIN_URL, CONTROL_URL, WORKSPACE_NAME, controlHeaders, createExperimen
  *
  * 対象の画面(SCREENS): ホーム・ワークスペースのホーム・サイトのトップ(= エクスペリエンスの一覧)・目標・オーディエンスの一覧・
  * エクスペリエンスの詳細・オーディエンスの詳細(設定)・サイト設定・メンバー(ワークスペースの設定)・公開・公開履歴。
+ * B148: サイト設定のドメインの節(siteSettingsDomains)は、直接(?section=domains)・節のリンク・節の保存 1 回を SCREENS の外で数える(節の切り替えはルーターを通らない)。
  * 目標には詳細の画面が無い(一覧の中で編集する)ので、目標の一覧で代える。画面ごとに次の 2 通りを数える:
  * - 直接: page.goto で URL を開く(HTML の要求)
  * - 遷移: 遷移元の画面を開き、落ち着いてからリンクにマウスを乗せ、その先読みも落ち着いてから押す(RSC の要求 `?_rsc=`)。
@@ -48,6 +49,7 @@ type ScreenName =
   | "experiment"
   | "audience"
   | "siteSettings"
+  | "siteSettingsDomains"
   | "members"
   | "publish"
   | "history";
@@ -67,6 +69,9 @@ export const REQUEST_LIMITS: Record<ScreenName, { direct: number; navigation: nu
   experiment: { direct: 9, navigation: 9 }, // 実測 8 / 8(+ audiences・goals・experiments/:eid・evaluation-plan)
   audience: { direct: 8, navigation: 8 }, // 実測 7 / 7(+ audiences/:aid・audiences・goals)
   siteSettings: { direct: 6, navigation: 6 }, // 実測 5 / 5(+ experiments)。B139 の訪問者 ID の共有のカードが入った後も同じ(カードは control を呼ばない。2026-11-01)
+  // B148: サイト設定のドメインの節。上限は siteSettings と同じ(節を増やしても admin → control の要求を増やさない)。
+  // direct = ?section=domains を直接開く / navigation = 一般の節から設定のメニューの「ドメイン」で移る(ルーターを通さない節の切り替え)
+  siteSettingsDomains: { direct: 6, navigation: 6 }, // 実測 5 / 0(2026-11-02。節のリンクはルーターを通らないので control を呼ばない)
   members: { direct: 6, navigation: 6 }, // 実測 5 / 5(サイトの外。+ members・invitations)
   publish: { direct: 6, navigation: 6 }, // 実測 5 / 5(+ publish-preview)
   history: { direct: 6, navigation: 6 }, // 実測 5 / 5(+ publishes)
@@ -81,6 +86,15 @@ export const REQUEST_LIMITS: Record<ScreenName, { direct: number; navigation: nu
 export const IDLE_LIMITS = {
   siteTop: 2, // 実測 1(BFF の /static/status。2026-11-01)
   audiences: 2, // 実測 1(同上)
+} as const;
+
+/**
+ * B148: 書き込みの回数の上限。ドメインの節の保存 1 回(BFF の PATCH 1 + 保存の後の読み直し)が control を呼ぶ回数。
+ * 上限は siteSettings の直接の表示と同じ(読み直しは画面の表示と同じ取得で、PATCH の 1 回はその余裕の中に収める)
+ */
+export const SAVE_LIMITS = {
+  // 実測 6(2026-11-02。PATCH 1 + 読み直し 5)。余裕は 0: 読み直しの取得が 1 つ増えたら落ちる(上げる前にファイルの先頭の手順)
+  siteSettingsDomains: REQUEST_LIMITS.siteSettings.direct,
 } as const;
 
 const SITE_RC = { id: "site_e2e_rcount", name: "E2E Request Count" };
@@ -254,7 +268,7 @@ const SCREENS: Screen[] = [
 ];
 
 /** 画面ごとの実測(最後の表) */
-type Row = { direct: number | null; navigation: number | null; prefetchOnHover: number | null; afterLoad: number | null; open?: number | null };
+type Row = { direct: number | null; navigation: number | null; prefetchOnHover: number | null; afterLoad: number | null; open?: number | null; save?: number | null };
 
 /**
  * 全画面を 1 つのテストの段(test.step)にする: 表明は soft にして、ある画面が上限を超えても・操作で落ちても残りの画面まで数えて記録する
@@ -386,6 +400,90 @@ test("main screens: control requests per view stay within the budget (direct HTM
         expect.soft(duplicates(navigation), `${s.name}: 遷移: 同じパスへの重複が無い`).toEqual({});
         expect.soft(navigation.total, `${s.name}: 遷移: control への要求が数えられている(≥ 1)`).toBeGreaterThan(0);
         expect.soft(navigation.total, `${s.name}: 遷移で control への要求 ≤ ${limit.navigation}`).toBeLessThanOrEqual(limit.navigation);
+      }),
+    );
+  }
+
+  // B148: サイト設定のドメインの節。節はルーターを通さずに切り替わる(lib/settings-section.ts)ので、SCREENS の遷移の形(押した後の RSC の要求)にならない。
+  // 直接(?section=domains の HTML)・節のリンク(押した後の要求の全部)・節の保存 1 回(BFF の PATCH と保存の後の読み直しの RSC)を数える
+  {
+    const settingsPath = `${siteBase(ids)}/settings`;
+    const limit = REQUEST_LIMITS.siteSettingsDomains;
+    const row: Row = { direct: null, navigation: null, prefetchOnHover: null, afterLoad: null, save: null };
+    summary.siteSettingsDomains = row;
+    const domainsSection = page.getByTestId("domains-section");
+    const isOwnHtml = (r: AdminRequest) => new URL(r.url).pathname === settingsPath && !new URL(r.url).searchParams.has("_rsc");
+    const guard = async (what: string, body: () => Promise<void>) => {
+      try {
+        await body();
+      } catch (e) {
+        expect.soft(String(e), `siteSettingsDomains: ${what} の操作が最後まで進む`).toBe("");
+        await waitQuiet(Date.now() - 5_000).catch(() => undefined);
+      }
+    };
+
+    await test.step("siteSettingsDomains: direct load (HTML, ?section=domains)", () =>
+      guard("direct", async () => {
+        const from = Date.now();
+        await page.goto(`${settingsPath}?section=domains`);
+        await waitForHydration(page);
+        await expect(domainsSection).toBeVisible();
+        const to = await waitQuiet(from);
+        const reqs = await adminRequests(from, to);
+        const own = reqs.filter(isOwnHtml);
+        const direct = count(own, ids.wid);
+        row.direct = direct.total;
+        await record(testInfo, "siteSettingsDomains-direct", { direct, others: count(reqs.filter((r) => !isOwnHtml(r)), ids.wid), requests: perRequest(reqs, ids.wid) });
+        expect.soft(own, "siteSettingsDomains: 直接: 画面の HTML の要求が 1 件ある").toHaveLength(1);
+        expect.soft(duplicates(direct), "siteSettingsDomains: 直接: 同じパスへの重複が無い").toEqual({});
+        expect.soft(direct.total, "siteSettingsDomains: 直接: control への要求が数えられている(≥ 1)").toBeGreaterThan(0);
+        expect.soft(direct.total, `siteSettingsDomains: 直接の表示で control への要求 ≤ ${limit.direct}`).toBeLessThanOrEqual(limit.direct);
+      }),
+    );
+
+    await test.step("siteSettingsDomains: section link from the general section", () =>
+      guard("navigation", async () => {
+        await page.goto(settingsPath);
+        await waitForHydration(page);
+        await waitQuiet(Date.now() - 5_000);
+        const link = page.getByTestId("section-domains");
+        await link.hover();
+        await waitQuiet(Date.now());
+        const from = Date.now();
+        await link.click();
+        await expect(domainsSection).toBeVisible();
+        await expect(page).toHaveURL(/[?&]section=domains/);
+        const to = await waitQuiet(from);
+        const reqs = await adminRequests(from, to);
+        const navigation = count(reqs, ids.wid);
+        row.navigation = navigation.total;
+        await record(testInfo, "siteSettingsDomains-navigation", { navigation, requests: perRequest(reqs, ids.wid) });
+        expect.soft(navigation.total, `siteSettingsDomains: 節のリンクで control への要求 ≤ ${limit.navigation}`).toBeLessThanOrEqual(limit.navigation);
+      }),
+    );
+
+    await test.step("siteSettingsDomains: one save of the section (PATCH + refresh)", () =>
+      guard("save", async () => {
+        await expect(domainsSection).toBeVisible();
+        await waitQuiet(Date.now() - 5_000);
+        const from = Date.now();
+        await page.getByRole("button", { name: "保存", exact: true }).click();
+        await expect(page.getByText("保存しました")).toBeVisible();
+        const to = await waitQuiet(from);
+        const reqs = await adminRequests(from, to);
+        // 表明するのは保存そのものの要求: BFF の PATCH と、保存の後の読み直し(この画面の RSC)。ほかは記録だけ
+        const isSaveOwn = (r: AdminRequest) => {
+          const u = new URL(r.url);
+          return u.pathname === `/api/control/sites/${SITE_RC.id}` || (u.pathname === settingsPath && u.searchParams.has("_rsc"));
+        };
+        const own = reqs.filter(isSaveOwn);
+        const save = count(own, ids.wid);
+        row.save = save.total;
+        await record(testInfo, "siteSettingsDomains-save", { save, others: count(reqs.filter((r) => !isSaveOwn(r)), ids.wid), requests: perRequest(reqs, ids.wid), limit: SAVE_LIMITS.siteSettingsDomains });
+        expect.soft(own.length, "siteSettingsDomains: 保存: PATCH と読み直しの 2 件の要求がある").toBe(2);
+        // PATCH の分が数えられている(0 = 観測の口が壊れた)
+        expect.soft(save.total, "siteSettingsDomains: 保存: control への要求が数えられている(≥ 1)").toBeGreaterThan(0);
+        expect.soft(save.total, `siteSettingsDomains: 節の保存 1 回で control への要求 ≤ ${SAVE_LIMITS.siteSettingsDomains}`).toBeLessThanOrEqual(SAVE_LIMITS.siteSettingsDomains);
       }),
     );
   }

@@ -931,7 +931,7 @@ describe("版の名乗り(plan12 K3)", () => {
     expect(res.status).toBe(426);
     await expect(res.json()).resolves.toMatchObject({ error: "client_too_old", clientVersion: 0 });
     // 名乗れば通る
-    const ok = await PATCH(post("http://admin.test/api/control/sites/s1", { method: "PATCH", headers: { ...json, "x-wtt-client-version": "1" }, body: "{}" }), params(["sites", "s1"]));
+    const ok = await PATCH(post("http://admin.test/api/control/sites/s1", { method: "PATCH", headers: { ...json, "x-wtt-client-version": String(MIN_CLIENT_VERSION) }, body: "{}" }), params(["sites", "s1"]));
     expect(ok.status).toBe(200);
   });
 });

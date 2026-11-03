@@ -39,6 +39,8 @@ const BANNED: Array<{ re: RegExp; use: string }> = [
   { re: /\.toUpperCase\(\)/, use: "roleLabel(ロールの表示は roleLabel だけ)" },
   // B77: エクスペリエンスの編集のタブは「基本設定」/「パターン」(旧「概要」/「パターン」/「外部計測」)。タブの label と JSX のテキストに置いた「概要」を探す
   { re: /label:\s*["'`]概要["'`]|>\s*概要\s*</, use: "基本設定(エクスペリエンスの編集のタブ)" },
+  // B148: 旧い欄の名前。タグを置くドメインの一覧 1 つにまとめた(Origin は「この一覧から決まる値」で「受け付ける Origin」と書く)
+  { re: /受け付けるサイトのアドレス/, use: "タグを置くドメイン(一覧から決まる値は「受け付ける Origin」)" },
   // B77: description は「メモ」(オーディエンスの説明も表記は「メモ(任意)」)。半角・全角の括弧の両方
   { re: /説明[(（]任意[)）]/, use: "メモ(任意)" },
 ];
@@ -46,6 +48,9 @@ const BANNED: Array<{ re: RegExp; use: string }> = [
 const ALLOW: Array<{ file: string; re: RegExp; why: string }> = [
   { file: "lib/targeting-tree.ts", re: /\.toUpperCase\(\)/, why: "演算子の名前(notEquals など)を組み立てる" },
   { file: "components/experiment/VariantsTab.tsx", re: /\.toUpperCase\(\)/, why: "新しいパターンの既定の名前(ID の大文字)= データ" },
+];
+/** englishProseIn の検査を外すファイル(理由を書く。ALLOW と同じく、直したら消す) */
+const ALLOW_PROSE: Array<{ file: string; use: string; why: string }> = [
 ];
 
 /**
@@ -103,6 +108,8 @@ const ENGLISH_PROSE: Array<{ re: RegExp; use: string }> = [
   { re: /(?<![\w/:.-])version(?![\w/:.-])/, use: "版" },
   { re: /(?<![\w/:.-])active(?![\w/:.-])/, use: "配信中" },
   { re: /\bPhase\b/, use: "「今後追加します」など(開発の段階名は画面に出さない)" },
+  // B148: Mode B の hosts は「Cloudflare 経由のドメイン」、入力の欄は「タグを置くドメイン」(g.hosts などの識別子は語の途中なので当たらない)
+  { re: /(?<![\w/:.-])hosts(?![\w/:.-])/, use: "Cloudflare 経由のドメイン / タグを置くドメイン" },
 ];
 const stripNonProse = (t: string) => t.replace(/<code>[^<]*<\/code>/g, " ").replace(/\$\{[^}]*\}/g, " ").replace(/\{[^{}]*\}/g, " ");
 /** 1 行の中の、日本語を含む文字列リテラルと JSX のテキストに残る英語の語(の言い換え先) */
@@ -127,7 +134,7 @@ function bannedIn(line: string, file?: string): string[] {
     out.push(b.use);
   }
   for (const t of jsxTextHits(line)) out.push(`JSX のテキスト「${t.slice(0, 40)}」→ 用語表の日本語`);
-  out.push(...englishProseIn(line));
+  out.push(...englishProseIn(line).filter((hit) => !(file && ALLOW_PROSE.some((a) => a.file === file && hit.endsWith(`→ ${a.use}`)))));
   return out;
 }
 
@@ -176,6 +183,10 @@ describe("screen strings follow the glossary (backlog B35)", () => {
       '{ id: "overview", label: "概要" }',
       "<h2>概要</h2>",
       "                説明(任意)",
+      // B148: 旧い欄の名前
+      '<Field label="受け付けるサイトのアドレス(Origin。1 行に 1 つ)">',
+      '<Field label="hosts(1 行 1 ホスト名)" error={fields.hosts}>',
+      "<li>下の hosts に対象ホスト名を 1 行ずつ書く</li>",
     ];
     for (const line of bad) expect(bannedIn(line), line).not.toEqual([]);
     const good = [
@@ -221,6 +232,11 @@ describe("screen strings follow the glossary (backlog B35)", () => {
       'title="エクスペリエンス名"',
       'title="エクスペリエンス情報を追加"',
       'title="出力される内容"',
+      // B148 の用語(識別子の hosts は語の途中・日本語の無い行なので当たらない)
+      "<span>タグを置くドメイン(1 行に 1 つ)</span>",
+      "const groups = site.cookieGroups.map((g) => g.hosts.join(\"・\"));",
+      "{`${g.hosts.join(\"・\")} で共有`}",
+      "<dt>受け付ける Origin(/v1/ の CORS)</dt>",
     ];
 
     for (const line of good) expect(bannedIn(line), line).toEqual([]);
@@ -252,6 +268,15 @@ describe("screen strings follow the glossary (backlog B35)", () => {
       "出力される内容",
       "サイト設定", // B60: 画面の見出し(旧「サイトの設定」)
     ];
+    const screen = DIRS.flatMap(files)
+      .map((file) => stripComments(readFileSync(path.join(ROOT, file), "utf8")))
+      .join("\n");
+    expect(terms.filter((t) => !screen.includes(t))).toEqual([]);
+  });
+
+  it("uses the B148 terms on screen (the glossary additions)", () => {
+    // B148: 一般のドメイン・受け付ける Origin と Mode B の hosts を「タグを置くドメイン」1 つにまとめ、判定の結果を「Cloudflare 経由」「Cloudflare 外」と呼ぶ
+    const terms = ["タグを置くドメイン", "Cloudflare 経由", "Cloudflare 外"];
     const screen = DIRS.flatMap(files)
       .map((file) => stripComments(readFileSync(path.join(ROOT, file), "utf8")))
       .join("\n");

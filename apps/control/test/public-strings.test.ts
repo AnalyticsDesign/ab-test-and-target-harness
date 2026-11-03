@@ -57,9 +57,19 @@ describe("public strings carry no private design references", () => {
     const byoid = await call("PATCH", `/sites/${sid}`, { token, body: { idSource: "cookie:_wtt_vid" } });
     expect(byoid.status).toBe(422);
     noPrivateRef("byoid_cookie_name_conflict", JSON.stringify(await json(byoid)));
-    const modeB = await call("PATCH", `/sites/${sid}`, { token, body: { mode: "B", hosts: ["www.example.com"], idSource: "cookie:sid" } });
+    const modeB = await call("PATCH", `/sites/${sid}`, { token, body: { mode: "B", idSource: "cookie:sid" } });
     expect(modeB.status).toBe(422);
     noPrivateRef("mode_b_requires_id_source_ab", JSON.stringify(await json(modeB)));
+    // B148: 旧い欄と一覧の行の誤り
+    const legacy = await call("PATCH", `/sites/${sid}`, { token, body: { hosts: ["www.example.com"] } });
+    expect(legacy.status).toBe(422);
+    noPrivateRef("legacy_domain_fields", JSON.stringify(await json(legacy)));
+    const badDomains = await call("PATCH", `/sites/${sid}`, { token, body: { domains: ["www.example.com/a", "co.jp", "", "*.example.com"] } });
+    expect(badDomains.status).toBe(422);
+    noPrivateRef("invalid_domains", JSON.stringify(await json(badDomains)));
+    const suffix = await call("PATCH", `/sites/${sid}`, { token, body: { domains: ["co.jp"] } });
+    expect(suffix.status).toBe(422);
+    noPrivateRef("invalid_domains (suffix)", JSON.stringify(await json(suffix)));
     const { id: eid } = await createExperiment(token, sid);
     const attr = await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, {
       token,
@@ -95,7 +105,7 @@ describe("public strings carry no private design references", () => {
     expect(storeBody.error).toBe("results_store_missing");
     noPrivateRef("results_store_missing", JSON.stringify(storeBody));
     // D9 ③(K25): 評価計画のエラー。結果を記録するサイトで、判定に使う目標が無い・基準の重みが 0 の開始
-    const recorded = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+    const recorded = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "Site", domains: ["www.example.com"] }, envOverride: RESULTS_STORE });
     const { id: rec } = await json<{ id: string }>(recorded);
     const { id: planExp } = await createExperiment(token, rec);
     const start = () => call("POST", `/sites/${rec}/experiments/${planExp}/status`, { token, body: { status: "running" }, envOverride: RESULTS_STORE });

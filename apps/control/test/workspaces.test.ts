@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { kvKeys } from "@wtt/core";
-import { BREAK_GLASS, call, googleSignIn, json, setupOwner, inviteAndJoin, uniqueEmail, expectEnvelope, failingD1Insert, createSite, createExperiment, runDirect } from "./helpers";
+import { BREAK_GLASS, call, googleSignIn, json, setupOwner, inviteAndJoin, uniqueEmail, expectEnvelope, failingD1Insert, createSite, createExperiment, runDirect, setEdgeDomains } from "./helpers";
 
 /** `POST /workspaces/:wid/invitations` の応答(B28 で `extended` が増えた) */
 type InvitationResult = { id: string; url: string; expiresAt: number; extended: boolean };
@@ -438,6 +438,7 @@ describe("workspaces / invitations / members", () => {
     // 最後の 1 つは消せないので、消される側とは別にもう 1 つ作っておく
     await call("POST", "/workspaces", { token: owner.token, body: { name: "Keeper" } });
     const { id } = await createSite(owner.token, owner.workspaceId, { id: "site_ws", mode: "B", domain: "ws.example.com" });
+    await setEdgeDomains(owner.token, id, ["ws.example.com"]); // B148 Task 2: 判定は D1 に直接置く
     expect(await env.CONFIG_KV.get(kvKeys.settings(id))).not.toBeNull();
     expect(await env.CONFIG_KV.get(kvKeys.host("ws.example.com"))).toBe(id);
     expect((await call("DELETE", `/workspaces/${owner.workspaceId}`, { token: owner.token })).status).toBe(204);

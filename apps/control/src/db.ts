@@ -36,6 +36,11 @@ export type SiteRow = {
    * 共有の自動の移行の対象か(0 / 1。既存の行は 1)
    */
   share_subdomains: number; previous_cookie_domains_json: string; share_migration_pending: number;
+  /**
+   * migrations/0022_site_domains.sql(B148): タグを置くドメインの一覧(`DomainRow[]` の JSON。domains.ts)。一覧が正で、
+   * domain・allowed_origins_json・hosts_json は保存のたびに deriveDomainColumns で一覧から導いて書く
+   */
+  domains_json: string;
 };
 export type SiteHostRow = { host: string; site_id: string };
 /** migrations/0007_audiences.sql。definition_json = 保存する形の配信条件(core の Targeting) */

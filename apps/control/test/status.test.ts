@@ -312,7 +312,7 @@ describe("run_id の発行と開始の警告(D9 ②)", () => {
   /** 計測用 D1 がある導入で作った Site(results_enabled = 1)と、変更 1 件のテスト */
   async function storeBase(expOverrides: Record<string, unknown> = {}) {
     const owner = await setupOwner();
-    const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+    const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domains: ["www.example.com"] }, envOverride: RESULTS_STORE });
     expect(res.status).toBe(201);
     const { id: sid } = await json<{ id: string }>(res);
     const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_hero", ...expOverrides });

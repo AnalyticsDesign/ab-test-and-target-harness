@@ -23,7 +23,7 @@ describe("api keys (decision 34, spec §13.3)", () => {
     // 鍵 = 所有者の Role(EDITOR)。GET /me は通る
     expect((await call("GET", "/me", { token: key })).status).toBe(200);
     // ADMIN 操作(Site の作成)は 403 forbidden + required: "admin"
-    const denied = await call("POST", `/workspaces/${wid}/sites`, { token: key, body: { name: "x", domain: "x.example.com" } });
+    const denied = await call("POST", `/workspaces/${wid}/sites`, { token: key, body: { name: "x", domains: ["x.example.com"] } });
     expect(denied.status).toBe(403);
     expect(await json(denied)).toMatchObject({ error: "forbidden", required: "admin" });
     // 失効後は 401

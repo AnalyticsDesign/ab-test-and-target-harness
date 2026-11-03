@@ -76,8 +76,8 @@ describe("openapi (decision 34)", () => {
     // review r1 / r2 の持ち越し: Task 3 の 2 ルートが requestBody を本当に公開しているかの常設アサート
     const doc = (await (await app.request("/openapi.json", {}, env)).json()) as Doc;
     for (const [path, method, required] of [
-      ["/workspaces/{wid}/sites", "post", ["name", "domain"]],
-      ["/sites/{sid}", "patch", ["name"]],
+      ["/workspaces/{wid}/sites", "post", ["name", "domains"]],
+      ["/sites/{sid}", "patch", ["name", "domains"]],
     ] as const) {
       const schema = doc.paths[path]?.[method]?.requestBody?.content?.["application/json"]?.schema;
       expect(schema, `${method.toUpperCase()} ${path}: requestBody が無い`).toBeDefined();

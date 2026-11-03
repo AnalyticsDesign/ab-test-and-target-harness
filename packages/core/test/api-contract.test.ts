@@ -37,8 +37,8 @@ describe("lowerClientVersion", () => {
 });
 
 describe("版の定数", () => {
-  it("MIN_CLIENT_VERSION は 1 で、契約の版以下", () => {
-    expect(MIN_CLIENT_VERSION).toBe(1);
+  it("MIN_CLIENT_VERSION は 3(B148 で書き込みの欄が変わった)で、契約の版以下", () => {
+    expect(MIN_CLIENT_VERSION).toBe(3);
     expect(MIN_CLIENT_VERSION).toBeLessThanOrEqual(API_CONTRACT_VERSION);
   });
   it("MIN を契約の版より低く据え置くなら理由を書く", () => {

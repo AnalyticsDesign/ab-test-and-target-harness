@@ -476,7 +476,7 @@ AI エージェントに任せる場合、構成は 0.2 の質問と検査スク
 
 - `zone_name: auto` と `asset_public_base: auto` は、0.4 の[ログインの後の確認](#ログインの後の確認)で確定する
 - 未検証と注記された値(`control_protection` の `waf` / `access`)が書かれていたら、進める前に人に確認する
-- ページのホスト(サイトの「ドメイン(ホスト名)」)は入力ファイルには書かず、5 節でサイトを作るときに管理画面で入力する
+- ページのホスト(サイトの「タグを置くドメイン」)は入力ファイルには書かず、5 節でサイトを作るときに管理画面で入力する
 - `dlite_hosts` があるときは、5 節でサイトを作るときに `導入の形` を `B: サーバー発行 Cookie` にする
 
 確認:
@@ -897,7 +897,7 @@ admin のリクエストの数え方:
 | ゾーンの WAF Rate Limiting Rule(2.7) | 作れる | 作れる(別のドメインのゾーンに作る) | 作れない。Worker の起動前に捨てる仕組みが無いので、無料枠の日次上限(10 万リクエスト)を 1 台の機械から数分で使い切られうる。使い切ると当日は edge も control も止まる。上限はアカウント単位 |
 | ゾーンの Cache Rule(2.6) | 作る。設置タグのファイルのブラウザキャッシュの設定が上書きされないようにする、念のための設定 | 作る(別のドメインのゾーンに、条件のホストを `<edge のホスト>` にして作る) | 作れない(ゾーンが無い)。設置タグのファイルのヘッダー(60 秒)は配信専用の Worker が付けるので、変更されずに適用される |
 | Mode B(サーバー発行 Cookie) | 使える | 使えない(ページのホストに `/__ab/*` を置けないため。Mode A か Mode C で運用する) | 使えない |
-| タグと設置サイト | 同一オリジン | 別オリジン。サイトの `allowedOrigins` にページの origin が要る(サイトを作ると `https://<ドメイン>` が入る。ページのホストが複数なら足す)。サイトが CSP を出していれば `script-src` と `connect-src` に `<edge のホスト>` を足す(設置タグと edge が同じホストなので 1 つ) | 別オリジン。サイトが CSP を出していれば `script-src` に `wtt-static` のホスト、`connect-src` に edge のホストを足す |
+| タグと設置サイト | 同一オリジン | 別オリジン。サイト設定の「ドメイン」の節の「タグを置くドメイン」に、ページのホストが要る(サイトを作ると作成のときに入れたドメインが 1 行目に入る。ページのホストが複数なら足す。edge が受け付けるページの Origin はこの一覧から決まる)。サイトが CSP を出していれば `script-src` と `connect-src` に `<edge のホスト>` を足す(設置タグと edge が同じホストなので 1 つ) | 別オリジン。サイトが CSP を出していれば `script-src` に `wtt-static` のホスト、`connect-src` に edge のホストを足す |
 
 別のドメインに置く構成では、ほかに次の 2 つを承知しておく:
 
@@ -1130,7 +1130,7 @@ curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "https://<edge のホ�
 
 設置サイトのゾーンの Workers Route(`<設置ホスト>/s/*` を `wtt-static` に、`<設置ホスト>/v1/*` を edge に)を推奨する。設置タグと decision / event が設置サイトと同一オリジンになるため CORS の設定も DNS レコード・証明書の追加も要らない。
 
-サイトのドメインが Cloudflare に無いときは、Cloudflare に置ける別のドメインのホスト(`<edge のホスト>`。例 `ab.example.net`)に置く(`edge_address: custom-domain`)。1 つのホストに、edge を Custom Domain で、`wtt-static` を `<edge のホスト>/s/*` の Route で置く。設置タグと decision / event はページと別オリジンになるので、サイトの `allowedOrigins` にページの origin が要る(サイトを作ると `https://<ドメイン>` が入る)。代償は 1 節の制約 (3)。どちらも無いときは `*.workers.dev`(`edge_address: workers-dev`)。
+サイトのドメインが Cloudflare に無いときは、Cloudflare に置ける別のドメインのホスト(`<edge のホスト>`。例 `ab.example.net`)に置く(`edge_address: custom-domain`)。1 つのホストに、edge を Custom Domain で、`wtt-static` を `<edge のホスト>/s/*` の Route で置く。設置タグと decision / event はページと別オリジンになるので、サイト設定の「タグを置くドメイン」にページのホストが要る(サイトを作ると作成のときに入れたドメインが入る)。代償は 1 節の制約 (3)。どちらも無いときは `*.workers.dev`(`edge_address: workers-dev`)。
 
 ### 2.6 ゾーン側の Cache Rule(念のため。推奨)
 
@@ -1339,7 +1339,7 @@ IP with NAT support は Cloudflare の画面の名前で、日本語の表示は
 
 ### 2.8 ドメインありへの移行(`workers-dev` → `route`)
 
-`*.workers.dev` で始めた導入を、設置サイトのゾーンの Route に移す手順。Worker・KV・Durable Objects・サイト設定・`allowedOrigins` は引き続き使える。変わるのは edge と設置タグの公開 origin(設置タグを配る `wtt-static` の置き場所を含む)だけ。
+`*.workers.dev` で始めた導入を、設置サイトのゾーンの Route に移す手順。Worker・KV・Durable Objects・サイト設定(タグを置くドメインの一覧を含む)は引き続き使える。変わるのは edge と設置タグの公開 origin(設置タグを配る `wtt-static` の置き場所を含む)だけ。
 
 `*.workers.dev` で始めた導入を、サイトとは別のドメイン(別のドメインに置く構成)に移す手順は、まだ用意していない。
 
@@ -1756,15 +1756,15 @@ curl -sS "<control URL>/login-options"   # 期待: {"google":true,"passwordLogin
 
 `dlite_hosts` があるときは、サイトを作るときに次のとおりにする([サイト導入ガイド 8 節](site-install.md#mode-bサーバー発行-cookie)):
 
-- `ドメイン(ホスト名)` に `dlite_hosts` のホストを入れる
+- `タグを置くドメイン(1 つ目)` に `install_host` を入れる(`install_host` が `dlite_hosts` に無いときは、`dlite_hosts` のホストを入れる)
 - `導入の形` を `B: サーバー発行 Cookie(同じゾーンの Workers Route。サイトが Cloudflare 配下のとき)` にする。作成画面の既定は Mode A なので、選ばないと Safari 対策が有効にならない
-- Mode B で作ると、サイト設定の `hosts` には `ドメイン(ホスト名)` が自動で入る。作成の画面には `hosts` の欄は無い。ほかのホストでも使うときは、作成後のサイト設定の `hosts` に足す
-- サイトを作った後、疎通を確かめる。`set-cookie:` の行が出れば成功:
+- Mode B で作ると、作成のときに、入れたドメインで edge が応答するか(Cloudflare 経由か)を control が確かめる。作った後、左メニューの下の「設定」→「サイト設定」の「ドメイン」の節で、そのドメインの行の札が `Cloudflare 経由(edge が応答しました)` になったことを確かめる
+- ほかのホストにもタグを置くときは、同じ「ドメイン」の節の「タグを置くドメイン」に足して保存する。保存のたびに、一覧のドメインごとに確かめ直す
 
-```bash
-curl -si -X POST "https://<dlite_hosts のホスト>/__ab/decision" -H 'content-type: application/json' \
-  -d '{"v":1,"url":"https://<dlite_hosts のホスト>/","referrer":"","device":"desktop"}' | grep -i set-cookie
-```
+期待と違うとき:
+
+- 札が `Cloudflare 外(edge が応答しません)` → そのホストに `/__ab/*` の Route が無いか、まだ edge に届いていない(2.3)。Route を足してから、ドメインの節でもう一度保存すると確かめ直す
+- 札が `確かめられませんでした` → 確認の要求が 403・429・5xx を受けたか、時間切れになった。そのドメインは前回の判定のまま(初めてなら Cloudflare 外として動く)。サイトのゾーンの WAF(2.7 のレート制限ルールや、ほかの遮断のルール)が、control からの確認の要求を止めていることがある。2.7 の「遮断を見る」と同じ、ゾーンの Security(セキュリティ)→ Analytics → Events のタブ(Analytics・Events の日本語の表示は未確認)で、`/__ab/ping` への要求が止められていないかを見る。止められていたら、その要求を止めないようにルールを直してから、もう一度保存する
 
 **スモーク**(**【人が行う】** 管理画面の操作): サイトを作る → エクスペリエンスを作る → 開始(成功すると自動で公開される)→ 下の確認 → 終了。エージェントは確認コマンドを用意する。
 
@@ -2016,6 +2016,13 @@ runtime を作り直したら control と deployer も必ず再デプロイす�
 - マイグレーション(上の 2 つ目のブロックの手順 2)を control の deploy(手順 3)より前に当てる。2 つ目のブロックの順のままでよい。control を先にデプロイすると、新しい control がログイン状態を作るときに書く列がまだ無いので、ログインが失敗する。この列は足すだけで、前の版の control は読まないので、前の版へ戻すとき(6.5)にデータベースを戻す必要は無い
 - この版より前に作られたログイン状態のうち、パスワードの記録を持つ人のものは、Google でログインしたものも含めて、API キーの発行が 403 になる。Google でログインし直せば発行できる。非常口を閉じた後のパスワードの記録の削除(8 節)が済んでいれば当たらない。削除は閉じてから通常 15 分以内に行われ、その回の量が多いと次の回に回り、書き込みの凍結中は止まる
 - 前の版で非常口(8 節)を開けたことがあれば、管理画面の各ワークスペースの「メンバーの API キー」(左メニューの下の「設定」の「ワークスペース」の見出しの下。管理者以上)の一覧で、心当たりの無い鍵を失効させる(鍵はそのワークスペースの一覧にだけ出るので、ワークスペースごとに見る)。前の版では、パスワードでログインしたセッションからも鍵を発行でき、その鍵は非常口を閉じても残るため
+
+**タグを置くドメインの一覧を入れるリリースの更新**(CHANGELOG の目印「タグを置くドメインの一覧(壊れる変更)」):
+
+- control の `apps/control/wrangler.jsonc` の `compatibility_flags` に `global_fetch_strictly_public` が増えた。保存のときに control が各ドメインの `/__ab/ping` へ送る確認を、control とサイトが同じゾーンにある構成でも、ゾーンの Route を経由して edge に届くようにするため。6.2 の stash の apply でこの行が衝突したら、新しい版の行(`"nodejs_compat", "global_fetch_strictly_public"`)を残す。手順 3(control)の前に `grep -c global_fetch_strictly_public apps/control/wrangler.jsonc` が 1 であることを確かめる
+- マイグレーション(D1 の `0022_site_domains.sql`)が、今の 3 つの欄(ドメイン・受け付けるサイトのアドレス・Mode B の `hosts`)からタグを置くドメインの一覧を作る。上の 2 つ目のブロックの順(マイグレーション → control)のままでよい
+- **この版より前に開いた管理画面のタブは、凍結を外した後の最初の保存で「管理画面が古い版です」(426)になる**。ページを再読み込みすれば直る。API で `domain`・`allowedOrigins`・`hosts` を書き込んでいるエージェントや手順は、`domains` に書き換える(古い欄を送ると 422 `legacy_domain_fields`)
+- 凍結を外した後、Mode B のサイトはドメインの節で一度保存すると、一覧のドメインごとに Cloudflare 経由かを確かめる。保存するまでは、今の `hosts` にあったドメインは Cloudflare 経由、それ以外は確かめていないドメイン(Cloudflare 外として動く)のまま
 
 ```bash
 pnpm -C apps/admin build && pnpm -C apps/admin deploy:cf   # 4. admin

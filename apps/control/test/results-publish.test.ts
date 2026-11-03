@@ -14,7 +14,7 @@ async function resultsSite(store = true, existing?: Awaited<ReturnType<typeof se
   const owner = existing ?? (await setupOwner());
   const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, {
     token: owner.token,
-    body: { name: "Site", domain: "www.example.com" },
+    body: { name: "Site", domains: ["www.example.com"] },
     ...(store ? { envOverride: RESULTS_STORE } : {}),
   });
   expect(res.status).toBe(201);

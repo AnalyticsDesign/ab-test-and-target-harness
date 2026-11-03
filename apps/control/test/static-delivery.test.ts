@@ -22,7 +22,7 @@ const unfreeze = () => env.DB.prepare("delete from instance_settings where key =
 /** Site を作って 1 回 Publish する(DEPLOYER は無し = skipped)。戻り値は D1 の行 */
 async function publishedSite() {
   const { token, workspaceId, userId } = await setupOwner();
-  const site = await json(await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "S", domain: "www.example.com" } }));
+  const site = await json(await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "S", domains: ["www.example.com"] } }));
   const pub = await json(await call("POST", `/sites/${site.id}/publish`, { token }));
   expect(pub.ok).toBe(true);
   const db = getDb(env as unknown as Env);
@@ -86,7 +86,7 @@ describe("static delivery (決定 52)", () => {
 
   it("公開中の版が無い Site の出し直しは削除の依頼になる", async () => {
     const { token, workspaceId } = await setupOwner();
-    const site = await json(await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "S", domain: "www.example.com" } }));
+    const site = await json(await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "S", domains: ["www.example.com"] } }));
     const fake = fakeDeployer();
     await requestStaticDeploy({ ...testEnv, DEPLOYER: fake }, getDb(env as unknown as Env), site.id);
     expect(fake.deploys).toHaveLength(0);

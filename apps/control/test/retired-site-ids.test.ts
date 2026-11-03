@@ -43,7 +43,7 @@ async function newWorkspace(owner: Owner, name: string): Promise<string> {
 
 /** 結果を記録するサイト(計測用 D1 がある導入で作る)に、開始済みの run を 1 つ持たせる。削除の取りやめで queue に積まれないことを見るため */
 async function siteWithRun(owner: Owner, workspaceId: string, eid: string): Promise<string> {
-  const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token: owner.token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+  const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token: owner.token, body: { name: "Site", domains: ["www.example.com"] }, envOverride: RESULTS_STORE });
   expect(res.status).toBe(201);
   const { id: sid } = await json<{ id: string }>(res);
   await createExperiment(owner.token, sid, { id: eid });
@@ -162,6 +162,7 @@ describe("削除したサイトの ID の退役(B155)", () => {
     expect(rows[0]!.retired_at).toBeGreaterThan(1_000_000_000_000); // epoch ミリ秒の今ごろ
   });
 
+  // B148 Task 4: Mode B の作成は要求の中で 1 行目を確かめ、edge ならホストを取る(偽の edge が edge と答える)
   it("rollback_after_host_claim_failure_does_not_record", async () => {
     const owner = await setupOwner();
     const host = "claimed.example.com";
@@ -173,7 +174,7 @@ describe("削除したサイトの ID の退役(B155)", () => {
     });
     const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, {
       token: owner.token,
-      body: { id: "site_host_rejected", name: "B", domain: host, mode: "B" },
+      body: { id: "site_host_rejected", name: "B", domains: [host], mode: "B" },
       envOverride: { DB: hooked.db },
     });
     expect(res.status).toBe(409);
@@ -195,7 +196,7 @@ describe("削除したサイトの ID の退役(B155)", () => {
     });
     const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, {
       token: owner.token,
-      body: { id, name: "B", domain: "www.kv-fail.example.com" },
+      body: { id, name: "B", domains: ["www.kv-fail.example.com"] },
       envOverride: { DB: hooked.db, CONFIG_KV: failingKv(/:settings$/) },
     });
     expect(res.status).toBe(503);
@@ -216,7 +217,7 @@ describe("削除したサイトの ID の退役(B155)", () => {
     });
     const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, {
       token: owner.token,
-      body: { id, name: "B", domain: "www.overlap.example.com" },
+      body: { id, name: "B", domains: ["www.overlap.example.com"] },
       envOverride: { DB: hooked.db, CONFIG_KV: failingKv(/:settings$/) },
     });
     expect(res.status).toBe(503);
@@ -224,7 +225,7 @@ describe("削除したサイトの ID の退役(B155)", () => {
     expect(await siteGone(id)).toBe(true);
     expect(await retiredOf(id)).toEqual([{ id, workspace_id: owner.workspaceId, retired_at: expect.any(Number) }]);
     // 同じワークスペースは作り直せる(退役は同じワークスペースを止めない)
-    expect((await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id, name: "B", domain: "www.overlap.example.com" } })).status).toBe(201);
+    expect((await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id, name: "B", domains: ["www.overlap.example.com"] } })).status).toBe(201);
   });
 
   it("delete_by_old_code_path_is_recorded", async () => {
@@ -255,7 +256,7 @@ let domainSeq = 0;
 /** 呼ぶたびに登録ドメインが違う(B139 の共有の衝突の調整・予約の衝突を起こさない) */
 const freshDomain = () => `www.retired-${++domainSeq}.com`;
 const createRes = (token: string, wid: string, id: string | undefined, envOverride?: Partial<Env>) =>
-  call("POST", `/workspaces/${wid}/sites`, { token, body: { ...(id ? { id } : {}), name: "Site", domain: freshDomain() }, envOverride });
+  call("POST", `/workspaces/${wid}/sites`, { token, body: { ...(id ? { id } : {}), name: "Site", domains: [freshDomain()] }, envOverride });
 
 async function expect409(res: Response, expected: Record<string, unknown>, id: string): Promise<Record<string, unknown>> {
   expect(res.status).toBe(409);

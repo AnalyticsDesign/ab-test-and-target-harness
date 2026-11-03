@@ -6,14 +6,14 @@ import { call, createExperiment, createSite, expectEnvelope, json, publishRes, R
 describe("Site の結果の記録の設定(D9 ②)", () => {
   it("site_create_defaults_results_off_without_store", async () => {
     const { token, workspaceId } = await setupOwner();
-    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "Site", domain: "www.example.com" } });
+    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "Site", domains: ["www.example.com"] } });
     expect(res.status).toBe(201);
     expect(await json(res)).toMatchObject({ resultsEnabled: false, resultsRetentionDays: 90 });
   });
 
   it("site create defaults results on with store", async () => {
     const { token, workspaceId } = await setupOwner();
-    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "Site", domains: ["www.example.com"] }, envOverride: RESULTS_STORE });
     expect(res.status).toBe(201);
     const site = await json<{ id: string }>(res);
     expect(site).toMatchObject({ resultsEnabled: true, resultsRetentionDays: 90 });

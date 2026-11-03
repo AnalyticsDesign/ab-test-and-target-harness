@@ -44,7 +44,8 @@ export function SiteCreateForm({ workspaceId, visibleSites }: { workspaceId: str
         setError(null);
         setFields({});
         const fd = new FormData(e.currentTarget);
-        const body: Record<string, unknown> = { name: fd.get("name"), domain: String(fd.get("domain")).toLowerCase(), mode: fd.get("mode"), consentMode: fd.get("consentMode") };
+        // B148: 入力は一覧の 1 行目として送る(https:// や末尾の / は control がそろえる)。足すのは作成後のサイト設定のドメインの節
+        const body: Record<string, unknown> = { name: fd.get("name"), domains: [String(fd.get("domain")).trim()], mode: fd.get("mode"), consentMode: fd.get("consentMode") };
         if (fd.get("id")) body.id = fd.get("id");
         try {
           const s = await api<SiteCreated>("POST", `/workspaces/${workspaceId}/sites`, body);
@@ -73,8 +74,8 @@ export function SiteCreateForm({ workspaceId, visibleSites }: { workspaceId: str
       <Field label="名前" error={fields.name}>
         <input name="name" required />
       </Field>
-      <Field label="ドメイン(ホスト名)" hint="受け付けるサイトのアドレス(Origin)の初期値(https://<ドメイン>)になります" error={fields.domain}>
-        <input name="domain" required pattern="[a-z0-9.\-]+" placeholder="www.example.com" />
+      <Field label="タグを置くドメイン(1 つ目)" hint="作成後に、サイト設定のドメインの節で足せます" error={fields["domains.0"] ?? fields.domains}>
+        <input name="domain" required placeholder="www.example.com" autoComplete="off" spellCheck={false} />
       </Field>
       <Field label="サイト ID(任意)" hint="タグの URL(/s/<サイト ID>.js)になります。既存タグを引き継ぐ場合はその ID を指定します。作成後は変更できません" error={fields.id}>
         <input name="id" pattern="[A-Za-z0-9_\-]{1,64}" placeholder="site_example" />

@@ -1,8 +1,8 @@
 import { defineConfig } from "@playwright/test";
-import { ADMIN_URL, AUTH_SECRET, BREAK_GLASS_TOKEN, CONTROL_URL, E2E_RESULTS_VISITOR_KEY, SETUP_TOKEN, e2eWranglerEnv } from "./e2e/fixtures";
+import { ADMIN_URL, AUTH_SECRET, BREAK_GLASS_TOKEN, CONTROL_URL, E2E_INSTALL_MARKER, E2E_RESULTS_VISITOR_KEY, FAKE_EDGE_URL, SETUP_TOKEN, e2eWranglerEnv } from "./e2e/fixtures";
 
 /**
- * admin の E2E。偽の Cloudflare API(8791)/ control + デプロイ専用の Worker(8799。1 プロセス)/ edge(8787)/ admin(3000)の 4 プロセスを起動して実際のブラウザで管理画面を操作し、
+ * admin の E2E。偽の Cloudflare API(8791)/ 偽の edge の /__ab/ping(8812。B148)/ control + デプロイ専用の Worker(8799。1 プロセス)/ edge(8787)/ admin(3000)の 5 プロセスを起動して実際のブラウザで管理画面を操作し、
  * **control の Publish が設置タグの配信ファイルに現れる**ところまでを確認する(control → デプロイ専用の Worker → 偽の API。このプランの DoD 3)。
  *
  * 入口は必ずルートの `pnpm e2e:admin`。状態のリセット(`e2e/global-setup.ts`)は Playwright の `globalSetup` ではなく
@@ -37,6 +37,14 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
+      // B148: 偽の edge(/__ab/ping を受ける)。control の AB_PROBE_ORIGIN_OVERRIDE(下の --var)がここを指す。導入の印は global-setup.ts が置く値と同じ
+      command: "node e2e/fake-edge-ping.mjs",
+      url: `${FAKE_EDGE_URL}/`,
+      env: { ...e2eWranglerEnv("control"), FAKE_EDGE_PORT: new URL(FAKE_EDGE_URL).port, FAKE_EDGE_INSTALL_MARKER: E2E_INSTALL_MARKER }, // process.env の写しに足す(PATH など)
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+    {
       // control と edge は各 app の wrangler(`pnpm exec`)で起動する。dev registry で互いの Durable Object を呼ぶプロセスどうしの
       // 版(workerd の build)が違うと RPC が落ちる疑いがあり(D9 ③ では版をそろえてから落ちなくなった)、wrangler の版は apps の
       // package.json でそろえてある(B92)。D9 ③ Task 17 の修正 1 では E2E の起動だけ admin の wrangler を使っていたが、版がそろったので外した。
@@ -45,8 +53,11 @@ export default defineConfig({
       // 決定 46: E2E は Google を呼べないので、非常用のパスワードログインを開けた状態で起動する(fixtures.ts の login())
       // 決定 52: デプロイ専用の Worker は 2 つ目の -c で同じプロセスに載せる(control の DEPLOYER が確実に繋がる。別プロセス + dev registry だと
       // RPC が「Network connection lost」になる実行があった)。その Worker の vars(偽の API の向き先・偽の鍵)は e2e/deployer.wrangler.jsonc に書く(--var は効かない)
+      // B148: AB_PROBE_ORIGIN_OVERRIDE は E2E だけの変数(本番の wrangler.jsonc には無い)。`.test` のドメインの確かめを偽の edge に向ける。
+      // AB_E2E_PROBE_OVERRIDE_ENABLED=1 は上書きを効かせる 2 つ目の門(片方だけでは効かない。control の probeOverrideFromEnv)。
+      // control の compatibility_flags の global_fetch_strictly_public は、手元の wrangler dev では 127.0.0.1 への fetch を止めない(2026-11-02 に実測)ので外さない
       cwd: "../control",
-      command: `pnpm exec wrangler dev -c wrangler.jsonc -c ../admin/e2e/deployer.wrangler.jsonc --port 8799 --persist-to .e2e-state --var AB_SETUP_TOKEN:${SETUP_TOKEN} --var BETTER_AUTH_SECRET:${AUTH_SECRET} --var AB_ADMIN_URL:${ADMIN_URL} --var AB_CONTROL_URL:${CONTROL_URL} --var AB_ASSET_PUBLIC_BASE:${CONTROL_URL}/dev-assets --var AB_EDGE_ORIGIN:https://wtt-edge.example.workers.dev --var AB_GOOGLE_CLIENT_ID:e2e-google-client-id --var AB_GOOGLE_CLIENT_SECRET:e2e-google-client-secret --var AB_BREAK_GLASS_TOKEN:${BREAK_GLASS_TOKEN} --var CF_USAGE_TOKEN: --var CF_ACCOUNT_ID:`,
+      command: `pnpm exec wrangler dev -c wrangler.jsonc -c ../admin/e2e/deployer.wrangler.jsonc --port 8799 --persist-to .e2e-state --var AB_SETUP_TOKEN:${SETUP_TOKEN} --var BETTER_AUTH_SECRET:${AUTH_SECRET} --var AB_ADMIN_URL:${ADMIN_URL} --var AB_CONTROL_URL:${CONTROL_URL} --var AB_ASSET_PUBLIC_BASE:${CONTROL_URL}/dev-assets --var AB_EDGE_ORIGIN:https://wtt-edge.example.workers.dev --var AB_GOOGLE_CLIENT_ID:e2e-google-client-id --var AB_GOOGLE_CLIENT_SECRET:e2e-google-client-secret --var AB_BREAK_GLASS_TOKEN:${BREAK_GLASS_TOKEN} --var CF_USAGE_TOKEN: --var CF_ACCOUNT_ID: --var AB_PROBE_ORIGIN_OVERRIDE:${FAKE_EDGE_URL} --var AB_E2E_PROBE_OVERRIDE_ENABLED:1`,
       url: "http://127.0.0.1:8799/",
       ...wranglerServer("control"),
       reuseExistingServer: false,
@@ -100,6 +111,8 @@ export default defineConfig({
     // 管理画面の速さ CE-R9: 書き込みの後の読み直しの反映の前に押した遷移・節の切り替えが、捨てられない・戻されない(読み直しを遅らせて窓を決まって作る)。専用のサイトを作る
     { name: "refresh-race", testMatch: /refresh-race\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     { name: "shell-reuse", testMatch: /shell-reuse\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    // B148: サイト設定のドメインの節(偽の edge で Cloudflare 経由・外・確かめられない、を出す)。専用のサイトを作る
+    { name: "domains-flow", testMatch: /domains-flow\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // 7o K14: 設置タグの配信ファイルの帯と全サイトの作り直し。偽の API を一時的に失敗にする(終わりに必ず戻す)。専用のサイトを作り、メンバーを 1 人招待する。
     // 失敗の窓がほかの project の公開に重ならないよう最後に置く(workers: 1 なので並んで走らない)
     { name: "static-delivery", testMatch: /static-delivery\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },

@@ -24,7 +24,7 @@
 | 当てはまる状況 | 設置サイトの DNS が Cloudflare にあり、設置ホストのレコードがプロキシ有効(オレンジの雲) | 設置サイトの DNS は Cloudflare に移せないが、別のドメインを Cloudflare のゾーンにできる | Cloudflare にゾーンを 1 つも置けない |
 | 可否 | 可 | 可 | **可(制約あり)**。前提 = Free アカウントで、止まって困る Workers が同じアカウントに無いこと |
 | 公開の仕方 | `<設置ホスト>/s/*`(`wtt-static`)と `/v1/*`(edge)の Workers Route | edge は Custom Domain `<edge のホスト>`(例 `ab.example.net`)、`wtt-static` は同じホストの Route `<edge のホスト>/s/*`。`edge_address: custom-domain` | `*.workers.dev`(`edge_address: workers-dev`。`wtt-edge` と `wtt-static` の 2 つ) |
-| タグと設置サイトの関係 | 同一オリジン。CORS 設定は不要 | 別オリジン。サイトの `allowedOrigins` にページの origin が要る。サイトが CSP を出していれば `script-src` と `connect-src` に `<edge のホスト>` を足す(設置タグと edge が同じホストなので 1 つ) | 別オリジン。サイトが CSP を出していれば `wtt-static` と edge のホストを足す |
+| タグと設置サイトの関係 | 同一オリジン。CORS 設定は不要 | 別オリジン。サイト設定の「ドメイン」の節の「タグを置くドメイン」(API は `domains`)にページのホストが要る(受け付ける Origin はこの一覧から決まる)。サイトが CSP を出していれば `script-src` と `connect-src` に `<edge のホスト>` を足す(設置タグと edge が同じホストなので 1 つ) | 別オリジン。サイトが CSP を出していれば `wtt-static` と edge のホストを足す |
 | Mode B(サーバー発行 Cookie。Safari 対策の一方式) | 使える | 使えない(ページのホストに `/__ab/*` を置けないため) | 使えない |
 | Cache Rule / WAF Rate Limiting Rule | 設置サイトのゾーンに作る | edge を置いたゾーンに作る。Cache Rule の条件のホスト名は `<edge のホスト>`。WAF Rate Limiting Rule の条件はパスだけで、[デプロイガイド 2.7](deploy.md#27-waf-rate-limiting-rule推奨) と同じ式 | **作れない**。万が一、悪意のある人がプログラムで大量のアクセスを送ってきた場合(タグのアドレスはサイトの HTML に書かれるので、誰でも知ることができる)、アクセスを制限できず、無料枠の日次上限を使い切られて当日の配信が止まる(Free なら課金は起きない) |
 
@@ -33,7 +33,7 @@
 - **A の前提の確認**: `curl -sI https://<設置ホスト>/ | grep -i '^server:'` が `server: cloudflare` を返せばプロキシ経由になっている。返さない場合、Workers Route は発火しない(タグの URL がサイト本体の 404 になる)
 - **DNS を Cloudflare に移すのはサイト全体に及ぶ作業**。ネームサーバーの変更、既存レコードの移行、SSL/TLS の暗号化モードの設定などが要り、この製品の手順の範囲外。サイトの管理者と相談して先に済ませる。ネームサーバーを移さずに一部のホストだけ Cloudflare に載せる方式(CNAME セットアップ)は Business プラン以上
 - **B(別のドメインに置く構成)**: edge と設置タグを、ページと別のドメインのホスト(`<edge のホスト>`)から配る。手順はデプロイガイドの `custom-domain` のときの手順で、読む節は[デプロイガイドの冒頭の一覧](deploy.md#手で導入する最短の手順)にある。代償の一覧は[デプロイガイド 1 節の制約 (3)](deploy.md#1-前提と全体像)。別オリジンになるので、次の 5 つを引き受ける。
-  - サイトの `allowedOrigins` に、ページの origin が要る(edge のホストではない)。サイトを作ると `https://<ドメイン>` が入る。ページのホストが複数なら足す
+  - サイト設定の「ドメイン」の節の「タグを置くドメイン」(API は `domains`)に、ページのホストが要る(edge のホストではない)。サイトを作ると作成のときに入れたドメインが入る。ページのホストが複数なら足す
   - サイトが CSP を出していれば、`script-src` と `connect-src` に `<edge のホスト>` を足す。設置タグと edge が同じホストなので、足すホストは 1 つ([サイト導入ガイド 10 節](site-install.md#10-コードの変更と-csp))
   - Mode B は使えない。Mode B はページのホストに `/__ab/*` の Route を置く必要があり、edge を別のドメインに置くとそれができないため。この構成では Mode B による Safari 対策はできないので、Mode A か Mode C で運用する([サイト導入ガイド 8 節](site-install.md#8-mode-c-と-mode-b))
   - 設置タグを別のドメインのホストから読み込むので、ブラウザや拡張機能の追跡防止の機能に遮断されやすい

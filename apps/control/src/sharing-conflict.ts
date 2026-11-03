@@ -1,10 +1,11 @@
 // B139(spec §6.4・Q23・Q28・Q29): 訪問者 ID の Cookie の共有の衝突の検査と、共有の予約(sharing_claims)と、既存のサイトの共有の自動の移行。
 // 衝突 = 同じ導入の中で、同じ登録ドメインのドメインを持つ 2 つのサイトが、「どちらかがその登録ドメインで共有している(今の範囲か、期限の中の前の範囲)」で、
 // 「Cookie の名前(正本・UUID・印・期限の中の旧名)のどれかが重なる」こと。Cookie はワークスペースの区切りを知らないので、検査は導入全体で行う
-import { kvKeys, markerCookieName } from "@wtt/core";
+import { markerCookieName } from "@wtt/core";
 import { deriveCookieScopes, registrableDomain, tagHosts } from "./cookie-scope";
 import { syncSettingsRecord } from "./cron/sync-settings-record";
 import { getDb, type Db, type SiteRow } from "./db";
+import { ensureInstallMarker, readProbeSettings } from "./domain-probe";
 import type { Env } from "./env";
 import { ApiError } from "./errors";
 import { readCloudflarePlan } from "./instance-settings";
@@ -230,7 +231,8 @@ type MigrateOutcome = "on" | "off" | "skipped";
 
 /**
  * 既存のサイト(share_migration_pending = 1)のうち、衝突しないものだけを共有オンにする一度きりの処理。control の Cron が毎回の最初に呼ぶ。
- * - 完了の印(KV の meta:install)があれば何もしない(利用者がオンにした・オフにした設定を変えない)
+ * - 移行待ちのサイト(印 1)が無ければ何もしない(利用者がオンにした・オフにした設定を変えない)。KV の導入の印があっても、
+ *   印 1 のサイトがあれば処理する(B148 のマイグレーションが、一覧が domain 1 行になるサイトを印 1 にして渡す。P11)
  * - 1 回に MIGRATION_PAGE 件まで。進み具合は D1 の share_migration_pending(処理したサイトは同じ batch で 0 にする)。
  *   止まっても、残りは次の呼び出しが続きから進める
  * - 衝突するサイト・設定を共有の形にできないサイトはオフのまま(印だけ 0 にする)
@@ -242,9 +244,8 @@ type MigrateOutcome = "on" | "off" | "skipped";
  *   配信ファイルは、公開中の版があり bootstrap に焼く設定が変わるなら、同じ文で作り直しの印を立てる(static-reconcile と GET が拾う)
  */
 export async function migrateSharing(env: Env, db: D1Database, nowSec: number): Promise<{ done: boolean; turnedOn: string[] }> {
-  if ((await env.CONFIG_KV.get(kvKeys.installMarker)) !== null) return { done: true, turnedOn: [] };
   const page = (await db.prepare("SELECT * FROM sites WHERE share_migration_pending = 1 ORDER BY id LIMIT ?1").bind(MIGRATION_PAGE).all<SiteRow>()).results;
-  if (page.length === 0) return finishMigration(env, []);
+  if (page.length === 0) return finishMigration(env, db, []);
 
   const dbEnv: Env = { ...env, DB: db };
   const kdb = getDb(dbEnv);
@@ -290,12 +291,16 @@ export async function migrateSharing(env: Env, db: D1Database, nowSec: number): 
   if (page.length === MIGRATION_PAGE) return { done: false, turnedOn };
   // 飛ばしたサイト(印が 1 のまま)が残っていれば、次の呼び出しで試し直す
   if ((await db.prepare("SELECT 1 AS x FROM sites WHERE share_migration_pending = 1 LIMIT 1").first()) !== null) return { done: false, turnedOn };
-  return finishMigration(env, turnedOn);
+  return finishMigration(env, db, turnedOn);
 }
 
-/** 完了の印を書く。既にあれば書き換えない(B148 の判定が照合に使う値なので、別の実行が書いた値を上書きしない) */
-async function finishMigration(env: Env, turnedOn: string[]): Promise<{ done: boolean; turnedOn: string[] }> {
-  if ((await env.CONFIG_KV.get(kvKeys.installMarker)) === null) await env.CONFIG_KV.put(kvKeys.installMarker, crypto.randomUUID());
+/**
+ * 移行の終わりに導入の印を確かめる(B148 Task 3)。保存の判定と同じ ensureInstallMarker を使う: 正本は D1、KV は写し。
+ * 既にあれば書き換えない(別の実行が書いた値を上書きしない)。KV にだけある値は D1 に入れ、D1 と KV が違えば KV を直す
+ */
+async function finishMigration(env: Env, db: D1Database, turnedOn: string[]): Promise<{ done: boolean; turnedOn: string[] }> {
+  const { installMarker } = await readProbeSettings(db);
+  await ensureInstallMarker(env, db, installMarker);
   return { done: true, turnedOn };
 }
 

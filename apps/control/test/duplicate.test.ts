@@ -40,7 +40,7 @@ describe("POST …/duplicate (決定 51、設計書 §4.1)", () => {
   it("duplicate_does_not_copy_run_id", async () => {
     // D9 ②: 計測用 D1 がある導入で作った Site(結果を記録する)の実行中のテスト。複製は別のテストなので run_id を写さない
     const owner = await setupOwner();
-    const created = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+    const created = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domains: ["www.example.com"] }, envOverride: RESULTS_STORE });
     const { id: sid } = await json<{ id: string }>(created);
     await createExperiment(owner.token, sid, { id: "exp_src" });
     await call("PUT", `/sites/${sid}/experiments/exp_src/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
@@ -205,7 +205,7 @@ describe("複製の中身と評価計画(D9 ③)", () => {
   /** 計測用 D1 がある導入の Site(結果を記録する) */
   async function resultsSite() {
     const owner = await setupOwner();
-    const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+    const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domains: ["www.example.com"] }, envOverride: RESULTS_STORE });
     expect(res.status).toBe(201);
     const { id: sid } = await json<{ id: string }>(res);
     return { ...owner, sid };

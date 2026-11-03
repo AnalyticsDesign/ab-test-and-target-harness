@@ -2,18 +2,23 @@ import { z } from "zod";
 import { DEFAULT_ANALYTICS } from "@wtt/core";
 import { deriveCookieScopes } from "./cookie-scope";
 import type { ExperimentRow, GoalRow, SiteRow } from "./db";
+import { domainGroups, type DomainRow } from "./domains";
 
 /** siteSalt は返さない(公開値ではあるが管理画面に不要。spec §4.3) */
 export function siteJson(row: SiteRow) {
+  const domains = JSON.parse(row.domains_json) as DomainRow[];
+  const groups = domainGroups(domains, row.mode);
   return {
     id: row.id, workspaceId: row.workspace_id, name: row.name, domain: row.domain, mode: row.mode, idSource: row.id_source,
-    allowedOrigins: JSON.parse(row.allowed_origins_json) as string[], hosts: JSON.parse(row.hosts_json) as string[],
+    // B148: 一覧が正。domain・allowedOrigins は一覧から導いた読むだけの値(D1 の列は保存のたびに一覧から書く)
+    domains, allowedOrigins: JSON.parse(row.allowed_origins_json) as string[],
+    edgeDomains: groups.edge, outsideDomains: groups.outside, uncheckedDomains: groups.unchecked,
     retentionDays: row.retention_days, consentMode: row.consent_mode, forgetOnRevoke: row.forget_on_revoke === 1, timezone: row.timezone, decisionTimeoutMs: row.decision_timeout_ms,
     resultsEnabled: row.results_enabled === 1, resultsRetentionDays: row.results_retention_days,
     newProfileBudgetPerDay: row.new_profile_budget_per_day,
     visitorCookieName: row.visitor_cookie_name, uuidCookieEnabled: row.uuid_cookie_enabled === 1, uuidCookieName: row.uuid_cookie_name,
     previousCookieNames: JSON.parse(row.previous_cookie_names_json) as Array<{ name: string; until: number }>,
-    // B139: 共有の切り替えと、hosts・allowedOrigins から導いたまとまり(読むだけ。保存しない)
+    // B139: 共有の切り替えと、一覧から導いたまとまり(読むだけ。保存しない)
     shareSubdomains: row.share_subdomains === 1, cookieGroups: deriveCookieScopes(row).groups,
     // 決定 62 より前に保存した行は dataLayerName を持たないので既定名で補う(edge へ配る record は SiteSettingsSchema が埋める)
     analytics: row.analytics_json ? { dataLayerName: DEFAULT_ANALYTICS.dataLayerName, ...JSON.parse(row.analytics_json) } : DEFAULT_ANALYTICS,
@@ -30,11 +35,25 @@ export const SiteJsonSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
   name: z.string(),
-  domain: z.string(),
+  domain: z.string().describe("代表のドメイン(タグを置くドメインの一覧の先頭の行のホスト名)。読むだけ。書くときは domains"),
   mode: z.enum(["A", "B"]),
   idSource: z.string(),
-  allowedOrigins: z.array(z.string()),
-  hosts: z.array(z.string()),
+  domains: z
+    .array(
+      z.object({
+        value: z.string().describe("ホスト名(例: www.example.com)。開発用の行は Origin(例: http://localhost:8080)"),
+        verdict: z
+          .enum(["edge", "outside", "unknown", "dev"])
+          .describe("edge = Cloudflare 経由(このツールの配信が届く)、outside = Cloudflare 外、unknown = まだ確かめていない・確かめられなかった、dev = 開発用(確かめない)"),
+        checkedAt: z.number().int().nullable().describe("edge か outside と確かめた時刻(epoch 秒)。確かめていなければ null"),
+        triedAt: z.number().int().nullable().describe("最後に確かめに行った時刻(epoch 秒。結果が unknown でも進む)。行っていなければ null"),
+      }),
+    )
+    .describe("タグを置くドメインの一覧(書き込みは domains に文字列の配列で送る)"),
+  allowedOrigins: z.array(z.string()).describe("受け付ける Origin(一覧の全行を Origin にしたもの)。読むだけ。書くときは domains"),
+  edgeDomains: z.array(z.string()).describe("Cloudflare 経由と確かめたドメイン(Mode B のときだけ。Mode A は空)。読むだけ。書くときは domains"),
+  outsideDomains: z.array(z.string()).describe("Cloudflare 外と確かめたドメイン(Mode B のときだけ。Mode A は空)。読むだけ。書くときは domains"),
+  uncheckedDomains: z.array(z.string()).describe("まだ確かめていない・確かめられなかったドメイン(Mode B のときだけ。Mode A は空)。読むだけ。書くときは domains"),
   retentionDays: z.number().int(),
   consentMode: z.enum(["implicit", "required"]),
   forgetOnRevoke: z.boolean(),
@@ -50,7 +69,7 @@ export const SiteJsonSchema = z.object({
   shareSubdomains: z.boolean().describe("訪問者 ID の Cookie を、同じ登録ドメインのサブドメインのあいだで共有する"),
   cookieGroups: z
     .array(z.object({ domain: z.string().describe("Cookie の Domain 属性にする登録ドメイン"), hosts: z.array(z.string()).describe("このまとまりに属する、タグを置くホスト") }))
-    .describe("共有のまとまり(hosts と allowedOrigins の https のホストを登録ドメインごとにまとめたもの。読むだけ)。共有がオフなら空。IP アドレス・localhost・http やポート付きの Origin は入らない"),
+    .describe("共有のまとまり(タグを置くドメインの一覧の、開発用でない行を登録ドメインごとにまとめたもの。読むだけ)。共有がオフなら空。IP アドレス・localhost・開発用の行(http やポート付きの Origin)は入らない"),
   analytics: z.record(z.string(), z.unknown()).describe("外部計測の名前(dataLayer の命名設定。`analytics`。push 先の配列の名前 `dataLayerName` を含む)"),
   ga4PropertyId: z.string().nullable(),
   bigqueryDataset: z.string().nullable(),

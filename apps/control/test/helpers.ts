@@ -22,6 +22,7 @@ import {
 import { app } from "../src/index";
 import { edgeOrigin } from "../src/capabilities";
 import { siteToSettings } from "../src/site-settings";
+import { installHashOf } from "../src/domain-probe";
 import { getDb, type ExperimentRow, type SiteRow } from "../src/db";
 import type { BudgetStatus, Env, LeaseResult, ReadReservation, ResultsBudgetRpc, ResultsHealthRpc, StopPeriod, StopReason } from "../src/env";
 import { ErrorEnvelopeSchema } from "../src/openapi";
@@ -519,12 +520,44 @@ let siteDomainSeq = 0;
 /**
  * Site を 1 つ作る(Task 3 以降のテストが Site 配下のルートを叩くのに使う)。
  * 既定のドメインは呼ぶたびに登録ドメインそのものが違う形(`www.example-<連番>.com`)にする(B139: 同じ登録ドメインのサイトは訪問者 ID の Cookie の共有の衝突を
- * 避けるために作成で自動の調整を受ける。衝突を確かめるテストは domain と Cookie 名を明示する)
+ * 避けるために作成で自動の調整を受ける。衝突を確かめるテストは domain と Cookie 名を明示する)。
+ * `domain: "x"` は `domains: ["x"]` として送る(B148)。複数の行は `domains` で渡す
  */
 export async function createSite(token: string, workspaceId: string, overrides: Record<string, unknown> = {}): Promise<{ id: string }> {
-  const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "Site", domain: `www.example-${++siteDomainSeq}.com`, ...overrides } });
+  // B148: API は domains だけを受ける。テストの書きやすさのため `domain` は 1 行の domains に読み替える
+  const { domain, ...rest } = overrides;
+  const domains = domain !== undefined ? [domain] : [`www.example-${++siteDomainSeq}.com`];
+  const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { name: "Site", domains, ...rest } });
   expect(res.status).toBe(201);
   return json(res);
+}
+
+/**
+ * B148 Task 2: Cloudflare 経由の判定(Task 4)を通さずに、D1 の一覧の行の判定を edge にする(一覧に無い値は後ろに足す)。
+ * 旧い 3 列・site_hosts・KV はそのまま(次の domains を含む保存が、同じ値の行の判定を保って導き直す)。返すのは一覧の値の並び
+ */
+export async function seedEdgeDomains(sid: string, values: string[]): Promise<string[]> {
+  const rows = JSON.parse((await siteRow(sid)).domains_json) as Array<{ value: string; verdict: string; checkedAt: number | null; triedAt: number | null }>;
+  for (const v of values) {
+    const at = rows.find((r) => r.value === v);
+    if (at) at.verdict = "edge";
+    else rows.push({ value: v, verdict: "edge", checkedAt: null, triedAt: null });
+  }
+  await env.DB.prepare("update sites set domains_json = ? where id = ?").bind(JSON.stringify(rows), sid).run();
+  return rows.map((r) => r.value);
+}
+
+/**
+ * B148 Task 2: Mode B のサイトの一覧を `values` にし、そのうち `edge` の値を Cloudflare 経由として保存する(seedEdgeDomains の後に通常の PATCH)。
+ * site_hosts と KV のホストのキーは通常の保存の経路で書かれる
+ */
+export async function setEdgeDomains(token: string, sid: string, edge: string[], values: string[] = edge): Promise<void> {
+  // B148 Task 4: Mode B の保存は判定する。edge に入れない値は偽の edge で 404(outside)にする(このテストの間は続く)
+  for (const v of values) if (!edge.includes(v)) fakeEdgePing.set(v, () => new Response("not found", { status: 404 }));
+  await env.DB.prepare("update sites set domains_json = '[]' where id = ?").bind(sid).run();
+  await seedEdgeDomains(sid, edge);
+  const res = await call("PATCH", `/sites/${sid}`, { token, body: { domains: values } });
+  expect(res.status).toBe(200);
 }
 
 /** KV の失敗注入(Task 6 の publish.test.ts でも使う)。pattern に一致するキーの put(または get)で `times` 回だけ throw し、それ以降は本物に委譲する */
@@ -604,6 +637,35 @@ export async function siteRow(sid: string): Promise<SiteRow> {
 /** D1 の experiments 行(started_at / stopped_at など experimentJson に出ない列を直接見る用。Task 7 の status テストが使う) */
 export async function experimentRow(sid: string, eid: string): Promise<ExperimentRow> {
   return getDb(env).selectFrom("experiments").selectAll().where("site_id", "=", sid).where("id", "=", eid).executeTakeFirstOrThrow();
+}
+
+/**
+ * B148 Task 3: テストの既定の fetch を偽の edge にする(判定の GET が外へ出ないように)。`/__ab/ping` だけを受け、
+ * edge の check.ts と同じく KV の `meta:install` の SHA-256 を返す(印が無ければ 503)。ほかの URL は元の fetch に渡す。
+ * ドメインごとに応答を変えるテストは fakeEdgePing.set(host, () => Response) で差し替える(毎テストの前に空にする)。
+ * vi.spyOn ではなく直接差し替えるのは、restoreAllMocks で外れないようにするため(test/apply-migrations.ts が入れる)
+ */
+export const fakeEdgePing = new Map<string, () => Response | Promise<Response>>();
+let fakeEdgeInstalled = false;
+export function installFakeEdge(): void {
+  if (fakeEdgeInstalled) return;
+  fakeEdgeInstalled = true;
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.pathname !== "/__ab/ping") return real(input, init);
+    const override = fakeEdgePing.get(url.hostname);
+    if (override) return override();
+    return fakeEdgeResponse();
+  }) as typeof fetch;
+}
+
+/** 偽の edge の既定の応答(この導入の edge が答えた形)。差し替えた応答の中で「待ってから edge と答える」ときにも使う */
+export async function fakeEdgeResponse(): Promise<Response> {
+  const headers = { "Content-Type": "application/json", "Cache-Control": "no-store" };
+  const marker = await env.CONFIG_KV.get(kvKeys.installMarker);
+  if (marker === null || marker === "") return new Response(JSON.stringify({ error: "install marker unavailable" }), { status: 503, headers });
+  return new Response(JSON.stringify({ edge: "wtt", install: await installHashOf(marker) }), { status: 200, headers });
 }
 
 /** admin が Cookie に入れる flow ID の代わり(routes/oauth.ts の FLOW_RE に合う形) */

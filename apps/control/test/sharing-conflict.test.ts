@@ -102,13 +102,13 @@ describe("sharing conflicts on save (B139 Q23)", () => {
     await createSite(token, workspaceId, { id: "site_a", domain: "www.example.com", uuidCookieEnabled: true });
     // B の正本名が A の印の名前(_wtt_vid_js)と同じ
     const b = await createSite(token, workspaceId, { id: "site_b", domain: "www.b-site.com", visitorCookieName: "_wtt_vid_js" });
-    await expectConflict(await patch(token, b.id, { allowedOrigins: ["https://form.example.com"] }));
+    await expectConflict(await patch(token, b.id, { domains: ["https://form.example.com"] }));
     // UUID の名前が重なる
     const c = await createSite(token, workspaceId, { id: "site_c", domain: "www.c-site.com", visitorCookieName: "_c_vid", uuidCookieEnabled: true });
-    await expectConflict(await patch(token, c.id, { allowedOrigins: ["https://shop.example.com"] }));
+    await expectConflict(await patch(token, c.id, { domains: ["https://shop.example.com"] }));
     // UUID Cookie が無効なら UUID の名前は重ならない
     const d = await createSite(token, workspaceId, { id: "site_d", domain: "www.d-site.com", visitorCookieName: "_d_vid" });
-    expect((await patch(token, d.id, { allowedOrigins: ["https://shop.example.com"] })).status).toBe(200);
+    expect((await patch(token, d.id, { domains: ["https://shop.example.com"] })).status).toBe(200);
   });
 
   it("conflict_with_previous_range_within_retention", async () => {
@@ -116,23 +116,23 @@ describe("sharing conflicts on save (B139 Q23)", () => {
     const b = await createSite(token, workspaceId, { id: "site_b", domain: "www.b-site.com" });
     const a = await createSite(token, workspaceId, { id: "site_a", domain: "www.example.com" });
     // A は共有をオフにして example.com から離れる(example.com は前の範囲に残る)
-    expect((await patch(token, a.id, { shareSubdomains: false, allowedOrigins: ["https://www.a-site.com"] })).status).toBe(200);
+    expect((await patch(token, a.id, { shareSubdomains: false, domains: ["https://www.a-site.com"] })).status).toBe(200);
     expect(JSON.parse((await siteRow(a.id)).previous_cookie_domains_json).map((p: { domain: string }) => p.domain)).toEqual(["example.com"]);
-    await expectConflict(await patch(token, b.id, { allowedOrigins: ["https://form.example.com"] }));
+    await expectConflict(await patch(token, b.id, { domains: ["https://form.example.com"] }));
     // 期限を過ぎたら通る
     await expire(a.id);
-    expect((await patch(token, b.id, { allowedOrigins: ["https://form.example.com"] })).status).toBe(200);
+    expect((await patch(token, b.id, { domains: ["https://form.example.com"] })).status).toBe(200);
   });
 
   it("removing_last_domain_keeps_previous_range_reserved", async () => {
     const { token, workspaceId } = await setupOwner();
     const a = await createSite(token, workspaceId, { id: "site_a", domain: "www.example.com" });
-    expect((await patch(token, a.id, { allowedOrigins: ["https://www.example.com", "https://www.a-site.com"] })).status).toBe(200);
+    expect((await patch(token, a.id, { domains: ["https://www.example.com", "https://www.a-site.com"] })).status).toBe(200);
     // まとまり example.com を一覧から消す(共有はオンのまま。前の範囲に残る)
-    expect((await patch(token, a.id, { allowedOrigins: ["https://www.a-site.com"] })).status).toBe(200);
+    expect((await patch(token, a.id, { domains: ["https://www.a-site.com"] })).status).toBe(200);
     expect(await claimsOf(a.id)).toContainEqual(expect.objectContaining({ domain: "example.com", cookie_name: "_wtt_vid" }));
     const b = await createSite(token, workspaceId, { id: "site_b", domain: "www.b-site.com" });
-    await expectConflict(await patch(token, b.id, { allowedOrigins: ["https://form.example.com"] }));
+    await expectConflict(await patch(token, b.id, { domains: ["https://form.example.com"] }));
   });
 
   it("conflict_message_hides_other_workspace_site", async () => {
@@ -141,14 +141,14 @@ describe("sharing conflicts on save (B139 Q23)", () => {
     const second = await json<{ id: string }>(await call("POST", "/workspaces", { token: owner.token, body: { name: "Second" } }));
     const admin = await inviteAndJoin(owner.token, second.id, "admin"); // 1 つ目のワークスペースには入っていない
     const b = await createSite(admin.token, second.id, { id: "site_other", domain: "www.b-site.com" });
-    const res = await patch(admin.token, b.id, { allowedOrigins: ["https://form.example.com"] });
+    const res = await patch(admin.token, b.id, { domains: ["https://form.example.com"] });
     const text = await res.clone().text();
     const body = await expectConflict(res);
     expect(body.message).toBe(HIDDEN);
     expect(text).not.toContain("Secret Site");
     expect(text).not.toContain("site_secret");
     // 両方のワークスペースを見られる人にはサイト名を出す
-    const seen = await expectConflict(await patch(owner.token, b.id, { allowedOrigins: ["https://form.example.com"] }));
+    const seen = await expectConflict(await patch(owner.token, b.id, { domains: ["https://form.example.com"] }));
     expect(seen.message).toBe("サイト「Secret Site」と、訪問者 ID の Cookie がぶつかります");
   });
 
@@ -158,7 +158,7 @@ describe("sharing conflicts on save (B139 Q23)", () => {
     await offWithoutHistory(token, a.id);
     const b = await createSite(token, workspaceId, { id: "site_b", domain: "www.b-site.com" });
     await offWithoutHistory(token, b.id);
-    expect((await patch(token, b.id, { allowedOrigins: ["https://form.example.com"] })).status).toBe(200);
+    expect((await patch(token, b.id, { domains: ["https://form.example.com"] })).status).toBe(200);
     // 片方が共有を始めるとぶつかる
     await expectConflict(await patch(token, b.id, { shareSubdomains: true }));
     // 共有オフで前の範囲も無いサイトは予約を持たない
@@ -186,20 +186,20 @@ describe("sharing claims (B139 Q28)", () => {
     const { token, workspaceId } = await setupOwner();
     // 前の範囲
     const a = await createSite(token, workspaceId, { id: "site_a", domain: "www.example.com" });
-    expect((await patch(token, a.id, { allowedOrigins: ["https://www.a-site.com"] })).status).toBe(200);
+    expect((await patch(token, a.id, { domains: ["https://www.a-site.com"] })).status).toBe(200);
     const b = await createSite(token, workspaceId, { id: "site_b", domain: "www.b-site.com" });
-    await expectConflict(await patch(token, b.id, { allowedOrigins: ["https://form.example.com"] }));
+    await expectConflict(await patch(token, b.id, { domains: ["https://form.example.com"] }));
     await expire(a.id); // A は保存しない
-    expect((await patch(token, b.id, { allowedOrigins: ["https://form.example.com"] })).status).toBe(200);
+    expect((await patch(token, b.id, { domains: ["https://form.example.com"] })).status).toBe(200);
     expect((await claimsOf(b.id)).map((c) => c.domain)).toContain("example.com");
     expect((await claimsOf(a.id)).map((c) => c.domain)).not.toContain("example.com");
     // 旧 Cookie 名
     const c = await createSite(token, workspaceId, { id: "site_c", domain: "www.c-site.com", visitorCookieName: "_c_vid" });
     expect((await patch(token, c.id, { visitorCookieName: "_c_new" })).status).toBe(200);
     const d = await createSite(token, workspaceId, { id: "site_d", domain: "www.d-site.com", visitorCookieName: "_c_vid" });
-    await expectConflict(await patch(token, d.id, { allowedOrigins: ["https://form.c-site.com"] }));
+    await expectConflict(await patch(token, d.id, { domains: ["https://form.c-site.com"] }));
     await expire(c.id);
-    expect((await patch(token, d.id, { allowedOrigins: ["https://form.c-site.com"] })).status).toBe(200);
+    expect((await patch(token, d.id, { domains: ["https://form.c-site.com"] })).status).toBe(200);
     expect(await claimsOf(d.id)).toContainEqual(expect.objectContaining({ domain: "c-site.com", cookie_name: "_c_vid", until: null }));
   });
 
@@ -210,9 +210,9 @@ describe("sharing claims (B139 Q28)", () => {
     // A の保存が事前の検査を通った後(batch の直前)に、B の保存が検査から KV まで終える
     let bStatus = 0;
     const db = beforeD1Batch(env.DB, async () => {
-      bStatus = (await patch(token, b.id, { allowedOrigins: ["https://www.b-site.com", "https://y.example.com"] })).status;
+      bStatus = (await patch(token, b.id, { domains: ["https://www.b-site.com", "https://y.example.com"] })).status;
     });
-    const res = await patch(token, a.id, { allowedOrigins: ["https://www.a-site.com", "https://x.example.com"] }, { DB: db });
+    const res = await patch(token, a.id, { domains: ["https://www.a-site.com", "https://x.example.com"] }, { DB: db });
     expect(bStatus).toBe(200);
     const body = await expectConflict(res);
     expect(body.message).toBe("サイト「Site B」と、訪問者 ID の Cookie がぶつかります");
@@ -257,7 +257,7 @@ describe("sharing claims (B139 Q28)", () => {
     const before = await siteRow(a.id);
     const claimsBefore = await claimsOf(a.id);
     // 予約が増える保存は D1 が先。KV の書き込みが失敗したら D1 を戻す
-    const res = await patch(token, a.id, { allowedOrigins: ["https://www.a-site.com", "https://x.example.com"] }, { CONFIG_KV: failingKv(new RegExp(`^${kvKeys.settings(a.id)}$`)) });
+    const res = await patch(token, a.id, { domains: ["https://www.a-site.com", "https://x.example.com"] }, { CONFIG_KV: failingKv(new RegExp(`^${kvKeys.settings(a.id)}$`)) });
     expect(res.status).toBe(503);
     const after = await siteRow(a.id);
     expect(after.allowed_origins_json).toBe(before.allowed_origins_json);
@@ -284,7 +284,7 @@ describe("undo after a failed settings write (B139)", () => {
         return typeof v === "function" ? v.bind(target) : v;
       },
     }) as D1Database;
-    const res = await patch(token, a.id, { allowedOrigins: ["https://www.a-site.com", "https://x.example.com"] }, { DB: db, CONFIG_KV: failingKv(new RegExp(`^${kvKeys.settings(a.id)}$`)) });
+    const res = await patch(token, a.id, { domains: ["https://www.a-site.com", "https://x.example.com"] }, { DB: db, CONFIG_KV: failingKv(new RegExp(`^${kvKeys.settings(a.id)}$`)) });
     expect(res.status).toBe(500);
     expect(await json(res)).toMatchObject({ error: "internal" });
   });
@@ -295,7 +295,7 @@ describe("site creation with sharing conflicts (B139 Q29)", () => {
     const { token, workspaceId } = await setupOwner();
     const a = await createSite(token, workspaceId, { id: "site_a", domain: "www.example.com" });
     await offWithoutHistory(token, a.id);
-    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_b", name: "B", domain: "form.example.com" } });
+    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_b", name: "B", domains: ["form.example.com"] } });
     expect(res.status).toBe(201);
     expect(await json(res)).toMatchObject({ shareSubdomains: false, visitorCookieName: "_wtt_vid", sharingAdjusted: { reason: "conflict", shareSubdomains: false, visitorCookieName: "_wtt_vid" } });
     expect((await siteRow("site_b")).share_subdomains).toBe(0);
@@ -304,7 +304,7 @@ describe("site creation with sharing conflicts (B139 Q29)", () => {
 
   it("create_site_without_conflict_has_no_adjustment", async () => {
     const { token, workspaceId } = await setupOwner();
-    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_b", name: "B", domain: "www.example.com" } });
+    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_b", name: "B", domains: ["www.example.com"] } });
     expect(res.status).toBe(201);
     const body = await json(res);
     expect(body.sharingAdjusted).toBeUndefined();
@@ -314,7 +314,7 @@ describe("site creation with sharing conflicts (B139 Q29)", () => {
   it("create_site_conflict_with_shared_site_renames_cookie", async () => {
     const { token, workspaceId } = await setupOwner();
     await createSite(token, workspaceId, { id: "site_a", domain: "www.example.com" });
-    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_b", name: "B", domain: "form.example.com" } });
+    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_b", name: "B", domains: ["form.example.com"] } });
     expect(res.status).toBe(201);
     const body = await json(res);
     expect(body).toMatchObject({ shareSubdomains: true, visitorCookieName: "_wtt_vid_site_b", sharingAdjusted: { reason: "conflict", shareSubdomains: true, visitorCookieName: "_wtt_vid_site_b" } });
@@ -327,7 +327,7 @@ describe("site creation with sharing conflicts (B139 Q29)", () => {
   it("create_site_conflict_renames_uuid_cookie_too", async () => {
     const { token, workspaceId } = await setupOwner();
     await createSite(token, workspaceId, { id: "site_a", domain: "www.example.com", uuidCookieEnabled: true });
-    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_b", name: "B", domain: "form.example.com", uuidCookieEnabled: true } });
+    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_b", name: "B", domains: ["form.example.com"], uuidCookieEnabled: true } });
     expect(res.status).toBe(201);
     expect(await json(res)).toMatchObject({ visitorCookieName: "_wtt_vid_site_b", uuidCookieName: "_wtt_uuid_site_b", uuidCookieEnabled: true, sharingAdjusted: { visitorCookieName: "_wtt_vid_site_b" } });
   });
@@ -338,7 +338,7 @@ describe("site creation with sharing conflicts (B139 Q29)", () => {
     const id = `site_${"x".repeat(55)}`; // `_wtt_vid_` + 60 字 = 68 字 > 64
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(id)));
     const hex = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
-    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id, name: "B", domain: "form.example.com" } });
+    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id, name: "B", domains: ["form.example.com"] } });
     expect(res.status).toBe(201);
     expect((await json(res)).visitorCookieName).toBe(`_wtt_vid_${hex}`);
   });
@@ -348,7 +348,7 @@ describe("site creation with sharing conflicts (B139 Q29)", () => {
     const other = await createSite(token, workspaceId, { id: "site_other", name: "Other", domain: "www.other-site.com" });
     // 事前の検査を通った後に、同時の作成が同じ組(example.com × _wtt_vid)を予約した
     const db = beforeD1Batch(env.DB, () => env.DB.prepare("insert into sharing_claims (domain, cookie_name, site_id, until) values ('example.com', '_wtt_vid', ?, null)").bind(other.id).run());
-    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_b", name: "B", domain: "www.example.com" }, envOverride: { DB: db } });
+    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_b", name: "B", domains: ["www.example.com"] }, envOverride: { DB: db } });
     const body = await expectConflict(res);
     expect(body.hint).toBe("もう一度作ってください。続くときは、訪問者 ID の Cookie 名を指定して作ってください");
     expect(await env.DB.prepare("select id from sites where id = 'site_b'").first()).toBeNull();
@@ -370,7 +370,10 @@ async function pendingSites(token: string, workspaceId: string, n: number): Prom
   await asPending(token, src.id);
   const ids = await cloneSites(src.id, n, "site_m");
   await env.DB.prepare(
-    "update sites set allowed_origins_json = json_array('https://www.' || replace(id, '_', '-') || '.com'), share_migration_pending = 1 where id like 'site_m%'",
+    // B148: タグを置くドメインは domains_json が正(3 列は一覧から導いた値にそろえる)
+    `update sites set domains_json = json_array(json_object('value', 'www.' || replace(id, '_', '-') || '.com', 'verdict', 'unknown', 'checkedAt', NULL, 'triedAt', NULL)),
+       domain = 'www.' || replace(id, '_', '-') || '.com', allowed_origins_json = json_array('https://www.' || replace(id, '_', '-') || '.com'),
+       share_migration_pending = 1 where id like 'site_m%'`,
   ).run();
   await env.DB.prepare("update sites set share_migration_pending = 0 where id = ?").bind(src.id).run();
   return ids;
@@ -447,20 +450,30 @@ describe("sharing migration (B139)", () => {
     }
   });
 
-  it("migration_runs_once_and_keeps_user_choice", async () => {
+  // B148(P11): 完了の印があっても、印 1 のサイト(B148 のマイグレーションが渡したもの)は処理する。利用者がオフにした印 0 のサイトはそのまま
+  it("migration_processes_pending_sites_even_after_install_marker", async () => {
     const { token, workspaceId } = await setupOwner();
     const c = await createSite(token, workspaceId, { id: "site_c", domain: "www.c-site.com" });
     await asPending(token, c.id);
+    expect((await migrate()).turnedOn).toEqual([c.id]);
+    expect(await env.CONFIG_KV.get(kvKeys.installMarker)).not.toBeNull();
+    // 印のある導入で、別のサイトが移行待ちになった
     const d = await createSite(token, workspaceId, { id: "site_d", domain: "www.d-site.com" });
     await asPending(token, d.id);
-    expect((await migrate()).turnedOn).toEqual([c.id, d.id]);
-    // 完了の後に利用者が C をオフにした。D は(何かの理由で)印が 1 に戻っていても触らない
+    expect(await migrate()).toEqual({ done: true, turnedOn: [d.id] });
+    expect((await siteRow(d.id)).share_subdomains).toBe(1);
+  });
+
+  it("migration_keeps_user_choice_after_completion", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const c = await createSite(token, workspaceId, { id: "site_c", domain: "www.c-site.com" });
+    await asPending(token, c.id);
+    expect((await migrate()).turnedOn).toEqual([c.id]);
+    // 完了の後に利用者が C をオフにした(印 0)。次の移行は触らない
     expect((await patch(token, c.id, { shareSubdomains: false })).status).toBe(200);
-    expect((await patch(token, d.id, { shareSubdomains: false })).status).toBe(200);
-    await env.DB.prepare("update sites set share_migration_pending = 1 where id = ?").bind(d.id).run();
+    expect((await siteRow(c.id)).share_migration_pending).toBe(0);
     expect(await migrate()).toEqual({ done: true, turnedOn: [] });
     expect((await siteRow(c.id)).share_subdomains).toBe(0);
-    expect((await siteRow(d.id)).share_subdomains).toBe(0);
   });
 
   it("install_marker_created_without_static_rebuild", async () => {
@@ -578,15 +591,15 @@ describe("sharing migration (B139)", () => {
     const { token, workspaceId } = await setupOwner();
     const c = await createSite(token, workspaceId, { id: "site_c", domain: "www.c-site.com" });
     await asPending(token, c.id);
-    // 移行の途中で別の実行が印を書いた(最初に読んだ時点では無かった)
+    // 移行の途中(C の設定の記録を書いたとき)で別の実行が印を書いた。B148: 移行は先頭で印を読まなくなったので、途中の書き込みで再現する
     let wrote = false;
     const kv = new Proxy(env.CONFIG_KV, {
       get(target, prop) {
         const v = Reflect.get(target, prop);
-        if (prop === "get")
+        if (prop === "put")
           return async (key: string, ...rest: unknown[]) => {
             const r = await (v as (...a: unknown[]) => Promise<unknown>).call(target, key, ...rest);
-            if (key === kvKeys.installMarker && !wrote) {
+            if (key === kvKeys.settings(c.id) && !wrote) {
               wrote = true;
               await target.put(kvKeys.installMarker, "existing-marker");
             }

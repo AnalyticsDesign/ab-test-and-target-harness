@@ -166,13 +166,14 @@ describe("nav", () => {
     const owner = settingsGroups(origin, { workspaces: wsOf("owner"), instanceAdmin: false })[0]!;
     expect(owner.heading).toBe("サイト設定");
     expect(owner.name).toBe("サイト1");
-    expect(owner.items.map((i) => i.label)).toEqual(["一般", "導入タグ", "訪問者 ID", "外部計測の名前", "外部 ID", "危険な操作"]);
+    expect(owner.items.map((i) => i.label)).toEqual(["一般", "ドメイン", "導入タグ", "訪問者 ID", "外部計測の名前", "外部 ID", "危険な操作"]);
     expect(owner.items[0]!.href).toBe("/w/ws1/sites/s1/settings");
     expect(owner.items[0]!.href).not.toContain("?");
-    expect(owner.items[1]!.href).toBe("/w/ws1/sites/s1/settings?section=tag");
-    expect(owner.items.map((i) => i.icon)).toEqual(["gear", "gear", "gear", "gear", "gear", "dot"]);
+    expect(owner.items[1]!.href).toBe("/w/ws1/sites/s1/settings?section=domains");
+    expect(owner.items[2]!.href).toBe("/w/ws1/sites/s1/settings?section=tag");
+    expect(owner.items.map((i) => i.icon)).toEqual(["gear", "gear", "gear", "gear", "gear", "gear", "dot"]);
     const admin = settingsGroups(origin, { workspaces: wsOf("admin"), instanceAdmin: false })[0]!;
-    expect(admin.items).toHaveLength(5);
+    expect(admin.items).toHaveLength(6);
     expect(admin.items.map((i) => i.label)).not.toContain("危険な操作");
     // summary に無いサイト・ワークスペースは節を出さない
     expect(scopes(settingsGroups({ kind: "site", wid: "ws1", sid: "nope" }, { workspaces: wsOf("admin"), instanceAdmin: false }))).toEqual(["workspace", "personal"]);

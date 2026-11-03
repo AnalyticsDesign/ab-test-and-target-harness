@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { E2E_INSTALL_MARKER } from "./fixtures";
 
 /**
  * admin E2E の初期状態を作る。
@@ -41,6 +42,18 @@ execFileSync("pnpm", ["exec", "wrangler", "d1", "migrations", "apply", "wtt-cont
 // edge の results-migrations を指し、database_id も edge と同じなので、control と edge が同じローカルの wtt-results を読み書きする
 // (edge が受けた参加・CV を control の結果の API が読む)
 execFileSync("pnpm", ["exec", "wrangler", "d1", "migrations", "apply", "wtt-results", "--local", "--persist-to", ".e2e-state"], { cwd: control, stdio: "inherit" });
+// B148: 導入の印(固定値)を D1 の正本(instance_settings の install_marker。値は JSON の文字列)と、edge が読む KV の写し(meta:install)に置く。
+// 偽の edge(e2e/fake-edge-ping.mjs)はこの SHA-256 を返すので、control の判定(domain-probe.ts)が「Cloudflare 経由」になる。
+// 置かないと control が最初の確かめで新しい印を作り、偽の edge の値と合わない
+execFileSync(
+  "pnpm",
+  [
+    "exec", "wrangler", "d1", "execute", "wtt-control", "--local", "--persist-to", ".e2e-state", "--command",
+    `INSERT INTO instance_settings (key, value, updated_at, updated_by) VALUES ('install_marker', '${JSON.stringify(E2E_INSTALL_MARKER)}', ${Date.now()}, NULL)`,
+  ],
+  { cwd: control, stdio: "inherit" },
+);
+execFileSync("pnpm", ["exec", "wrangler", "kv", "key", "put", "meta:install", E2E_INSTALL_MARKER, "--binding", "CONFIG_KV", "--local", "--persist-to", ".e2e-state"], { cwd: control, stdio: "inherit" });
 // D9 ③(Task 17 の修正 1): この実行の wrangler dev だけが使う dev registry とログの置き場所(fixtures.ts の e2eWranglerEnv)。
 // 状態ディレクトリごと消しているので、前の実行の古い登録は残らない
 mkdirSync(resolve(control, ".e2e-state", "registry"), { recursive: true });

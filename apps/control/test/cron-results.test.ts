@@ -82,7 +82,7 @@ async function dueTest(owner: Owner, sid: string, eid: string, startedAt: number
 
 /** ID を決めて Site を作る(結果を記録する。並びを決めるテスト用) */
 async function siteWithId(owner: Owner, id: string): Promise<string> {
-  const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id, name: id, domain: `${id.toLowerCase()}.example.com` }, envOverride: RESULTS_STORE });
+  const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id, name: id, domains: [`${id.toLowerCase()}.example.com`] }, envOverride: RESULTS_STORE });
   expect(res.status).toBe(201);
   return id;
 }

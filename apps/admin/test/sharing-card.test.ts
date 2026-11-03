@@ -3,7 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ApiClientError, describeError, fieldErrors } from "@/lib/client";
 import { sectionOfField } from "@/components/settings/sections";
+import { InstallTag } from "@/components/settings/InstallTag";
 import { SharingCard } from "@/components/settings/SharingCard";
+import { groupDomainChecks } from "@/components/settings/domains-view";
 import { sharingNoticeFor, sharingPatch, withSharingHint, type SharingAdjusted } from "@/components/settings/sharing-notice";
 import { createdHref } from "@/components/SiteForms";
 import type { Site } from "@/lib/types";
@@ -20,6 +22,8 @@ const site = (over: Partial<Site> = {}): Site =>
     uuidCookieEnabled: true,
     uuidCookieName: "_ab_uuid",
     shareSubdomains: true,
+    outsideDomains: [],
+    uncheckedDomains: [],
     cookieGroups: [
       { domain: "example.com", hosts: ["www.example.com", "form.example.com"] },
       { domain: "example-shop.jp", hosts: ["shop.example-shop.jp"] },
@@ -200,5 +204,91 @@ describe("sharingPatch", () => {
     share = false;
     share = true;
     expect(sharingPatch(share, true)).toEqual({});
+  });
+});
+
+// B148: 共有のカードと導入タグの案内は、ドメインの節を指す
+describe("共有のカードとドメインの節(B148)", () => {
+  const domainsLink = (html: string, text: string) => expect(html).toMatch(new RegExp(`<a href="/w/w1/sites/s1/settings\\?section=domains">${text}</a>`));
+  const modeB = (over: Partial<Site> = {}) =>
+    site({ mode: "B", outsideDomains: ["form.example.com"], uncheckedDomains: [], edgeDomains: ["www.example.com"], ...over });
+
+  it("範囲の計算元は「タグを置くドメイン」(ドメインの節へのリンク)で、hint にも同じことを書く", () => {
+    const html = render(site());
+    expect(html).toContain("共有する範囲(登録ドメインごと。");
+    domainsLink(html, "タグを置くドメイン");
+    expect(html).toContain("から計算):");
+    expect(html).toContain("範囲はタグを置くドメインから、登録ドメインごとに計算します。");
+    expect(html).not.toContain("受け付けるサイトのアドレス");
+    expect(html).not.toContain("hosts");
+  });
+
+  it("説明の 1 文目の末尾の「(Cloudflare 外のドメインでも)」は Mode B だけ", () => {
+    expect(render(modeB())).toContain("同じ ID で目標の達成を記録できます(Cloudflare 外のドメインでも)。");
+    expect(render(site())).toContain("同じ ID で目標の達成を記録できます。");
+    expect(render(site())).not.toContain("(Cloudflare 外のドメインでも)");
+  });
+
+  it("カードの末尾に、タグを置くドメインの判定はドメインの節で変えると案内する", () => {
+    const html = render(site());
+    expect(html).toContain("タグを置くドメインと Cloudflare 経由かの判定は ");
+    domainsLink(html, "ドメインで変える");
+  });
+
+  it("Cloudflare 外のドメインの警告は、Mode B・共有オフ・外のドメインありのときだけ出す", () => {
+    const warn = (html: string) => html.includes('data-testid="sharing-outside-warning"');
+    const off = modeB({ shareSubdomains: false, cookieGroups: [] });
+    const html = render(off);
+    expect(warn(html)).toBe(true);
+    expect(html).toContain("<code>form.example.com</code>");
+    expect(html).toContain("では ID がつながりません(そこで達成した目標は、テストの結果に入りません)。「サブドメインをまたいで ID を共有する」をオンにしてください。");
+    expect(html).toMatch(/data-testid="sharing-outside-warning"[^>]*style="[^"]*font-weight:(600|700)/);
+    // 共有がオン・外のドメインが無い・Mode A のときは出さない
+    expect(warn(render(off, { share: true }))).toBe(false);
+    expect(warn(render(modeB({ shareSubdomains: false, cookieGroups: [], outsideDomains: [] })))).toBe(false);
+    expect(warn(render(site({ mode: "A", shareSubdomains: false, cookieGroups: [], outsideDomains: ["form.example.com"] })))).toBe(false);
+    // 入力中の導入の形が A なら、保存済みが B でも出さない
+    expect(warn(render(off, { mode: "A" }))).toBe(false);
+  });
+
+  it("状態の表の「Cloudflare 外のドメイン」の列と「未判定:」の注記は Mode B だけ", () => {
+    const b = modeB({ uncheckedDomains: ["form.example.com"], outsideDomains: [] });
+    const html = render(b);
+    expect(html).toContain("<th>まとまり(登録ドメイン)</th><th>含むドメイン</th><th>Cloudflare 外のドメイン</th><th>ID の Cookie</th>");
+    expect(html).toContain("未判定: <code>form.example.com</code>(保存すると決まります)");
+    const out = render(modeB());
+    expect(out).toMatch(/<td><code>example\.com<\/code><\/td><td>.*<\/td><td><code>form\.example\.com<\/code><\/td>/);
+    expect(out).toContain("<td>なし</td>"); // 外のドメインが無いまとまり
+    expect(out).not.toContain("未判定:");
+    const a = render(site());
+    expect(a).toContain("<th>まとまり(登録ドメイン)</th><th>含むドメイン</th><th>ID の Cookie</th>");
+    expect(a).not.toContain("<th>Cloudflare 外のドメイン</th>");
+    expect(a).not.toContain("未判定:");
+  });
+
+  it("まとまりごとの判定: 保存済みが Mode B なら判定の結果を、まだ Mode A なら全部を未判定にする", () => {
+    const g = { domain: "example.com", hosts: ["www.example.com", "form.example.com"] };
+    expect(groupDomainChecks(modeB({ uncheckedDomains: ["www.example.com"] }), g)).toEqual({ outside: ["form.example.com"], unchecked: ["www.example.com"] });
+    expect(groupDomainChecks(site({ mode: "A" }), g)).toEqual({ outside: [], unchecked: ["www.example.com", "form.example.com"] });
+  });
+});
+
+describe("導入タグの案内(B148)", () => {
+  const tag = (over: Partial<Site> = {}) =>
+    renderToStaticMarkup(createElement(InstallTag, { site: site({ domain: "www.example.com", ...over }), tagOrigin: "https://tag.example.net", canAdmin: true }));
+
+  it("ドメインの行は代表のドメインと、ドメインの節へのリンク。受け付けるサイトのアドレスの文は無い", () => {
+    const html = tag();
+    expect(html).toContain("www.example.com");
+    expect(html).toMatch(/<a href="\/w\/w1\/sites\/s1\/settings\?section=domains">ドメインで変える<\/a>/);
+    expect(html).toContain("複数のドメインのページに置くときは、ドメインの節の「タグを置くドメイン」に足します。");
+    expect(html).not.toContain("受け付けるサイトのアドレス");
+    expect(html).not.toContain("一般で");
+  });
+
+  it("Mode B では、Route を置いてから保存すると確かめると添える", () => {
+    const text = "Mode B では、足したドメインに Route を置いてから保存すると、Cloudflare 経由かを確かめます(手順はドメインの節)。";
+    expect(tag({ mode: "B" })).toContain(text);
+    expect(tag({ mode: "A" })).not.toContain(text);
   });
 });

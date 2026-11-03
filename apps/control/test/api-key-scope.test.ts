@@ -85,7 +85,7 @@ describe("api key scope (backlog B42)", () => {
     const b = await newWorkspace(owner.token, "B");
     const viewer = await makeKey(owner.token, null, { roleCap: "viewer" });
     expect((await call("GET", `/workspaces/${b}/sites`, { token: viewer.key })).status).toBe(200);
-    const write = await call("POST", `/workspaces/${b}/sites`, { token: viewer.key, body: { name: "x", domain: "x.example.com" } });
+    const write = await call("POST", `/workspaces/${b}/sites`, { token: viewer.key, body: { name: "x", domains: ["x.example.com"] } });
     expect(write.status).toBe(403);
     expect(await json(write)).toMatchObject({ required: "admin" });
     expect((await call("GET", "/instance-admins", { token: viewer.key })).status).toBe(403);

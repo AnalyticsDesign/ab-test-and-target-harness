@@ -179,8 +179,9 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await expect(tzCombo()).toHaveValue("America/New_York");
     await chooseTz("Asia/Tokyo");
     await saveAndReload();
-    // (3) Deployment Mode(訪問者 ID の節)。Mode B は hosts が要るので保存はせず、dirty になることと、再読み込みで捨てられることだけを見る
-    await page.getByTestId("section-identity").click();
+    // (3) Deployment Mode(ドメインの節。B148)。Mode B の保存はドメインを確かめに行くので保存はせず、dirty になることと、再読み込みで捨てられることだけを見る
+    // (Mode B の保存と判定は domains-flow.spec.ts)
+    await page.getByTestId("section-domains").click();
     await expect(saveState).toHaveText("変更はありません");
     await pick(page, "導入の形", /^B: サーバー発行 Cookie/);
     await expect(saveState).toHaveText("未保存の変更あり");
@@ -213,14 +214,16 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     // 導入タグ: フォームの外。コピー用のコード枠に Site ID が入っている
     await page.getByTestId("section-tag").click();
     await expect(page.getByTestId("code-block")).toContainText(`/s/${SITE.id}.js`);
-    // B60 B123: モードとドメインの横のリンクで、変える節へ移る(同じ画面のまま URL の ?section= が変わる)
+    // B60 B123: モードとドメインの横のリンクで、変える節へ移る(同じ画面のまま URL の ?section= が変わる)。
+    // B148: 導入の形とドメインの一覧はドメインの節に移った(「ドメインで変える」の行き先)
     await page.getByRole("link", { name: "訪問者 ID で変える" }).click();
     await expect(page).toHaveURL(/[?&]section=identity/);
-    await expect(page.getByRole("combobox", { name: "導入の形", exact: true })).toBeVisible();
+    await expect(page.locator('input[name="visitorCookieName"]')).toBeVisible();
     await page.getByTestId("section-tag").click();
-    await page.getByRole("link", { name: "一般で変える" }).click();
-    await expect(page).not.toHaveURL(/section=/);
-    await expect(page.locator('textarea[name="allowedOrigins"]')).toBeVisible();
+    await page.getByRole("link", { name: "ドメインで変える" }).click();
+    await expect(page).toHaveURL(/[?&]section=domains/);
+    await expect(page.getByRole("combobox", { name: "導入の形", exact: true })).toBeVisible();
+    await expect(page.locator('input[name="domains.0"]')).toBeVisible();
     await page.getByTestId("section-tag").click();
     await expect(page.getByTestId("code-block")).toBeVisible();
 
@@ -231,7 +234,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await expect(saveState).toHaveCount(0);
     await nav.getByRole("link", { name: "設定", exact: true }).click();
     await expect(saveState).toBeVisible();
-    await expect(page.locator('input[name="domain"]')).toBeVisible();
+    await expect(page.locator('input[name="name"]')).toBeVisible(); // 一般の節(B148 でドメインの欄はドメインの節に移った)
     await expect(page.getByTestId("code-block")).toHaveCount(0);
     await expect(page).toHaveURL(settingsUrl);
     await expect(page.getByTestId("section-general")).toHaveAttribute("aria-current", "page");
@@ -272,7 +275,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     // 存在しない節は一般の節で開く
     await page.goto(`${settingsUrl}?section=bogus`);
     await waitForHydration(page);
-    await expect(page.locator('input[name="domain"]')).toBeVisible();
+    await expect(page.locator('input[name="name"]')).toBeVisible(); // 一般の節(B148 でドメインの欄はドメインの節に移った)
     // 再描画で節が戻らない: ?section=tag で開いてから一般の節へ切り替え、入力する(入力で再描画される)。
     // 入力の後も、保存の後(router.refresh)も一般の節のまま(initialSection の入れ直しで導入タグへ戻らない)。
     // 1 字打って消す(同じ値の fill は入力のイベントを出さない)。名前は元のまま保存し、変更の無い状態で次へ進む
@@ -286,13 +289,13 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await siteName.press("Backspace");
     await expect(siteName).toHaveValue(SITE.name);
     await expect(saveState).toHaveText("未保存の変更あり");
-    await expect(page.locator('input[name="domain"]')).toBeVisible();
+    await expect(page.locator('input[name="name"]')).toBeVisible(); // 一般の節(B148 でドメインの欄はドメインの節に移った)
     await expect(page.getByTestId("code-block")).toHaveCount(0);
     // 保存の直後(読み直しの反映を待たずに)次の節へ切り替える。読み直しの反映の前の切り替えは、反映の後に回る(lib/refresh-wait.ts)ので、
     // 下の「切り替えの枠の href が ?section=tag で終わる」が、保存の直後の節の切り替えの見張りになる(以前は refresh の応答を待っていた。管理画面の速さの記録 4 節)
     await page.getByRole("button", { name: "保存" }).click();
     await expect(page.getByText("保存しました")).toBeVisible();
-    await expect(page.locator('input[name="domain"]')).toBeVisible();
+    await expect(page.locator('input[name="name"]')).toBeVisible(); // 一般の節(B148 でドメインの欄はドメインの節に移った)
     await expect(page.getByTestId("code-block")).toHaveCount(0);
 
     // B60 Task 5(ユーザーの決定 5): 設定のメニューの切り替えの枠でサイトを選ぶと、サイト設定の画面では同じ節のまま別のサイトへ移る。
@@ -576,7 +579,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
       await nav.getByRole("link", { name: "メンバー", exact: true }).click();
       await expect(page).toHaveURL(/\/w\/[^/]+\/members$/);
       await expect(siteGroupHeading).toBeVisible();
-      await expect(nav.locator('[data-testid^="section-"]')).toHaveCount(6); // オーナーには危険な操作も出る
+      await expect(nav.locator('[data-testid^="section-"]')).toHaveCount(7); // オーナーには危険な操作も出る(B148 でドメインの節が増えて 7)
       await expect(nav.locator('[data-testid^="section-"][aria-current]')).toHaveCount(0);
       await expect(backLink).toHaveAttribute("href", experimentHref);
       // 「戻る」で設定を開く前の画面(評価計画のタブ)へ

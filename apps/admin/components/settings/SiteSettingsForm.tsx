@@ -8,7 +8,7 @@ import { ApiClientError, api, describeError, fieldErrors } from "@/lib/client";
 import { budgetFromInput, NEW_PROFILE_BUDGET_HINT, NEW_PROFILE_BUDGET_LABEL } from "@/lib/new-profile-budget";
 import { capacityWarning, cspNotice, resultsToggleNotice, splitCode } from "@/lib/results-settings";
 import { clearSettingsSection, sectionOfHref, setSectionErrors, setSettingsSection, syncSettingsSection, useSettingsSection } from "@/lib/settings-section";
-import type { AnalyticsSettings, Site } from "@/lib/types";
+import type { AnalyticsSettings, DomainChecks, Site, SiteSaved } from "@/lib/types";
 import { useLeaveGuard, type LeaveAttempt } from "../api-keys/useLeaveGuard";
 import { Field } from "../Field";
 import { ErrorBox } from "../ErrorBox";
@@ -20,6 +20,9 @@ import { Combo } from "../ui/Combo";
 import { InstallTag } from "./InstallTag";
 import { DangerZone } from "./DangerZone";
 import { SharingCard } from "./SharingCard";
+import { DomainsSection } from "./DomainsSection";
+import { compactRows, domainsChanged, shouldSendDomains } from "./domains-view";
+import { SectionLink } from "./SectionLink";
 import { sharingPatch, withSharingHint, type SharingAdjusted } from "./sharing-notice";
 import { SECTIONS, fieldKeysFor, firstInvalidSection, sectionOfField, type SectionId } from "./sections";
 
@@ -118,7 +121,12 @@ export function SiteSettingsForm({
   // B139: 共有のチェック。カードの状態の表示が入力中の値で変わり、無効のチェックは FormData に載らないので state で持つ
   const [share, setShare] = useState(site.shareSubdomains);
   const [idSourceKind, setIdSourceKind] = useState<"ab" | "cookie">(site.idSource === "ab" ? "ab" : "cookie");
-  const lines = (v: string) => String(v).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  // B148: タグを置くドメインの一覧(行を足す・消すので state で持つ)。保存に成功したら応答の一覧(そろえた値)で置き換える
+  const [rows, setRows] = useState<string[]>(() => site.domains.map((r) => r.value));
+  // B148: 直前の保存の判定の結果。router.refresh() の後も、次の保存か別のサイトへ移るまで(page.tsx の key で作り直す)出す
+  const [domainChecks, setDomainChecks] = useState<DomainChecks>(null);
+  // domains を送る保存の間だけ立てる(保存の帯に「ドメインを確かめています」を出す)
+  const [checking, setChecking] = useState(false);
   // Analytics のフィールド error は control 側の 422 コードによって key の形が違う(どちらも path は配列):
   // strictObject 全体の validation_failed なら ["analytics","exposure","event"] → "analytics.exposure.event"、
   // invalid_analytics(applySitePatch が AnalyticsSettingsSchema だけを検証したもの)は
@@ -196,13 +204,15 @@ export function SiteSettingsForm({
     const analytics: Record<string, unknown> = {};
     analytics.dataLayerName = String(fd.get("analytics.dataLayerName"));
     for (const f of ANALYTICS_FIELDS) setPath(analytics, f.path, String(fd.get(`analytics.${f.path}`)));
+    // B148: domains はドメインの節の保存か、一覧・導入の形を変えたときだけ送る(ほかの節の保存で確かめに行かない)。
+    // 空の行は送らず、画面の行も同じ形にそろえる(control の 422 の行の番号 domains.<n> と画面の行を合わせるため)
+    const sentRows = compactRows(rows);
+    const sendDomains = shouldSendDomains(section, domainsChanged(rows, site.domains), mode !== site.mode);
     const body: Record<string, unknown> = {
       name: fd.get("name"),
-      domain: fd.get("domain"),
-      mode: fd.get("mode"),
+      ...(sendDomains ? { domains: sentRows } : {}),
+      mode,
       idSource: idSourceKind === "ab" ? "ab" : `cookie:${String(fd.get("byoidCookie")).trim()}`,
-      allowedOrigins: lines(String(fd.get("allowedOrigins"))),
-      hosts: lines(String(fd.get("hosts"))).map((h) => h.toLowerCase()),
       consentMode: fd.get("consentMode"),
       retentionDays: Number(fd.get("retentionDays")),
       forgetOnRevoke: fd.get("forgetOnRevoke") === "on",
@@ -226,10 +236,16 @@ export function SiteSettingsForm({
     setError(null);
     setFields({});
     setSaved(false);
+    setDomainChecks(null);
+    setChecking(sendDomains && mode === "B");
+    if (sendDomains) setRows(sentRows);
     try {
-      await api("PATCH", `/sites/${site.id}`, body);
+      const res = await api<SiteSaved>("PATCH", `/sites/${site.id}`, body);
       setSaved(true);
       setDirty(false);
+      // 応答の一覧(保存した形にそろえた値)で行を置き換える。router.refresh() は state の行を作り直さないため
+      if (Array.isArray(res?.domains)) setRows(res.domains.map((r) => r.value));
+      setDomainChecks(res?.domainChecks ?? null);
       // 保存の後の読み直し。反映の前に押した節・リンクは反映の後に回る(lib/refresh-wait.ts。管理画面の速さの記録 4 節・CE-R9)
       void refreshAndWait();
     } catch (err) {
@@ -241,6 +257,7 @@ export function SiteSettingsForm({
       if (first) setSettingsSection(sectionOfField(first));
     } finally {
       setBusy(false);
+      setChecking(false);
     }
   }
   const ro = !canAdmin || busy;
@@ -261,12 +278,6 @@ export function SiteSettingsForm({
           <h2>{heading("general")}</h2>
           <Field label="名前" error={fields.name}>
             <input name="name" defaultValue={site.name} disabled={ro} required />
-          </Field>
-          <Field label="ドメイン" error={fields.domain}>
-            <input name="domain" defaultValue={site.domain} disabled={ro} required />
-          </Field>
-          <Field label="受け付けるサイトのアドレス(Origin。1 行に 1 つ。https://host[:port] の形)" hint="Mode A の判定(/decision)・イベント(/event)はここに一致する Origin だけ受け付けます。空だと全拒否(403)" error={fields.allowedOrigins}>
-            <textarea name="allowedOrigins" defaultValue={site.allowedOrigins.join("\n")} disabled={ro} />
           </Field>
           <Field label="同意の扱い" group error={fields.consentMode}>
             <Picker
@@ -353,47 +364,32 @@ export function SiteSettingsForm({
             <input name="resultsRetentionDays" type="number" min={7} max={365} defaultValue={site.resultsRetentionDays} disabled={ro} required />
           </Field>
         </section>
+        <DomainsSection
+          site={site}
+          mode={mode}
+          rows={rows}
+          fields={fields}
+          disabled={ro}
+          canAdmin={canAdmin}
+          domainChecks={domainChecks}
+          className={switched ? "card enter" : "card"}
+          hidden={section !== "domains"}
+          onModeChange={(v) => {
+            setMode(v);
+            setDirty(true); // hidden input の値の変更は form の change イベントを起こさない
+            clearField("mode");
+          }}
+          onRowsChange={setRows}
+          onListEdited={() => {
+            setDirty(true); // 行を足す・消すボタンは form の change イベントを起こさない
+            clearField("domains"); // 行の番号がずれるので、一覧のエラーを全部消す
+          }}
+        />
         <section className={switched ? "card enter" : "card"} hidden={section !== "identity"}>
           <h2>{heading("identity")}</h2>
-          <Field label="導入の形" group error={fields.mode}>
-            <Picker
-              label="導入の形"
-              name="mode"
-              value={mode}
-              disabled={ro}
-              options={[
-                { value: "A", label: "A: JS Cookie" },
-                { value: "B", label: "B: サーバー発行 Cookie(同じゾーンの Workers Route)" },
-              ]}
-              onChange={(v) => {
-                setMode(v as "A" | "B");
-                setDirty(true);
-                clearField("mode");
-              }}
-            />
-          </Field>
-          {mode === "B" ? (
-            <div className="banner-warn" style={{ display: "block" }}>
-              <p>
-                <strong>Mode B(サーバー発行 Cookie)の設置手順</strong>(インフラ作業。管理画面は設定値の保持までです)
-              </p>
-              <ol>
-                <li>
-                  対象ゾーンに Workers Route <code>&lt;hosts の各ホスト&gt;/__ab/*</code> → <code>wtt-edge</code> を追加する
-                </li>
-                <li>下の hosts に対象ホスト名を 1 行ずつ書く(小文字。IDN は punycode)</li>
-                <li>
-                  保存後、<code>curl -si -X POST https://&lt;host&gt;/__ab/decision -H 'content-type: application/json' -d '{"{"}"v":1,"url":"https://&lt;host&gt;/","referrer":"","device":"desktop"{"}"}'</code> で{" "}
-                  <code>Set-Cookie</code> が返ることを確認する
-                </li>
-              </ol>
-              <Field label="hosts(1 行 1 ホスト名)" error={fields.hosts}>
-                <textarea name="hosts" defaultValue={site.hosts.join("\n")} disabled={ro} />
-              </Field>
-            </div>
-          ) : (
-            <input type="hidden" name="hosts" value="" />
-          )}
+          <p className="muted" data-testid="identity-moved">
+            導入の形(Mode)と Mode B の設置手順は <SectionLink to="domains">ドメイン</SectionLink> の節にあります。この節は ID の Cookie の設定だけです。
+          </p>
           <Field label="訪問者 ID の取得元" group error={fields.idSource}>
             <Picker
               label="訪問者 ID の取得元"
@@ -470,6 +466,7 @@ export function SiteSettingsForm({
           share={share}
           mode={mode}
           disabled={ro}
+          canAdmin={canAdmin}
           error={fields.shareSubdomains}
           className={switched ? "card enter" : "card"}
           hidden={section !== "identity"}
@@ -523,7 +520,10 @@ export function SiteSettingsForm({
       ) : null}
       {/* A10: 保存の帯はフォームに入る節でだけ出す。未保存の入力は節を移っても残り、離脱の確認が守る */}
       {canAdmin && inForm ? (
-        <SaveBar dirty={dirty}>
+        <SaveBar
+          dirty={dirty && !checking}
+          message={checking ? "保存しています。ドメインを確かめています" : section === "domains" && mode === "B" ? "保存すると、ドメインごとに edge が応答するかを確かめ直します" : undefined}
+        >
           <SubmitButton busy={busy} form="site-settings-form">保存</SubmitButton>
         </SaveBar>
       ) : null}

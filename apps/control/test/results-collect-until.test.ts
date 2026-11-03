@@ -33,7 +33,7 @@ const HOUR = 60 * 60 * 1000;
 
 /** 結果を記録するサイト(計測用 D1 がある導入で作る = results_enabled 1) */
 async function recordingSite(owner: Owner): Promise<string> {
-  const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+  const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domains: ["www.example.com"] }, envOverride: RESULTS_STORE });
   expect(res.status).toBe(201);
   return (await json<{ id: string }>(res)).id;
 }

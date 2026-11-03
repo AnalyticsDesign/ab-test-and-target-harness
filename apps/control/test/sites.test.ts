@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { kvKeys, parseSiteSettings } from "@wtt/core";
-import { call, json, setupOwner, inviteAndJoin, createSite, failingKv, failingD1Insert, siteRow, expectEnvelope } from "./helpers";
+import { call, json, setupOwner, inviteAndJoin, createSite, failingKv, failingD1Insert, fakeEdgePing, seedEdgeDomains, setEdgeDomains, siteRow, expectEnvelope } from "./helpers";
 import { getDb } from "../src/db";
 import { releaseHosts, siteToSettings } from "../src/site-settings";
 
@@ -16,7 +16,7 @@ describe("sites", () => {
     const { id } = await createSite(token, workspaceId, { id: "site_one", domain: "www.example.com" });
     expect(id).toBe("site_one");
     const site = await json(await call("GET", "/sites/site_one", { token }));
-    expect(site).toMatchObject({ id: "site_one", mode: "A", idSource: "ab", consentMode: "implicit", visitorCookieName: "_wtt_vid", uuidCookieName: "_wtt_uuid", uuidCookieEnabled: false, allowedOrigins: ["https://www.example.com"], hosts: [], analytics: { extraKey: "ab_extra" } });
+    expect(site).toMatchObject({ id: "site_one", mode: "A", idSource: "ab", consentMode: "implicit", visitorCookieName: "_wtt_vid", uuidCookieName: "_wtt_uuid", uuidCookieEnabled: false, allowedOrigins: ["https://www.example.com"], edgeDomains: [], analytics: { extraKey: "ab_extra" } });
     expect(site.siteSalt).toBeUndefined();
     // 時刻の単位: createdAt / updatedAt / contentUpdatedAt は epoch ミリ秒(epoch 秒なのは previousCookieNames.until だけ)
     const now = Date.now();
@@ -51,7 +51,7 @@ describe("sites", () => {
     const ed = await inviteAndJoin(owner.token, owner.workspaceId, "editor");
     expect((await call("GET", `/sites/${id}`, { token: ed.token })).status).toBe(200);
     expect((await call("PATCH", `/sites/${id}`, { token: ed.token, body: { name: "x" } })).status).toBe(403);
-    expect((await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: ed.token, body: { name: "S", domain: "a.example" } })).status).toBe(403);
+    expect((await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: ed.token, body: { name: "S", domains: ["a.example"] } })).status).toBe(403);
   });
   it("renaming the canonical cookie keeps the old name in previousCookieNames and rejects reuse while alive", async () => {
     const { token, workspaceId } = await setupOwner();
@@ -89,12 +89,12 @@ describe("sites", () => {
     const byoidBody = (await expectEnvelope(res)) as { error: string; message: string };
     expect(byoidBody.error).toBe("byoid_cookie_name_conflict");
     expect(byoidBody.message).not.toBe("byoid_cookie_name_conflict");
-    res = await call("PATCH", `/sites/${id}`, { token, body: { mode: "B", hosts: ["www.example.com"], idSource: "cookie:sid" } });
+    res = await call("PATCH", `/sites/${id}`, { token, body: { mode: "B", idSource: "cookie:sid" } });
     expect(res.status).toBe(422);
     const modeBBody = (await expectEnvelope(res)) as { error: string; message: string };
     expect(modeBBody.error).toBe("mode_b_requires_id_source_ab");
     expect(modeBBody.message).not.toBe("mode_b_requires_id_source_ab");
-    res = await call("PATCH", `/sites/${id}`, { token, body: { allowedOrigins: ["https://a.example/"] } });
+    res = await call("PATCH", `/sites/${id}`, { token, body: { decisionTimeoutMs: 100 } }); // core の SiteSettingsSchema(300〜3000)で落ちる
     expect(res.status).toBe(422);
     // invalid_settings は review r2 finding 2 の対象そのもの: applySitePatch() が validationFailed() を
     // 経由しない独自 ApiError で path を文字列にしていたため、ErrorEnvelopeSchema(path は配列)への
@@ -107,8 +107,10 @@ describe("sites", () => {
   it("mode B writes host keys and removes stale ones", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id } = await createSite(token, workspaceId, { mode: "B", domain: "www.example.com" });
-    expect(await env.CONFIG_KV.get(kvKeys.host("www.example.com"))).toBe(id); // 作成時 hosts = [domain]
-    expect((await call("PATCH", `/sites/${id}`, { token, body: { hosts: ["blog.example.com"] } })).status).toBe(200);
+    // B148 Task 2: edge の判定は D1 に直接置く(保存の判定は Task 4)
+    await setEdgeDomains(token, id, ["www.example.com"]);
+    expect(await env.CONFIG_KV.get(kvKeys.host("www.example.com"))).toBe(id);
+    await setEdgeDomains(token, id, ["blog.example.com"]);
     expect(await env.CONFIG_KV.get(kvKeys.host("www.example.com"))).toBeNull();
     expect(await env.CONFIG_KV.get(kvKeys.host("blog.example.com"))).toBe(id);
   });
@@ -152,7 +154,9 @@ describe("sites", () => {
   });
   it("delete removes the site and every KV record", async () => {
     const { token, workspaceId } = await setupOwner();
-    const { id } = await createSite(token, workspaceId, { mode: "B" });
+    const { id } = await createSite(token, workspaceId, { mode: "B", domain: "www.example.com" });
+    await setEdgeDomains(token, id, ["www.example.com"]);
+    expect(await env.CONFIG_KV.get(kvKeys.host("www.example.com"))).toBe(id);
     expect((await call("DELETE", `/sites/${id}`, { token })).status).toBe(204);
     expect(await env.CONFIG_KV.get(kvKeys.settings(id))).toBeNull();
     expect(await env.CONFIG_KV.get(kvKeys.host("www.example.com"))).toBeNull();
@@ -161,17 +165,20 @@ describe("sites", () => {
   it("host claim rejects cross-workspace duplicates and deletes only own mapping", async () => {
     const a = await setupOwner();
     const wsB = await json<{ id: string }>(await call("POST", "/workspaces", { token: a.token, body: { name: "B" } })); // 別 Workspace(同じ OWNER で可。所有権は Site 単位)
-    await createSite(a.token, a.workspaceId, { id: "s1", mode: "B", domain: "shop.example.com" }); // mode B は hosts = [domain]
-    await createSite(a.token, wsB.id, { id: "s2", domain: "x.example.com", visitorCookieName: "_ab_vid_s2" }); // B139: 同じ登録ドメインなので Cookie 名を分ける
-    const dup = await call("PATCH", `/sites/s2`, { token: a.token, body: { hosts: ["SHOP.example.com."] } }); // 正規化後に s1 と衝突
+    await createSite(a.token, a.workspaceId, { id: "s1", mode: "B", domain: "shop.example.com" });
+    await setEdgeDomains(a.token, "s1", ["shop.example.com"]);
+    await createSite(a.token, wsB.id, { id: "s2", mode: "B", domain: "x.example.com", visitorCookieName: "_ab_vid_s2" }); // B139: 同じ登録ドメインなので Cookie 名を分ける
+    await seedEdgeDomains("s2", ["shop.example.com"]); // s2 でも Cloudflare 経由と判定された(B148 Task 2: 判定は D1 に直接置く)
+    const dup = await call("PATCH", `/sites/s2`, { token: a.token, body: { domains: ["x.example.com", "SHOP.example.com."] } }); // 正規化後に s1 と衝突
     expect(dup.status).toBe(409);
     const dupBody = (await expectEnvelope(dup)) as { error: string; message: string };
     expect(dupBody.error).toBe("host_in_use");
     expect(dupBody.message).not.toBe("host_in_use");
     expect(await env.CONFIG_KV.get(kvKeys.host("shop.example.com"))).toBe("s1");
     // s2 が自分の host を付けて外しても s1 の mapping は消えない
-    expect((await call("PATCH", `/sites/s2`, { token: a.token, body: { hosts: ["two.example.com"] } })).status).toBe(200);
-    expect((await call("PATCH", `/sites/s2`, { token: a.token, body: { hosts: [] } })).status).toBe(200);
+    await setEdgeDomains(a.token, "s2", ["two.example.com"], ["x.example.com", "two.example.com"]);
+    expect(await env.CONFIG_KV.get(kvKeys.host("two.example.com"))).toBe("s2");
+    expect((await call("PATCH", `/sites/s2`, { token: a.token, body: { domains: ["x.example.com"] } })).status).toBe(200);
     expect(await env.CONFIG_KV.get(kvKeys.host("two.example.com"))).toBeNull();
     expect(await env.CONFIG_KV.get(kvKeys.host("shop.example.com"))).toBe("s1");
   });
@@ -187,18 +194,29 @@ describe("sites", () => {
     expect(kvBody.message).toBe("設定の保存に失敗しました");
     expect((await json(await call("GET", `/sites/${id}`, { token }))).name).toBe("Site");
   });
-  it("mode b site creation claims its domain as a host", async () => {
+  // B148 Task 4: Mode B の作成は要求の中で 1 行目を確かめ、edge ならホストとして取る。edge でなければホストを持たない
+  it("mode b site creation takes the host only when the first row is edge", async () => {
     const { token, workspaceId } = await setupOwner();
-    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_b", name: "B", domain: "b.example.com", mode: "B" } });
+    const res = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_b", name: "B", domains: ["b.example.com"], mode: "B" } });
     expect(res.status).toBe(201);
+    expect(await json(res)).toMatchObject({ edgeDomains: ["b.example.com"], uncheckedDomains: [] });
     expect(await env.CONFIG_KV.get(kvKeys.host("b.example.com"))).toBe("site_b");
     expect((await env.DB.prepare("select site_id from site_hosts where host = ?").bind("b.example.com").first<{ site_id: string }>())?.site_id).toBe("site_b");
+    fakeEdgePing.set("c.example.org", () => new Response("not found", { status: 404 }));
+    const out = await call("POST", `/workspaces/${workspaceId}/sites`, { token, body: { id: "site_c", name: "C", domains: ["c.example.org"], mode: "B" } });
+    expect(out.status).toBe(201);
+    expect(await json(out)).toMatchObject({ edgeDomains: [], outsideDomains: ["c.example.org"] });
+    expect(await env.CONFIG_KV.get(kvKeys.host("c.example.org"))).toBeNull();
+    expect(await env.DB.prepare("select site_id from site_hosts where host = ?").bind("c.example.org").first()).toBeNull();
   });
   it("host batch failure on patch removes the kv host keys it wrote", async () => {
     // failingD1Insert(Task 1 の helpers)は site_hosts への insert を含む batch 全体を失敗させる
     const { token, workspaceId } = await setupOwner();
-    const { id } = await createSite(token, workspaceId, { id: "site_hb" });
-    const res = await call("PATCH", `/sites/${id}`, { token, body: { hosts: ["hb.example.com"], visitorCookieName: "_new_vid" }, envOverride: { DB: failingD1Insert(env.DB, "site_hosts") } });
+    // B148 Task 4: 作成の 1 行目は Cloudflare 外(404)にして、ホストを持たない状態から始める
+    fakeEdgePing.set("www.hb-base.com", () => new Response("not found", { status: 404 }));
+    const { id } = await createSite(token, workspaceId, { id: "site_hb", mode: "B", domain: "www.hb-base.com" });
+    const domains = await seedEdgeDomains(id, ["hb.example.com"]); // B148 Task 2: 判定は D1 に直接置く
+    const res = await call("PATCH", `/sites/${id}`, { token, body: { domains, visitorCookieName: "_new_vid" }, envOverride: { DB: failingD1Insert(env.DB, "site_hosts") } });
     expect(res.status).toBe(409);
     // review r2 finding 4: この catch はかつて生の例外(String(e))を message に流していた。
     // ErrorEnvelopeSchema には string 型としか宣言していないので通ってしまう ── ここで日本語文字を含む
@@ -208,7 +226,7 @@ describe("sites", () => {
     expect(hostBody.message).toBe("ホスト名の登録が競合しました");
     expect(await env.CONFIG_KV.get(kvKeys.host("hb.example.com"))).toBeNull();
     const site = await json(await call("GET", `/sites/${id}`, { token }));
-    expect(site.hosts).toEqual([]);
+    expect(JSON.parse((await siteRow(id)).hosts_json)).toEqual([]);
     // 失敗した PATCH の後、KV の settings record は D1 と一致していること。
     // KV だけが先に進んだまま残ると、次の PATCH が旧行から再導出して配信中の Cookie 名を
     // previousCookieNames にも載せずに捨ててしまう(= 全訪問者の再バケット)
@@ -221,10 +239,12 @@ describe("sites", () => {
   it("a host key failure on patch rolls the settings record back to match d1", async () => {
     // settings の put は通り、host の put で落ちる経路(failingKv(/:settings$/) では踏めない)
     const { token, workspaceId } = await setupOwner();
-    const { id } = await createSite(token, workspaceId, { id: "site_hostfail" });
+    fakeEdgePing.set("www.hf-base.com", () => new Response("not found", { status: 404 })); // 作成の 1 行目は Cloudflare 外(ホストを持たない)
+    const { id } = await createSite(token, workspaceId, { id: "site_hostfail", mode: "B", domain: "www.hf-base.com" });
+    const domains = await seedEdgeDomains(id, ["hf.example.com"]); // B148 Task 2: 判定は D1 に直接置く
     const res = await call("PATCH", `/sites/${id}`, {
       token,
-      body: { hosts: ["hf.example.com"], visitorCookieName: "_new_vid" },
+      body: { domains, visitorCookieName: "_new_vid" },
       envOverride: { CONFIG_KV: failingKv(/^host:/) },
     });
     expect(res.status).toBe(503);
@@ -239,11 +259,12 @@ describe("sites", () => {
     expect(s?.hosts).toEqual([]);
     expect(await env.CONFIG_KV.get(kvKeys.host("hf.example.com"))).toBeNull();
   });
+  // B148 Task 4: Mode B の作成は 1 行目を確かめ(偽の edge が edge と答える)、ホストのキーを書く。そこで落ちたときの戻し
   it("a host key failure on create leaves no orphan settings record in kv", async () => {
     const { token, workspaceId } = await setupOwner();
     const res = await call("POST", `/workspaces/${workspaceId}/sites`, {
       token,
-      body: { id: "site_orphan", name: "B", domain: "orphan.example.com", mode: "B" },
+      body: { id: "site_orphan", name: "B", domains: ["orphan.example.com"], mode: "B" },
       envOverride: { CONFIG_KV: failingKv(/^host:/) },
     });
     expect(res.status).toBe(503);
@@ -395,10 +416,11 @@ describe("host release order (plan12 K14 (c))", () => {
   it("host_release_keeps_mapping_owned_by_another_site", async () => {
     const { token, workspaceId } = await setupOwner();
     const a = await createSite(token, workspaceId, { id: "site_ra", mode: "B", domain: "h.example.com" });
+    await setEdgeDomains(token, a.id, ["h.example.com"]);
     const b = await createSite(token, workspaceId, { id: "site_rb", domain: "b.example.com", visitorCookieName: "_ab_vid_rb" }); // B139: 同じ登録ドメインなので Cookie 名を分ける
     await moveHostToB("h.example.com", b.id);
     // A が H を外す PATCH。後始末の KV の get が古い "A" を 1 回返しても、D1 で B が持っているので H の mapping は消えない
-    const res = await call("PATCH", `/sites/${a.id}`, { token, body: { hosts: [] }, envOverride: { CONFIG_KV: staleGetOnce(kvKeys.host("h.example.com"), a.id) } });
+    const res = await call("PATCH", `/sites/${a.id}`, { token, body: { domains: ["www.ra-site.com"] }, envOverride: { CONFIG_KV: staleGetOnce(kvKeys.host("h.example.com"), a.id) } });
     expect(res.status).toBe(200);
     expect(await env.CONFIG_KV.get(kvKeys.host("h.example.com"))).toBe(b.id);
   });
@@ -406,6 +428,7 @@ describe("host release order (plan12 K14 (c))", () => {
   it("releaseHosts deletes only a host nobody owns in d1 and whose kv points at this site", async () => {
     const { token, workspaceId } = await setupOwner();
     const a = await createSite(token, workspaceId, { id: "site_rc", mode: "B", domain: "own.example.com" });
+    await setEdgeDomains(token, a.id, ["own.example.com"]);
     const db = getDb(env);
     // 自 Site が D1 で持っている間は消さない(確定前に呼ばれても守る)
     await releaseHosts(env, db, a.id, ["own.example.com"]);
@@ -421,6 +444,8 @@ describe("host release order (plan12 K14 (c))", () => {
   it("a failed d1 batch on patch leaves the kv mapping of the host it tried to remove", async () => {
     const { token, workspaceId } = await setupOwner();
     const a = await createSite(token, workspaceId, { id: "site_rd", mode: "B", domain: "keep.example.com" });
+    await setEdgeDomains(token, a.id, ["keep.example.com"]);
+    await seedEdgeDomains(a.id, ["new.example.com"]); // B148 Task 2: 判定は D1 に直接置く
     // K14 (c) の保証 = 外す host の KV は D1 の確定の前に消さない。「消した後に戻し直す」実装と区別するため、
     // (1) host:keep の delete を記録し、(2) host:keep の put(戻しの put)を失敗させる。前進の経路が put するのは host:new だけ
     const deletes: string[] = [];
@@ -431,17 +456,18 @@ describe("host release order (plan12 K14 (c))", () => {
         return typeof v === "function" ? v.bind(target) : v;
       },
     }) as KVNamespace;
-    const res = await call("PATCH", `/sites/${a.id}`, { token, body: { hosts: ["new.example.com"] }, envOverride: { DB: failingD1Insert(env.DB, "site_hosts"), CONFIG_KV: recordingKv } });
+    const res = await call("PATCH", `/sites/${a.id}`, { token, body: { domains: ["new.example.com"] }, envOverride: { DB: failingD1Insert(env.DB, "site_hosts"), CONFIG_KV: recordingKv } });
     expect(res.status).toBe(409);
     expect(deletes).not.toContain(kvKeys.host("keep.example.com")); // D1 が確定しなかったので、外そうとした host の KV は消していない
     expect(await env.CONFIG_KV.get(kvKeys.host("keep.example.com"))).toBe(a.id); // 外そうとした host は D1 も KV も旧値のまま
     expect(await env.CONFIG_KV.get(kvKeys.host("new.example.com"))).toBeNull(); // 書いた新しい host は戻す
-    expect((await json(await call("GET", `/sites/${a.id}`, { token }))).hosts).toEqual(["keep.example.com"]);
+    expect(JSON.parse((await siteRow(a.id)).hosts_json)).toEqual(["keep.example.com"]);
   });
 
   it("site deletion does not delete a mapping another site now owns, even when kv returns a stale value", async () => {
     const { token, workspaceId } = await setupOwner();
     const a = await createSite(token, workspaceId, { id: "site_re", mode: "B", domain: "gone.example.com" });
+    await setEdgeDomains(token, a.id, ["gone.example.com"]);
     const b = await createSite(token, workspaceId, { id: "site_rf", domain: "b2.example.com", visitorCookieName: "_ab_vid_rf" }); // B139: 同じ登録ドメインなので Cookie 名を分ける
     await moveHostToB("gone.example.com", b.id);
     const res = await call("DELETE", `/sites/${a.id}`, { token, envOverride: { CONFIG_KV: staleGetOnce(kvKeys.host("gone.example.com"), a.id) } });
@@ -454,6 +480,7 @@ describe("host release order (plan12 K14 (c))", () => {
     const { token, workspaceId } = await setupOwner();
     const keeper = await json<{ id: string }>(await call("POST", "/workspaces", { token, body: { name: "Keeper" } }));
     const a = await createSite(token, workspaceId, { id: "site_rg", mode: "B", domain: "ws-gone.example.com" });
+    await setEdgeDomains(token, a.id, ["ws-gone.example.com"]);
     const b = await createSite(token, keeper.id, { id: "site_rh", domain: "b3.example.com", visitorCookieName: "_ab_vid_rh" }); // B139: 同じ登録ドメインなので Cookie 名を分ける
     await moveHostToB("ws-gone.example.com", b.id);
     const res = await call("DELETE", `/workspaces/${workspaceId}`, { token, envOverride: { CONFIG_KV: staleGetOnce(kvKeys.host("ws-gone.example.com"), a.id) } });
@@ -497,20 +524,20 @@ describe("cookie sharing scopes (B139)", () => {
     const { token, workspaceId } = await setupOwner();
     const { id } = await createSite(token, workspaceId, { domain: "www.example.com" });
     const both = ["https://www.example.com", "https://shop.example-shop.jp"];
-    expect((await call("PATCH", `/sites/${id}`, { token, body: { allowedOrigins: both } })).status).toBe(200);
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { domains: both } })).status).toBe(200);
     expect((await kvSettings(id))?.cookieDomains).toEqual(["example.com", "example-shop.jp"]);
     expect(await prevDomains(id)).toEqual([]);
-    expect((await call("PATCH", `/sites/${id}`, { token, body: { allowedOrigins: ["https://www.example.com"] } })).status).toBe(200);
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { domains: ["https://www.example.com"] } })).status).toBe(200);
     expect((await prevDomains(id)).map((p) => p.domain)).toEqual(["example-shop.jp"]);
     // まとまりを戻すと前の範囲から外れる
-    expect((await call("PATCH", `/sites/${id}`, { token, body: { allowedOrigins: both } })).status).toBe(200);
+    expect((await call("PATCH", `/sites/${id}`, { token, body: { domains: both } })).status).toBe(200);
     expect(await prevDomains(id)).toEqual([]);
   });
 
   it("kv_settings_carry_cookie_domains", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id } = await createSite(token, workspaceId, { domain: "www.example.com" });
-    const res = await call("PATCH", `/sites/${id}`, { token, body: { allowedOrigins: ["https://www.example.com", "https://form.example.com"] } });
+    const res = await call("PATCH", `/sites/${id}`, { token, body: { domains: ["https://www.example.com", "https://form.example.com"] } });
     expect(res.status).toBe(200);
     const raw = JSON.parse((await env.CONFIG_KV.get(kvKeys.settings(id)))!);
     expect(raw).toMatchObject({ shareSubdomains: true, cookieDomains: ["example.com"], previousCookieDomains: [] });

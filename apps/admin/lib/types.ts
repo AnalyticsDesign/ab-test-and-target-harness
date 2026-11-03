@@ -41,11 +41,25 @@ export type InvitationResult = { id: string; url: string; expiresAt: number; ext
 export type PublicInvitation = { id: string; email: string; role: Role | null; workspaceName: string; status: string; expiresAt: number };
 /** サイトの外部計測の名札。control は既定値で埋めた全項目を返すので core の型をそのまま使う(B77: 出力プレビューがキー名を引くため) */
 export type { AnalyticsSettings };
+/** B148: タグを置くドメインの一覧の 1 行。edge = Cloudflare 経由 / outside = Cloudflare 外 / unknown = まだ確かめていない / dev = 開発用。時刻は epoch 秒 */
+export type DomainRow = { value: string; verdict: "edge" | "outside" | "unknown" | "dev"; checkedAt: number | null; triedAt: number | null };
+/**
+ * B148: 保存(PATCH)・作成の応答の判定の結果。判定しなかった保存は null。
+ * changes = 判定が変わった行 / deferred = 時間か上限で確かめなかった行(次の保存で確かめる)/ unknown = 確かめられなかった行(前回の判定を保つ)
+ */
+export type DomainChecks = { changes: Array<{ domain: string; from: DomainRow["verdict"]; to: DomainRow["verdict"] }>; deferred: string[]; unknown: string[] } | null;
+/** `PATCH /sites/:sid` の応答 */
+export type SiteSaved = Site & { domainChecks: DomainChecks };
 export type Site = {
-  id: string; workspaceId: string; name: string; domain: string; mode: "A" | "B"; idSource: string; allowedOrigins: string[]; hosts: string[];
+  id: string; workspaceId: string; name: string; mode: "A" | "B"; idSource: string;
+  /**
+   * B148: タグを置くドメインの一覧(control の書き込みは domains だけ)。domain(代表)・allowedOrigins は一覧から導いた読むだけの値。
+   * edgeDomains・outsideDomains・uncheckedDomains は判定の結果のまとまり(Mode A は 3 つとも空)
+   */
+  domains: DomainRow[]; domain: string; allowedOrigins: string[]; edgeDomains: string[]; outsideDomains: string[]; uncheckedDomains: string[];
   retentionDays: number; consentMode: "implicit" | "required"; forgetOnRevoke: boolean; resultsEnabled: boolean; resultsRetentionDays: number; newProfileBudgetPerDay: number | null; timezone: string; decisionTimeoutMs: number; visitorCookieName: string; uuidCookieEnabled: boolean; uuidCookieName: string;
   previousCookieNames: Array<{ name: string; until: number }>;
-  /** B139: 訪問者 ID の Cookie の共有と、control が hosts・allowedOrigins から導いたまとまり(読むだけ。共有がオフなら空) */
+  /** B139: 訪問者 ID の Cookie の共有と、control がタグを置くドメインの一覧から導いたまとまり(読むだけ。共有がオフなら空) */
   shareSubdomains: boolean; cookieGroups: Array<{ domain: string; hosts: string[] }>;
   analytics: AnalyticsSettings; ga4PropertyId: string | null; bigqueryDataset: string | null;
   activeVersion: number | null; activeKvStale: boolean; staticStale: boolean; staticRemoving: boolean; lastActivatedAt: number | null; contentUpdatedAt: number; createdAt: number; updatedAt: number;
@@ -60,7 +74,7 @@ export type Site = {
  * `POST /workspaces/:wid/sites` の応答。B139: 同じ登録ドメインの別のサイトと訪問者 ID の Cookie がぶつかるため、
  * 共有をオフにするか(shareSubdomains = false)、Cookie 名を変えて(共有はオンのまま)作ったときだけ sharingAdjusted が付く
  */
-export type SiteCreated = Site & { sharingAdjusted?: { reason: "conflict"; shareSubdomains: boolean; visitorCookieName: string } };
+export type SiteCreated = Site & { domainChecks?: DomainChecks; sharingAdjusted?: { reason: "conflict"; shareSubdomains: boolean; visitorCookieName: string } };
 export type Status = "draft" | "running" | "paused" | "archived";
 export type ChangeType = "TEXT" | "IMAGE" | "HIDE" | "ATTRIBUTE" | "HTML" | "CSS" | "CUSTOM_JS";
 /**

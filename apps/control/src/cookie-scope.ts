@@ -1,7 +1,8 @@
 // B139: 訪問者 ID の Cookie を共有する範囲(Cookie の Domain)を、サイトの設定から導く。
-// B139 の段階の入力は hosts と allowedOrigins(spec §10.1)。B148 で入力を domains に差し替える(差し替えるのは tagHosts だけ)
+// 入力はタグを置くドメインの一覧(domains_json。B148 で hosts と allowedOrigins から差し替えた。差し替えたのは tagHosts だけ)
 import { getDomain } from "tldts";
 import type { SiteRow } from "./db";
+import type { DomainRow } from "./domains";
 
 /** 共有の範囲 1 つ(登録ドメイン)と、そこに属するタグを置くホスト */
 export type CookieGroup = { domain: string; hosts: string[] };
@@ -14,22 +15,9 @@ export function registrableDomain(host: string): string | null {
   return getDomain(host, { allowPrivateDomains: true }) ?? null;
 }
 
-/** Origin の文字列からホスト名を取る。https で、ポートの無いものだけ(http・ポート付きは開発用として除く)。読めない値は null */
-function originHost(origin: string): string | null {
-  let u: URL;
-  try {
-    u = new URL(origin);
-  } catch {
-    return null;
-  }
-  return u.protocol === "https:" && u.port === "" ? u.hostname : null;
-}
-
-/** タグを置くホスト = hosts ∪ allowedOrigins のホスト(重複を除き、出てきた順)。B148 でこの関数の入力を domains に差し替える */
+/** タグを置くホスト = 一覧の開発用でない行の値(一覧の順。値はそろえて保存してあるので重複しない)。開発用の行(http・ポート付きの Origin)は共有しない */
 export function tagHosts(row: SiteRow): string[] {
-  const hosts = JSON.parse(row.hosts_json) as string[];
-  const origins = (JSON.parse(row.allowed_origins_json) as string[]).map(originHost).filter((h): h is string => h !== null);
-  return Array.from(new Set([...hosts, ...origins].map((h) => h.toLowerCase())));
+  return (JSON.parse(row.domains_json) as DomainRow[]).filter((d) => d.verdict !== "dev").map((d) => d.value);
 }
 
 /**

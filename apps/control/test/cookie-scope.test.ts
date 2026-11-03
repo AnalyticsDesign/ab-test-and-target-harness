@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { deriveCookieScopes, registrableDomain, tagHosts } from "../src/cookie-scope";
 import type { SiteRow } from "../src/db";
+import type { DomainRow } from "../src/domains";
 
-/** B139 Task 3: 共有の範囲を hosts / allowedOrigins から導く関数(spec §10.1 の B139 の段階の式) */
+/** B139 Task 3: 共有の範囲をタグを置くドメインから導く関数。B148 で入力を hosts / allowedOrigins から domains_json に差し替えた */
 
-/** 導く関数が読む列だけを持つ行(ほかの列は使わない) */
-const row = (p: { hosts?: string[]; allowedOrigins?: string[]; share?: 0 | 1 }): SiteRow =>
+/** 導く関数が読む列だけを持つ行(ほかの列は使わない)。行は [値, 判定] で渡す */
+const row = (p: { domains?: Array<[string, DomainRow["verdict"]]>; share?: 0 | 1 }): SiteRow =>
   ({
-    hosts_json: JSON.stringify(p.hosts ?? []),
-    allowed_origins_json: JSON.stringify(p.allowedOrigins ?? []),
+    domains_json: JSON.stringify((p.domains ?? []).map(([value, verdict]) => ({ value, verdict, checkedAt: null, triedAt: null }))),
     share_subdomains: p.share ?? 1,
   }) as SiteRow;
 
@@ -23,27 +23,27 @@ describe("cookie-scope", () => {
     expect(registrableDomain("127.0.0.1")).toBeNull();
   });
 
-  it("dev_and_ip_origins_are_not_grouped", () => {
+  it("dev_and_ip_rows_are_not_grouped", () => {
     const r = row({
-      allowedOrigins: ["https://www.example.com", "http://www.example.com", "https://www.example.com:8443", "https://127.0.0.1", "http://localhost:8080"],
+      domains: [["www.example.com", "unknown"], ["http://www.example.com", "dev"], ["https://www.example.com:8443", "dev"], ["127.0.0.1", "unknown"], ["http://localhost:8080", "dev"]],
     });
     expect(deriveCookieScopes(r).scopes).toEqual(["example.com"]);
   });
 
   it("groups_by_registrable_domain", () => {
-    const r = row({ hosts: ["www.example.com"], allowedOrigins: ["https://form.example.com", "https://shop.example-shop.jp"] });
+    const r = row({ domains: [["www.example.com", "edge"], ["form.example.com", "outside"], ["shop.example-shop.jp", "unknown"]] });
     expect(deriveCookieScopes(r).groups).toEqual([
       { domain: "example.com", hosts: ["www.example.com", "form.example.com"] },
       { domain: "example-shop.jp", hosts: ["shop.example-shop.jp"] },
     ]);
   });
 
-  it("tag_hosts_dedupes_hosts_and_origins", () => {
-    const r = row({ hosts: ["www.example.com"], allowedOrigins: ["https://www.example.com", "https://WWW.Example.com", "not a url"] });
-    expect(tagHosts(r)).toEqual(["www.example.com"]);
+  it("tag_hosts_reads_non_dev_rows_of_domains", () => {
+    const r = row({ domains: [["www.example.com", "edge"], ["http://localhost:8080", "dev"], ["form.example.com", "unknown"]] });
+    expect(tagHosts(r)).toEqual(["www.example.com", "form.example.com"]);
   });
 
   it("sharing_off_yields_no_scopes", () => {
-    expect(deriveCookieScopes(row({ hosts: ["www.example.com"], share: 0 }))).toEqual({ groups: [], scopes: [] });
+    expect(deriveCookieScopes(row({ domains: [["www.example.com", "edge"]], share: 0 }))).toEqual({ groups: [], scopes: [] });
   });
 });

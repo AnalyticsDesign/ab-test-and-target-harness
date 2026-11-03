@@ -22,13 +22,17 @@ export function InstallTag({ site, tagOrigin, canAdmin }: { site: Site; tagOrigi
         <dt className="muted">モード</dt>
         <dd style={{ margin: 0 }}>
           {site.mode === "B" ? "B" : site.idSource === "ab" ? "A" : "C"}{" "}
-          {/* モードは「訪問者 ID」の節の「導入の形」と「訪問者 ID の取得元」で決まる */}
+          {/* モードは「ドメイン」の節の「導入の形」と、「訪問者 ID」の節の「訪問者 ID の取得元」で決まる */}
           <SectionLink to="identity">訪問者 ID で{verb}</SectionLink>
+          <span className="muted">(導入の形は <SectionLink to="domains">ドメイン</SectionLink> の節)</span>
         </dd>
         <dt className="muted">ドメイン</dt>
         <dd style={{ margin: 0 }}>
-          {site.domain} <SectionLink to="general">一般で{verb}</SectionLink>
-          <p className="muted" style={{ margin: "4px 0 0" }}>複数のドメインのページに置くときは、一般の「受け付けるサイトのアドレス(Origin)」に、置くページのアドレスを 1 行に 1 つずつ足します(50 件まで)。</p>
+          {site.domain} <SectionLink to="domains">ドメインで{verb}</SectionLink>
+          <p className="muted" style={{ margin: "4px 0 0" }}>
+            複数のドメインのページに置くときは、ドメインの節の「タグを置くドメイン」に足します。
+            {site.mode === "B" ? "Mode B では、足したドメインに Route を置いてから保存すると、Cloudflare 経由かを確かめます(手順はドメインの節)。" : null}
+          </p>
         </dd>
       </dl>
     </section>

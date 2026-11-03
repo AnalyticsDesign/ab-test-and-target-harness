@@ -4,16 +4,12 @@ import {
   AnalyticsSettingsSchema, DEFAULT_ANALYTICS, canonicalTimeZone, kvKeys, markerCookieName, NEW_PROFILE_BUDGET_DEFAULTS, NEW_PROFILE_INSTANCE_PER_DAY_FREE, SITE_ID_RE, SiteSettingsSchema,
   type NewProfileBudget, type SiteSettings,
 } from "@wtt/core";
-import { deriveCookieScopes } from "./cookie-scope";
+import { deriveCookieScopes, registrableDomain } from "./cookie-scope";
 import { toStatement, type Db, type SiteRow } from "./db";
+import { checkDomainList, deriveDomainColumns, MAX_DOMAINS, type DomainInputError, type DomainRow } from "./domains";
 import type { Env } from "./env";
 import { ApiError, validationFailed } from "./errors";
 import type { CloudflarePlan } from "./instance-settings";
-
-const HOST_RE = /^[a-z0-9.-]+$/;
-
-/** ホスト名の正規化(小文字・末尾のドット除去・前後空白除去)。KV / D1 の鍵はこの形だけを使う */
-export const normalizeHost = (h: string): string => h.trim().toLowerCase().replace(/\.+$/, "");
 
 /** hosts が他 Site に取られていないことだけを調べる(PATCH は batch で入れ替えるのでこれだけを使う) */
 export async function assertHostsFree(db: Db, siteId: string, hosts: string[]): Promise<void> {
@@ -31,7 +27,7 @@ export async function assertHostsFree(db: Db, siteId: string, hosts: string[]): 
  * `id` / `workspace_id` / `site_salt` / `bridge_secret*` / `created_at` も PATCH では不変
  */
 export const SITE_PATCH_COLUMNS = [
-  "name", "domain", "mode", "id_source", "allowed_origins_json", "hosts_json",
+  "name", "domain", "mode", "id_source", "allowed_origins_json", "hosts_json", "domains_json",
   "retention_days", "consent_mode", "decision_timeout_ms",
   "visitor_cookie_name", "uuid_cookie_enabled", "uuid_cookie_name", "previous_cookie_names_json",
   "forget_on_revoke", "timezone", "analytics_json", "ga4_property_id", "bigquery_dataset",
@@ -64,10 +60,43 @@ export async function claimHosts(db: Db, siteId: string, hosts: string[]): Promi
   }
 }
 
+/**
+ * B148: タグを置くドメインの一覧の書き込み。行の検査(形・重複・件数)は applySitePatch が checkDomainList で行い、
+ * 422 invalid_domains で行ごとの日本語の文を返す(zod の英語の文を出さないため、ここでは文字列の配列であることだけを見る)
+ */
+const DomainsInput = z
+  .array(z.string())
+  .describe(
+    `タグを置くドメインの一覧(1〜${MAX_DOMAINS} 行)。1 行に 1 つのホスト名(例: www.example.com)。https:// や末尾の / は付けても外して保存する。` +
+      "http:// で書いた行と、既定でないポート付きで書いた行(例: http://localhost:8080、https://www.example.com:8443)は開発用として Origin の形のまま保存する。" +
+      "既定のポートは外す: https://www.example.com:443 と www.example.com:443 は通常の行 www.example.com になり、http://localhost:80 は開発用の http://localhost になる。" +
+      "先頭の行が代表のドメイン(domain)になる。" +
+      "送った一覧で保存済みの一覧を置き換える(同じ値の行は前の判定を保つ)。共有(shareSubdomains)がオンのとき、公開の接尾辞そのもの(co.jp など)の行は 422 invalid_domains",
+  );
+
+/** B148: 旧い欄(書き込みは domains に変わった)。読み取りの応答には domain・allowedOrigins が読むだけの値として残る */
+const LEGACY_DOMAIN_FIELDS = ["domain", "allowedOrigins", "hosts"] as const;
+
+/**
+ * 書き込みの body に旧い欄があれば 422 legacy_domain_fields を返す。strictObject の失敗(知らない欄)より前に、
+ * validator のフックが受けた生の body で見る(旧い欄を送る利用者に、書き換え方を示すため)
+ */
+export function legacyDomainFieldsError(body: unknown): ApiError | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  const found = LEGACY_DOMAIN_FIELDS.filter((k) => Object.prototype.hasOwnProperty.call(body, k));
+  if (found.length === 0) return null;
+  return new ApiError(422, "legacy_domain_fields", {
+    path: [found[0]],
+    issues: found.map((k) => ({ path: [k], message: `${k} は書き込みでは使えません` })),
+    message: "domain・allowedOrigins・hosts は書き込みでは使えません。タグを置くドメインは domains で送ってください",
+    hint: 'タグを置くドメインを 1 行ずつ domains に並べて送ってください。例: {"domains": ["www.example.com", "shop.example.com"]}。先頭の行が代表のドメインになり、受け付ける Origin と Cloudflare 経由のホストは一覧から決まります',
+  });
+}
+
 export const SiteCreateSchema = z.strictObject({
   id: z.string().regex(SITE_ID_RE).optional(),
   name: z.string().min(1).max(100),
-  domain: z.string().regex(HOST_RE),
+  domains: DomainsInput,
   mode: z.enum(["A", "B"]).default("A"),
   consentMode: z.enum(["implicit", "required"]).default("implicit"),
   retentionDays: z.number().int().min(1).max(3650).default(90),
@@ -79,11 +108,9 @@ export const SiteCreateSchema = z.strictObject({
 /** spec §13.5 PATCH /sites/:sid の受理フィールド(ADMIN 以上)。値の検証は core の SiteSettingsSchema に委ねる */
 export const SitePatchSchema = z.strictObject({
   name: z.string().min(1).max(100).optional(),
-  domain: z.string().regex(HOST_RE).optional(),
+  domains: DomainsInput.optional(),
   mode: z.enum(["A", "B"]).optional(),
   idSource: z.string().optional(),
-  allowedOrigins: z.array(z.string()).max(50).optional(),
-  hosts: z.array(z.string()).max(50).optional(),
   retentionDays: z.number().int().min(1).max(3650).optional(),
   forgetOnRevoke: z.boolean().optional().describe("撤回時に訪問者プロフィールを削除する(既定 true)。Mode B では訪問者プロフィールの削除には効かない(retentionDays で消える)。結果を記録するサイトでは、その訪問者の結果の記録(参加・目標の達成)も削除する(Mode B を含む)。false は retentionDays(結果の記録は resultsRetentionDays)に委ねる"),
   timezone: z.string().min(1).max(64).optional().describe("曜日・時間帯の条件の判定に使うタイムゾーン(IANA 名。例: Asia/Tokyo)。変更は次の公開で効く"),
@@ -116,7 +143,7 @@ export const SitePatchSchema = z.strictObject({
   shareSubdomains: z
     .boolean()
     .optional()
-    .describe("訪問者 ID の Cookie を、同じ登録ドメイン(例: example.com)のサブドメインのあいだで共有する(既定 true)。タグを置くホスト(hosts と allowedOrigins のホスト)を登録ドメインごとにまとめ、まとまりごとに Domain 属性を付けて発行する。false はホストごとの Cookie。切り替えは設置タグの配信ファイルを作り直して反映する"),
+    .describe("訪問者 ID の Cookie を、同じ登録ドメイン(例: example.com)のサブドメインのあいだで共有する(既定 true)。タグを置くドメイン(domains の開発用でない行)を登録ドメインごとにまとめ、まとまりごとに Domain 属性を付けて発行する。false はホストごとの Cookie。切り替えは設置タグの配信ファイルを作り直して反映する"),
   // 検証は core の AnalyticsSettingsSchema に委ねる(失敗を validation_failed ではなく 422 invalid_analytics で返すため、ここでは unknown)
   analytics: z.unknown().optional().describe("外部計測の名前(dataLayer の命名設定)。全フィールド optional、未指定は既定値。`dataLayerName` は push 先の配列の名前(既定 `dataLayer`。GTM のスニペットで名前を変えているサイトは同じ名前にする)。不正なら 422 invalid_analytics"),
   // 決定 34: 外部 ID(資格情報ではない)。null で消去。site-settings record には載せない
@@ -175,11 +202,16 @@ export function applySitePatch(row: SiteRow, patch: SitePatch, nowMs: number): {
   // Identity / Analytics 命名設定は KV 即時反映で Publish 不要。`content_updated_at` は Goal / オーディエンス(`touchSite`)と、タイムゾーン・結果の記録の切り替え(PATCH のルートが touchSite)だけが進める
   const next: SiteRow = { ...row, updated_at: nowMs };
   if (patch.name !== undefined) next.name = patch.name;
-  if (patch.domain !== undefined) next.domain = patch.domain;
   if (patch.mode !== undefined) next.mode = patch.mode;
   if (patch.idSource !== undefined) next.id_source = patch.idSource;
-  if (patch.allowedOrigins !== undefined) next.allowed_origins_json = JSON.stringify(patch.allowedOrigins);
-  if (patch.hosts !== undefined) next.hosts_json = JSON.stringify(patch.hosts.map(normalizeHost));
+  if (patch.domains !== undefined) {
+    const checked = checkDomainList(patch.domains);
+    if ("errors" in checked) return { next, error: invalidDomains(checked.errors.map((e) => ({ index: e.index, message: DOMAIN_ERROR_MESSAGES[e.reason] }))) };
+    // 同じ値の前の行は判定と時刻を保つ。無ければ開発用は dev、ほかは unknown(Cloudflare 経由かの判定は別に行う)
+    const previous = new Map((JSON.parse(row.domains_json) as DomainRow[]).map((d) => [d.value, d]));
+    const rows = checked.rows.map((r): DomainRow => previous.get(r.value) ?? { value: r.value, verdict: r.dev ? "dev" : "unknown", checkedAt: null, triedAt: null });
+    next.domains_json = JSON.stringify(rows);
+  }
   if (patch.retentionDays !== undefined) next.retention_days = patch.retentionDays;
   if (patch.consentMode !== undefined) next.consent_mode = patch.consentMode;
   if (patch.decisionTimeoutMs !== undefined) next.decision_timeout_ms = patch.decisionTimeoutMs;
@@ -188,6 +220,16 @@ export function applySitePatch(row: SiteRow, patch: SitePatch, nowMs: number): {
   if (patch.resultsRetentionDays !== undefined) next.results_retention_days = patch.resultsRetentionDays;
   if (patch.newProfileBudgetPerDay !== undefined) next.new_profile_budget_per_day = patch.newProfileBudgetPerDay;
   if (patch.shareSubdomains !== undefined) next.share_subdomains = patch.shareSubdomains ? 1 : 0;
+  // B148: 旧い 3 列は一覧と Mode からここでだけ導く(どの保存でも書き直すので、一覧と食い違わない。Mode を変えた保存も hosts が変わる)
+  writeDerivedColumns(next);
+  // B148(spec §6.4): 共有がオンなら、公開の接尾辞そのもの(co.jp・pages.dev など)の行は範囲を決められない。
+  // 一覧を送った保存・作成と、共有をオンにする保存で断る(Task 2 review M4: 共有の切り替えだけの保存で抜けないように)
+  if ((patch.domains !== undefined || row.share_subdomains !== 1) && next.share_subdomains === 1) {
+    const suffixRows = (JSON.parse(next.domains_json) as DomainRow[])
+      .map((d, index) => ({ d, index }))
+      .filter(({ d }) => d.verdict !== "dev" && d.value !== "localhost" && !IPV4_RE.test(d.value) && registrableDomain(d.value) === null);
+    if (suffixRows.length > 0) return { next, error: invalidDomains(suffixRows.map(({ index }) => ({ index, message: PUBLIC_SUFFIX_MESSAGE }))) };
+  }
   if (patch.timezone !== undefined) {
     // 大文字小文字だけを一覧の綴りにそろえて保存する(asia/tokyo → Asia/Tokyo。別名は置き換えない)。オフセット形式は IANA 名ではないので受けない(plan ② P14)
     const tz = canonicalTimeZone(patch.timezone);
@@ -257,15 +299,71 @@ export function applySitePatch(row: SiteRow, patch: SitePatch, nowMs: number): {
   }
   if (next.mode === "B" && next.id_source !== "ab")
     return { next, error: new ApiError(422, "mode_b_requires_id_source_ab", { message: "Mode B(サーバー発行 Cookie)と Mode C(BYOID)は併用できません", hint: "Mode B では「訪問者 ID の取得元」を ab(ツールが発行する ID)にしてください。サイトの既存の Cookie を使う場合は Mode A のままにします" }) };
+  const error = settingsError(next);
+  return error ? { next, error } : { next };
+}
+
+/** 一覧と Mode から旧い 3 列(domain・allowed_origins_json・hosts_json)を書く。書くのは applySitePatch と applyDomainRows だけ */
+function writeDerivedColumns(next: SiteRow): void {
+  const derived = deriveDomainColumns(JSON.parse(next.domains_json) as DomainRow[], next.mode);
+  next.domain = derived.domain;
+  next.allowed_origins_json = JSON.stringify(derived.allowedOrigins);
+  next.hosts_json = JSON.stringify(derived.hosts);
+}
+
+/** core の SiteSettingsSchema の検査。通らなければ 422 invalid_settings */
+function settingsError(next: SiteRow): ApiError | null {
   const parsed = SiteSettingsSchema.safeParse(settingsInput(next));
-  if (!parsed.success) {
-    // 同上(invalid_analytics と同じ理由で validationFailed() 経由に変更。review r2 finding 2)
-    const err = validationFailed(parsed.error, "invalid_settings");
-    err.extra.hint = parsed.error.issues[0]?.message;
-    err.extra.message = "サイト設定が不正です";
-    return { next, error: err };
-  }
-  return { next };
+  if (parsed.success) return null;
+  // 同上(invalid_analytics と同じ理由で validationFailed() 経由に変更。review r2 finding 2)
+  const err = validationFailed(parsed.error, "invalid_settings");
+  err.extra.hint = parsed.error.issues[0]?.message;
+  err.extra.message = "サイト設定が不正です";
+  return err;
+}
+
+/**
+ * B148 Task 4: 判定の結果を当てた一覧の行(mergeProbeResults の rows)を applySitePatch の後の行に入れ、3 列を導き直して検査をもう一度通す。
+ * 判定は行の値を変えず判定だけを変えるので、Cookie の共有の範囲(tagHosts は判定を見ない)と旧名の一覧は変わらない
+ */
+export function applyDomainRows(row: SiteRow, rows: DomainRow[]): { next: SiteRow; error?: ApiError } {
+  const next: SiteRow = { ...row, domains_json: JSON.stringify(rows) };
+  writeDerivedColumns(next);
+  const error = settingsError(next);
+  return error ? { next, error } : { next };
+}
+
+/**
+ * B148 Task 4(Task 2 review M3): Mode A の間は判定しないので、A の間に保存されていた行の判定(A の前の edge など)は確かめていない扱いにする。
+ * Mode を B にする保存が、判定の結果を当てる前に呼ぶ(確かめられなかった行が、前の edge のままホストに戻らないように)。開発用の行はそのまま
+ */
+export function resetVerdictsFromModeA(row: SiteRow): SiteRow {
+  const rows = (JSON.parse(row.domains_json) as DomainRow[]).map((d): DomainRow => (d.verdict === "dev" ? d : { ...d, verdict: "unknown", checkedAt: null }));
+  return { ...row, domains_json: JSON.stringify(rows) };
+}
+
+/** 一覧の行の誤りの文(利用者に見せる。どの行かは issues の path で返す) */
+const DOMAIN_ERROR_MESSAGES: Record<DomainInputError | "duplicate" | "empty" | "too_many", string> = {
+  path: "パス(/ より後ろ)・?・# は書けません。ホスト名だけを書いてください",
+  wildcard: "* は使えません。ホスト名を 1 つずつ書いてください",
+  not_domain: "ドメインの形ではありません。www.example.com の形で書いてください",
+  duplicate: "同じドメインが既にあります",
+  empty: "タグを置くドメインを 1 つ以上書いてください",
+  too_many: `${MAX_DOMAINS} 行までです。使っていない行を消してください`,
+};
+const PUBLIC_SUFFIX_MESSAGE = "この行は公開の接尾辞なので、ID を共有する範囲を決められません。サブドメインまで書くか、共有をオフにしてください";
+/** 一覧の値は HOST_RE を通っているので、IP は IPv4 の形だけ(IPv6 は開発用の Origin でしか書けない) */
+const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/** 422 invalid_domains。issues は行ごと(index が null の誤りは一覧全体を指す)。path は先頭の issue */
+function invalidDomains(items: { index: number | null; message: string }[]): ApiError {
+  const issues = items.map((i) => ({ path: i.index === null ? ["domains"] : ["domains", i.index], message: i.message }));
+  return new ApiError(422, "invalid_domains", {
+    path: issues[0]?.path ?? ["domains"],
+    message: "タグを置くドメインの一覧に直すところがあります",
+    hint: issues[0]?.message,
+    issues,
+  });
 }
 
 function settingsInput(row: SiteRow): unknown {
@@ -325,15 +423,17 @@ export async function putSettingsRecord(env: Env, row: SiteRow, extras: Settings
 
 /**
  * spec §5.4「設定の配送」: settings record と、新しい hosts の host キーを KV に書く(activation = KV put)。**消さない**
+ * B148 Task 4: `previousHosts`(前の行の hosts)を渡すと、その中に無かったホストのキーだけを書く(KV の書き込みは Free で 1 日 1,000 回。
+ * 保存の正常の経路だけが渡す。戻しと作成は渡さず、今までどおり全部を書く)
  * (外した host のキーは D1 の確定の後に releaseHosts で消す。plan12 K14 (c))。
  * D9 ③(K11): run ごとの収集の締め切り(`collectUntilMap(db, siteId)` の表)と、plan12 K10: Cloudflare のプラン(新しい訪問者の予算の既定)を
  * extras で受けて settings に足して書く(composeSettingsRecord)。
  * KV の settings を書くのはこの関数と putSettingsRecord だけなので、呼び出し元は必ず今の表とプランを渡す(渡し忘れると Site の保存で締め切りか予算が消える)
  */
-export async function putSiteRecords(env: Env, row: SiteRow, extras: SettingsExtras): Promise<void> {
+export async function putSiteRecords(env: Env, row: SiteRow, extras: SettingsExtras, opts: { previousHosts?: readonly string[] } = {}): Promise<void> {
   try {
     const settings = await putSettingsRecord(env, row, extras);
-    for (const h of settings.hosts) await env.CONFIG_KV.put(kvKeys.host(h), row.id);
+    for (const h of settings.hosts) if (!opts.previousHosts?.includes(h)) await env.CONFIG_KV.put(kvKeys.host(h), row.id);
   } catch (e) {
     // message は利用者向けの日本語文言に固定する(describeError がそのまま画面に出す)。生の例外文字列は detail に載せ、
     // errorHandler が 5xx をサーバー側にも記録する(routes/sites.ts の host_in_use と同じ形)
@@ -346,7 +446,7 @@ export async function putSiteRecords(env: Env, row: SiteRow, extras: SettingsExt
  * D1 の site_hosts でその host を持つ Site が**自 Site でも他 Site でも**無いときだけ、KV の値を読み、自 Site を指していれば消す。
  * 他の Site が D1 で持っていれば(別の Site が取った直後など)KV が古い値を返しても消さない。
  * 保証の範囲: D1 で確かめてから KV を消すまでの間に別の Site が取る競合は残る(KV に CAS が無いため)。
- * 取られた Site の次の PATCH が同じ host を put し直して自己修復する。例外はそのまま投げる(呼び出し元が D1 確定後の扱いを決める)
+ * ホストのキーは新しいものだけを書く(putSiteRecords の previousHosts)ので、消えてしまったキーは、そのホストを一覧から外して足し直すまで戻らない(plan で受け入れた)。例外はそのまま投げる(呼び出し元が D1 確定後の扱いを決める)
  */
 export async function releaseHosts(env: Env, db: Db, siteId: string, hosts: string[]): Promise<void> {
   if (hosts.length === 0) return;

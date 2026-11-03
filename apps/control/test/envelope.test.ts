@@ -33,19 +33,19 @@ describe("error envelope contract", () => {
       [401, "unauthorized", () => call("GET", "/me")],
       [403, "forbidden", () => call("POST", `/sites/${sid}/publish`, { token: viewer.token })],
       [404, "not_found", () => call("GET", "/sites/nope", { token: owner.token })],
-      [409, "site_id_taken", () => call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id: sid, name: "dup", domain: "dup.example.com" } })],
+      [409, "site_id_taken", () => call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id: sid, name: "dup", domains: ["dup.example.com"] } })],
       // B155: 別のワークスペースで削除したサイトの ID。元のワークスペースを見られる人(ここではシステム管理者)にだけ reason を付ける
       [409, "site_id_taken", async () => {
         const other = (await json<{ id: string }>(await call("POST", "/workspaces", { token: owner.token, body: { name: "Other" } }))).id;
         await createSite(owner.token, other, { id: "site_retired_env" });
         expect((await call("DELETE", "/sites/site_retired_env", { token: owner.token })).status).toBe(204);
-        return call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id: "site_retired_env", name: "x", domain: "retired-env.example.com" } });
+        return call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id: "site_retired_env", name: "x", domains: ["retired-env.example.com"] } });
       }, "retired_elsewhere"],
       [413, "asset_too_large", () =>
         call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: imageForm(big, "image/png", eid), envOverride: { AB_ASSET_MAX_MB: "1" } })],
       [415, "unsupported_media_type", () => call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: imageForm(PNG, "text/html", eid) })],
       [422, "validation_failed", () =>
-        call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id: "Bad ID", name: "x", domain: "x.example.com" } })],
+        call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id: "Bad ID", name: "x", domains: ["x.example.com"] } })],
       // content-type 無しの壊れた body は validator が読まずに素通しするので、空 object として 422 になる(400 ではない)
       [422, "validation_failed", () => call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, raw: "{not json" })],
       // 無認証の POST 6 経路は経路ごとに IP 単位で 30 回 / 10 秒。31 回目が 429(枠の作り自体は auth.test.ts が固定する)
@@ -87,7 +87,7 @@ describe("error envelope contract", () => {
       expect((await call("DELETE", `/sites/${id}`, { token: owner.token })).status).toBe(204);
     };
     const create = (id: string, db?: D1Database) =>
-      call("POST", `/workspaces/${x}/sites`, { token: xAdmin.token, body: { id, name: "x", domain: `${id.replace(/_/g, "-")}.example.com` }, envOverride: db ? { DB: db } : undefined });
+      call("POST", `/workspaces/${x}/sites`, { token: xAdmin.token, body: { id, name: "x", domains: [`${id.replace(/_/g, "-")}.example.com`] }, envOverride: db ? { DB: db } : undefined });
     const withoutId = (b: Record<string, unknown>) => JSON.stringify(Object.entries(b).filter(([k]) => k !== "id")); // キーの順も比べる
 
     await createSite(owner.token, x, { id: "site_live" });
@@ -126,11 +126,11 @@ describe("error envelope contract", () => {
 
   it("validation failures carry a machine-readable path and issues", async () => {
     const owner = await setupOwner();
-    const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "x", domain: "not a domain" } });
+    const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "x", domains: "not a list" } }); // B148: 行の誤りは invalid_domains。形の誤り(配列でない)は validation_failed
     expect(res.status).toBe(422);
     const body = await json<{ error: string; path: unknown[]; issues: Array<{ path: unknown[]; message: string }> }>(res);
     expect(body.error).toBe("validation_failed");
-    expect(body.path).toEqual(["domain"]); // 封筒の path は string | number の配列(spec §13.5)
+    expect(body.path).toEqual(["domains"]); // 封筒の path は string | number の配列(spec §13.5)
     expect(body.issues.length).toBeGreaterThan(0);
   });
 });

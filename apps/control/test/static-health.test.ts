@@ -222,6 +222,11 @@ describe("GET /static/status (7o K12)", () => {
     const patch = await call("PATCH", `/sites/${s}`, { token: o.token, body: { retentionDays: 120 }, envOverride: { DEPLOYER: fake } });
     expect(patch.status).toBe(200);
     expect((await siteRow(s)).static_seq).toBe(before.static_seq);
+    // B148: 一覧を送る保存でも、同じ登録ドメインのホストを足すだけなら焼き込む値(cookieDomains・Mode A の edgeHosts)は変わらない
+    const registrable = before.domain.replace(/^www\./, "");
+    const withForm = await call("PATCH", `/sites/${s}`, { token: o.token, body: { domains: [before.domain, `form.${registrable}`] }, envOverride: { DEPLOYER: fake } });
+    expect(withForm.status).toBe(200);
+    expect((await siteRow(s)).static_seq).toBe(before.static_seq);
     await fake.flush(); // 公開のときの入力で配り終える
     expect((await getStatus(o.token, { DEPLOYER: fake })).mismatchSites).toEqual([]); // 印が立ったままでも、digest は一致する
     const got = await json(await call("GET", `/sites/${s}`, { token: o.token, envOverride: { DEPLOYER: fake } }));
@@ -236,7 +241,7 @@ describe("GET /static/status (7o K12)", () => {
     const fake = fakeDeployer("pending");
     await call("POST", `/sites/${s}/publish`, { token: o.token, envOverride: { DEPLOYER: fake } });
     const before = await siteRow(s);
-    const patch = await call("PATCH", `/sites/${s}`, { token: o.token, body: { allowedOrigins: ["https://www.example.com", "https://shop.example-shop.jp"] }, envOverride: { DEPLOYER: fake } });
+    const patch = await call("PATCH", `/sites/${s}`, { token: o.token, body: { domains: ["www.example.com", "shop.example-shop.jp"] }, envOverride: { DEPLOYER: fake } });
     expect(patch.status).toBe(200);
     const after = await siteRow(s);
     expect(after.static_seq).toBeGreaterThan(before.static_seq);
@@ -392,7 +397,7 @@ describe("POST /static/rebuild (7o K11)", () => {
 
   it("作り直しは UPDATE が返した行の版で config を読み、記録する版とそろえる(CX-High-3)", async () => {
     const o = await setupOwner();
-    const created = await call("POST", `/workspaces/${o.workspaceId}/sites`, { token: o.token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+    const created = await call("POST", `/workspaces/${o.workspaceId}/sites`, { token: o.token, body: { name: "Site", domains: ["www.example.com"] }, envOverride: RESULTS_STORE });
     const { id: s } = await json<{ id: string }>(created);
     await createExperiment(o.token, s, { id: "exp_t" });
     expect((await call("PUT", `/sites/${s}/experiments/exp_t/variants/b/changes`, { token: o.token, body: [TEXT_CHANGE()] })).status).toBe(200);

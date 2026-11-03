@@ -53,6 +53,16 @@ export type Env = {
    * 結果の画面の「収集できなかった送信」を読む。無ければ失敗の回数は読めない(vitest の既定は無し。fakeResultsHealth を渡す)
    */
   RESULTS_HEALTH?: DurableObjectNamespace<ResultsHealthRpc>;
+  /**
+   * B148: admin の E2E だけの、ドメインの確かめ(/__ab/ping)の宛先の上書き(domain-probe.ts の probeUrl)。
+   * `http://127.0.0.1:<port>` / `http://localhost:<port>` で、かつ `.test` のドメインにだけ効く。本番の wrangler.jsonc には書かない
+   */
+  AB_PROBE_ORIGIN_OVERRIDE?: string;
+  /**
+   * B148: 上の AB_PROBE_ORIGIN_OVERRIDE を効かせる 2 つ目の門(domain-probe.ts の probeOverrideFromEnv)。"1" のときだけ上書きを使う。
+   * admin の E2E だけが置く。本番の wrangler.jsonc には書かない
+   */
+  AB_E2E_PROBE_OVERRIDE_ENABLED?: string;
 };
 
 /**

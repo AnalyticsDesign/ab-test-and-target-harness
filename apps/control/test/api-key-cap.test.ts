@@ -40,7 +40,7 @@ describe("api key role cap (backlog B33, decision 48)", () => {
     expect(made.roleCap).toBe("editor");
     // 実効 Role = min(OWNER, editor) = EDITOR: ADMIN 操作(Site の作成)は 403 required admin。
     // (Member の操作は B42 の大原則で鍵では行えないので、運用側の ADMIN 操作で確かめる)
-    const denied = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: made.key, body: { name: "x", domain: "x.example.com" } });
+    const denied = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: made.key, body: { name: "x", domains: ["x.example.com"] } });
     expect(denied.status).toBe(403);
     expect(await json(denied)).toMatchObject({ error: "forbidden", required: "admin" });
     // VIEWER 以上の操作(Site 一覧)は通る
@@ -54,7 +54,7 @@ describe("api key role cap (backlog B33, decision 48)", () => {
     const owner = await setupOwner();
     const made = await json<{ key: string; roleCap: string | null }>(await call("POST", "/me/api-keys", { token: owner.token, body: { name: "full", workspaceId: null } }));
     expect(made.roleCap).toBeNull();
-    expect((await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: made.key, body: { name: "x", domain: "x.example.com" } })).status).toBe(201);
+    expect((await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: made.key, body: { name: "x", domains: ["x.example.com"] } })).status).toBe(201);
   });
 
   it("roleCap_above_the_users_highest_role_is_rejected_with_400", async () => {
@@ -107,7 +107,7 @@ describe("api key role cap (backlog B33, decision 48)", () => {
     const key = await makeKey(admin.token, "admin-cap", "admin", owner.workspaceId);
     expect((await call("GET", `/workspaces/${owner.workspaceId}/members`, { token: key.key })).status).toBe(200);
     expect((await call("PATCH", `/workspaces/${owner.workspaceId}/members/${admin.memberId}`, { token: owner.token, body: { role: "viewer" } })).status).toBe(200);
-    const denied = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: key.key, body: { name: "x", domain: "x.example.com" } });
+    const denied = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: key.key, body: { name: "x", domains: ["x.example.com"] } });
     expect(denied.status).toBe(403);
     expect(await json(denied)).toMatchObject({ error: "forbidden", required: "admin" });
   });
@@ -126,7 +126,7 @@ describe("api key role cap (backlog B33, decision 48)", () => {
     const bogus = await makeKey(owner.token, "bogus", "admin");
     await setMeta(bogus.id, JSON.stringify({ scope: "full", roleCap: "owner" }));
     expect((await me(bogus.key)).roleCap).toBe("viewer");
-    const denied = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: bogus.key, body: { name: "x", domain: "x.example.com" } });
+    const denied = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: bogus.key, body: { name: "x", domains: ["x.example.com"] } });
     expect(denied.status).toBe(403);
     const numeric = await makeKey(owner.token, "numeric", "admin");
     await setMeta(numeric.id, JSON.stringify({ scope: "full", roleCap: 3 }));
@@ -157,6 +157,6 @@ describe("api key role cap (backlog B33, decision 48)", () => {
     expect(forB.status).toBe(400);
     expect(await json(forB)).toMatchObject({ error: "role_cap_too_high", highest: "viewer" });
     const forA = await json<{ key: string }>(await call("POST", "/me/api-keys", { token: u.token, body: { name: "cap-admin", workspaceId: a.workspaceId, roleCap: "admin" } }));
-    expect((await call("POST", `/workspaces/${b.id}/sites`, { token: forA.key, body: { name: "x", domain: "x.example.com" } })).status).toBe(404);
+    expect((await call("POST", `/workspaces/${b.id}/sites`, { token: forA.key, body: { name: "x", domains: ["x.example.com"] } })).status).toBe(404);
   });
 });

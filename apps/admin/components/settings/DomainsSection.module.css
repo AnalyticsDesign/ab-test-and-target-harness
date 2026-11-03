@@ -1,0 +1,36 @@
+/*
+ * B148: タグを置くドメインの一覧。行は表の形で、どの行も同じ列の幅にそろえる(入力欄の幅・札の位置が行ごとに揺れない)。
+ * 列 = 行番号 / ドメイン(入力)/ 代表(1 行目だけ)/ 判定(Mode B)/ 削除。見出しの行も同じ列を使う。
+ * 入力の面は --sunken、入力欄だけ白い(管理画面の入力の決まりと同じ)
+ */
+.rows { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 8px; }
+.row { background: var(--sunken); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; }
+.main { display: grid; grid-template-columns: 2em minmax(0, 300px) 3.6em minmax(0, 1fr) auto; grid-template-areas: "no input rep check del"; column-gap: 10px; row-gap: 6px; align-items: center; }
+.main.noCheck { grid-template-areas: "no input rep . del"; }
+.no { grid-area: no; color: var(--muted); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.input { grid-area: input; min-width: 0; }
+.input input { width: 100%; min-width: 0; font-family: var(--font-mono); font-size: 12.5px; }
+.rep { grid-area: rep; }
+.check { grid-area: check; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.del { grid-area: del; }
+.head { padding: 0 11px; font-size: 11.5px; font-weight: 500; color: var(--muted); margin-top: 6px; }
+.badgeRep { background: var(--accent-soft); color: var(--accent); border-color: transparent; white-space: nowrap; }
+/* 札の下の小さな灰色の注記(エラーに見えないよう、警告の色を使わない) */
+.badgeNote { font-size: 11.5px; color: var(--muted); line-height: 1.35; }
+.notes { display: flex; flex-direction: column; gap: 2px; padding-left: calc(2em + 10px); margin-top: 4px; font-size: 12px; color: var(--muted); }
+.notes:empty { display: none; }
+.err { padding-left: calc(2em + 10px); }
+.foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.derived { border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 14px; }
+.derivedHead { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+.derived dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 0; font-size: 12.5px; }
+.derived dt { color: var(--muted); }
+.derived dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  /* 狭い幅: 1 段目 = 行番号・入力・削除、2 段目 = 代表・判定。見出しは隠す */
+  .main, .main.noCheck { grid-template-columns: 2em minmax(0, 1fr) auto; grid-template-areas: "no input del" ". rep rep" ". check check"; }
+  .head { display: none; }
+  .derived dl { grid-template-columns: 1fr; gap: 2px; }
+}
+/* 設置手順の curl の 1 行。狭い幅(760px など)で枠からはみ出さないよう、どこでも折り返す */
+.cmd { overflow-wrap: anywhere; word-break: break-all; }

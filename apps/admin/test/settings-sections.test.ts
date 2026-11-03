@@ -3,17 +3,19 @@ import { SECTIONS, fieldKeysFor, firstInvalidSection, sectionOfField } from "@/c
 
 describe("settings sections", () => {
   it("lists the submenu in the designed order, with headings that match the current names", () => {
-    expect(SECTIONS.map((s) => s.label)).toEqual(["一般", "導入タグ", "訪問者 ID", "外部計測の名前", "外部 ID", "危険な操作"]);
+    expect(SECTIONS.map((s) => s.label)).toEqual(["一般", "ドメイン", "導入タグ", "訪問者 ID", "外部計測の名前", "外部 ID", "危険な操作"]);
     expect(SECTIONS.find((s) => s.id === "naming")!.heading).toBe("外部計測の名前(dataLayer の名札)");
     expect(SECTIONS.find((s) => s.id === "external")!.heading).toBe("分析(外部 ID)");
+    expect(SECTIONS.find((s) => s.id === "domains")).toMatchObject({ label: "ドメイン", heading: "ドメイン", inForm: true });
     expect(SECTIONS.filter((s) => !s.inForm).map((s) => s.id)).toEqual(["tag", "danger"]);
   });
   it("finds the section that holds a form field (input name or control error path)", () => {
     expect(sectionOfField("name")).toBe("general");
-    expect(sectionOfField("allowedOrigins")).toBe("general");
+    expect(sectionOfField("allowedOrigins")).toBe("domains"); // B148: 旧い欄(legacy_domain_fields の path)もドメインの節
+    expect(sectionOfField("domains.0")).toBe("domains");
     expect(sectionOfField("decisionTimeoutMs")).toBe("general");
-    expect(sectionOfField("mode")).toBe("identity");
-    expect(sectionOfField("hosts")).toBe("identity");
+    expect(sectionOfField("mode")).toBe("domains"); // B148: 導入の形はドメインの節
+    expect(sectionOfField("hosts")).toBe("domains");
     expect(sectionOfField("idSource")).toBe("identity");
     expect(sectionOfField("byoidCookie")).toBe("identity");
     expect(sectionOfField("visitorCookieName")).toBe("identity");
@@ -48,6 +50,14 @@ describe("settings sections", () => {
     expect(origins("allowedOrigins.0")).toBe(true); // 配列の添字
     expect(origins("domain")).toBe(false);
     expect(origins("allowedOriginsX")).toBe(false);
+    // B148: 一覧の行は domains.<n>。行を直したらその行のエラーだけ、行を足す・消すときは domains で一覧の全部を消す
+    const row1 = fieldKeysFor("domains.1");
+    expect(row1("domains.1")).toBe(true);
+    expect(row1("domains.0")).toBe(false);
+    expect(row1("domains")).toBe(false);
+    const list = fieldKeysFor("domains");
+    expect(list("domains")).toBe(true);
+    expect(list("domains.3")).toBe(true);
   });
   // B139: 共有の衝突(422 sharing_conflict、path は shareSubdomains)は正本 Cookie 名を変えると解けるので、正本 Cookie 名を変えたら共有のエラーも消す
   it("clears_sharing_conflict_when_visitor_cookie_name_changes", () => {

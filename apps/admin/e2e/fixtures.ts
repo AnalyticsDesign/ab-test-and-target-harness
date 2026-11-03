@@ -28,6 +28,16 @@ export const CONTROL_URL = "http://localhost:8799";
 export const EDGE_URL = "http://127.0.0.1:8787";
 /** 設置タグの配信ファイル(/s/*)を配う場所 = 偽の Cloudflare API(e2e/fake-cf-api.mjs)。本番では配信専用の Worker */
 export const STATIC_URL = "http://127.0.0.1:8791";
+/**
+ * B148: 偽の edge(e2e/fake-edge-ping.mjs)。control の AB_PROBE_ORIGIN_OVERRIDE(playwright.config.ts の --var。AB_E2E_PROBE_OVERRIDE_ENABLED=1 と一緒に置いたときだけ効く)がここを指し、
+ * `.test` のドメインの確かめ(/__ab/ping)がここに届く。ポートはほかの E2E の偽のサーバー(8791)・wrangler(8787 / 8799)・admin(3000)と分ける
+ */
+export const FAKE_EDGE_URL = "http://127.0.0.1:8812";
+/**
+ * B148: E2E の導入の印(テスト専用の固定値)。global-setup.ts が D1 の instance_settings(install_marker。値は JSON の文字列)と
+ * KV の meta:install に置き、偽の edge はその SHA-256 を返す(control の判定が「Cloudflare 経由」になる)
+ */
+export const E2E_INSTALL_MARKER = "e2e00000-b148-4000-8000-000000000001";
 
 export const SETUP_TOKEN = "e2e-setup-token";
 export const AUTH_SECRET = "e2e-secret-0123456789abcdef0123456789abcdef";
@@ -102,12 +112,12 @@ export const HERO_TEXT = "E2E から書き換え";
  * admin BFF は接続元 IP を転送しないので(決定 35 (4))、この E2E のすべての無認証 POST は control からは
  * 同じ IP に見え、経路ごとに 1 枠を共有する(apps/control/src/app.ts)。
  *
- * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 31 回(`login(` の呼び出しの実数。publish-flow 10 / audience-flow 10 /
+ * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 34 回(`login(` の呼び出しの実数。publish-flow 10 / audience-flow 10 /
  * version-banner 2 / experiment-kind-flow 1 / login-screen 1 / results-flow 1 / invite-flow 1 / static-delivery 1 / results-settings 1 /
- * variant-ui 1 / write-freeze 1 / request-count 1、うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 /
+ * variant-ui 1 / write-freeze 1 / request-count 1 / refresh-race 1 / shell-reuse 1 / domains-flow 1、うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 /
  * 招待受諾 2 回(invite-flow 1 / static-delivery 1。`acceptInvite()` は受諾でセッションを得るので、招待されたメンバーの sign-in は数えない)/
  * `break-glass/reset-link` 1 回 / `reset-password` 1 回。
- * 1 実行の sign-in の合計(31)は上限(30 回 / 10 秒。`apps/control/wrangler.jsonc` の AUTH_RATE_LIMITER)を超えていて、合計だけでは
+ * 1 実行の sign-in の合計(34)は上限(30 回 / 10 秒。`apps/control/wrangler.jsonc` の AUTH_RATE_LIMITER)を超えていて、合計だけでは
  * 10 秒窓に収まるとは言えない。今は `workers: 1` で直列に走り、各 `login()` の間に画面の遷移とテストの操作が入るので、1 つの 10 秒窓に
  * 入る sign-in は合計よりずっと少ない(窓ごとの実数は測っていない)。これ以上ログインを増やすなら、
  * 各テストでログインし直すのをやめて `storageState` でセッションを引き回すこと(ログインの検証は 1 本残せばよい)。

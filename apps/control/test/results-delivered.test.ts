@@ -90,7 +90,7 @@ const textOf = (d: DeliveredDefinition | undefined) => (d?.variants[1]!.changes[
 /** 計測用 D1 がある導入の Site(結果を記録する) */
 async function resultsSite(existing?: Awaited<ReturnType<typeof setupOwner>>) {
   const owner = existing ?? (await setupOwner());
-  const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domain: "www.example.com" }, envOverride: RESULTS_STORE });
+  const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domains: ["www.example.com"] }, envOverride: RESULTS_STORE });
   expect(res.status).toBe(201);
   const { id: sid } = await json<{ id: string }>(res);
   return { owner, sid };

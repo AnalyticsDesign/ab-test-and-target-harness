@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { defineConfig } from "vitest/config";
@@ -47,6 +47,14 @@ function wranglerConfigForTests(cfg: Record<string, unknown>): string {
 
 // D1 は migrations を適用してから使う(公式 fixture vitest-plugin-examples/d1 と同じ構成)。
 // readD1Migrations は @cloudflare/vitest-plugin の直下 export(installed の dist/pool/index.d.mts で確認)
+/** 本番の wrangler.jsonc の生の文字列(キー = リポジトリの根からのパス)。開発用の release/overlay は、あるときだけ入れる */
+function wranglerConfigsForProbeCheck(): Record<string, string> {
+  const out: Record<string, string> = { "apps/control/wrangler.jsonc": readFileSync(path.join(import.meta.dirname, "wrangler.jsonc"), "utf8") };
+  const overlay = path.join(import.meta.dirname, "../../release/overlay/apps/control/wrangler.jsonc");
+  if (existsSync(overlay)) out["release/overlay/apps/control/wrangler.jsonc"] = readFileSync(overlay, "utf8");
+  return out;
+}
+
 export default defineConfig(async () => {
   const cfg = readJsonc(path.join(import.meta.dirname, "wrangler.jsonc"));
   // D1 の binding とマイグレーションの置き場所は wrangler.jsonc が正(テストの RESULTS_DB も wrangler.jsonc の binding だけから作る。D9 ③ K5)
@@ -82,6 +90,9 @@ export default defineConfig(async () => {
             TEST_MIGRATIONS: migrations,
             TEST_RESULTS_MIGRATIONS: resultsMigrations,
             TEST_SOURCES: sources,
+            // B148: E2E だけの変数(AB_PROBE_ORIGIN_OVERRIDE・AB_E2E_PROBE_OVERRIDE_ENABLED)が本番の設定に無いことを domain-probe.test.ts が見る(生の文字列で渡す)。
+            // release/ は公開リポジトリに無いので、overlay はあるときだけ渡す(公開リポジトリでは apps/control/wrangler.jsonc だけを見る)
+            TEST_WRANGLER_CONFIGS: wranglerConfigsForProbeCheck(),
             BETTER_AUTH_SECRET: "test-secret-0123456789abcdef0123456789abcdef",
             AB_SETUP_TOKEN: "test-setup-token",
             // backlog B36: 更新の後に流す修復 SQL(scripts/instance-admins-repair.sql)をテストで実行するため

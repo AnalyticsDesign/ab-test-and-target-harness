@@ -3,7 +3,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   // Better Auth が AsyncLocalStorage を使う
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   // database_id は `wrangler d1 create wtt-control` で作った値に置き換える。ローカル / vitest は wrangler のローカル D1 を使うため値は問われない
   // RESULTS_DB は計測用 D1(wtt-results)。edge の wrangler.jsonc と同じ database_id にする。control は読み取りと削除だけで、
   // 表の形の正は edge の results-migrations/(本番への適用は edge の results:migrate:remote だけ。docs/deploy.md)

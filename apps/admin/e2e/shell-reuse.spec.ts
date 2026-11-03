@@ -125,7 +125,7 @@ test("the loading shell never shows another site's or workspace's top bar", asyn
   expect(ws.status()).toBe(201);
   const wid2 = ((await ws.json()) as { id: string }).id;
   for (const [w, s] of [[wid2, C], [wid, D]] as const) {
-    expect((await page.request.post(`${ADMIN_URL}/api/control/workspaces/${w}/sites`, { headers: controlHeaders(), data: { name: s.name, domain: "localhost", id: s.id } })).status()).toBe(201);
+    expect((await page.request.post(`${ADMIN_URL}/api/control/workspaces/${w}/sites`, { headers: controlHeaders(), data: { name: s.name, domains: ["localhost"], id: s.id } })).status()).toBe(201);
     expect((await page.request.patch(`${ADMIN_URL}/api/control/sites/${s.id}`, { headers: controlHeaders(), data: { resultsEnabled: false } })).status()).toBe(200);
   }
 
