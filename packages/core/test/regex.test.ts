@@ -49,7 +49,8 @@ describe("regex: 照合器と RegExp の差分(設計書 §10.5 R9)", () => {
       }
     }
     expect(compared).toBeGreaterThan(300000);
-  });
+    // 30 万回以上を比べるので、遅い CI の runner では既定の 5 秒を超える(2026-11-02・03 のリハーサルで 5.3 秒)。手元は数百 ms
+  }, 30_000);
 
   it("受理した式は RegExp も受理し、同じ真偽になる(記号を混ぜた乱択)", () => {
     const rnd = rng(777);
