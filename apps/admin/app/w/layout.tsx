@@ -8,6 +8,7 @@ import { StaticHealthBanner } from "@/components/StaticHealthBanner";
 import { AppShell } from "@/components/ui/AppShell";
 import { Sidebar } from "@/components/ui/Sidebar";
 import { SettingsOriginProvider } from "@/components/ui/SettingsOrigin";
+import { PageLeaveGuard } from "@/components/ui/PageLeaveGuard";
 
 /**
  * `/w/*` は認証済み領域。`requireUser()` は未ログインなら `/login` へ redirect する。
@@ -31,6 +32,8 @@ export default async function AuthedLayout({ children }: { children: ReactNode }
       {/* 7o K14: 設置タグの配信ファイルの帯はシステム管理者だけ。状態はクライアントだけが取る(この layout の描画にデプロイ専用の Worker への往復を足さない) */}
       {user.instanceAdmin ? <StaticHealthBanner /> : null}
       {shouldShowBreakGlassBanner(caps) ? <BreakGlassBanner /> : null}
+      {/* 離れる前の確認(未保存の変更・保存の途中)。リンク・ログアウト・再読み込み・戻る・進むを止める。外枠と同じくクライアント遷移で作り直されない所に 1 つだけ置く */}
+      <PageLeaveGuard />
       <SettingsOriginProvider summary={summary.status === 200 ? summary.data : []}>
         <AppShell sidebar={<Sidebar user={user} />}>{children}</AppShell>
       </SettingsOriginProvider>

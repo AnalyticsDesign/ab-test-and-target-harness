@@ -7,10 +7,12 @@ import { WorkspaceApiKeysPanel } from "@/components/WorkspaceApiKeysPanel";
 import { Content } from "@/components/ui/AppShell";
 import { TopBar } from "@/components/ui/TopBar";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { PageMark } from "@/components/ui/PageMark";
 
 /** メンバーの API キー(決定 54 (6)、決定 48 (8) の一覧)。メンバー画面の下から独立させた。管理者以上だけ */
-export default async function WorkspaceApiKeysPage({ params }: { params: Promise<{ wid: string }> }) {
+export default async function WorkspaceApiKeysPage({ params, searchParams }: { params: Promise<{ wid: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const { wid } = await params;
+  const mark = <PageMark path={`/w/${wid}/api-keys`} search={await searchParams} />;
   // 互いに依らない取得は並べて読む(allInOrder。失敗は並べた順に判定するので、未ログインは今までどおりログインへ)。
   // キーの一覧は下の権限の判定の後で取る(管理者でない人の分は取らない)
   const [me, workspaces] = await allInOrder([requireUser(), loadWorkspaces()]);
@@ -20,7 +22,8 @@ export default async function WorkspaceApiKeysPage({ params }: { params: Promise
   if (!canManage(ws.role)) {
     return (
       <>
-        <TopBar crumbs={crumbs} />
+        {mark}
+        <TopBar crumbs={crumbs} scope={{ wid, sid: null }} />
         <Content>
           <p className="error-box">メンバーの API キーは管理者以上が見られます</p>
         </Content>
@@ -30,7 +33,8 @@ export default async function WorkspaceApiKeysPage({ params }: { params: Promise
   const keys = await controlFetch<WorkspaceApiKey[]>(`/workspaces/${wid}/api-keys`);
   return (
     <>
-      <TopBar crumbs={crumbs} />
+      {mark}
+      <TopBar crumbs={crumbs} scope={{ wid, sid: null }} />
       <Content>
         <PageHeader title="メンバーの API キー" />
         {keys.status === 200 ? (

@@ -76,3 +76,20 @@ describe("AppLink の先読みの呼び出しは、イベントの処理の外�
     expect(code).not.toMatch(/router\.prefetch\(|\.matches\(/);
   });
 });
+
+describe("遷移中の表示の部品は store を選ぶ関数だけで読む(B173 第 1 段 Task 4。描き直しの見張り)", () => {
+  // DOM のテストの道具が無いので静的に見る: スナップショット全体を読むと、関わりの無い更新(別のリンクの遷移・保存の状態)のたびに描き直す
+  const READERS = ["components/ui/AppLink.tsx", "components/ui/ChromeScopeGuard.tsx", "components/ui/SiteChromeGuard.tsx", "components/ui/NavGate.tsx", "components/ui/RouteLoading.tsx"];
+
+  it("AppLink, ChromeScopeGuard, SiteChromeGuard, NavGate and RouteLoading read the store only through useFeedbackSelector", () => {
+    for (const f of READERS) {
+      const src = readFileSync(path.join(ROOT, f), "utf8");
+      expect(src, f).toMatch(/useFeedbackSelector\(/);
+      expect(src, f).not.toMatch(/getSnapshot\(\)/);
+    }
+    // lib/use-feedback.ts が export する hook は useFeedbackSelector だけ(スナップショット全体を返す hook を作らない)
+    const hook = readFileSync(path.join(ROOT, "lib/use-feedback.ts"), "utf8");
+    const exported = [...hook.matchAll(/export\s+(?:function|const)\s+(\w+)/g)].map((m) => m[1]);
+    expect(exported).toEqual(["useFeedbackSelector"]);
+  });
+});

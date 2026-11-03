@@ -4,6 +4,7 @@ import { api, describeError, fieldErrors } from "@/lib/client";
 import { Field } from "./Field";
 import { ErrorBox } from "./ErrorBox";
 import { SubmitButton } from "./SubmitButton";
+import { navigateDocument } from "@/lib/navigate";
 
 /** 新しいワークスペース(システム管理者だけ。決定 54 (10))。ホームの「新しいワークスペース」は `?new=1` 付きで来るので、名前欄にフォーカスを移す(K18) */
 export function WorkspaceCreateForm({ autoFocus = false }: { autoFocus?: boolean }) {
@@ -24,7 +25,7 @@ export function WorkspaceCreateForm({ autoFocus = false }: { autoFocus?: boolean
           // K12: 作った直後にすること(サイトの追加・招待)はそのワークスペースの画面にある。
           // クライアント遷移(router.push)は共有 layout(サイドバーの切り替えの一覧)を描き直さず、
           // router.refresh() を足しても確実には反映されない(このバージョンの Next.js/vinext で実測)ため、全画面の遷移にする
-          window.location.assign(`/w/${id}`);
+          navigateDocument(`/w/${id}`);
         } catch (err) {
           setError(describeError(err));
           setFields(fieldErrors(err));

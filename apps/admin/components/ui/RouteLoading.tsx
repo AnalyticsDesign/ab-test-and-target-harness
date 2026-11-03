@@ -1,4 +1,29 @@
+"use client";
+import { createContext, useContext } from "react";
+import { useFeedbackSelector } from "@/lib/use-feedback";
+import type { FeedbackSnapshot } from "@/lib/feedback-store";
 import styles from "./RouteLoading.module.css";
+
+/** 遷移の打ち切りの文言(NavGate と共通) */
+export const NAV_TIMEOUT_MESSAGE = "画面を開けませんでした。再読み込みしてください";
+
+/**
+ * NavGate(本文の包み)の中か。NavGate は打ち切りのとき本文の先頭に文言を出すので、その中の RouteLoading(サイトの中の loading.tsx)は
+ * 文言を重ねて出さない。NavGate の外(上部バーごと替わる画面の loading.tsx)は、自分で文言を出す
+ */
+export const InsideNavGate = createContext(false);
+
+/**
+ * store の遷移から決める表示の状態(基本の値なので、関わりの無い更新では描き直さない)。
+ * none = 遷移が無い(直接開いた文書の流し込み・戻る/進むなど store を通らない遷移): すぐ見せる。
+ * pending = 遷移が始まって 150 ms 以内: 場所は取って見せない。loading = 見せる。timedOut = 10 秒で打ち切った
+ */
+export type LoadingState = "none" | "pending" | "loading" | "timedOut";
+export function selectLoadingState(s: FeedbackSnapshot): LoadingState {
+  if (!s.nav) return "none";
+  if (s.nav.timedOut) return "timedOut";
+  return s.nav.visible ? "loading" : "pending";
+}
 
 /**
  * 画面の読み込み中の表示。各画面のフォルダの loading.tsx がこれを描く(管理画面の速さ A)。
@@ -19,15 +44,44 @@ import styles from "./RouteLoading.module.css";
  * サイドバーの右の列にじかに出る。じかに出るときは、上部バーと同じ高さの空の帯を置いて本文の位置が跳ねないようにする
  * (帯と余白は RouteLoading.module.css で場所ごとに出し分ける)。
  * 保存の後の router.refresh() では出ない(vinext は refresh を transition で描き、境界の key は URL のパスから決まって変わらない)。
+ * 表示は store の遷移(lib/feedback-store.ts)に従う(B173 第 1 段): 押してから 150 ms までは場所だけ取って見せず、10 秒で打ち切ったら「読み込み中…」の代わりに打ち切りの文言を出す。
+ * store を通らない表示(直接開いた文書の流し込み・戻る/進む)は今までどおりすぐ見せる。
  * 試しの実行を省いた分、ページの notFound() は応答を流し始めた後に起きるので、直接開いたときの HTTP の状態は 404 ではなく 200 になる
  * (画面には今までどおり 404 の表示が出る。layout の notFound() は 404 のまま。実測)
  */
 export function RouteLoading() {
+  const state = useFeedbackSelector(selectLoadingState);
+  const insideGate = useContext(InsideNavGate);
+  if (state === "pending") {
+    // 速い遷移(150 ms 以内)ではちらつかせない。場所は取る(見せる状態になったときに本文の位置が跳ねないよう)。
+    // 見えない間は role・aria-busy も付けない(読み上げにも「読み込み中」を知らせない)
+    return (
+      <div className={styles.loading} style={{ visibility: "hidden" }} aria-hidden="true" data-nav-loading="pending">
+        <div className={styles.bar} />
+        <div className={styles.body} />
+      </div>
+    );
+  }
+  if (state === "timedOut") {
+    // vinext が前の画面をこの枠に置き換えた後でも、打ち切りを知らせる。NavGate の中では NavGate が本文の先頭に出すので重ねない
+    return (
+      <div className={styles.loading}>
+        <div className={styles.bar} aria-hidden="true" />
+        <div className={styles.body}>
+          {insideGate ? null : (
+            <p role="alert" className="error-box">
+              {NAV_TIMEOUT_MESSAGE}
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className={styles.loading} role="status" aria-busy="true">
       <div className={styles.bar} aria-hidden="true" />
       <div className={styles.body}>
-        <span className={styles.text}>読み込み中…</span>
+        <span className={state === "loading" ? `${styles.text} ${styles.textNow}` : styles.text}>読み込み中…</span>
       </div>
     </div>
   );

@@ -7,6 +7,7 @@ import { Field } from "./Field";
 import { ErrorBox } from "./ErrorBox";
 import { SubmitButton } from "./SubmitButton";
 import { Picker } from "./ui/Picker";
+import { navigateDocument } from "@/lib/navigate";
 
 /**
  * 作成の後の遷移先。ふつうはサイトの概要。B139: 作成で衝突を避けるために共有か Cookie 名を変えたときは、
@@ -51,7 +52,7 @@ export function SiteCreateForm({ workspaceId, visibleSites }: { workspaceId: str
           const s = await api<SiteCreated>("POST", `/workspaces/${workspaceId}/sites`, body);
           // クライアント遷移(router.push)は共有 layout(サイドバーの Site 一覧)を描き直さず、
           // router.refresh() を足しても確実には反映されない(このバージョンの Next.js/vinext で実測)ため、全画面の遷移にする
-          window.location.assign(createdHref(workspaceId, s));
+          navigateDocument(createdHref(workspaceId, s));
         } catch (err) {
           setError(describeError(err));
           setFields(fieldErrors(err));

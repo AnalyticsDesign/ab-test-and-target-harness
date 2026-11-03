@@ -42,6 +42,8 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
     method,
     headers: { ...contentType, ...(init.headers as Record<string, string> | undefined), ...browserVersionHeaders() },
     body: isForm ? body : body === undefined ? undefined : JSON.stringify(body),
+    // 打ち切りの合図(BusyScope の 30 秒の上限が使う)。渡さなければ undefined で、これまでと同じ
+    signal: init.signal,
   });
   const data = res.status === 204 ? null : await res.json().catch(() => null);
   if (!res.ok) throw new ApiClientError(res.status, (data as ErrorEnvelope | null)?.error ?? `http_${res.status}`, (data as ErrorEnvelope | null) ?? {});

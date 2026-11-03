@@ -50,12 +50,12 @@ test.describe.serial("pattern UI (B77)", () => {
     return page.getByTestId(`variant-${id}`);
   };
   const saveState = () => page.getByTestId("save-state");
-  /** 「保存(下書き)」を押し、指定の要求の応答を待つ。成功なら保存バーが「変更はありません」に戻る(本体の作り直しの着地)まで待つ */
+  /** 「保存(下書き)」を押し、指定の要求の応答を待つ。成功なら保存バーが「保存しました」になる(保存の後の読み直しの反映)まで待つ */
   const save = async (until: (r: Response) => boolean): Promise<Response> => {
     const done = page.waitForResponse(until);
     await page.getByRole("button", { name: "保存(下書き)" }).click();
     const res = await done;
-    if (res.ok()) await expect(saveState()).toHaveText("変更はありません");
+    if (res.ok()) await expect(saveState()).toHaveText("保存しました");
     return res;
   };
   const isWrite = (method: string, path: string) => (r: Response) => r.request().method() === method && new URL(r.url()).pathname === `/api/control${path}`;
@@ -195,7 +195,7 @@ test.describe.serial("pattern UI (B77)", () => {
     await expect(unpublishedBadge).toHaveCount(0);
     const memoLabel = "メモ(社内用。外部には出力されません)";
 
-    // 配信中: パターンのメモだけを直す → 送るのはそのパターンの description だけの PATCH。保存バーは「変更はありません」に戻る
+    // 配信中: パターンのメモだけを直す → 送るのはそのパターンの description だけの PATCH。保存バーは「保存しました」になる
     await page.getByRole("tab", { name: "パターン" }).click();
     const b = await pickVariant("b");
     await b.getByLabel(memoLabel).fill("配信中に書いたメモ");
@@ -234,8 +234,8 @@ test.describe.serial("pattern UI (B77)", () => {
     const res = page.waitForResponse(isWrite("PATCH", base(EXP_MAIN.id)));
     await page.getByRole("button", { name: "保存(下書き)" }).click();
     expect((await res).status()).toBe(200);
-    // 保存の後は変更が無いので、保存バーは「未保存の変更あり」のまま残らない(終了したエクスペリエンスでは、変更が無ければバーごと出さない)
-    await expect(saveState()).toHaveCount(0);
+    // 保存の後は、帯の左に「保存しました」を出す(終了したエクスペリエンスでも、成功の文がある間は帯を残す。次に欄を変えるか破棄すると帯ごと消える)
+    await expect(saveState()).toHaveText("保存しました");
     rec.stop();
     expect(rec.writes).toEqual([{ method: "PATCH", path: base(EXP_MAIN.id), body: { description: "終了後の振り返り" } }]);
     await page.reload();

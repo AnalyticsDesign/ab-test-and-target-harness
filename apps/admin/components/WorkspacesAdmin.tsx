@@ -5,6 +5,7 @@ import { api, describeError } from "@/lib/client";
 import { deleteBlocked, runningIn } from "@/lib/workspaces";
 import type { WorkspaceSummary } from "@/lib/types";
 import { WorkspaceCreateForm } from "./WorkspaceForms";
+import { reloadDocument } from "@/lib/navigate";
 
 /**
  * 設定 > ワークスペース(決定 54 (10)。システム管理者だけ)= 作成 + 一覧(サイト数・メンバー数・配信中の数)+ 削除。
@@ -25,7 +26,7 @@ export function WorkspacesAdmin({ workspaces, focusNew }: { workspaces: Workspac
       setTyped("");
       // クライアントの再取得(router.refresh)は共有 layout(サイドバーの切り替えの一覧)を確実には描き直さない
       // (このバージョンの Next.js/vinext で実測)ため、全画面で読み直す
-      window.location.reload();
+      reloadDocument();
     } catch (e) {
       // 押せる状態から削除するまでの間に誰かが開始した等。サーバーの 409 の文をその行に出す(Review Focus 3)
       setError({ id: w.id, message: describeError(e) });

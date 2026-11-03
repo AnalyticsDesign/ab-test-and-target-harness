@@ -14,6 +14,7 @@ import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Picker } from "../ui/Picker";
 import { ErrorBox } from "../ErrorBox";
 import { ExperimentIdField } from "./ExperimentIdField";
+import { navigateDocument } from "@/lib/navigate";
 
 /**
  * 決定 51(設計書 §4.2、モックの複製の画面): 見出しの「複製」から開く。元は変わらず、下書きを作って新しいエクスペリエンスの概要へ移る。
@@ -95,7 +96,7 @@ export function DuplicateDialog({
         // 上部バーの「未公開の編集あり」を描き直すため全画面の遷移(作成の画面と同じ理由)。
         // B108: 移った先の見た目が元とほぼ同じで反応が無いように見えるので、作成したことを知らせる印を付ける(移った先で URL から消す)
         const q = analyticsFailed ? "?duplicated=1&analyticsFailed=1" : "?duplicated=1";
-        window.location.assign(`/w/${wid}/sites/${siteId}/experiments/${created.id}${q}`);
+        navigateDocument(`/w/${wid}/sites/${siteId}/experiments/${created.id}${q}`);
       }}
     >
       <p className="muted">元のエクスペリエンスは変わりません。新しいエクスペリエンスは下書きで作られ、開始するまでサイトには表示されません。</p>

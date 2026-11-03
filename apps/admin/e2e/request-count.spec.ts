@@ -1,4 +1,4 @@
-import { test, expect, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { test, expect, type Locator, type Page, type Request, type TestInfo } from "@playwright/test";
 import { ADMIN_URL, CONTROL_URL, WORKSPACE_NAME, controlHeaders, createExperiment, createSite, login, waitForHydration } from "./fixtures";
 
 /**
@@ -16,6 +16,9 @@ import { ADMIN_URL, CONTROL_URL, WORKSPACE_NAME, controlHeaders, createExperimen
  * - 直接: page.goto で URL を開く(HTML の要求)
  * - 遷移: 遷移元の画面を開き、落ち着いてからリンクにマウスを乗せ、その先読みも落ち着いてから押す(RSC の要求 `?_rsc=`)。
  *   遷移元を開いた後〜落ち着くまでの分(表示の後の先読みなど)と、マウスを乗せたときの先読みの分は別に数えて記録だけする
+ * ほかに、一覧を開いて何もしない間の要求(IDLE_LIMITS)と、エクスペリエンスの保存 1 回(SAVE_LIMITS。別の test
+ * 「experience save: one write and one refresh …」)を数える。保存の test は、押してから落ち着くまでの窓の admin への要求を
+ * 書き込み・読み直し・許したもの(SAVE_ALLOWED)に分け、それ以外の要求が無いことも表明する
  *
  * 数え方: admin の wrangler dev の手元の観測(`/cdn-cgi/local/explorer/api/local/observability/query`。wrangler が起動時のログに案内する、
  * 読み取りだけの SQL の口)を読む。admin への要求 1 件ごとに根の span があり、その中で control へ出した要求が子の fetch の span
@@ -32,7 +35,7 @@ import { ADMIN_URL, CONTROL_URL, WORKSPACE_NAME, controlHeaders, createExperimen
  * 余裕の付け方: 上限 = 直した後の実測(request-count を 3 回走らせたときの最大)+ 1。数は毎回同じ(揺れない)ことを 3 回で確かめてある。
  * 「+ 1」は観測の誤差のためではなく、無関係な小さな変更で毎回上限を上げずに済むための幅。2 増えたら落ちる。
  *
- * 上限を上げるときの手順(REQUEST_LIMITS の値を変える前に必ず):
+ * 上限を上げるときの手順(REQUEST_LIMITS・IDLE_LIMITS・SAVE_LIMITS の値を変える前、SAVE_ALLOWED に足す前に必ず):
  * 1. 先に減らせないかを確かめる: 同じ GET は 1 回の描画の中で lib/control-dedupe.ts がまとめる(controlRequest を通していれば効く)。
  *    互いに依らない取得は lib/loaders.ts の allInOrder で並べる(回数は減らないが直列の待ちが減る)。新しい呼び方で controlRequest を迂回していないか
  * 2. それでも増えるなら、増える理由(どの画面で、どの control の呼び出しが、なぜ要るか)を、上げる値の横のコメントと commit の本文に書いてから上げる
@@ -89,13 +92,33 @@ export const IDLE_LIMITS = {
 } as const;
 
 /**
- * B148: 書き込みの回数の上限。ドメインの節の保存 1 回(BFF の PATCH 1 + 保存の後の読み直し)が control を呼ぶ回数。
+ * 書き込みの回数の上限(REQUEST_LIMITS とは別のまとまり。値の上げ方はファイルの先頭の手順と同じ)。
+ *
+ * B148: ドメインの節の保存 1 回(BFF の PATCH 1 + 保存の後の読み直し)が control を呼ぶ回数。
  * 上限は siteSettings の直接の表示と同じ(読み直しは画面の表示と同じ取得で、PATCH の 1 回はその余裕の中に収める)
+ *
+ * B173 第 1 段: エクスペリエンスの保存 1 回の上限。
+ * 名前だけ変えて「保存(下書き)」を押したときの、押してから「保存しました」が出て画面が新しい名前を出すまでの数。値 = 実測 + 1(ただし
+ * writeRequests・refreshRsc は 1 回ちょうどを表明する)。
+ * - writeRequests = 保存の BFF の書き込みの要求(PATCH /api/control/sites/:sid/experiments/:eid)の数
+ * - writeControl = その書き込みの要求が control を呼んだ数
+ * - refreshRsc = 保存の後の読み直し(エクスペリエンスの詳細の RSC の要求)の数
+ * - refreshControl = その RSC の要求が control を呼んだ数
  */
 export const SAVE_LIMITS = {
   // 実測 6(2026-11-02。PATCH 1 + 読み直し 5)。余裕は 0: 読み直しの取得が 1 つ増えたら落ちる(上げる前にファイルの先頭の手順)
   siteSettingsDomains: REQUEST_LIMITS.siteSettings.direct,
+  // 実測(2026-11-02。1 回押し・二度押しとも、3 回の実行で同じ): writeControl 1(PATCH 1 回)/ refreshControl 8。
+  // refreshControl の 8 は上の REQUEST_LIMITS.experiment(詳細の遷移 = 実測 8)と同じ: 保存の後の読み直しはその画面の RSC を描き直すだけで、
+  // 外枠の /me・/workspaces/summary・/capabilities・/sites/:sid + audiences・goals・experiments/:eid・evaluation-plan を 1 回ずつ呼ぶ(重複なし)
+  experimentNameSave: { writeRequests: 1, writeControl: 2, refreshRsc: 1, refreshControl: 9 },
 } as const;
+
+/**
+ * 保存の窓(SAVE_LIMITS の test)で、書き込み・読み直しのほかに許す admin への要求。ここに無い要求が窓の中に出たら落とす
+ * (余計な往復が増えたことを見張る。最終レビュー FR-Medium-5)。足すときは、なぜ要るかを横に書く
+ */
+const SAVE_ALLOWED: ReadonlyArray<(url: URL) => boolean> = [];
 
 const SITE_RC = { id: "site_e2e_rcount", name: "E2E Request Count" };
 const EXP = { id: "exp_e2e_rcount", name: "E2E request count experience" };
@@ -195,6 +218,18 @@ async function record(testInfo: TestInfo, name: string, data: unknown): Promise<
   const json = JSON.stringify(data, null, 2);
   console.log(`[request-count] ${name}\n${json}`);
   await testInfo.attach(`request-counts-${name}`, { body: json, contentType: "application/json" });
+}
+
+/** ブラウザが admin へ送った要求(メソッド・pathname)を、stop() まで集める。観測の口の span にはメソッドが無いので、書き込みの識別に使う */
+function watchBrowserRequests(page: Page): { seen: Array<{ method: string; pathname: string }>; stop: () => void } {
+  const seen: Array<{ method: string; pathname: string }> = [];
+  const origin = new URL(ADMIN_URL).origin;
+  const on = (req: Request) => {
+    const u = new URL(req.url());
+    if (u.origin === origin) seen.push({ method: req.method(), pathname: u.pathname });
+  };
+  page.on("request", on);
+  return { seen, stop: () => page.off("request", on) };
 }
 
 /** 画面の URL を組むための ID(ワークスペースの ID はサイトを作った後に分かる) */
@@ -518,4 +553,93 @@ test("main screens: control requests per view stay within the budget (direct HTM
     "summary",
     Object.fromEntries(Object.entries(summary).map(([name, r]) => [name, { ...r, limit: REQUEST_LIMITS[name as ScreenName] }])),
   );
+});
+
+/**
+ * エクスペリエンスの保存 1 回(名前だけ変える)の回数。保存は覆いの部品で 1 回の書き込み + 1 回の読み直しにしてある(二度押しでも同じ)ので、
+ * 書き込み・読み直しの要求がちょうど 1 回ずつであることと、それぞれが control を呼んだ数が上限以下であることを見る。
+ * 専用のサイトを作る(上の test の状態に頼らない)。ID は SITE_RC / EXP の ID の先頭に一致しないものにする(symbolize が置き換えてしまうため)
+ */
+test("experience save: one write and one refresh stay within the control request budget (single click and double click)", async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  const started = Date.now();
+  const site = { id: "site_e2e_savecount", name: "E2E Save Count" };
+  const exp = { id: "exp_e2e_savecount", name: "E2E save count experience" };
+  const limit = SAVE_LIMITS.experimentNameSave;
+
+  await login(page);
+  await createSite(page, site);
+  const wid = new URL(page.url()).pathname.split("/")[2]!;
+  const siteUrl = page.url();
+  await createExperiment(page, exp);
+  // 観測の口が使えること(見えないと下の数が 0 になる。下の「≥ 1」の表明と合わせた保険)
+  expect(count(await adminRequests(started), wid).total).toBeGreaterThan(0);
+
+  const expPath = `${new URL(siteUrl).pathname}/experiments/${exp.id}`;
+  const writePath = `/api/control/sites/${site.id}/experiments/${exp.id}`;
+  const region = page.getByRole("region", { name: "基本設定" });
+  const nameInput = region.getByLabel("名前(100 字以内)");
+  const saveButton = page.getByRole("button", { name: "保存(下書き)" });
+
+  /** 名前を変えて保存し、帯に「保存しました」が出て画面が新しい名前を出したところまでの admin への要求を数える */
+  const measure = async (label: string, newName: string, press: () => Promise<void>) => {
+    await page.goto(expPath);
+    await waitForHydration(page);
+    await expect(nameInput).toBeVisible();
+    // 開いた分(HTML・先読みなど)を数えないよう、落ち着いてから数え始める
+    await waitQuiet(Date.now() - 5_000);
+    await nameInput.fill(newName);
+    const browser = watchBrowserRequests(page);
+    const from = Date.now();
+    await press();
+    await expect(page.getByTestId("save-state")).toHaveText("保存しました");
+    await expect(heading(page, newName)).toBeVisible();
+    // 帯の文と画面の名前を確かめた後、遅れて来る要求も含めて落ち着くまで待ってから閉じる
+    const reqs = await adminRequests(from, await waitQuiet(from));
+    browser.stop();
+    // 窓の中の admin への要求を分類する: 書き込み(保存の PATCH)・読み直し(詳細の RSC)・許したもの(SAVE_ALLOWED)・その他。
+    // 観測の口の span には HTTP のメソッドが無いので、書き込みの path への要求はブラウザ側で見た PATCH の数と照らす(下の表明)
+    const writes = reqs.filter((r) => new URL(r.url).pathname === writePath);
+    const refreshes = reqs.filter((r) => new URL(r.url).pathname === expPath && new URL(r.url).searchParams.has("_rsc"));
+    const allowed = reqs.filter((r) => !writes.includes(r) && !refreshes.includes(r) && SAVE_ALLOWED.some((ok) => ok(new URL(r.url))));
+    const others = reqs.filter((r) => !writes.includes(r) && !refreshes.includes(r) && !allowed.includes(r));
+    const browserPatches = browser.seen.filter((r) => r.method === "PATCH" && r.pathname === writePath);
+    // ブラウザが admin へ送った GET 以外の要求のうち、保存の PATCH でないもの(別の書き込みが増えたら落とす)
+    const browserOtherWrites = browser.seen.filter((r) => r.method !== "GET" && r.method !== "HEAD" && !(r.method === "PATCH" && r.pathname === writePath));
+    const result = {
+      writeRequests: writes.length,
+      writeControl: count(writes, wid).total,
+      refreshRsc: refreshes.length,
+      refreshControl: count(refreshes, wid).total,
+    };
+    await record(testInfo, `experimentNameSave-${label}`, {
+      ...result,
+      writeByPath: count(writes, wid).byPath,
+      refreshByPath: count(refreshes, wid).byPath,
+      allowed: perRequest(allowed, wid),
+      others: perRequest(others, wid),
+      browserPatches: browserPatches.length,
+      browserOtherWrites: browserOtherWrites.map((r) => `${r.method} ${symbolize(r.pathname, wid)}`),
+      requests: perRequest(reqs, wid),
+      limit,
+    });
+    // 書き込み・読み直しの要求はちょうど 1 回。control を呼んだ数は、0 件(観測の口が壊れた)で素通りしないよう 0 より大きいことも見る
+    expect.soft(result.writeRequests, `${label}: 保存の書き込みの要求がちょうど ${limit.writeRequests} 件`).toBe(limit.writeRequests);
+    expect.soft(result.refreshRsc, `${label}: 保存の後の読み直し(RSC)の要求がちょうど ${limit.refreshRsc} 件`).toBe(limit.refreshRsc);
+    expect.soft(result.writeControl, `${label}: 書き込みが control を呼んだ数が数えられている(≥ 1)`).toBeGreaterThan(0);
+    expect.soft(result.writeControl, `${label}: 書き込みが control を呼んだ数 ≤ ${limit.writeControl}`).toBeLessThanOrEqual(limit.writeControl);
+    expect.soft(result.refreshControl, `${label}: 読み直しが control を呼んだ数が数えられている(≥ 1)`).toBeGreaterThan(0);
+    expect.soft(result.refreshControl, `${label}: 読み直しが control を呼んだ数 ≤ ${limit.refreshControl}`).toBeLessThanOrEqual(limit.refreshControl);
+    // 書き込みの path への要求は、すべてブラウザが送った PATCH(同じ path への GET などが紛れて書き込みに数えられていない)
+    expect.soft(browserPatches.length, `${label}: ブラウザが送った保存の PATCH の数が、観測の口の書き込みの要求の数と同じ`).toBe(result.writeRequests);
+    expect.soft(browserOtherWrites.map((r) => `${r.method} ${symbolize(r.pathname, wid)}`), `${label}: 保存の PATCH のほかに書き込みの要求が無い`).toEqual([]);
+    // 書き込み・読み直し・許したもののほかに、admin への要求が無い(余計な BFF の GET・別の画面の RSC が増えたら落とす)
+    expect.soft(perRequest(others, wid), `${label}: 保存の窓に、書き込み・読み直し・許したもの以外の要求が無い`).toEqual([]);
+    return result;
+  };
+
+  const single = await measure("single-click", "E2E save count renamed 1", () => saveButton.click());
+  // 二度押し: 1 回目で覆いが出て 2 回目は効かないので、数は 1 回押しと同じ
+  const double = await measure("double-click", "E2E save count renamed 2", () => saveButton.dblclick());
+  expect.soft(double, "二度押しの数が 1 回押しと同じ").toEqual(single);
 });

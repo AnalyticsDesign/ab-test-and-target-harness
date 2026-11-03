@@ -74,6 +74,8 @@ export type SaveSteps = {
   variantMemos: string[];
   /** (6) PUT …/changes を送るパターンの ID(オリジナルは送らない) */
   putChanges: string[];
+  /** (7) PUT …/evaluation-plan(B173 第 1 段 Q12: 評価計画も同じ保存の帯で送る。最後の段) */
+  putPlan: boolean;
 };
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -88,7 +90,7 @@ const variantSet = (d: Draft) => d.variants.map((v) => [v.id, v.name, v.weight, 
  * 終了したエクスペリエンスはメモだけを送る(ほかの欄は読み取り専用)。
  * 新しいパターンは (4) で作られるので、メモと変更は保存済みの値が無い = 空と比べる
  */
-export function saveSteps(initial: Draft, current: Draft, status: Status): SaveSteps {
+export function saveSteps(initial: Draft, current: Draft, status: Status, plan?: { dirty: boolean }): SaveSteps {
   const before = new Map(initial.variants.map((v) => [v.id, v]));
   const archived = status === "archived";
   return {
@@ -97,7 +99,46 @@ export function saveSteps(initial: Draft, current: Draft, status: Status): SaveS
     putVariants: status === "draft" && !same(variantSet(initial), variantSet(current)),
     variantMemos: current.variants.filter((v) => v.description !== (before.get(v.id)?.description ?? "")).map((v) => v.id),
     putChanges: archived ? [] : current.variants.filter((v) => !v.original && !same(v.changes, before.get(v.id)?.changes ?? [])).map((v) => v.id),
+    // 評価計画の未保存の判定は評価計画の側(lib/evaluation-plan.ts の planDirty)が持つので、結果だけを受ける
+    putPlan: plan?.dirty ?? false,
   };
+}
+
+/** 送る段が 1 つでもあるか(評価計画の段を含む)。無ければ保存は破棄と同じにする(isDirty の偽陽性のとき) */
+export function hasSteps(steps: SaveSteps): boolean {
+  return steps.patchExperiment || steps.experimentMemo || steps.putVariants || steps.variantMemos.length > 0 || steps.putChanges.length > 0 || steps.putPlan;
+}
+
+/** 外部計測の PATCH の値。名前も追加の項目も無ければ null(設定を外す) */
+const analyticsBody = (d: Draft) =>
+  d.expName || Object.keys(d.extra).length ? { ...(d.expName ? { overrides: { experimentName: d.expName } } : {}), ...(Object.keys(d.extra).length ? { extra: d.extra } : {}) } : null;
+
+/**
+ * 本体の PATCH の body(B173 第 1 段 Q10・spec §6.1)。自分が変えた欄だけを載せる: 開いた後にほかの人が変えた、自分の変えていない欄を上書きしないため
+ * (control の PATCH はどの欄も省略できる)。外部計測は名前と追加の項目をまとめた 1 つの値なので、どちらかが変われば全体を送る。
+ * 画面で表せない保存値(raw)の配信条件は送らない。メモ(description)は別の段で送るので載せない
+ */
+export function experimentPatchBody(initial: Draft, current: Draft): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (initial.name !== current.name) body.name = current.name;
+  if (!same(initial.urlMatch, current.urlMatch)) body.urlMatch = current.urlMatch;
+  if (!same(initial.targeting, current.targeting)) Object.assign(body, targetingBody(current.targeting));
+  if (initial.traffic !== current.traffic) body.trafficPercentage = current.traffic;
+  if (initial.persist !== current.persist) body.persistAssignment = current.persist;
+  if (initial.expName !== current.expName || !same(initial.extra, current.extra)) body.analytics = analyticsBody(current);
+  return body;
+}
+
+/**
+ * 新しいサーバーの値が届いたとき(本体の作り直しをやめた後。B173 第 1 段 spec §6.1)の、基準(base)と下書き(draft)の決め方。
+ * 未保存の変更が無ければ、その値で描き直す(自分の保存の後もこれ。保存の成功の直後に基準を送った値にしてあるので、未保存にならない)。
+ * 未保存の変更があれば、下書きを残し、基準も開いたときの値のまま残す(次の保存で、自分が変えた欄だけを送るため)。
+ * 届いた値が基準と違えば、注記(この画面を開いた後に、内容が更新されました)を出す
+ */
+export function reconcileServerUpdate(input: { base: Draft; draft: Draft; server: Draft }): { base: Draft; draft: Draft; notice: boolean } {
+  const { base, draft, server } = input;
+  if (!isDirty(base, draft)) return { base: server, draft: server, notice: false };
+  return { base, draft, notice: !same(base, server) };
 }
 
 /** エクスペリエンスの外部計測を値の検査の形にする(名前の空欄は「指定なし」で、analyticsValueErrors が見ない) */
@@ -118,8 +159,9 @@ export function draftValueErrors(initial: Draft, current: Draft): AnalyticsValue
 /**
  * 保存が落ちた段から、その欄があるタブを決める(タブ名に印を付ける)。
  * エクスペリエンスの PATCH(メモだけの PATCH を含む)の欄は、外部計測(analytics)も含めてすべて「基本設定」(B77 K16)。
- * パターンの段(variants・パターンのメモ・changes)は「パターン」。path の先頭は今は見ないが、欄を分けるときのために受けておく
+ * パターンの段(variants・パターンのメモ・changes)は「パターン」。評価計画の段は「評価計画」。path の先頭は今は見ないが、欄を分けるときのために受けておく
  */
-export function failedTab(stage: "patch" | "variants" | "changes", _firstPathSegment: string | undefined): EditorTab {
+export function failedTab(stage: "patch" | "variants" | "changes" | "plan", _firstPathSegment: string | undefined): EditorTab {
+  if (stage === "plan") return "plan";
   return stage === "patch" ? "overview" : "variants";
 }

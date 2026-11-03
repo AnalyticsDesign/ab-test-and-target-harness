@@ -1,9 +1,12 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, type ComponentProps, type FocusEvent, type MouseEvent, type TouchEvent } from "react";
+import { useCallback, useId, useMemo, type ComponentProps, type FocusEvent, type MouseEvent, type TouchEvent } from "react";
 import { isFocusVisible, isPlainLeftClick, prefetchQuietly } from "@/lib/prefetch-intent";
-import { deferUntilRefreshed, isRefreshPending } from "@/lib/refresh-wait";
+import { cancelNavigation, normalizeUrl, selectLinkPending, startNavigation } from "@/lib/feedback-store";
+import { useFeedbackSelector } from "@/lib/use-feedback";
+import { currentUrl, isAppNavigation, navigateApp, shouldStartNavigation } from "@/lib/navigate";
+import { isRefreshPending } from "@/lib/refresh-wait";
 
 type LinkProps = ComponentProps<typeof Link>;
 
@@ -34,6 +37,10 @@ export function AppLink({
   ...rest
 }: Omit<LinkProps, "href" | "prefetch"> & { href: string; prefetch?: false }) {
   const router = useRouter();
+  // 押されたリンクの鍵(store の遷移に付け、リンクごとの「待ち」の表示に使う)
+  const key = useId();
+  // このリンクで始めた遷移が見せる状態(押してから 150 ms 後)の間だけ true。回る印は globals.css の [data-nav-pending]::after
+  const pending = useFeedbackSelector(useMemo(() => selectLinkPending(key), [key]));
   // Link と同じく、本番の build だけで先読みする(開発の next dev では先読みしない)
   const prefetchOnIntent = useCallback(() => {
     if (prefetch === false || process.env.NODE_ENV !== "production") return;
@@ -45,6 +52,8 @@ export function AppLink({
       {...rest}
       href={href}
       prefetch={false}
+      aria-busy={pending ? true : rest["aria-busy"]}
+      data-nav-pending={pending ? "" : undefined}
       onMouseEnter={(e: MouseEvent<HTMLAnchorElement>) => {
         onMouseEnter?.(e);
         prefetchOnIntent();
@@ -62,13 +71,20 @@ export function AppLink({
       }}
       onClick={(e: MouseEvent<HTMLAnchorElement>) => {
         onClick?.(e);
+        // 呼び出し元が止めたクリック(節のリンク・切り替えの枠など)・新しいタブ・ダウンロード・アプリの外やページ内の移動は触らない
+        if (e.defaultPrevented || !isPlainLeftClick(e) || !isAppNavigation(href)) return;
         // 書き込みの後の読み直しが画面に反映される前に押した遷移は、vinext が黙って捨てる(lib/refresh-wait.ts。CE-R9)。
-        // その間だけ、Link の遷移を止めて、反映の後に同じ行き先へ移る(後から押したリンクが前のものに替わる)。
-        // 呼び出し元が止めたクリック(節のリンク・切り替えの枠など)と、新しいタブ・ダウンロードは触らない
-        if (e.defaultPrevented || !isPlainLeftClick(e) || !isRefreshPending()) return;
-        e.preventDefault();
-        const options = { scroll: rest.scroll !== false };
-        deferUntilRefreshed("navigation", () => (rest.replace ? router.replace(href, options) : router.push(href, options)));
+        // その間は、表示を始めるかに関わらず Link の遷移を止めて、反映の後に同じ行き先へ移る(後から押したリンクが前のものに替わる。lib/navigate.ts)
+        if (isRefreshPending()) {
+          e.preventDefault();
+          navigateApp(router, href, { key, replace: rest.replace, scroll: rest.scroll !== false });
+          return;
+        }
+        // 待たせないときは Link の遷移がそのまま進む。遷移の始まりだけを知らせる(1 クリックで多くて 1 回)
+        const fromUrl = currentUrl();
+        // 表示を始めない遷移(今の URL・最後の印と同じ URL)でも、Link の遷移は前の遷移を置き換えるので、store の前の遷移は終える
+        if (shouldStartNavigation(href, fromUrl)) startNavigation({ href: normalizeUrl(href), fromUrl, key });
+        else cancelNavigation();
       }}
     />
   );

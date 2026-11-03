@@ -9,7 +9,7 @@ import type { WorkspaceSummary } from "@/lib/types";
  * 設定を開いた場所の記憶(B60)と、サイドバーが読む summary(全ワークスペースのサイト一覧)。外枠(app/w/layout.tsx)に 1 つだけ置く。
  *
  * 記憶は押した側(リンクの onClick)では書かず、画面が移るたびに直前の pathname + search と今のものから決める(lib/nav.ts の nextRemembered)。
- * 離脱の確認(components/api-keys/useLeaveGuard.ts)は capture でクリックを止めるので、onClick が走らない経路でも記憶がずれないようにするため
+ * 離脱の確認(components/ui/useLeaveGuard.ts)は capture でクリックを止めるので、onClick が走らない経路でも記憶がずれないようにするため
  */
 type SettingsOriginValue = { remembered: RememberedOrigin | null; workspaces: WorkspaceSummary[] };
 

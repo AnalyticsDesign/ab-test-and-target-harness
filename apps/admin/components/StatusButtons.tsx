@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { useRefreshAndWait } from "@/lib/use-refresh-and-wait";
+import { useStatusChangeGuard } from "@/lib/status-guard";
 import { api, describeError } from "@/lib/client";
 import { STATUS_JA } from "@/lib/experiment-filter";
 import { comparisonsOf, type PlanView } from "@/lib/evaluation-plan";
@@ -74,6 +75,8 @@ export function StatusButtons({
   // 状態の変更の後の読み直し。反映の前に押したリンクは反映の後に回る(lib/refresh-wait.ts。CE-R9)
   const refreshAndWait = useRefreshAndWait();
   const ask = useConfirm();
+  // 未保存の変更があれば、状態の変更の確認・終了のモーダルの前に止める(B173 第 1 段)
+  const statusGuard = useStatusChangeGuard();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
   // 開始の応答の warnings(結果を記録しない開始・容量の見込み)。次の操作で消す
@@ -91,6 +94,7 @@ export function StatusButtons({
           className={n.danger ? "btn btn-danger" : "btn btn-primary"}
           disabled={busy}
           onClick={async () => {
+            if (!(await statusGuard())) return;
             setStopNotices(null);
             if (experiment.kind === "test" && n.to === "archived") {
               setMsg(null);

@@ -3,15 +3,18 @@ import { loginView } from "@/lib/login-view";
 import { oauthErrorMessage } from "@/lib/oauth-errors";
 import { ErrorBox } from "@/components/ErrorBox";
 import { PasswordLoginForm } from "./PasswordLoginForm";
+import { PageMark } from "@/components/ui/PageMark";
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string | string[] }> }) {
-  const { error } = await searchParams;
+  const search = await searchParams;
+  const { error } = search;
   // 同じキーが複数回付いた URL では配列になる(先頭だけを見る)
   const message = oauthErrorMessage(Array.isArray(error) ? error[0] : error);
   // control が答えない・形が違うときは「Google のみ」に倒す(lib/login-view.ts)
   const view = loginView(await controlFetch<unknown>("/login-options"));
   return (
     <div className="card" style={{ maxWidth: 420 }}>
+      <PageMark path={`/login`} search={search} />
       <h1>ログイン</h1>
       <ErrorBox message={message} />
       {view.google ? (

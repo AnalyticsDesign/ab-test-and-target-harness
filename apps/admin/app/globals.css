@@ -12,6 +12,8 @@
   --danger: #c23a30; --danger-soft: #fbeae8;
   --code-bg: #f6f6f4; --code-key: #8a3fb0; --code-str: #2f7a45; --code-cmt: #8a8983;
   --shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+  /* 書き込みの間に範囲を覆う色(BusyScope)。本文の背景色の 60%。--bg を参照するので、ダークでも同じ要素(html)の --bg に追従する */
+  --overlay-bg: color-mix(in srgb, var(--bg) 60%, transparent);
   --font-sans: "IBM Plex Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
   --radius: 6px; --radius-card: 8px; --control-h: 32px;
@@ -66,12 +68,22 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
 @keyframes wtt-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes wtt-pop { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
 .enter { animation: wtt-enter var(--dur) var(--ease-out) both; }
+/* 押したリンクの回る印(B173 第 1 段)。遷移が押してから 150 ms を過ぎても終わらない間だけ、AppLink が data-nav-pending を付ける。
+   色はトークン。塗りの濃いボタン(.btn-primary)の上では文字の色に合わせる */
+@keyframes wtt-spin { to { transform: rotate(360deg); } }
+[data-nav-pending]::after {
+  content: ""; display: inline-block; flex-shrink: 0; width: 10px; height: 10px; margin-left: 6px; vertical-align: -1px;
+  border: 2px solid var(--muted); border-right-color: transparent; border-radius: 50%; animation: wtt-spin 0.8s linear infinite;
+}
+.btn-primary[data-nav-pending]::after { border-color: var(--accent-text); border-right-color: transparent; }
 /* テーマ切替のクロスフェード(lib/theme.ts の applyTheme が startViewTransition の中で data-theme を変える) */
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 250ms; }
 /* OS で「視差効果を減らす」を選んでいる人には動かさない。admin 全体の transition / animation を一律で止める(後から足す動きもここに含まれる) */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
   ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+  /* 回る印は回さない(上の一律の止め方では 1 回だけ回って止まる位置が決まらないので、明示的に止める。欠けた輪のまま待ちを示す) */
+  [data-nav-pending]::after { animation: none; }
 }
 
 /* 既存の業務コンポーネントが使うクラス(名前は変えず、トークンで書き直す) */

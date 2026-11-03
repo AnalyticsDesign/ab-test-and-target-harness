@@ -6,3 +6,5 @@ main .bar { display: none; }
 main .body { padding: 0; }
 /* 文字は少し遅らせて出す: すぐ届く画面では空白が一瞬あるだけで、文字が点滅しない。動きは画面切替と同じ(globals.css の wtt-enter・--dur) */
 .text { color: var(--muted); font-size: 12.5px; animation: wtt-enter var(--dur) var(--ease-out) 300ms both; }
+/* store の遷移が 150 ms 待ってから見せるとき(RouteLoading の loading の状態)は、もう待ったので文字を遅らせない */
+.textNow { animation-delay: 0ms; }

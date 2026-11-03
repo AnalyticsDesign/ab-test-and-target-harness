@@ -5,14 +5,16 @@ import type { ApiKey } from "@/lib/types";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { TopBar } from "@/components/ui/TopBar";
 import { Content } from "@/components/ui/AppShell";
+import { PageMark } from "@/components/ui/PageMark";
 
-export default async function ApiKeysPage() {
+export default async function ApiKeysPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   // ワークスペースの一覧は共有 loader(summary から作る。取れなければ画面全体のエラー)。B42: 範囲の選択肢と、範囲ごとの権限の上限を決めるのに使う。
   // requireUser も並べ、失敗は並べた順に判定する(未ログインはエラーの画面ではなくログインへ)
   const [me, keys, workspaces] = await allInOrder([requireUser(), controlFetch<ApiKey[]>("/me/api-keys"), loadWorkspaces()]);
   return (
     <>
-      <TopBar crumbs={[{ label: "設定" }, { label: "API キー" }]} />
+      <PageMark path={`/w/me/api-keys`} search={await searchParams} />
+      <TopBar crumbs={[{ label: "設定" }, { label: "API キー" }]} scope={{ wid: null, sid: null }} />
       <Content>
         <div>
           <PageHeader title="API キー" />

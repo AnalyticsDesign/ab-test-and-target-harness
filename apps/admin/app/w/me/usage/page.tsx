@@ -5,17 +5,21 @@ import { usageFailure } from "@/lib/usage";
 import { UsagePanel } from "@/components/usage/UsagePanel";
 import { Content } from "@/components/ui/AppShell";
 import { TopBar } from "@/components/ui/TopBar";
+import { PageMark } from "@/components/ui/PageMark";
 
 /**
  * 設定 > システム > Cloudflare 使用状況(backlog D10、決定 54 (7))。システム管理者だけ。
  * 設定は GraphQL の取得に関係なく出す(未設定・取得の失敗でも、見られる人とプランは変えられる)
  */
-export default async function UsagePage() {
+export default async function UsagePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const me = await requireUser();
+  // どの分岐でも同じ印を出す(印の無い分岐に移ると、遷移の待ち表示が打ち切りまで終わらない)
+  const mark = <PageMark path={`/w/me/usage`} search={await searchParams} />;
   if (!me.instanceAdmin) {
     return (
       <>
-        <TopBar crumbs={[{ label: "設定" }, { label: "Cloudflare 使用状況" }]} />
+        {mark}
+        <TopBar crumbs={[{ label: "設定" }, { label: "Cloudflare 使用状況" }]} scope={{ wid: null, sid: null }} />
         <Content>
           <p className="error-box">この画面はシステム管理者だけが開けます</p>
         </Content>
@@ -26,7 +30,8 @@ export default async function UsagePage() {
   const [settings, usage] = await Promise.all([controlFetch<UsageSettingsView>("/usage/settings"), controlFetch<unknown>("/usage")]);
   return (
     <>
-      <TopBar crumbs={[{ label: "設定" }, { label: "Cloudflare 使用状況" }]} />
+      {mark}
+      <TopBar crumbs={[{ label: "設定" }, { label: "Cloudflare 使用状況" }]} scope={{ wid: null, sid: null }} />
       <Content>
         {settings.status === 200 ? (
           <UsagePanel

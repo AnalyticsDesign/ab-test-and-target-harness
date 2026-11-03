@@ -10,6 +10,7 @@ import { ErrorBox } from "./ErrorBox";
 import { Combo } from "./ui/Combo";
 import { SubmitButton } from "./SubmitButton";
 import { PageHeader } from "./ui/PageHeader";
+import { navigateDocument } from "@/lib/navigate";
 
 /**
  * B36 / 決定 53: システム管理者の一覧・追加・外す。追加はワークスペースのメンバーから選ぶ(B41 (2)。招待は作らない)。
@@ -100,7 +101,7 @@ export function InstanceAdminsPanel({
                           // B46 K11: チェックを入れたら元のロールに戻さず、すべてのワークスペースから外す
                           () => api("DELETE", `/instance-admins/${a.userId}${optionChecked ? "?restore=false" : ""}`),
                           // B46: 自分を外したら全画面で /w へ(同じ画面を描き直すと「この画面はシステム管理者だけが開けます」になる)。完全に外したときも同じ
-                          self ? () => window.location.assign("/w") : undefined,
+                          self ? () => navigateDocument("/w") : undefined,
                         );
                     }}
                   >

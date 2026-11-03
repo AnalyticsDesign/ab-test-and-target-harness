@@ -8,10 +8,12 @@ import type { Invitation, Member } from "@/lib/types";
 import { MembersPanel } from "@/components/MembersPanel";
 import { Content } from "@/components/ui/AppShell";
 import { TopBar } from "@/components/ui/TopBar";
+import { PageMark } from "@/components/ui/PageMark";
 
 /** メンバーと招待。メンバーの API キーは独立した画面(`/w/:wid/api-keys`。決定 54 (6)) */
-export default async function MembersPage({ params }: { params: Promise<{ wid: string }> }) {
+export default async function MembersPage({ params, searchParams }: { params: Promise<{ wid: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const { wid } = await params;
+  const mark = <PageMark path={`/w/${wid}/members`} search={await searchParams} />;
   // 互いに依らない取得は並べて読む(allInOrder。失敗は並べた順に判定するので、未ログインは今までどおりログインへ)。
   // メンバー・招待は下の権限の判定の後で取る(管理者でない人の分は取らない)
   const [me, workspaces] = await allInOrder([requireUser(), loadWorkspaces()]);
@@ -21,7 +23,8 @@ export default async function MembersPage({ params }: { params: Promise<{ wid: s
   if (!canManage(ws.role)) {
     return (
       <>
-        <TopBar crumbs={crumbs} />
+        {mark}
+        <TopBar crumbs={crumbs} scope={{ wid, sid: null }} />
         <Content>
           <p className="error-box">メンバーの管理は管理者以上が行います</p>
         </Content>
@@ -40,7 +43,8 @@ export default async function MembersPage({ params }: { params: Promise<{ wid: s
   const siteNames = (summary.find((w) => w.id === wid)?.sites ?? []).map((s) => s.name);
   return (
     <>
-      <TopBar crumbs={crumbs} />
+      {mark}
+      <TopBar crumbs={crumbs} scope={{ wid, sid: null }} />
       <Content>
         <MembersPanel
           workspaceId={wid}

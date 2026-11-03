@@ -4,6 +4,7 @@ import { Field } from "@/components/Field";
 import { ErrorBox } from "@/components/ErrorBox";
 import { SubmitButton } from "@/components/SubmitButton";
 import { browserVersionHeaders } from "@/lib/client";
+import { PageMark } from "@/components/ui/PageMark";
 
 export default function SetupPage() {
   const [busy, setBusy] = useState(false);
@@ -45,6 +46,8 @@ export default function SetupPage() {
   }
   return (
     <form onSubmit={onSubmit} className="card" style={{ maxWidth: 480 }}>
+      {/* クライアントのページは画面に反映された後に mount するので、印は window.location(= 移動先)から作る(PageMark には移動先を渡さない) */}
+      <PageMark />
       <h1>初回セットアップ</h1>
       <p className="muted">
         control Worker の <code>AB_SETUP_TOKEN</code> を入力し、最初のオーナーとワークスペースを作ります。パスワードは決めません

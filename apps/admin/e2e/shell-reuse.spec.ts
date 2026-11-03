@@ -1,5 +1,6 @@
-import { test, expect, type Page, type Route } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { ADMIN_URL, WORKSPACE_NAME, controlHeaders, createSite, login, waitForHydration } from "./fixtures";
+import { delayRsc } from "./rsc-delay";
 
 /**
  * 管理画面の速さ(最終レビュー CX-R1): 読み込み中の枠(vinext の optimistic route shell)が、別のサイト・ワークスペースで覚えた
@@ -39,20 +40,6 @@ async function snap(page: Page): Promise<Snap> {
       skeleton: sk ? { rendered: sk.getAttribute("data-rendered-site"), current: sk.getAttribute("data-current-site") } : null,
     };
   });
-}
-
-/** 本描画の RSC(先読みでないもの)を遅らせる。allowPrefetch = false なら先読みは abort する(移動先の先読みが無い状態にする) */
-async function delayRsc(page: Page, pathRe: RegExp, allowPrefetch = false): Promise<() => Promise<void>> {
-  const handler = async (route: Route) => {
-    const url = new URL(route.request().url());
-    if (!pathRe.test(url.pathname) || !url.search.includes("_rsc")) return route.continue();
-    const prefetch = (await route.request().allHeaders())["next-router-prefetch"];
-    if (prefetch) return allowPrefetch ? route.continue() : route.abort();
-    await new Promise((r) => setTimeout(r, DELAY_MS));
-    return route.continue().catch(() => {});
-  };
-  await page.route("**/*", handler);
-  return () => page.unroute("**/*", handler);
 }
 
 /** 押した直後から、遅らせた本描画が届いた後まで 100 ms ごとに読む */
@@ -141,7 +128,7 @@ test("the loading shell never shows another site's or workspace's top bar", asyn
 
   await test.step("same workspace, another site, no prefetch of the destination", async () => {
     await push(page, `/w/${wid}/sites/${B.id}`, B.name);
-    const undo = await delayRsc(page, new RegExp(`/sites/${B.id}/audiences$`));
+    const undo = await delayRsc(page, new RegExp(`/sites/${B.id}/audiences$`), DELAY_MS);
     const snaps = await observe(page, () => navLink(page, "オーディエンス").dispatchEvent("click"), settled(page, B.name));
     await undo();
     expectNoLeak(snaps, { wid, site: B }, WS2_NAME, true);
@@ -149,7 +136,7 @@ test("the loading shell never shows another site's or workspace's top bar", asyn
 
   await test.step("hover then click at once (the prefetch is not registered yet)", async () => {
     await push(page, `/w/${wid}/sites/${D.id}`, D.name);
-    const undo = await delayRsc(page, new RegExp(`/sites/${D.id}/audiences$`), true);
+    const undo = await delayRsc(page, new RegExp(`/sites/${D.id}/audiences$`), DELAY_MS, true);
     const snaps = await observe(page, () => navLink(page, "オーディエンス").click(), settled(page, D.name));
     await undo();
     expectNoLeak(snaps, { wid, site: D }, WS2_NAME, true);
@@ -157,7 +144,7 @@ test("the loading shell never shows another site's or workspace's top bar", asyn
 
   await test.step("a site in another workspace", async () => {
     await push(page, `/w/${wid2}/sites/${C.id}`, C.name);
-    const undo = await delayRsc(page, new RegExp(`/sites/${C.id}/audiences$`));
+    const undo = await delayRsc(page, new RegExp(`/sites/${C.id}/audiences$`), DELAY_MS);
     const snaps = await observe(page, () => navLink(page, "オーディエンス").dispatchEvent("click"), settled(page, C.name));
     await undo();
     expectNoLeak(snaps, { wid: wid2, site: C }, WORKSPACE_NAME, true);
@@ -165,7 +152,7 @@ test("the loading shell never shows another site's or workspace's top bar", asyn
 
   await test.step("prefetch of the destination completed, then click", async () => {
     await push(page, `/w/${wid}/sites/${B.id}`, B.name);
-    const undo = await delayRsc(page, new RegExp(`/sites/${B.id}/goals$`), true);
+    const undo = await delayRsc(page, new RegExp(`/sites/${B.id}/goals$`), DELAY_MS, true);
     const pre = page.waitForResponse((r) => r.url().includes(`/sites/${B.id}/goals`) && r.url().includes("_rsc"));
     await navLink(page, "目標").hover();
     await pre;
@@ -178,7 +165,7 @@ test("the loading shell never shows another site's or workspace's top bar", asyn
   await test.step("back to the first site after the shell was remembered on another site", async () => {
     // 目標の枠は直前に B で覚えた(枠は経路の形ごとに 1 つ = 最後に覚えたものが使われる)
     await push(page, `/w/${wid}/sites/${A.id}`, A.name);
-    const undo = await delayRsc(page, new RegExp(`/sites/${A.id}/goals$`));
+    const undo = await delayRsc(page, new RegExp(`/sites/${A.id}/goals$`), DELAY_MS);
     const snaps = await observe(page, () => navLink(page, "目標").dispatchEvent("click"), settled(page, A.name));
     await undo();
     expectNoLeak(snaps, { wid, site: A }, WS2_NAME, true);

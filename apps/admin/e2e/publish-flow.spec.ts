@@ -527,9 +527,9 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await change.locator('input[maxlength="500"]').fill(HERO_SELECTOR);
     await change.locator("textarea").fill(HERO_TEXT);
     expect((await saveDraft(page, SITE.id, EXPERIMENT.id)).status()).toBe(200);
-    // router.refresh() の着地 = 本体が作り直され、保存バーが「変更はありません」に戻る。それを待ってから見る
+    // 保存の後の読み直しの反映 = 保存バーが「保存しました」になる。それを待ってから見る
     // (待たずに見ると、保存前から出ている要素で通ってしまい、保持を証明しない)
-    await expect(page.getByTestId("save-state")).toHaveText("変更はありません");
+    await expect(page.getByTestId("save-state")).toHaveText("保存しました");
     await expect(page.getByRole("tab", { name: "パターン" })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByTestId("variant-b").getByTestId("change-TEXT")).toBeVisible(); // 保存後も Variant タブの b のまま
 
@@ -546,10 +546,10 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     // B77 K17: 保存は変わった段だけを送るので、読み込んだ変更の文を直して送り、元の文に戻してもう一度送る(どちらも読み込んだ変更の PUT)
     await saved.locator("textarea").fill(`${HERO_TEXT}(2 回目)`);
     expect((await saveDraft(page, SITE.id, EXPERIMENT.id)).status()).toBe(200);
-    await expect(page.getByTestId("save-state")).toHaveText("変更はありません");
+    await expect(page.getByTestId("save-state")).toHaveText("保存しました");
     await saved.locator("textarea").fill(HERO_TEXT);
     expect((await saveDraft(page, SITE.id, EXPERIMENT.id)).status()).toBe(200);
-    await expect(page.getByTestId("save-state")).toHaveText("変更はありません");
+    await expect(page.getByTestId("save-state")).toHaveText("保存しました");
     await expect(appAlert(page)).toHaveCount(0);
 
     // B60: 設定を開いた場所の記憶。下書きのテストの画面に相乗りする(sign-in の予算を増やさない)
@@ -562,12 +562,12 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
       await page.getByRole("spinbutton", { name: "最大期間", exact: true }).fill("9");
       const opened = new URL(page.url());
       const experimentHref = `${opened.pathname}${opened.search}`;
-      // 最下部の「設定」は離脱の確認に止められ(onClick は走らない)、「保存せずに移動」の後に移る。
+      // 最下部の「設定」は離脱の確認(PageLeaveGuard)に止められ(onClick は走らない)、「移動する」の後に移る。
       // それでも provider は画面の移動から開いた場所を覚え、「戻る」は search まで含めた元の画面を指す。
       // openSettings は押した直後に選択中を待つので、確認を挟むここでは使わない
       await nav.getByRole("link", { name: "設定", exact: true }).click();
-      const leave = page.getByRole("alertdialog", { name: "評価計画の変更を保存していません" });
-      await leave.getByRole("button", { name: "保存せずに移動" }).click();
+      const leave = page.getByRole("alertdialog", { name: "保存していない変更があります" });
+      await leave.getByRole("button", { name: "移動する", exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`/sites/${SITE.id}/settings$`));
       await expect(backLink).toHaveAttribute("href", experimentHref);
       // サイトから開いたので、メニューの先頭は「サイト設定」の節(見出しの下の行にサイト名。切り替えの枠にもサイト名が出るので、見出しの塊で見る)

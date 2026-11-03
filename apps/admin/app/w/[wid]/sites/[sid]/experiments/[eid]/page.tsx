@@ -13,6 +13,7 @@ import { DuplicateButton } from "@/components/experiment/DuplicateButton";
 import { DuplicatedNotice } from "@/components/experiment/DuplicatedNotice";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPill } from "@/components/ui/StatusPill";
+import { PageMark } from "@/components/ui/PageMark";
 
 export default async function ExperimentPage({ params, searchParams }: { params: Promise<{ wid: string; sid: string; eid: string }>; searchParams: Promise<{ tab?: string | string[]; variant?: string | string[]; duplicated?: string | string[]; analyticsFailed?: string | string[] }> }) {
   const { wid, sid, eid } = await params;
@@ -52,6 +53,7 @@ export default async function ExperimentPage({ params, searchParams }: { params:
   const analyticsFailed = pickParam(sp.analyticsFailed, ["1"], "") === "1";
   return (
     <div>
+      <PageMark path={`/w/${wid}/sites/${sid}/experiments/${eid}`} search={sp} />
       <PageHeader
         title={exp.data.name}
         meta={

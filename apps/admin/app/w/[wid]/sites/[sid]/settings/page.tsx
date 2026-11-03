@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { SECTION_IDS } from "@/components/settings/sections";
 import { SiteSettingsForm } from "@/components/settings/SiteSettingsForm";
 import { sharingNoticeFor } from "@/components/settings/sharing-notice";
+import { PageMark } from "@/components/ui/PageMark";
 
 export default async function SettingsPage({ params, searchParams }: { params: Promise<{ wid: string; sid: string }>; searchParams: Promise<{ section?: string | string[]; sharing?: string | string[] }> }) {
   await requireUser();
@@ -25,6 +26,7 @@ export default async function SettingsPage({ params, searchParams }: { params: P
   const sharingAdjusted = sharingNoticeFor(query.sharing, site.data);
   return (
     <div>
+      <PageMark path={`/w/${wid}/sites/${sid}/settings`} search={query} />
       <PageHeader title="サイト設定" meta={site.data.name} />
       {/* key: 別のサイトの設定へ移る(設定のメニューの切り替えの枠など)と、同じ部品が使い回されて前のサイトの入力の state が残るので、サイトごとに作り直す */}
       <SiteSettingsForm key={site.data.id} site={site.data} canAdmin={ws.role === "owner" || ws.role === "admin"} canDelete={ws.role === "owner"} tagOrigin={caps.tagOrigin} initialSection={initialSection} resultsStore={caps.resultsStore} edgeOrigin={caps.edgeOrigin} runningTests={counts.runningTests} runningRecordedTests={counts.runningRecordedTests} sharingAdjusted={sharingAdjusted} />

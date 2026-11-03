@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { dialogCloseEvent } from "@/lib/dialog-close";
 
 /**
  * 本文の下に出すチェックボックス(B46 K12)。開くたびにオフから始まる。
@@ -11,6 +12,7 @@ export type ConfirmOption = { label: string; checkedBody?: ReactNode; checkedCon
 /**
  * 確認のモーダル(backlog B45)。<dialog> の showModal = 外側は押せない・フォーカスは中に閉じる・閉じると押したボタンへ戻る。
  * 画面の中央に出す。初期のフォーカス = キャンセル側(Enter の押し間違いで実行しない)。Esc と外(背面)のクリック = キャンセル。
+ * single = 実行のボタン 1 つだけ(知らせるだけの確認。B173 第 1 段の状態の変更の前の確認)。初期のフォーカスはそのボタン
  * 入力欄を持つ確認をモーダルにするときは dismissOnBackdrop を false にする(外のクリックで書きかけが消えないように)。
  * 普段は useConfirm()(components/ConfirmProvider.tsx)から使う。画面に固有の確認(LeaveKeyDialog)はこれを直接使う
  */
@@ -25,6 +27,7 @@ export function ConfirmDialog({
   option,
   dismissOnBackdrop = true,
   confirmDisabled = false,
+  single = false,
   onConfirm,
   onCancel,
 }: {
@@ -43,11 +46,14 @@ export function ConfirmDialog({
   dismissOnBackdrop?: boolean;
   /** 実行のボタンを押せなくする(送信中など) */
   confirmDisabled?: boolean;
+  /** 実行のボタン 1 つだけを出す(キャンセルのボタンを出さない。Esc と背面のクリックは onCancel のまま) */
+  single?: boolean;
   onConfirm: (optionChecked: boolean) => void;
   onCancel: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
+  const confirm = useRef<HTMLButtonElement>(null);
   const id = useId();
   const [checked, setChecked] = useState(false);
   // 開いたときにオフに戻す(描画中に前回の open と比べて直す。effect の中で setState しない)
@@ -56,14 +62,19 @@ export function ConfirmDialog({
     setWasOpen(open);
     if (open) setChecked(false);
   }
+  // 自分で呼んだ close() のうち、close イベントがまだ届いていない数(onClose で古いイベントを見分ける。lib/dialog-close.ts)
+  const selfClosePending = useRef(0);
   useEffect(() => {
     const d = ref.current;
     if (!d) return;
     if (open && !d.open) {
       d.showModal();
-      cancel.current?.focus();
+      (cancel.current ?? confirm.current)?.focus();
     }
-    if (!open && d.open) d.close();
+    if (!open && d.open) {
+      selfClosePending.current += 1;
+      d.close();
+    }
   }, [open]);
   // 外(背面)のクリック = キャンセル(Esc と同じ。どの確認もキャンセルが安全側)。背面を押すとイベントの target は
   // <dialog> そのものになる(余白を押しても同じ)ので、座標が枠の外かで見分ける。中で押し始めて外で離した
@@ -94,9 +105,14 @@ export function ConfirmDialog({
         onCancel();
       }}
       // 保険: cancel を経ずにブラウザ側で閉じられたら(実装の差など)、React の状態もキャンセルとしてそろえる。
-      // ボタンや Esc で閉じた後は open が false になってから effect が close() するので、ここは呼ばれても何もしない
-      onClose={() => {
-        if (open) onCancel();
+      // ボタンや Esc で閉じた後は open が false になってから effect が close() する。そのイベントは自分の close() の分として無視する。
+      // close イベントは close() の後のタスクで届くので、閉じた直後に次の確認を開くと(「とどまる」の直後の戻るなど。B173 第 1 段)、
+      // 前の close() のイベントが次の確認の open=true の後(showModal() の前のこともある)に届く。DOM の今の open では見分けられないので、
+      // 自分の close() の数で見分けて、次の確認を取り消さない(最終レビュー FR-Medium-3)
+      onClose={(e) => {
+        const r = dialogCloseEvent({ open, elementOpen: e.currentTarget.open, selfClosePending: selfClosePending.current });
+        selfClosePending.current = r.selfClosePending;
+        if (r.cancel) onCancel();
       }}
     >
       <h2 id={`${id}-title`}>{title}</h2>
@@ -119,12 +135,14 @@ export function ConfirmDialog({
         </label>
       ) : null}
       <div className="row" style={{ justifyContent: "flex-end" }}>
-        <button type="button" className={tone === "danger" ? "btn btn-danger" : "btn btn-primary"} disabled={confirmDisabled} onClick={() => onConfirm(checked)}>
+        <button ref={confirm} type="button" className={tone === "danger" ? "btn btn-danger" : "btn btn-primary"} disabled={confirmDisabled} onClick={() => onConfirm(checked)}>
           {checked && option?.checkedConfirmLabel ? option.checkedConfirmLabel : confirmLabel}
         </button>
-        <button ref={cancel} type="button" className={emphasizeCancel ? "btn btn-primary" : "btn"} onClick={onCancel}>
-          {cancelLabel}
-        </button>
+        {single ? null : (
+          <button ref={cancel} type="button" className={emphasizeCancel ? "btn btn-primary" : "btn"} onClick={onCancel}>
+            {cancelLabel}
+          </button>
+        )}
       </div>
     </dialog>
   );

@@ -14,6 +14,10 @@ export type ConfirmOptions = {
   /** 実行のボタンの文言(「失効する」「外す」など、操作を動詞で) */
   confirmLabel: string;
   tone?: "danger" | "primary";
+  /** 取りやめのボタンの文言(既定は「キャンセル」。離れる前の確認の「とどまる」など) */
+  cancelLabel?: string;
+  /** true なら confirmLabel のボタン 1 つだけを出す(知らせるだけの確認。Esc と背面のクリックは今のまま取りやめ = false) */
+  single?: boolean;
   /** 本文の下に出すチェックボックス(既定はオフ。B46 K12)。チェックの有無は useConfirmWithOption() で受け取る */
   option?: ConfirmOption;
 };
@@ -56,6 +60,8 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         title={current?.title ?? ""}
         confirmLabel={current?.confirmLabel ?? ""}
         tone={current?.tone ?? "danger"}
+        cancelLabel={current?.cancelLabel}
+        single={current?.single}
         option={current?.option}
         onConfirm={(optionChecked) => settle({ confirmed: true, optionChecked })}
         onCancel={() => settle(CANCELLED)}

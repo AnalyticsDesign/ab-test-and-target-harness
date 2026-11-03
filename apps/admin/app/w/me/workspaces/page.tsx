@@ -4,15 +4,18 @@ import { WorkspacesAdmin } from "@/components/WorkspacesAdmin";
 import { Content } from "@/components/ui/AppShell";
 import { TopBar } from "@/components/ui/TopBar";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { PageMark } from "@/components/ui/PageMark";
 
 /** 設定 > ワークスペース(システム管理者だけ)。システム管理者はすべてのワークスペースのオーナーなので、概要の API で全件が取れる */
 export default async function WorkspacesSettingsPage({ searchParams }: { searchParams: Promise<{ new?: string }> }) {
   const me = await requireUser();
   const summary = me.instanceAdmin ? await loadSummary() : null;
-  const focusNew = (await searchParams).new === "1"; // ホームの「新しいワークスペース」から来た(K18)
+  const search = await searchParams;
+  const focusNew = search.new === "1"; // ホームの「新しいワークスペース」から来た(K18)
   return (
     <>
-      <TopBar crumbs={[{ label: "設定" }, { label: "ワークスペース" }]} />
+      <PageMark path={`/w/me/workspaces`} search={search} />
+      <TopBar crumbs={[{ label: "設定" }, { label: "ワークスペース" }]} scope={{ wid: null, sid: null }} />
       <Content>
         <PageHeader title="ワークスペース" />
         {!me.instanceAdmin ? (

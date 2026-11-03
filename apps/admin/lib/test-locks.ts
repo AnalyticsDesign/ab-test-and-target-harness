@@ -1,4 +1,5 @@
 import type { Draft } from "./experiment-draft";
+import { treeProblem } from "./conditions";
 import type { Experiment, Status } from "./types";
 
 /**
@@ -34,6 +35,22 @@ export function testLockMessage(e: Pick<Experiment, "kind" | "status">, field: s
 /** 配信率の入力のエラー。実行中・一時停止中のテストで、保存済みの値より下げたときだけ(同じ値・上げるのは可) */
 export function trafficError(e: LockTarget, value: number): string | null {
   return isStartedTest(e) && value < e.trafficPercentage ? TRAFFIC_LOCKED : null;
+}
+
+/**
+ * 保存の前に止める理由(配信率を下げた・配信条件の入力漏れ)。止めなければ null。
+ * 実際に送る PATCH の body(experimentPatchBody の値)に載る欄だけを見る(B173 第 1 段 最終レビュー FR-Medium-1):
+ * 未保存のまま新しいサーバーの値が届くと、基準と下書きは開いたときの値のまま残る(reconcileServerUpdate)。そのとき、ほかの人が上げた
+ * 配信率(e.trafficPercentage)と、自分が変えていない下書きの配信率を比べると、送らない欄のせいで名前だけの保存まで止めてしまう。
+ * 配信条件も同じで、送らない(変えていない)配信条件の入力漏れでは止めない。値の最終的な検査は control
+ */
+export function preSaveLockProblem(e: LockTarget, patch: Record<string, unknown>, draft: Draft, retentionDays: number): string | null {
+  if ("trafficPercentage" in patch) {
+    const traffic = trafficError(e, draft.traffic);
+    if (traffic) return traffic;
+  }
+  if ("targeting" in patch && draft.targeting.kind === "form") return treeProblem(draft.targeting.form.rows, retentionDays);
+  return null;
 }
 
 /**

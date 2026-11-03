@@ -197,69 +197,34 @@ test.describe.serial("results flow (D9 ③)", () => {
     await expect(planTip).toBeFocused();
   });
 
-  test("unsaved_plan_input_survives_a_save_on_another_tab_and_guards_leaving", async () => {
-    // B132: メモの保存の後の router.refresh は、メモが変わったので本体(評価計画のタブを含む)を作り直す。この作り直しが
-    // 評価計画の保存の途中に届く場面を毎回作る(成り行きに任せると、作り直しと保存のどちらが先かが実行ごとに変わり、
-    // 「保存しました」が出ずに落ちる回があった)。メモの保存の refresh を止めておき、評価計画の PUT の途中で通す
-    let releaseRefresh!: () => void;
-    const refreshHeld = new Promise<void>((r) => (releaseRefresh = r));
-    let refreshSeen = false;
-    const isPageRefresh = (u: URL) => u.pathname.endsWith(`/experiments/${EXP.id}`) && u.searchParams.has("_rsc");
-    // 評価計画の PUT を止める用意も先に作る(PUT の route の登録は保存の直前。途中で失敗しても finally で解放できるように)
-    let releasePut!: () => void;
-    const putHeld = new Promise<void>((r) => (releasePut = r));
-    const isPlanPut = (u: URL) => u.pathname.endsWith(`/experiments/${EXP.id}/evaluation-plan`);
-    await page.route(isPageRefresh, async (route) => {
-      // 先読み(prefetch)は止めない。止めるのはメモの保存の後の最初の読み直しだけ
-      if (refreshSeen || route.request().headers()["next-router-prefetch"]) return route.continue();
-      refreshSeen = true;
-      await refreshHeld;
-      await route.continue();
-    });
-    try {
-      // 評価計画のタブで入力(未保存)→ 基本設定のタブでメモを保存 → 評価計画の入力が残っている
-      await pick(page, "判定に使う目標", new RegExp(`^${GOAL.name}`));
-      await page.getByRole("spinbutton", { name: "最大期間", exact: true }).fill("9");
-      await page.getByRole("tab", { name: "基本設定" }).click();
-      await page.getByRole("textbox", { name: /^メモ/ }).fill("結果の E2E");
-      const saved = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP.id}`) && r.request().method() === "PATCH");
-      await page.getByRole("button", { name: "保存(下書き)" }).click();
-      expect((await saved).status()).toBe(200);
-      await expect(page.getByTestId("plan-unsaved")).toBeVisible();
-      await page.getByRole("tab", { name: "評価計画" }).click();
-      await expect(page.getByRole("spinbutton", { name: "最大期間", exact: true })).toHaveValue("9");
-      await expect(page.getByRole("combobox", { name: "判定に使う目標", exact: true })).toContainText(GOAL.name);
-      // 画面の中の移動は確認する(キャンセルなら移らない)
-      await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "目標" }).click();
-      const leave = page.getByRole("alertdialog", { name: "評価計画の変更を保存していません" });
-      await expect(leave).toBeVisible();
-      await leave.getByRole("button", { name: "キャンセル" }).click();
-      await expect(leave).toBeHidden();
-      await expect(page).toHaveURL(new RegExp(`/experiments/${EXP.id}`));
-      // 評価計画を保存する。PUT を止めている間にメモの保存の refresh を通し、本体が作り直されるのを待つ
-      // (作り直すと、メモが保存済みになって保存バーが「変更はありません」に変わる)
-      await page.route(isPlanPut, async (route) => {
-        if (route.request().method() === "PUT") await putHeld;
-        await route.continue();
-      });
-      const put = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP.id}/evaluation-plan`) && r.request().method() === "PUT");
-      await page.getByRole("button", { name: "評価計画を保存" }).click();
-      await expect.poll(() => refreshSeen).toBe(true);
-      releaseRefresh();
-      await expect(page.getByTestId("save-state")).toHaveText("変更はありません");
-      // 作り直した後のタブでも保存中のまま(重ねて押せない)
-      await expect(page.getByRole("button", { name: "保存中…" })).toBeDisabled();
-      releasePut();
-      expect((await put).status()).toBe(200);
-      // 保存の結果は作り直した後のタブに出る
-      await expect(page.getByRole("status").filter({ hasText: "保存しました" })).toBeVisible();
-      await expect(page.getByTestId("plan-unsaved")).toHaveCount(0);
-    } finally {
-      releaseRefresh();
-      releasePut();
-      await page.unroute(isPageRefresh);
-      await page.unroute(isPlanPut);
-    }
+  test("unsaved_plan_input_survives_a_tab_switch_guards_leaving_and_saves_with_the_bar", async () => {
+    // B173 第 1 段(Q12): 評価計画は下の帯の「保存(下書き)」で、本体(ここではメモ)と一緒に保存する。評価計画のタブに保存のボタンは無い。
+    // 評価計画のタブで入力(未保存)→ 基本設定のタブでメモを入力 → 評価計画の入力が残っている
+    await pick(page, "判定に使う目標", new RegExp(`^${GOAL.name}`));
+    await page.getByRole("spinbutton", { name: "最大期間", exact: true }).fill("9");
+    await expect(page.getByRole("button", { name: "評価計画を保存" })).toHaveCount(0);
+    await page.getByRole("tab", { name: "基本設定" }).click();
+    await page.getByRole("textbox", { name: /^メモ/ }).fill("結果の E2E");
+    await expect(page.getByTestId("plan-unsaved")).toHaveText("評価計画は保存した時点で反映されます(公開は不要)");
+    await page.getByRole("tab", { name: "評価計画" }).click();
+    await expect(page.getByRole("spinbutton", { name: "最大期間", exact: true })).toHaveValue("9");
+    await expect(page.getByRole("combobox", { name: "判定に使う目標", exact: true })).toContainText(GOAL.name);
+    // 画面の中の移動は確認する(「とどまる」なら移らない。B173 第 1 段の PageLeaveGuard)
+    await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "目標" }).click();
+    const leave = page.getByRole("alertdialog", { name: "保存していない変更があります" });
+    await expect(leave).toBeVisible();
+    await leave.getByRole("button", { name: "とどまる", exact: true }).click();
+    await expect(leave).toBeHidden();
+    await expect(page).toHaveURL(new RegExp(`/experiments/${EXP.id}`));
+    // 帯の「保存(下書き)」で、メモの PATCH と評価計画の PUT を 1 回ずつ送る
+    const patched = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP.id}`) && r.request().method() === "PATCH");
+    const put = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP.id}/evaluation-plan`) && r.request().method() === "PUT");
+    await page.getByRole("button", { name: "保存(下書き)" }).click();
+    expect((await patched).status()).toBe(200);
+    expect((await put).status()).toBe(200);
+    await expect(page.getByTestId("save-state")).toHaveText("保存しました。評価計画は反映済みです");
+    await expect(page.getByTestId("plan-unsaved")).toHaveCount(0);
+    await expect(page.getByRole("spinbutton", { name: "最大期間", exact: true })).toHaveValue("9");
   });
 
   test("start_shows_the_fixed_plan_and_starts", async () => {

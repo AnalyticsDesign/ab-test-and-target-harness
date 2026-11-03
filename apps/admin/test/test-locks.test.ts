@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { draftOf } from "@/lib/experiment-draft";
+import { draftOf, experimentPatchBody, type Draft } from "@/lib/experiment-draft";
+import { defaultCond } from "@/lib/conditions";
 import {
   ARCHIVED_TEST_MESSAGE,
   archivedTestBanner,
@@ -8,6 +9,7 @@ import {
   lockedFieldChanges,
   needsRunningTestConfirm,
   PERSIST_HINT,
+  preSaveLockProblem,
   RUNNING_TEST_CONFIRM,
   testLockMessage,
   trafficError,
@@ -99,5 +101,40 @@ describe("save confirmation for running tests (設計書 §5.5)", () => {
     expect(audienceSaveNotice([{ id: "y", name: "Y", status: "paused" }])).toBe(
       "次の公開で、一時停止中のエクスペリエンス 1 件の配信対象が変わります。テストでは、変更が結果に記録されます。大きく変えるなら複製して新しいテストにしてください。保存しますか?",
     );
+  });
+});
+
+// 最終レビュー FR-Medium-1: 保存の前の確かめは、実際に送る PATCH(experimentPatchBody)に載る欄だけを見る。
+// 画面を開いた後にほかの人が配信率を上げた値が届いても(サーバー 75・基準と下書き 50)、名前だけの保存を「下げられません」で止めない
+describe("preSaveLockProblem (B173 stage 1 final review FR-Medium-1)", () => {
+  const running75 = { ...at("running"), trafficPercentage: 75 };
+  const base = draftOf(EXP); // 開いたときの値(配信率 50)
+  const withRow = (d: Draft): Draft => {
+    if (d.targeting.kind !== "form") throw new Error("form expected");
+    return { ...d, targeting: { kind: "form", form: { ...d.targeting.form, rows: [defaultCond("url", {}, "row1")] } } };
+  };
+
+  it("does not check the traffic when the PATCH does not send trafficPercentage", () => {
+    const draft = { ...base, name: "renamed" };
+    const patch = experimentPatchBody(base, draft);
+    expect(patch).toEqual({ name: "renamed" });
+    expect(preSaveLockProblem(running75, patch, draft, 30)).toBeNull();
+  });
+
+  it("checks the traffic when the PATCH sends trafficPercentage", () => {
+    const draft = { ...base, traffic: 60 };
+    expect(preSaveLockProblem(running75, experimentPatchBody(base, draft), draft, 30)).toBe("テストの開始後は配信率を下げられません。絞るときは一時停止か終了してください");
+    const up = { ...base, traffic: 80 };
+    expect(preSaveLockProblem(running75, experimentPatchBody(base, up), up, 30)).toBeNull();
+  });
+
+  it("checks the targeting rows only when the PATCH sends targeting", () => {
+    // 保存済みの配信条件に入力漏れがあっても、配信条件を送らない保存は止めない
+    const savedRow = withRow(base);
+    const renamed = { ...savedRow, name: "renamed" };
+    expect(preSaveLockProblem(at("draft"), experimentPatchBody(savedRow, renamed), renamed, 30)).toBeNull();
+    // 画面で足した入力漏れの行は、配信条件を送るので止める
+    const added = withRow(base);
+    expect(preSaveLockProblem(at("draft"), experimentPatchBody(base, added), added, 30)).toBe("「ページの URL」の条件: 値を入力してください");
   });
 });

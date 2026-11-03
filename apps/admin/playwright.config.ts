@@ -113,8 +113,15 @@ export default defineConfig({
     { name: "shell-reuse", testMatch: /shell-reuse\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // B148: サイト設定のドメインの節(偽の edge で Cloudflare 経由・外・確かめられない、を出す)。専用のサイトを作る
     { name: "domains-flow", testMatch: /domains-flow\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    // B173 第 1 段: 遷移中の表示(本文のスケルトン・押したリンクの回る印・別のサイトへの遷移での上部バーの帯・打ち切りの知らせ)。専用のサイトを 2 つ作る。
+    // ファイル名まで絞る(作業ディレクトリの名前に「admin-feedback」が入ることがあるため。write-freeze と同じ理由)
+    { name: "nav-feedback", testMatch: /nav-feedback\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // 7o K14: 設置タグの配信ファイルの帯と全サイトの作り直し。偽の API を一時的に失敗にする(終わりに必ず戻す)。専用のサイトを作り、メンバーを 1 人招待する。
     // 失敗の窓がほかの project の公開に重ならないよう最後に置く(workers: 1 なので並んで走らない)
     { name: "static-delivery", testMatch: /static-delivery\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    // B173 第 1 段: エクスペリエンスの保存(保存の覆い・二度押し・変えた欄だけの PATCH・評価計画をまとめた保存・破棄)。専用のサイトを作る
+    { name: "experiment-save", testMatch: /experiment-save\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    // B173 第 1 段: 離れる前の確認(リンク・ログアウト・再読み込み・戻る・進む)と状態の変更の前の確認。戻る・進むの守りは本番と同じ <head> のスクリプトで確かめる。専用のサイトを作る
+    { name: "leave-guard", testMatch: /leave-guard\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
   ],
 });

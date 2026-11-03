@@ -1,0 +1,24 @@
+/* 範囲を包む。覆い(.overlay)をこの範囲の中だけに重ねるため position: relative。
+   isolation で z-index をこの範囲の中に閉じ込める(範囲の中の sticky な保存バー(z-index 5)より上に出すため) */
+.scope { position: relative; isolation: isolate; }
+
+/* 書き込みの間、範囲を覆う。色は本文の背景色の 60%(トークン --overlay-bg)。クリックは受けて止める(中身は inert でも、見た目の上でも触れないように) */
+.overlay { position: absolute; inset: 0; z-index: 10; background: var(--overlay-bg); cursor: progress; }
+
+/* 回る印と文言。範囲が縦に長いと中央は画面の外になるので、見えている範囲の上寄りに留める(sticky) */
+.box {
+  position: sticky; top: 40vh; width: fit-content; margin: 0 auto; padding-top: 24px;
+  display: flex; align-items: center; gap: 10px; font-size: 13.5px; font-weight: 500; color: var(--text);
+}
+
+/* 回る印。色はトークン(globals.css の [data-nav-pending]::after と同じ見た目で、こちらは覆いの中の要素) */
+.spinner {
+  flex-shrink: 0; width: 16px; height: 16px; border: 2px solid var(--muted); border-right-color: transparent; border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 「視差効果を減らす」を選んでいる人には回さない(欠けた輪のまま待ちを示す) */
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+}

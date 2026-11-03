@@ -17,7 +17,7 @@ const publish = (siteId: string): PublishState => ({ href: "/w/w1/sites/s1/publi
 describe("TopBar のサイト ID のコピー", () => {
   it("サイトの中では、サイト ID の印の中にコピーのボタンを出す(CodeBlock と同じ名前の形)", () => {
     expect(LONG_ID).toHaveLength(64);
-    const html = renderToStaticMarkup(createElement(TopBar, { crumbs: [{ label: "WS", href: "/w/w1" }, { label: "Site", href: "/w/w1/sites/s1" }], publish: publish(LONG_ID) }));
+    const html = renderToStaticMarkup(createElement(TopBar, { crumbs: [{ label: "WS", href: "/w/w1" }, { label: "Site", href: "/w/w1/sites/s1" }], publish: publish(LONG_ID), scope: { wid: "w1", sid: "s1" } }));
     expect(html).toContain(`サイト ID: ${LONG_ID}`);
     // ボタンは印の中(印の文字の後ろ)。アイコンだけなので、名前は title にも出す
     expect(html).toMatch(new RegExp(`<span class="badge mono [^"]*"><span[^>]*>サイト ID: ${LONG_ID}</span><button[^>]*data-testid="topbar-site-id-copy"[^>]*>`));
@@ -30,7 +30,7 @@ describe("TopBar のサイト ID のコピー", () => {
   });
 
   it("サイトの外(publish が無い画面)では出さない", () => {
-    const html = renderToStaticMarkup(createElement(TopBar, { crumbs: [{ label: "WS", href: "/w/w1" }] }));
+    const html = renderToStaticMarkup(createElement(TopBar, { crumbs: [{ label: "WS", href: "/w/w1" }], scope: { wid: "w1", sid: null } }));
     expect(html).not.toContain("topbar-site-id-copy");
     expect(html).not.toContain("サイト ID");
   });

@@ -4,9 +4,10 @@ import type { InstanceAdmin, InstanceAdminCandidate, Workspace } from "@/lib/typ
 import { InstanceAdminsPanel } from "@/components/InstanceAdminsPanel";
 import { Content } from "@/components/ui/AppShell";
 import { TopBar } from "@/components/ui/TopBar";
+import { PageMark } from "@/components/ui/PageMark";
 
 /** B36: システム管理者の一覧・追加・外す。403 はシステム管理者でない人、それ以外の失敗は取得の失敗として出し分ける */
-export default async function InstanceAdminsPage() {
+export default async function InstanceAdminsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   // B41 (2): 追加はメンバーから選ぶ。候補は一覧と同じ権限(システム管理者だけ)なので、並べて取る。
   // 権限の判定は control の 403(下の r.status)。requireUser も並べ、失敗は並べた順に判定する(未ログインはログインへ)
   const [me, r, candidates, workspaces] = await allInOrder([
@@ -18,7 +19,8 @@ export default async function InstanceAdminsPage() {
   ]);
   return (
     <>
-      <TopBar crumbs={[{ label: "設定" }, { label: "システム管理者" }]} />
+      <PageMark path={`/w/me/instance-admins`} search={await searchParams} />
+      <TopBar crumbs={[{ label: "設定" }, { label: "システム管理者" }]} scope={{ wid: null, sid: null }} />
       <Content>
         {r.status === 200 ? (
           <InstanceAdminsPanel

@@ -6,18 +6,20 @@ import { TopBar } from "@/components/ui/TopBar";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { WorkspaceCards } from "@/components/home/WorkspaceCards";
 import { UsageSummary } from "@/components/usage/UsageSummary";
+import { PageMark } from "@/components/ui/PageMark";
 
 /**
  * ホーム(決定 54 (8))。参加しているワークスペースが 1 つでも自動で移らず、ログイン後は必ずここに来る。
  * 中身 = ワークスペースごとのカード。システム管理者には「新しいワークスペース」(設定 > ワークスペースの作成の欄へ)。
  * 外枠(サイドバー)は app/w/layout.tsx が描く。summary が取れなければ画面全体のエラー(requireSummary が例外にする)。使用状況(D10)の要約はワークスペースの節の下(クライアントで読む)
  */
-export default async function HomePage() {
+export default async function HomePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   // 並べて読む。失敗は並べた順に判定する(未ログインはエラーの画面ではなくログインへ)
   const [user, workspaces] = await allInOrder([requireUser(), requireSummary()]);
   return (
     <>
-      <TopBar crumbs={[]} />
+      <PageMark path={`/w`} search={await searchParams} />
+      <TopBar crumbs={[]} scope={{ wid: null, sid: null }} />
       <Content>
         <PageHeader title="ホーム" />
         {workspaces.length === 0 ? (

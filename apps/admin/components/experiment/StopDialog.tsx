@@ -8,6 +8,7 @@ import type { Experiment } from "@/lib/types";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ErrorBox } from "../ErrorBox";
 import { useNow } from "../LocalTime";
+import { navigateDocument } from "@/lib/navigate";
 
 type Props = {
   wid: string;
@@ -101,7 +102,7 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
       const view = stopView(outcome, `/w/${wid}/sites/${siteId}/experiments`);
       // 公開も記録も済んで下書きを作れたら、その下書きへ移る(上部バーの「未公開の編集あり」を描き直すため全画面の遷移。複製の画面と同じ)
       if (view.navigate && view.created) {
-        window.location.assign(view.created);
+        navigateDocument(view.created);
         return;
       }
       onDone(view.messages, view.created);

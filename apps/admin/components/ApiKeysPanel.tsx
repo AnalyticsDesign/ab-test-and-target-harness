@@ -13,7 +13,8 @@ import { ExpiryLabel, LocalTime, useNow } from "./LocalTime";
 import { IssueKeyForm, type IssuedResult } from "./api-keys/IssueKeyForm";
 import { IssuedKey } from "./api-keys/IssuedKey";
 import { LeaveKeyDialog } from "./api-keys/LeaveKeyDialog";
-import { useLeaveGuard, type LeaveAttempt } from "./api-keys/useLeaveGuard";
+import { useLeaveGuard, type LeaveAttempt } from "./ui/useLeaveGuard";
+import { navigateApp } from "@/lib/navigate";
 
 /** 時刻の列(マウントの後にブラウザのタイムゾーンで描く。B44) */
 const when = (at: number | null) => (at ? <LocalTime at={at} /> : "-");
@@ -42,7 +43,7 @@ export function ApiKeysPanel({ keys, workspaces, amInstanceAdmin }: { keys: ApiK
     if (!a) return;
     bypass();
     setIssued(null);
-    if (a.kind === "href") router.push(a.href);
+    if (a.kind === "href") navigateApp(router, a.href);
     else a.form.requestSubmit();
   }
   function stay() {

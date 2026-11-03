@@ -9,7 +9,7 @@ import { budgetFromInput, NEW_PROFILE_BUDGET_HINT, NEW_PROFILE_BUDGET_LABEL } fr
 import { capacityWarning, cspNotice, resultsToggleNotice, splitCode } from "@/lib/results-settings";
 import { clearSettingsSection, sectionOfHref, setSectionErrors, setSettingsSection, syncSettingsSection, useSettingsSection } from "@/lib/settings-section";
 import type { AnalyticsSettings, DomainChecks, Site, SiteSaved } from "@/lib/types";
-import { useLeaveGuard, type LeaveAttempt } from "../api-keys/useLeaveGuard";
+import { useLeaveGuard, type LeaveAttempt } from "../ui/useLeaveGuard";
 import { Field } from "../Field";
 import { ErrorBox } from "../ErrorBox";
 import { LocalTime } from "../LocalTime";
@@ -25,6 +25,7 @@ import { compactRows, domainsChanged, shouldSendDomains } from "./domains-view";
 import { SectionLink } from "./SectionLink";
 import { sharingPatch, withSharingHint, type SharingAdjusted } from "./sharing-notice";
 import { SECTIONS, fieldKeysFor, firstInvalidSection, sectionOfField, type SectionId } from "./sections";
+import { navigateApp } from "@/lib/navigate";
 
 /** 節の見出し(B31 ⑥)。文字の正は sections.ts の SECTIONS */
 const heading = (id: SectionId) => SECTIONS.find((s) => s.id === id)!.heading;
@@ -166,7 +167,7 @@ export function SiteSettingsForm({
       return;
     }
     bypass();
-    if (a.kind === "href") router.push(a.href);
+    if (a.kind === "href") navigateApp(router, a.href);
     else a.form.requestSubmit();
   }
   const { bypass } = useLeaveGuard(dirty, (a) => void onLeave(a));

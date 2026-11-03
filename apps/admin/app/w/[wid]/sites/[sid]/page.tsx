@@ -8,6 +8,7 @@ import { ExperimentList } from "@/components/ExperimentList";
 import { LocalTime } from "@/components/LocalTime";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Icon } from "@/components/ui/Icon";
+import { PageMark } from "@/components/ui/PageMark";
 
 /** Site 概要 = 実験の一覧 + 作成リンク + 公開状況の要約(Site ナビ・未公開バナーは親の layout.tsx が担う) */
 export default async function SitePage({ params, searchParams }: { params: Promise<{ wid: string; sid: string }>; searchParams: Promise<{ status?: string | string[] }> }) {
@@ -26,12 +27,14 @@ export default async function SitePage({ params, searchParams }: { params: Promi
   const publishes = publishesRes.data;
   const canEdit = ws?.role !== "viewer";
   const canPublish = ws?.role === "owner" || ws?.role === "admin";
-  const initialFilter = pickParam((await searchParams).status, STATUS_FILTERS, "all");
+  const search = await searchParams;
+  const initialFilter = pickParam(search.status, STATUS_FILTERS, "all");
   // publishes の行は activate に成功した記録として `active` のまま残り続ける(status では絞れない。review 指摘)。
   // 「いま配信中」の行は site.activeVersion と version が一致する 1 行だけ
   const latest = publishes.find((p) => p.version === site.activeVersion);
   return (
     <div>
+      <PageMark path={`/w/${wid}/sites/${sid}`} search={search} />
       <PageHeader
         title="エクスペリエンス"
         meta={

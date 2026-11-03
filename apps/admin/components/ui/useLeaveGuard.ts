@@ -8,9 +8,11 @@ export type LeaveAttempt = { kind: "href"; href: string } | { kind: "logout"; fo
  * active の間、管理画面の中の移動(同じオリジンのリンクの普通のクリック・ログアウトの送信)を capture の段階で止めて onAttempt に渡し、
  * 再読み込み・タブを閉じるはブラウザ標準の beforeunload で確認する(文言は変えられない)。
  * document の capture は React の root より先に走るので、Next の Link の遷移より前に止まる。
- * 返す bypass() を呼ぶと、その後の 1 回の移動(「移動する」を選んだ後)は止めない(beforeunload も二重に出さない)
+ * 返す bypass() を呼ぶと、その後の移動(「移動する」を選んだ後)は止めない(beforeunload も二重に出さない)。
+ * rearm() は bypass() の効き目を消す(移動が打ち切りで終わり、元の画面が残ったときに守りを付け直す。B173 第 1 段)。
+ * ブラウザの戻る・進むは止めない(components/ui/PageLeaveGuard.tsx が lib/popstate-guard.ts で止める)
  */
-export function useLeaveGuard(active: boolean, onAttempt: (a: LeaveAttempt) => void): { bypass: () => void } {
+export function useLeaveGuard(active: boolean, onAttempt: (a: LeaveAttempt) => void): { bypass: () => void; rearm: () => void } {
   const skip = useRef(false);
   const handler = useRef(onAttempt);
   handler.current = onAttempt;
@@ -50,5 +52,5 @@ export function useLeaveGuard(active: boolean, onAttempt: (a: LeaveAttempt) => v
       window.removeEventListener("beforeunload", onBeforeUnload);
     };
   }, [active]);
-  return { bypass: () => void (skip.current = true) };
+  return { bypass: () => void (skip.current = true), rearm: () => void (skip.current = false) };
 }

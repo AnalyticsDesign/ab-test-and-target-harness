@@ -4,6 +4,7 @@ import { api, describeError } from "@/lib/client";
 import type { Site } from "@/lib/types";
 import { ErrorBox } from "../ErrorBox";
 import { SECTIONS } from "./sections";
+import { navigateDocument } from "@/lib/navigate";
 
 /** 節の見出し(B31 ⑥)。文字の正は sections.ts の SECTIONS。ほかの節と同じく枠の中の先頭に置く */
 const HEADING = SECTIONS.find((s) => s.id === "danger")!.heading;
@@ -40,7 +41,7 @@ export function DangerZone({ site, canDelete }: { site: Site; canDelete: boolean
           try {
             await api("DELETE", `/sites/${site.id}`);
             // クライアント遷移(router.push + router.refresh)では共有 layout(サイドバーの Site 一覧)が確実には描き直されない(このバージョンの Next.js/vinext で実測)ため、全画面の遷移にする
-            window.location.assign(`/w/${site.workspaceId}`);
+            navigateDocument(`/w/${site.workspaceId}`);
           } catch (e) {
             setError(describeError(e));
           } finally {

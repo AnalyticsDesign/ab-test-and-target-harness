@@ -8,8 +8,9 @@ import { NewSiteDisclosure } from "@/components/NewSiteDisclosure";
 import { Content } from "@/components/ui/AppShell";
 import { TopBar } from "@/components/ui/TopBar";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { PageMark } from "@/components/ui/PageMark";
 
-export default async function WorkspacePage({ params }: { params: Promise<{ wid: string }> }) {
+export default async function WorkspacePage({ params, searchParams }: { params: Promise<{ wid: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const { wid } = await params;
   // 互いに依らない取得は並べて読む(allInOrder。失敗は並べた順に判定するので、未ログインは今までどおりログインへ)
   const [, workspaces, sites, summary] = await allInOrder([requireUser(), loadWorkspaces(), loadSites(wid), requireSummary()]);
@@ -26,7 +27,8 @@ export default async function WorkspacePage({ params }: { params: Promise<{ wid:
   );
   return (
     <>
-      <TopBar crumbs={[{ label: ws.name, href: `/w/${wid}` }, { label: "サイト一覧" }]} />
+      <PageMark path={`/w/${wid}`} search={await searchParams} />
+      <TopBar crumbs={[{ label: ws.name, href: `/w/${wid}` }, { label: "サイト一覧" }]} scope={{ wid, sid: null }} />
       <Content>
         {canAdmin ? (
           <NewSiteDisclosure workspaceId={wid} defaultOpen={sites.data.length === 0} title="サイト一覧" meta={meta} visibleSites={visibleSites} />

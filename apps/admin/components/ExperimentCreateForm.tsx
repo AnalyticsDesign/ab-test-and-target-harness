@@ -10,6 +10,7 @@ import { KIND_HINT, KIND_JA, createButtonLabel } from "@/lib/experiment-kind";
 import { experimentIdProblem } from "@/lib/slug-id";
 import type { ExperimentKind } from "@wtt/core";
 import { ExperimentIdField } from "./experiment/ExperimentIdField";
+import { navigateDocument } from "@/lib/navigate";
 
 export function ExperimentCreateForm({ wid, sid }: { wid: string; sid: string }) {
   const [busy, setBusy] = useState(false);
@@ -34,7 +35,7 @@ export function ExperimentCreateForm({ wid, sid }: { wid: string; sid: string })
           const exp = await api<{ id: string }>("POST", `/sites/${sid}/experiments`, { id: fd.get("id"), name: fd.get("name"), kind, urlMatch });
           // クライアント遷移(router.push)は共有 layout(上部バーの「未公開の変更あり」)を描き直さず、
           // router.refresh() を足しても確実には反映されない(このバージョンの Next.js/vinext で実測)ため、全画面の遷移にする
-          window.location.assign(`/w/${wid}/sites/${sid}/experiments/${exp.id}`);
+          navigateDocument(`/w/${wid}/sites/${sid}/experiments/${exp.id}`);
         } catch (err) {
           setError(describeError(err));
         } finally {

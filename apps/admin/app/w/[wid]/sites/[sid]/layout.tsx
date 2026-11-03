@@ -20,6 +20,7 @@ export default async function SiteLayout({ children, params }: { children: React
       {/* 読み込み中の枠が別のサイトで覚えた上部バーを出さないよう、今の URL のサイトと照らす(SiteChromeGuard のコメント) */}
       <SiteChromeGuard wid={wid} sid={sid}>
         <TopBar
+          scope={{ wid, sid }}
           crumbs={[{ label: ws.name, href: `/w/${wid}` }, { label: site.data.name, href: base }]}
           publish={{ href: `${base}/publish`, activeVersion: site.data.activeVersion, hasUnpublished: site.data.hasUnpublishedChanges === true, canPublish, siteId: site.data.id, historyHref: `${base}/history` }}
         />

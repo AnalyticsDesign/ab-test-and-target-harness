@@ -103,3 +103,20 @@ describe("fieldErrors()", () => {
     expect(fieldErrors(e)).toEqual({ "exposure.event": "Invalid enum value" });
   });
 });
+
+describe("api() の打ち切りの合図", () => {
+  it("api passes the abort signal to fetch", async () => {
+    fetchMock.mockResolvedValue(json(200, {}));
+    const controller = new AbortController();
+    await api("PATCH", "/x", {}, { signal: controller.signal });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("signal を渡さなければ fetch にも渡さない", async () => {
+    fetchMock.mockResolvedValue(json(200, {}));
+    await api("GET", "/x");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeUndefined();
+  });
+});

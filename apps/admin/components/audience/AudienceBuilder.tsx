@@ -23,6 +23,7 @@ import { DND_ACCESSIBILITY, DraggableChip, nestedCollision, useDragSensors } fro
 import t from "../targeting/Targeting.module.css";
 import { GroupView, type BuilderApi } from "./GroupView";
 import styles from "./Audience.module.css";
+import { navigateApp } from "@/lib/navigate";
 
 type Props = { wid: string; siteId: string; audience: Audience | null; audiences: Audience[]; goals: Goal[]; site: Pick<Site, "retentionDays" | "timezone">; canEdit: boolean };
 
@@ -171,7 +172,7 @@ export function AudienceBuilder({ wid, siteId, audience, audiences, goals, site,
         router.refresh(); // 使っているエクスペリエンスの一覧などを読み直す
       } else {
         await call("POST", `/sites/${siteId}/audiences`, { id, name, description, definition });
-        router.push(`/w/${wid}/sites/${siteId}/audiences/${id}`);
+        navigateApp(router, `/w/${wid}/sites/${siteId}/audiences/${id}`);
       }
     } catch (e) {
       setError(describeError(e));
