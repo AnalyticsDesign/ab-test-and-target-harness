@@ -17,7 +17,7 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 ### 書き込みの凍結と版のヘッダー
 
 - 書き込みの凍結: D1 の `instance_settings` のキー `writeFreeze` に行があるあいだ、`/auth/*`・`/break-glass/*`・`POST /sites/:sid/evaluate` 以外の POST / PUT / PATCH / DELETE を `503 write_frozen` で断る(`src/write-freeze.ts`。行が読めなくても凍結中)。入切は `docs/deploy.md` 6.6。GET に伴う業務データの書き込み(`GET /sites/:sid` の配信の写しの自己修復と、設置タグの配信ファイルの自己修復(`reconcileStatic`)など)は `isWriteFrozen()` で凍結中かを確かめ、凍結中は見送る。Cron(下の「Cron」)と、後から足す自己修復も同じ関数を使う。`/auth/*` が開くパスの一覧は `src/auth-paths.ts`(業務の書き込みを足すと凍結から素通しになる)
-- 版のヘッダー: 全応答に `x-wtt-api-version`(`@wtt/core` の `API_CONTRACT_VERSION`)。管理画面は `x-wtt-client-version` を付けてくる。今は判定しない
+- 版のヘッダー: 全応答に `x-wtt-api-version`(`@wtt/core` の `API_CONTRACT_VERSION`)。管理画面は `x-wtt-client-version` を付けてくる。その版が最低の版(`@wtt/core` の `MIN_CLIENT_VERSION`。`x-wtt-min-client-version` で返す)より小さいと、変更操作を `426 client_too_old` で断る(読み取りは断らない。`x-wtt-client-version` を付けない要求は判定しない)
 
 ### Cron
 

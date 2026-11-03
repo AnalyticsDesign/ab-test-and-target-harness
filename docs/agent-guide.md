@@ -102,7 +102,7 @@ curl -sS -X PUT "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/variants/b/c
   -H "Authorization: Bearer $AB_API_KEY" -H 'content-type: application/json' \
   -d '[{"id":"c_text","type":"TEXT","selector":"h1.hero","payload":{"text":"新しい見出し"}}]'
 
-# 4. 評価計画を決める(テストだけ。判定に使う目標の g_lead は下の「目標名」の例で作る。ほかの項目は省けば既定値)
+# 4. 評価計画を決める(テストだけ。判定に使う目標の g_lead は、先に下の「パターンの組み替え・メモ・目標名」の目標の例で作っておく。ほかの項目は省けば既定値)
 curl -sS -X PUT "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/evaluation-plan" \
   -H "Authorization: Bearer $AB_API_KEY" -H 'content-type: application/json' \
   -d '{"plan":{"primaryGoalId":"g_lead","targetPerVariant":5000}}'
@@ -157,7 +157,7 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/goals" -H "Authorization: Bearer $A
 本物のページでパターンを見る方法は 2 つあり、見たいものが設置タグのファイルの compiled config(公開で作る設定)に載っているかどうかで使い分けます。
 
 - **compiled config に載っているエクスペリエンスは、URL だけで見られます(設置タグ経由のプレビュー)**: 設置タグのあるページを `#__ab_preview=<エクスペリエンス ID>:<パターン ID>` 付きの URL で開くと、指定したパターンを強制的に表示します。注入も認証も要りません。複数のエクスペリエンスはカンマ区切りで指定します(`#__ab_preview=exp_a:b,exp_b:a`)。下の注入と同じく完全隔離モードで、指定したエクスペリエンスだけを適用し、Cookie・consent・decision 通信・目標・Exposure に触れません。`window.AB.getPreviewReport()` も下と同じ形で読めます。設置タグは、プレビューの処理を設置タグと同じオリジンの別ファイル `/s/preview/<hash>.js` から読みます(通常の訪問者は読みません)。読めなかったときは何も適用せず元の表示のままにし、`getPreviewReport()` は空配列になります(このレシピの末尾の「`getPreviewReport()` が空配列(`[]`)のとき」)
-- **compiled config に載っていないものは、`draft-bootstrap` を注入します**: compiled config に載るのは配信中(`running`)のエクスペリエンスだけで、内容は最後に公開した時点のものです。下書き・一時停止中のエクスペリエンスを URL だけで指定すると `error: "unknown experiment or variant"` の行になり、配信中のエクスペリエンスの保存しただけで未公開の編集は表示されません。これらは次の手順で見ます
+- **compiled config に載っていないものは、`draft-bootstrap` を注入します**: compiled config に載るのは配信中(`running`)のエクスペリエンスだけで、内容は最後に公開した時点のものです。下書き・一時停止中のエクスペリエンスを URL だけで指定すると `error: "unknown experiment or variant"` の行になり、配信中のエクスペリエンスについても、保存しただけで公開していない編集は表示されません。これらは次の手順で見ます
 
 ```bash
 BOOT=$(mktemp) && export BOOT &&   # 推測できない名前で、所有者だけが読めるファイルを作る
@@ -169,7 +169,7 @@ curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/draft-bootstrap" \
 
 得られるのは設置タグのファイルと同形式の**完全に機能する** bootstrap JS(compiled config + runtime)です。KV にも本番の配信ファイルにも書き込まれませんが、隔離されるかどうかは**ページの URL に `#__ab_preview=` フラグメントが付いているかだけ**で決まります。
 
-**警告**: `addInitScript` で注入したのに URL にフラグメントを付け忘れると、下書きは**本番として**動きます。`needsProfile: false` のサイトでは未公開のエクスペリエンスがそのまま適用され、訪問者 ID の Cookie(サイト設定の `正本 Cookie 名`。新しいサイトの既定は `_wtt_vid`、この更新の前に作ったサイトは `_ab_vid`)が作られ、`ab_exposure` が dataLayer / GA4 に送られます(存在しないエクスペリエンス ID のイベントとして実データに混入します)。加えて二重起動ガードにより、そのページに設置タグがあっても本番側のエクスペリエンスは止まります。**`goto` する URL には毎回 `#__ab_preview=<エクスペリエンス ID>:<パターン ID>` を付けてください**。付け忘れに気づく手段は無いので、注入と `goto` は必ずセットで書くこと。
+**警告**: `addInitScript` で注入したのに URL にフラグメントを付け忘れると、下書きは**本番として**動きます。`needsProfile: false` のサイトでは未公開のエクスペリエンスがそのまま適用され、訪問者 ID の Cookie(サイト設定の `正本 Cookie 名`。新しいサイトの既定は `_wtt_vid`、v0.11 より前に作ったサイトは `_ab_vid`)が作られ、`ab_exposure` が dataLayer / GA4 に送られます(存在しないエクスペリエンス ID のイベントとして実データに混入します)。加えて二重起動ガードにより、そのページに設置タグがあっても本番側のエクスペリエンスは止まります。**`goto` する URL には毎回 `#__ab_preview=<エクスペリエンス ID>:<パターン ID>` を付けてください**。付け忘れに気づく手段は無いので、注入と `goto` は必ずセットで書くこと。
 
 これをヘッドレスブラウザに注入し、`#__ab_preview=<エクスペリエンス ID>:<パターン ID>` でパターンを固定します:
 

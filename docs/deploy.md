@@ -875,6 +875,7 @@ admin のリクエストの数え方:
 | R2(`wtt-assets`) | IMAGE の変更のアップロード先。R2 なし構成(`asset_public_base: none`)では不要 | control |
 | Durable Objects(`VisitorProfile`) | 履歴条件・`persistAssignment`・目標の訪問者状態 | edge |
 | Durable Objects(`ResultsBudget`・`ResultsHealth`) | 結果の記録の 1 日の予算(導入全体で 1 つ)と、収集できなかった送信の数(サイトごと) | edge。control も使う(記録の停止・削除の枠・集計の読み取りの予約と、失敗の数の読み取り) |
+| Durable Objects(`NewProfileBudget`) | 新しい訪問者の記録(`VisitorProfile`)の数の上限。1 日と 1 時間に新しく記録した数をサイトごとに数える(Free では導入全体の合計も)。[運用ガイド 7 節](operations.md#新しい訪問者の記録の上限サイト設定) | edge |
 | Durable Objects(`DeployQueue`) | 設置タグのファイルの作り直しを 1 本ずつ流し、失敗したら再試行する | デプロイ専用の Worker |
 | Rate Limiting binding | 無認証入口の補助的な絞り(実効は限定的。[運用ガイド 7 節](operations.md#7-レート制限の実効)) | 両方 |
 
@@ -895,7 +896,7 @@ admin のリクエストの数え方:
 |---|---|---|---|
 | ゾーンの WAF Rate Limiting Rule(2.7) | 作れる | 作れる(別のドメインのゾーンに作る) | 作れない。Worker の起動前に捨てる仕組みが無いので、無料枠の日次上限(10 万リクエスト)を 1 台の機械から数分で使い切られうる。使い切ると当日は edge も control も止まる。上限はアカウント単位 |
 | ゾーンの Cache Rule(2.6) | 作る。設置タグのファイルのブラウザキャッシュの設定が上書きされないようにする、念のための設定 | 作る(別のドメインのゾーンに、条件のホストを `<edge のホスト>` にして作る) | 作れない(ゾーンが無い)。設置タグのファイルのヘッダー(60 秒)は配信専用の Worker が付けるので、変更されずに適用される |
-| Mode B(サーバー発行 Cookie) | 使える | 使えない(ページのホストに `/__ab/*` を置けないため。Safari 対策は Mode A か Mode C) | 使えない |
+| Mode B(サーバー発行 Cookie) | 使える | 使えない(ページのホストに `/__ab/*` を置けないため。Mode A か Mode C で運用する) | 使えない |
 | タグと設置サイト | 同一オリジン | 別オリジン。サイトの `allowedOrigins` にページの origin が要る(サイトを作ると `https://<ドメイン>` が入る。ページのホストが複数なら足す)。サイトが CSP を出していれば `script-src` と `connect-src` に `<edge のホスト>` を足す(設置タグと edge が同じホストなので 1 つ) | 別オリジン。サイトが CSP を出していれば `script-src` に `wtt-static` のホスト、`connect-src` に edge のホストを足す |
 
 別のドメインに置く構成では、ほかに次の 2 つを承知しておく:
@@ -948,7 +949,7 @@ pnpm -C apps/control exec wrangler kv namespace list | jq -r '.[] | select(.titl
 
 期待と違うとき: `wrangler kv namespace create` が `already exists` を含むエラーを返す → 前回の作業で作った namespace が残っている。`kv namespace list` で id を引いて同じように書く。
 
-**計測用のデータベース(D1 の `wtt-results`)**: テストの結果(参加者と目標の達成)を記録する D1。設定用の `wtt-control`(3.1)とは分けてある(書き込みの量と保持期間が違い、`wtt-control` の控えと Time Travel を個票で大きくしないため)。edge が書き、control が結果の集計のために読み、保持期限を過ぎた記録を消す。edge と control の設定がこのデータベースを参照するので、どの構成でも作る。順は、作成 → `database_id` を書く → 表を作る(マイグレーション)→ 鍵の登録 → 2.4 の edge のデプロイ。
+**計測用のデータベース(D1 の `wtt-results`)**: テストの結果(参加者と目標の達成)を記録する D1。設定用の `wtt-control`(3.1)とは分けてある(書き込みの量と保持期間が違い、`wtt-control` の控えと Time Travel を参加者ごとの記録(個票)で大きくしないため)。edge が書き、control が結果の集計のために読み、保持期限を過ぎた記録を消す。edge と control の設定がこのデータベースを参照するので、どの構成でも作る。順は、作成 → `database_id` を書く → 表を作る(マイグレーション)→ 鍵の登録 → 2.4 の edge のデプロイ。
 
 ```bash
 pnpm -C apps/edge exec wrangler d1 create wtt-results </dev/null   # KV と同じく、設定ファイルへの追記は非対話なので行わない(database_id は下の手順で書く)
@@ -1569,7 +1570,7 @@ deploy の回数:
 
 Cron と edge への binding:
 
-- control は 15 分ごとの Cron Trigger(`*/15 * * * *`。`apps/control/wrangler.jsonc` の `triggers`)を 1 本持つ。Cron Trigger の数にはアカウントごとの上限がある(Free は 5 本)。この製品が使うのは、デプロイ専用の Worker の毎時の 1 本(2.9)と合わせて 2 本。deploy の出力の triggers に `schedule: */15 * * * *` が出る
+- control は 15 分ごとの Cron Trigger(`*/15 * * * *`。`apps/control/wrangler.jsonc` の `triggers`)を 1 本持つ。Cron Trigger の数にはアカウントごとの上限がある(Free は 5 本)。この製品が使うのは、デプロイ専用の Worker の毎時の 1 本(6.4)と合わせて 2 本。deploy の出力の triggers に `schedule: */15 * * * *` が出る
 - この Cron は、使用状況の表示と同じ値(3.3 の `CF_USAGE_TOKEN`・3.4 の `CF_ACCOUNT_ID`)でアカウント全体の使用量を見る。Free で Workers のリクエストか D1 の書き込みの行数が日次上限の 8 割に届いたら、結果の記録を次の UTC 0 時まで止める(配信と管理操作に残りを残すため)。使用状況の設定が無いとき・取得に失敗したときは何もしない。Paid では判定しない
 - 同じ Cron が、テストの結果の記録の作業も行う: 15 分ごとに、公開した設定が訪問者に配られたことの確認・記録の締め切り(評価時点)の書き直し・計測用のデータベースの容量の測定(95% 以上なら記録を止める)。UTC 0 時を過ぎた後に 1 日 1 回、目標参加者数に届いたことの確認と、評価時点の結果の記録の作成。UTC 23 時台に 1 回、保持期間を過ぎた参加者ごとの記録と、エクスペリエンス・サイトの削除で残った記録の削除(その日の書き込みの予算の残りの範囲で。大きなテストは数日かかる)。1 回の実行で使うデータベースの問い合わせの数に上限があり、終わらなかった分は次の実行で続ける
 - control は edge の Durable Object `ResultsBudget`(結果の記録の予算)と `ResultsHealth`(収集できなかった送信の数)を参照する(Worker をまたぐ binding)。そのため edge(2.4)を先にデプロイする。control だけを先にデプロイすると失敗する。更新(6.3)でも edge を先にデプロイする
@@ -1612,7 +1613,7 @@ control は `*.workers.dev` のままでも動く(ゾーンのキャッシュや
 
 | キー | 内容 |
 |---|---|
-| `AB_CONTROL_URL` | 3.5 で確認した control の公開 URL。control 側の `vars.AB_CONTROL_URL` と同じ値にする(違うと sign-in 後に 401 になる)。binding がある構成でも書く(Google のログインでブラウザを control へ送る先と、binding が無い構成で呼ぶ先に使う) |
+| `AB_CONTROL_URL` | 3.5 で確認した control の公開 URL。control 側の `vars.AB_CONTROL_URL` と同じ値にする(違うと sign-in 後に 401 になる)。binding がある構成でも書く(Google のログインでブラウザを control へ送る先と、`services` の binding を外した場合(この文書の手順には無い)に呼ぶ先に使う) |
 
 `services` の binding(`CONTROL` → `wtt-control` の `ControlBff`)はリポジトリの `apps/admin/wrangler.jsonc` に書いてあり、書き換えない。control の Worker 名を `wtt-control` から変えていなければそのまま使える。
 
@@ -1880,7 +1881,7 @@ git tag --list 'v*' --sort=-v:refname | head -3   # 目標の tag(例 v1.0)
 - (b) **サイト設定のフィールド追加**(既存サイトの record を書き直す必要)
 - (c) **runtime の変更**
 
-CHANGELOG に次の目印があるリリースは、6.3 の該当する項も読む: 「配る設定の版(`schemaVersion`)が上がる」「システム管理者を導入する」「パスワード再設定リンクの発行条件が変わる」「計測用のデータベースを足す」「レート制限の既定値が変わる」。パスワードでログインしていた版からの更新も 6.3 に項がある。「レート制限の既定値が変わる」は 6.2 の衝突の項も読む。
+CHANGELOG に次の目印があるリリースは、6.3 の該当する項も読む: 「配る設定の版(`schemaVersion`)が上がる」「計測用のデータベースを足す」「レート制限の既定値が変わる」。パスワードでログインしていた版からの更新も 6.3 に項がある。「レート制限の既定値が変わる」は 6.2 の衝突の項も読む。
 
 ### 6.2 取得
 
