@@ -174,7 +174,7 @@ test.describe.serial("pattern UI (B77)", () => {
     const dialog = page.getByRole("alertdialog", { name: "開始しますか?" });
     await expect(dialog).toContainText("重み 0% のパターンがあります。");
     await expect(dialog).toContainText("B は重み 0% のため、誰にも表示されません");
-    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await dialog.getByRole("button", { name: "キャンセル" }).press("Enter");
     await expect(dialog).toBeHidden();
     await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "draft");
     expect(posted).toBe(false); // キャンセルでは開始の要求を送らない
@@ -214,7 +214,8 @@ test.describe.serial("pattern UI (B77)", () => {
     const stopDialog = page.getByRole("alertdialog", { name: "終了して結果を記録します" });
     await expect(stopDialog.getByRole("radio", { name: /^採用なし/ })).toBeChecked();
     const done = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP_MAIN.id}/status`) && r.request().method() === "POST");
-    await stopDialog.getByRole("button", { name: "終了して記録" }).click();
+    await expect(stopDialog.getByRole("button", { name: "終了して記録" })).toBeEnabled();
+    await stopDialog.getByRole("button", { name: "終了して記録" }).press("Enter");
     expect((await done).status()).toBe(200);
     await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "archived");
     await page.reload();

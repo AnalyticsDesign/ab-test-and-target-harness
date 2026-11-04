@@ -86,6 +86,8 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     await expect(page.getByTestId("no-goals")).toHaveCount(0);
     await expect(page.getByLabel("名前", { exact: true })).toHaveValue("No goals yet"); // 入力は残る
     expect((await page.request.delete(`/api/control/sites/${SITE_AUD.id}/goals/g_tmp`, { headers: controlHeaders() })).status()).toBe(204);
+    // 未保存の入力のままサイドバーで離れると、離れる前の確認が出る(B173 第 2 段)ので、破棄してから次へ
+    await page.getByRole("button", { name: "破棄", exact: true }).click();
     // Goal は BFF 経由の API で作る(Goal の画面は今回の対象外)
     expect((await page.request.post(`/api/control/sites/${SITE_AUD.id}/goals`, { headers: controlHeaders(), data: { id: "g_lead", name: "資料請求", type: "CUSTOM", config: {} } })).status()).toBe(201);
     await newAudience(page, "Pricing visitors");
@@ -264,12 +266,12 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     const confirmSave = page.getByRole("alertdialog", { name: "オーディエンスを保存しますか?" });
     await page.getByRole("button", { name: "保存", exact: true }).click();
     await expect(confirmSave).toContainText("実行中のエクスペリエンス 1 件の配信対象が変わります");
-    await confirmSave.getByRole("button", { name: "キャンセル" }).click();
+    await confirmSave.getByRole("button", { name: "キャンセル" }).press("Enter");
     await expect(confirmSave).toHaveCount(0);
     expect(patched).toBe(0);
     await expect(page.getByTestId("save-state")).toHaveText("未保存の変更あり");
     await page.getByRole("button", { name: "保存", exact: true }).click();
-    await confirmSave.getByRole("button", { name: "保存する" }).click();
+    await confirmSave.getByRole("button", { name: "保存する" }).press("Enter");
     await expect(page.getByTestId("save-state")).toHaveText("保存しました。次の公開で反映されます");
 
     // Publish の確認画面: オーディエンスの変更で配信対象が変わるエクスペリエンスを「変更あり」として出す

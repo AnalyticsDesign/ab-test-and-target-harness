@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EDITOR_TABS, draftOf, tabsFor, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, reconcileServerUpdate, saveSteps, targetingBody, type Draft } from "@/lib/experiment-draft";
+import { EDITOR_TABS, draftOf, tabsFor, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, reconcileServerUpdate, saveSteps, targetingBody, type Draft } from "@/lib/experiment-draft";
 import type { Experiment } from "@/lib/types";
 
 const EXP = {
@@ -140,6 +140,14 @@ describe("B173 第 1 段 Task 7: 変えた欄だけを送る・評価計画を�
   it("name-only change sends only { name }", () => {
     const a = draftOf(EXP);
     expect(experimentPatchBody(a, { ...a, name: "x" })).toEqual({ name: "x" });
+  });
+  it("isTrafficSent は experimentPatchBody が trafficPercentage を載せる条件と同じ(B173 第 2 段)", () => {
+    const a = draftOf(EXP);
+    for (const current of [a, { ...a, name: "x" }, { ...a, traffic: a.traffic + 1 }, { ...a, traffic: a.traffic - 1 }]) {
+      expect(isTrafficSent(a, current)).toBe("trafficPercentage" in experimentPatchBody(a, current));
+    }
+    expect(isTrafficSent(a, a)).toBe(false);
+    expect(isTrafficSent(a, { ...a, traffic: a.traffic + 1 })).toBe(true);
   });
   it("traffic-only change sends only trafficPercentage", () => {
     const a = draftOf(EXP);

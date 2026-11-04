@@ -213,7 +213,7 @@ test.describe.serial("results flow (D9 ③)", () => {
     await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "目標" }).click();
     const leave = page.getByRole("alertdialog", { name: "保存していない変更があります" });
     await expect(leave).toBeVisible();
-    await leave.getByRole("button", { name: "とどまる", exact: true }).click();
+    await leave.getByRole("button", { name: "とどまる", exact: true }).press("Enter");
     await expect(leave).toBeHidden();
     await expect(page).toHaveURL(new RegExp(`/experiments/${EXP.id}`));
     // 帯の「保存(下書き)」で、メモの PATCH と評価計画の PUT を 1 回ずつ送る
@@ -240,7 +240,7 @@ test.describe.serial("results flow (D9 ③)", () => {
       await expect(fixed).toContainText("上回る確率 95% 以上");
       expect(posts).toHaveLength(0); // 確認の前には送らない
       const done = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP.id}/status`) && r.request().method() === "POST");
-      await dialog.getByRole("button", { name: "開始する", exact: true }).click();
+      await dialog.getByRole("button", { name: "開始する", exact: true }).press("Enter");
       const res = await done;
       expect(res.status()).toBe(200);
       expect(((await res.json()) as { publish: { ok: boolean } }).publish.ok).toBe(true);
@@ -317,7 +317,8 @@ test.describe.serial("results flow (D9 ③)", () => {
     await dialog.getByTestId("stop-duplicate").getByRole("checkbox", { name: "B だけを表示する新しいエクスペリエンスも作成する(下書き)" }).check();
     const stopped = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP.id}/status`) && r.request().method() === "POST");
     const duplicated = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP.id}/duplicate`) && r.request().method() === "POST");
-    await dialog.getByRole("button", { name: "終了して記録" }).click();
+    await expect(dialog.getByRole("button", { name: "終了して記録" })).toBeEnabled();
+    await dialog.getByRole("button", { name: "終了して記録" }).press("Enter");
     const stopRes = await stopped;
     expect(stopRes.status()).toBe(200);
     expect(stopRes.request().postDataJSON()).toMatchObject({ status: "archived", adoption: { variantId: "b", note: "B の文言が良い" } });
@@ -365,7 +366,8 @@ test.describe.serial("results flow (D9 ③)", () => {
     await dialog.getByRole("radio", { name: /^採用なし/ }).check();
     await dialog.getByLabel("メモ(任意)").fill("今回は見送る");
     const put = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP.id}/adoption`) && r.request().method() === "PUT");
-    await dialog.getByRole("button", { name: "採用を記録" }).click();
+    await expect(dialog.getByRole("button", { name: "採用を記録" })).toBeEnabled();
+    await dialog.getByRole("button", { name: "採用を記録" }).press("Enter");
     const res = await put;
     expect(res.status()).toBe(200);
     expect(res.request().postDataJSON()).toEqual({ variantId: null, note: "今回は見送る" });

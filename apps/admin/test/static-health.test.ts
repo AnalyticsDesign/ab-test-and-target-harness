@@ -245,6 +245,16 @@ describe("runRebuild", () => {
     await expect(runRebuild(call, () => {})).rejects.toThrow();
     expect(call).toHaveBeenCalledTimes(2);
   });
+  it("signal を各回に渡し、中止の後は続きを頼まない", async () => {
+    const controller = new AbortController();
+    const call = vi.fn(async (_after: string | null, _signal?: AbortSignal) => {
+      controller.abort();
+      return { requested: 1, removed: 0, skippedRemoving: 0, failed: [], next: "s1" } satisfies RebuildResult;
+    });
+    await expect(runRebuild(call, () => {}, controller.signal)).rejects.toThrow();
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(call.mock.calls[0]![1]).toBe(controller.signal);
+  });
   it("途中の失敗は投げる", async () => {
     const call = vi.fn(async (after: string | null) => {
       if (after === null) return { requested: 25, removed: 0, skippedRemoving: 0, failed: [], next: "s25" } satisfies RebuildResult;

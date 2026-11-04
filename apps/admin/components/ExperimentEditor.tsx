@@ -3,14 +3,13 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetState
 import { api, ApiClientError, fieldErrors } from "@/lib/client";
 import { toChangeWire } from "@/lib/change-wire";
 import { saveErrorMessage } from "@/lib/experiment-save";
-import { draftOf, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, reconcileServerUpdate, saveSteps, type Draft, type EditorTab } from "@/lib/experiment-draft";
+import { draftOf, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, reconcileServerUpdate, saveSteps, type Draft, type EditorTab } from "@/lib/experiment-draft";
 import { extensionErrors, planDirty, planFormErrors, planFormState, planMode, planPutBody, syncPlanState, type PlanForm, type PlanView } from "@/lib/evaluation-plan";
 import { archivedTestBanner, lockedFieldChanges, needsRunningTestConfirm, preSaveLockProblem, RUNNING_TEST_CONFIRM } from "@/lib/test-locks";
 import { emptyHtmlIndex, firstEmptyHtml } from "@/lib/change-issues";
 import { analyticsCardOpenInitially } from "@/lib/analytics-badges";
 import { replaceParam } from "@/lib/url-state";
 import { previewPageUrl } from "@/lib/page-match";
-import { useRefreshAndWait } from "@/lib/use-refresh-and-wait";
 import type { Audience, Experiment, Goal, Site } from "@/lib/types";
 import { useConfirm } from "./ConfirmProvider";
 import { ErrorBox } from "./ErrorBox";
@@ -116,7 +115,6 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
   };
 
   // 離れる前の確認(本体と評価計画の未保存・保存の途中)は、下の BusyScope の dirty を見る PageLeaveGuard(app/w/layout.tsx)が出す
-  const refreshAndWait = useRefreshAndWait();
   // 状態の変更の前の確かめ: 未保存の変更があれば終了のモーダルを開かない(B173 第 1 段)
   const statusGuard = useStatusChangeGuard();
   // 終了のモーダル(D9 ③ Task 16): 結果のタブの帯の「終了して採用を記録」「採用なしで終了」から開く。開始・終了は管理者以上(設計書 §10)
@@ -144,7 +142,7 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
         onDone={(messages, created) => {
           setStop(null);
           setStopNotices({ messages, created });
-          void refreshAndWait();
+          // 画面の読み直しは終了のモーダルの中で済んでいる(ここで読み直すと 2 回になる。B173 第 2 段)
         }}
       />
     ) : null}
@@ -513,6 +511,7 @@ function ExperimentEditorBody({
             analyticsOpen={experimentCardOpen}
             onAnalyticsOpen={(open) => onCardOpen("experiment", open)}
             lock={experiment}
+            trafficSent={isTrafficSent(base, draft)}
           />
         </TabPanel>
       ) : null}

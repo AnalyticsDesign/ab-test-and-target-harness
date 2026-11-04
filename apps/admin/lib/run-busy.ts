@@ -1,4 +1,5 @@
-import { BUSY_MIN_MS, WRITE_TIMEOUT_MS } from "./feedback-store";
+import { BUSY_MIN_MS, NAV_TIMEOUT_MS, WRITE_TIMEOUT_MS, navOutcome, navStartedAfter, nextSeq, subscribe } from "./feedback-store";
+import type { NavHandle } from "./navigate";
 import type { RefreshResult } from "./use-refresh-and-wait";
 
 /**
@@ -20,17 +21,32 @@ export type BusyTask<T> = {
   /** 書き込みが成功した直後(読み直しの前)。読み直しで届く値と比べる基準を、送った値に入れ替えるのに使う */
   onWritten?: (value: T) => void;
   /**
-   * refresh = 成功の後に読み直しの反映まで待つ。
+   * 書き込みの成功の後の処理。関数のときは書き込みの結果を見て選ぶ(応答で移動するか読み直すかが変わるもの。成功の後に 1 回だけ呼ぶ)。
+   * refresh = 読み直しの反映まで待つ。
    * none = 読み直しをしない。書き込みの成功と最短 300 ms の後に、覆いと実行権を戻す(全画面の移動まで覆う用途には使わない。
-   * 使うと、移動でページが閉じる前にフォームがまた押せる状態になり、二重の作成を止められない)。
-   * 申し送り: 全画面の移動が終わるまで覆い続ける形(例 after: "navigate"。自分で始めた遷移を discarded と判定しないよう、
-   * 遷移を始める前の通し番号で区別する)は、作成のフォームに範囲の部品を付ける第 2 段で足す(spec §5.2-4)。第 1 段では使う所が無い
+   * 使うと、移動でページが閉じる前にフォームがまた押せる状態になり、二重の作成を止められない。移動には navigate を使う)。
+   * navigate = 範囲の離れる前の確認を外して task.navigate で移動し、移動が終わる(ページが閉じる・部品が消える)まで覆いと実行権を保つ
+   * (B173 第 2 段)。移動を始めた後は navStartedAfter を見ない(自分で始めた遷移を discarded と取り違えないため)。
+   * 移動が打ち切り・別の遷移に替わった・始まらなかったときだけ、覆いを外して navigated を返す(確認の登録も戻す)。
+   * custom = 画面が task.custom で自分で取り直す(上限 10 秒)。その後は refresh と同じ(遷移の確かめ → 300 ms)。
+   * 取り直しが 10 秒で終わらない・失敗したときは書き込みの失敗にせず、saved の refresh: "timeout" にする
    */
-  after: "refresh" | "none";
+  after: AfterKind | ((value: T) => AfterKind);
+  /** after が navigate になりうるとき必須。navigateApp / navigateDocument / reloadDocument を呼び、その戻り値を返す */
+  navigate?: (value: T) => NavHandle;
+  /** after が custom になりうるとき必須。signal は 10 秒の上限で止める合図 */
+  custom?: (value: T, signal: AbortSignal) => Promise<void>;
 };
+
+export type AfterKind = "refresh" | "none" | "navigate" | "custom";
+
+/** 移動を待った結果(移動が終わらずに覆いを外したとき) */
+export type NavWaitResult = "timedOut" | "replaced" | "none";
 
 export type BusyOutcome<T> =
   | { kind: "saved"; value: T; refresh: RefreshResult | "skipped" }
+  /** after: navigate の移動が打ち切り・別の遷移に替わった・始まらなかった(印で終われば部品が消えるので返らない) */
+  | { kind: "navigated"; value: T; nav: NavWaitResult }
   /** 書き込みが失敗した */
   | { kind: "failed"; error: unknown }
   /** 30 秒待っても結果が分からない(書き込みが通ったかは不明) */
@@ -55,6 +71,15 @@ export type BusyDeps = {
   showOverlay(): void;
   /** 単調増加の時計(ms) */
   now(): number;
+  /**
+   * 持ち主の範囲(BusyScope)が生きているか。unmount・作り直しで false になり、戻らない。
+   * 戻る・進むの守りを通らずに画面を離れた(store に遷移が記録されない)ときも、範囲が消えればここで止まる
+   */
+  alive(): boolean;
+  /** 範囲の離れる前の確認の登録を外す(自分の移動を止めないように)。戻り値は元に戻す関数(移動が終わらなかったときに呼ぶ) */
+  releaseGuard(): () => void;
+  /** 移動の終わりを待つ(createNavWaiter)。ページが閉じる・部品が消えるときは解決しない */
+  waitNav(h: NavHandle): Promise<NavWaitResult>;
 };
 
 /**
@@ -111,40 +136,173 @@ function writeWithTimeout<T>(task: BusyTask<T>): Promise<WriteResult<T>> {
 }
 
 /**
+ * 画面の取り直し(task.custom)を 10 秒の上限で呼ぶ。上限を超えたら signal を中止して timeout。失敗(reject・同期の throw)も timeout。
+ * 時計は writeWithTimeout と同じく本物の setTimeout(上限の後に届いた結果・拒否は見ない)
+ */
+function customWithTimeout<T>(custom: (value: T, signal: AbortSignal) => Promise<void>, value: T): Promise<RefreshResult> {
+  const controller = new AbortController();
+  return new Promise<RefreshResult>((resolve) => {
+    const timer = setTimeout(() => {
+      controller.abort();
+      resolve("timeout");
+    }, NAV_TIMEOUT_MS);
+    new Promise<void>((res) => res(custom(value, controller.signal))).then(
+      () => {
+        clearTimeout(timer);
+        resolve("done");
+      },
+      () => {
+        clearTimeout(timer);
+        controller.abort();
+        resolve("timeout");
+      },
+    );
+  });
+}
+
+/**
  * 書き込みを 1 回実行し、結果を返す。決まりは spec の「書き込みの間」の節のとおり:
  * 確認 → 通し番号・覆い → 書き込み(30 秒)→ 失敗・遷移の確かめ → onWritten・基準の入れ替え → 読み直し → 遷移の確かめ → 覆ってから 300 ms まで待つ → もう一度遷移の確かめ。
  * 覆いを外す・実行権を返す・フォーカスを戻すのは呼び出し側(返ったらすぐ外す。saved だけ、ここで 300 ms を待ってから返る)
  */
 export async function runBusy<T>(deps: BusyDeps, task: BusyTask<T>): Promise<BusyOutcome<T>> {
   if (task.confirm && !(await task.confirm())) return { kind: "cancelled" };
+  // 持ち主の生存の確かめ(B173 第 2 段)。順は (1) 確認の後(覆う前) (2) 書き込みの後(30 秒の時間切れも) (3) onWritten の前 (4) 後の処理(none 以外)の前
+  // (5) refresh・custom の後 (6) 300 ms の待ちの後(結果を返す前)。
+  // false なら、その先を始めずに discarded(消えた範囲の結果は出す先が無い。守りを素通りした戻る・進むは navStartedAfter に記録されない)。
+  // navigate の移動を待つ間(navigateAndWait)は見ない: 自分の移動で範囲が消えるのは想定どおり(印で終われば返らない)
+  if (!deps.alive()) return { kind: "discarded" };
 
   const seq = deps.seq();
   deps.showOverlay();
   const coveredAt = deps.now();
 
   const result = await writeWithTimeout(task);
-  if ("timeout" in result) return { kind: "unknown" };
+  // (2) 時間切れでも、範囲が消えた・別の遷移が始まったなら unknown にしない(呼び出し側が取り直し・後の再取得を始めないように。最終レビュー I1)
+  if ("timeout" in result) return !deps.alive() || deps.navStartedAfter(seq) ? { kind: "discarded" } : { kind: "unknown" };
+  // (2) 失敗のときも、範囲が消えていれば失敗の表示は出す先が無いので捨てる
+  const gone = !deps.alive();
   if (!result.ok) {
     // 失敗の前に別の画面へ移り始めていれば、失敗の表示は出す先が無いので捨てる
-    return deps.navStartedAfter(seq) ? { kind: "discarded" } : { kind: "failed", error: result.error };
+    return gone || deps.navStartedAfter(seq) ? { kind: "discarded" } : { kind: "failed", error: result.error };
   }
-  if (deps.navStartedAfter(seq)) return { kind: "discarded" };
+  if (gone || deps.navStartedAfter(seq)) return { kind: "discarded" };
 
-  // 基準の入れ替えは読み直しの前に行う(読み直しで届く値と比べる時点で、基準が送った値になっているように)
-  task.onWritten?.(result.value);
+  const value = result.value;
+  // 後の処理は書き込みの成功の後に 1 回だけ決める(移動と読み直しが両方走らない)
+  const after = typeof task.after === "function" ? task.after(value) : task.after;
+
+  // (3) 基準の入れ替えは読み直しの前に行う(読み直しで届く値と比べる時点で、基準が送った値になっているように)
+  if (!deps.alive()) return { kind: "discarded" };
+  task.onWritten?.(value);
   deps.noteWriteSucceeded();
 
+  // (4)
+  if (after !== "none" && !deps.alive()) return { kind: "discarded" };
+
+  if (after === "navigate") return navigateAndWait(deps, task, value);
+
   let refresh: RefreshResult | "skipped" = "skipped";
-  if (task.after === "refresh") {
+  if (after === "refresh") {
     refresh = await deps.refresh();
-    // 読み直しの間に「移動する」を選んだ場合
-    if (deps.navStartedAfter(seq)) return { kind: "discarded" };
+    // 読み直しの間に「移動する」を選んだ場合・範囲が消えた場合(5)
+    if (!deps.alive() || deps.navStartedAfter(seq)) return { kind: "discarded" };
+  } else if (after === "custom") {
+    if (!task.custom) throw new Error("after: custom には task.custom が要る");
+    refresh = await customWithTimeout(task.custom, value);
+    // (5)
+    if (!deps.alive() || deps.navStartedAfter(seq)) return { kind: "discarded" };
   }
 
   // 一瞬で消えるちらつきを避けるため、覆ってから最低 BUSY_MIN_MS は出し続ける
   const rest = BUSY_MIN_MS - (deps.now() - coveredAt);
   if (rest > 0) await deps.sleep(rest);
-  if (deps.navStartedAfter(seq)) return { kind: "discarded" };
+  // (6)
+  if (!deps.alive() || deps.navStartedAfter(seq)) return { kind: "discarded" };
 
   return { kind: "saved", value: result.value, refresh };
+}
+
+/**
+ * after: navigate の後半。確認の登録を外してから移動し、移動の終わりを待つ。この間は覆いと実行権を保つ(呼び出し側の finally は、
+ * ここが返るまで走らない)。300 ms の最短は待たない(移動がそれより早く終わればページごと消える)。
+ * 移動が終わらなかった(打ち切り・別の遷移に替わった・始まらなかった)ときは、確認の登録を戻してから navigated を返す
+ */
+async function navigateAndWait<T>(deps: BusyDeps, task: BusyTask<T>, value: T): Promise<BusyOutcome<T>> {
+  if (!task.navigate) throw new Error("after: navigate には task.navigate が要る");
+  const restore = deps.releaseGuard();
+  let nav: NavWaitResult;
+  try {
+    nav = await deps.waitNav(task.navigate(value));
+  } catch (error) {
+    // 移動を始められなかった(navigate の throw)。登録を戻してから呼び出し側に渡す
+    restore();
+    throw error;
+  }
+  restore();
+  return { kind: "navigated", value, nav };
+}
+
+// ---- 移動の終わりを待つ(BusyScope の waitNav の中身。React に依らないので、実際の store・入口と組み合わせて単体テストする) ----
+
+/**
+ * 範囲ごとの移動の待ち。onOwnTimeout は、範囲が自分で打ち切りの文言を出す合図(store の遷移を始めない移動 = reloadDocument・外の URL だけ。
+ * store の遷移を始めた移動の打ち切りは NavGate が出すので、重ねて出さない)。
+ * dispose は範囲の unmount で呼ぶ: 待っている購読・タイマーをすべて外す(解決しない Promise を残しても、購読・タイマーは残らない)
+ */
+export function createNavWaiter(onOwnTimeout: () => void): { waitNav(h: NavHandle): Promise<NavWaitResult>; dispose(): void } {
+  const cleanups = new Set<() => void>();
+
+  const waitNav = (h: NavHandle): Promise<NavWaitResult> => {
+    if (h.kind === "none") return Promise.resolve("none");
+    return new Promise<NavWaitResult>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let unsubscribe: (() => void) | null = null;
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+        unsubscribe?.();
+        unsubscribe = null;
+        cleanups.delete(cleanup);
+      };
+      /** 待ちを終える。result が null(印で終わった)なら解決しない(部品が消える・ページが閉じる) */
+      const finish = (result: NavWaitResult | null) => {
+        cleanup();
+        if (result) resolve(result);
+      };
+
+      let check: () => void;
+      const navSeq = h.seq;
+      if (navSeq !== null) {
+        // store の遷移を始めた移動(app・アプリの中の navigateDocument): その番号の遷移の行方を見る。打ち切りの文言は NavGate
+        check = () => {
+          const outcome = navOutcome(navSeq);
+          if (outcome === "pending") return;
+          finish(outcome === "ended" ? null : outcome);
+        };
+      } else {
+        // store の遷移を始めない移動(reloadDocument・外の URL): 呼んだ時点より後の遷移が始まったら替わった。時計と文言は自分で持つ
+        const base = nextSeq();
+        check = () => {
+          if (navStartedAfter(base)) finish("replaced");
+        };
+        timer = setTimeout(() => {
+          timer = null;
+          finish("timedOut");
+          onOwnTimeout();
+        }, NAV_TIMEOUT_MS);
+      }
+      cleanups.add(cleanup);
+      unsubscribe = subscribe(check);
+      // 呼んだ時点ですでに決まっていることがある(購読の前の変化は知らせが来ない)
+      check();
+    });
+  };
+
+  return {
+    waitNav,
+    dispose: () => {
+      for (const fn of [...cleanups]) fn();
+    },
+  };
 }

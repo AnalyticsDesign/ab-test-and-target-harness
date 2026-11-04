@@ -8,6 +8,10 @@ import { ErrorBox } from "./ErrorBox";
 import { SubmitButton } from "./SubmitButton";
 import { Picker } from "./ui/Picker";
 import { navigateDocument } from "@/lib/navigate";
+import { BusyScope, useBusyAction } from "./ui/BusyScope";
+
+/** 作成の応答が 30 秒で分からなかったとき */
+const CREATE_UNKNOWN = "作成できたか分かりません。再読み込みして確かめてください";
 
 /**
  * 作成の後の遷移先。ふつうはサイトの概要。B139: 作成で衝突を避けるために共有か Cookie 名を変えたときは、
@@ -19,8 +23,17 @@ export function createdHref(workspaceId: string, s: SiteCreated): string {
   return `${base}/settings?section=identity&sharing=${s.sharingAdjusted.shareSubdomains ? "renamed" : "off"}`;
 }
 
+/** 新しいサイト。作成の POST から移った先の画面が開くまで、フォームのカードを覆って押し直せなくする(B173 第 2 段。二重の作成を止める) */
 export function SiteCreateForm({ workspaceId, visibleSites }: { workspaceId: string; visibleSites: number }) {
-  const [busy, setBusy] = useState(false);
+  return (
+    <BusyScope id="site-create">
+      <SiteCreateFormBody workspaceId={workspaceId} visibleSites={visibleSites} />
+    </BusyScope>
+  );
+}
+
+function SiteCreateFormBody({ workspaceId, visibleSites }: { workspaceId: string; visibleSites: number }) {
+  const { busy, run } = useBusyAction();
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [mode, setMode] = useState("A");
@@ -41,24 +54,25 @@ export function SiteCreateForm({ workspaceId, visibleSites }: { workspaceId: str
       className="card"
       onSubmit={async (e) => {
         e.preventDefault();
-        setBusy(true);
         setError(null);
         setFields({});
         const fd = new FormData(e.currentTarget);
         // B148: 入力は一覧の 1 行目として送る(https:// や末尾の / は control がそろえる)。足すのは作成後のサイト設定のドメインの節
         const body: Record<string, unknown> = { name: fd.get("name"), domains: [String(fd.get("domain")).trim()], mode: fd.get("mode"), consentMode: fd.get("consentMode") };
         if (fd.get("id")) body.id = fd.get("id");
-        try {
-          const s = await api<SiteCreated>("POST", `/workspaces/${workspaceId}/sites`, body);
+        const outcome = await run({
+          label: "作成中…",
+          write: (signal) => api<SiteCreated>("POST", `/workspaces/${workspaceId}/sites`, body, { signal }),
           // クライアント遷移(router.push)は共有 layout(サイドバーの Site 一覧)を描き直さず、
-          // router.refresh() を足しても確実には反映されない(このバージョンの Next.js/vinext で実測)ため、全画面の遷移にする
-          navigateDocument(createdHref(workspaceId, s));
-        } catch (err) {
-          setError(describeError(err));
-          setFields(fieldErrors(err));
-        } finally {
-          setBusy(false);
-        }
+          // router.refresh() を足しても確実には反映されない(このバージョンの Next.js/vinext で実測)ため、全画面の遷移にする。
+          // 移った先が開くまで覆いと実行権を保つ(移動の間に押せる状態に戻ると、二度目の作成になるため)
+          after: "navigate",
+          navigate: (s) => navigateDocument(createdHref(workspaceId, s)),
+        });
+        if (outcome.kind === "failed") {
+          setError(describeError(outcome.error));
+          setFields(fieldErrors(outcome.error));
+        } else if (outcome.kind === "unknown") setError(CREATE_UNKNOWN);
       }}
     >
       <h2>新しいサイト</h2>

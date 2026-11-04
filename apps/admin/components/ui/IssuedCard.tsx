@@ -5,7 +5,7 @@ import { CodeBlock } from "./CodeBlock";
 /**
  * 発行の結果のカード(API キー = 決定 54 (11)、招待リンク・リセットリンク = backlog B47)。見出し + 説明 + 注意 + コピーできるコード + 閉じる。
  * 出したら見出しにフォーカスを移す(押した場所の近くに出るので気づきやすく、読み上げでも分かる)。
- * 移動の確認(useLeaveGuard)は持たない — 要るもの(二度と表示できない API キー)だけ呼ぶ側で付ける
+ * 移動の確認は持たない — 要るもの(二度と表示できない API キー)だけ呼ぶ側で付ける(API キーは囲む BusyScope の prompt="issuedKey")
  */
 export function IssuedCard({
   title,

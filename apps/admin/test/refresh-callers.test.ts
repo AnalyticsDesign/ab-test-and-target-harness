@@ -13,18 +13,7 @@ const DIRS = ["app", "components", "lib"];
 /** router.refresh() を直接呼んでよい入口 */
 const ENTRY = "lib/use-refresh-and-wait.ts";
 /** 入口へ移し終えていない呼び出しの許可の一覧(第 2 段・第 3 段で減らす) */
-const ALLOWLIST = [
-  "components/ApiKeysPanel.tsx",
-  "components/audience/AudienceBuilder.tsx",
-  "components/GoalsPanel.tsx",
-  "components/InstanceAdminsPanel.tsx",
-  "components/MembersPanel.tsx",
-  "components/PublishPanel.tsx",
-  "components/StaticStaleBanner.tsx",
-  "components/targeting/ConditionFields.tsx",
-  "components/usage/UsagePanel.tsx",
-  "components/WorkspaceApiKeysPanel.tsx",
-];
+const ALLOWLIST = ["components/targeting/ConditionFields.tsx"];
 
 const walk = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((e) => {

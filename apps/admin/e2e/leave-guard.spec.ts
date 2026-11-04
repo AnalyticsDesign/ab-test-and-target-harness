@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { test, expect, type BrowserContext, type Page, type Request, type Route } from "@playwright/test";
-import { ADMIN_URL, changeStatus, createExperiment, createSite, login, waitForHydration } from "./fixtures";
+import { ADMIN_URL, WORKSPACE_NAME, changeStatus, createExperiment, createSite, login, markSessionsAsGoogle, pick, waitForHydration } from "./fixtures";
 
 /**
  * 離れる前の確認(B173 第 1 段 Task 8)。
@@ -146,7 +146,7 @@ async function expectStopped(page: Page, action: () => Promise<unknown>, value: 
   } finally {
     reqs.stop();
   }
-  await leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true }).click();
+  await leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true }).press("Enter");
   await expect(leaveConfirm(page)).toHaveCount(0);
 }
 
@@ -157,7 +157,7 @@ test("unsaved changes stop a sidebar click and logout", async () => {
   await clickNav(page, "目標");
   await expect(leaveConfirm(page)).toBeVisible();
   await expect(leaveConfirm(page)).toContainText("移動すると変更は失われます");
-  await leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true }).click();
+  await leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true }).press("Enter");
   await expect(leaveConfirm(page)).toHaveCount(0);
   expect(pathname(page)).toBe(expPath(EXP.id));
   await expect(nameInput(page)).toHaveValue("E2E leave 1");
@@ -166,7 +166,7 @@ test("unsaved changes stop a sidebar click and logout", async () => {
   await menu.locator("summary").click();
   await menu.getByRole("button", { name: "ログアウト" }).click();
   await expect(leaveConfirm(page)).toBeVisible();
-  await leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true }).click();
+  await leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true }).press("Enter");
   await expect(menu).not.toHaveAttribute("open", /.*/);
   expect(pathname(page)).toBe(expPath(EXP.id));
   await expect(nameInput(page)).toHaveValue("E2E leave 1");
@@ -227,7 +227,7 @@ test("a load with slow CSS does not break the page, and back passes through with
   await nameInput(page).fill("E2E leave slow 2");
   await clickNav(page, "目標");
   await expect(leaveConfirm(page)).toBeVisible();
-  await leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true }).click();
+  await leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true }).press("Enter");
   expect(pathname(page)).toBe(expPath(EXP.id));
 });
 
@@ -247,7 +247,7 @@ test("back is stopped after branching history", async () => {
   // 「移動する」で B(一覧)に着く(2 つ戻って A に行かない)
   await back(page);
   await expect(leaveConfirm(page)).toBeVisible();
-  await leaveConfirm(page).getByRole("button", { name: "移動する", exact: true }).click();
+  await leaveConfirm(page).getByRole("button", { name: "移動する", exact: true }).press("Enter");
   await expect(h1(page, "エクスペリエンス")).toBeVisible();
   expect(pathname(page)).toBe(sitePath());
 });
@@ -258,7 +258,7 @@ test("choosing 移動する on back goes back", async () => {
   await listToDetail(page, EXP);
   await nameInput(page).fill("E2E leave 5");
   await back(page);
-  await leaveConfirm(page).getByRole("button", { name: "移動する", exact: true }).click();
+  await leaveConfirm(page).getByRole("button", { name: "移動する", exact: true }).press("Enter");
   await expect(h1(page, "エクスペリエンス")).toBeVisible();
   await expect(rowLink(page, EXP)).toBeVisible();
   expect(pathname(page)).toBe(sitePath());
@@ -277,7 +277,7 @@ test("a click during a save, before the write returns: moving lands on the desti
     await clickNav(page, "目標");
     await expect(busyConfirm(page)).toBeVisible();
     await expect(busyConfirm(page)).toContainText("移動すると、保存できたかをこの画面では確かめられません");
-    await busyConfirm(page).getByRole("button", { name: "移動する", exact: true }).click();
+    await busyConfirm(page).getByRole("button", { name: "移動する", exact: true }).press("Enter");
     await expect(h1(page, "目標")).toBeVisible();
     await patched;
     await page.waitForTimeout(1_000);
@@ -301,7 +301,7 @@ test("a click during the post-save refresh: moving lands on the destination with
     await refreshing;
     await clickNav(page, "目標");
     await expect(busyConfirm(page)).toBeVisible();
-    await busyConfirm(page).getByRole("button", { name: "移動する", exact: true }).click();
+    await busyConfirm(page).getByRole("button", { name: "移動する", exact: true }).press("Enter");
     await expect(h1(page, "目標")).toBeVisible({ timeout: 10_000 });
     expect(pathname(page)).toBe(`${sitePath()}/goals`);
     await page.waitForTimeout(500);
@@ -325,7 +325,7 @@ test("back during a save, before the write returns: moving goes back with no ext
     await expect(page.getByRole("status").filter({ hasText: "保存中…" })).toBeVisible();
     await back(page);
     await expect(busyConfirm(page)).toBeVisible();
-    await busyConfirm(page).getByRole("button", { name: "移動する", exact: true }).click();
+    await busyConfirm(page).getByRole("button", { name: "移動する", exact: true }).press("Enter");
     await expect(h1(page, "エクスペリエンス")).toBeVisible();
     expect(pathname(page)).toBe(sitePath());
     await patched;
@@ -352,7 +352,7 @@ test("back during the post-save refresh: moving lands on the previous page", asy
     await refreshing;
     await back(page);
     await expect(busyConfirm(page)).toBeVisible();
-    await busyConfirm(page).getByRole("button", { name: "移動する", exact: true }).click();
+    await busyConfirm(page).getByRole("button", { name: "移動する", exact: true }).press("Enter");
     // URL だけ移って本文が止まることがない
     await expect(h1(page, "エクスペリエンス")).toBeVisible({ timeout: 10_000 });
     await expect(rowLink(page, EXP)).toBeVisible();
@@ -373,12 +373,12 @@ test("after a timed-out navigation on a page without loading.tsx, the leave guar
   try {
     await clickNav(page, "エクスペリエンス");
     await expect(leaveConfirm(page)).toBeVisible();
-    await leaveConfirm(page).getByRole("button", { name: "移動する", exact: true }).click();
+    await leaveConfirm(page).getByRole("button", { name: "移動する", exact: true }).press("Enter");
     await expect(page.locator("main").getByText(TIMEOUT_TEXT)).toBeVisible({ timeout: 15_000 });
     // 守りが付け直されている: もう一度押すと確認が出る
     await clickNav(page, "エクスペリエンス");
     await expect(leaveConfirm(page)).toBeVisible();
-    await leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true }).click();
+    await leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true }).press("Enter");
     // 再読み込みでも beforeunload の確認が来る
     const dialog = page.waitForEvent("dialog");
     void page.reload().catch(() => {});
@@ -404,7 +404,7 @@ test("status change with unsaved changes is stopped before the dialog", async ()
     await expect(dialog.getByRole("button")).toHaveCount(1);
     await expect(dialog.getByRole("button", { name: "閉じる", exact: true })).toBeVisible();
     await expect(page.getByRole("alertdialog")).toHaveCount(1);
-    await dialog.getByRole("button", { name: "閉じる", exact: true }).click();
+    await dialog.getByRole("button", { name: "閉じる", exact: true }).press("Enter");
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
     expect(statusReqs.count()).toBe(0);
     await expect(page.getByRole("button", { name: "開始(公開して配信を始める)" })).toBeVisible();
@@ -440,7 +440,7 @@ test("ending from the results tab with unsaved changes is stopped before the dia
         await expect(dialog).toContainText("先に保存してください");
         // 終了のモーダルは開かない(確認は 1 つだけ)
         await expect(page.getByRole("alertdialog")).toHaveCount(1);
-        await dialog.getByRole("button", { name: "閉じる", exact: true }).click();
+        await dialog.getByRole("button", { name: "閉じる", exact: true }).press("Enter");
         await expect(page.getByRole("alertdialog")).toHaveCount(0);
       } finally {
         await page.unroute("**/*", handler);
@@ -462,4 +462,59 @@ test("reload with unsaved changes triggers beforeunload", async () => {
   expect(d.type()).toBe("beforeunload");
   await d.dismiss();
   await expect(nameInput(page)).toHaveValue("E2E leave 12");
+});
+
+test("an issued key stops a sidebar click and back, and 戻って控える keeps the key", async () => {
+  // B173 第 2 段 Task 3: 発行したキーを控えずに離れる確認は PageLeaveGuard が出す(リンク・ログアウト・再読み込みに加えて、戻る・進むも止める)
+  markSessionsAsGoogle(); // B112: パスワードのセッションからは発行できない
+  const page = await ctx.newPage();
+  // 画面表示 → API キー(同じ文書の中に履歴を積む。戻るが守りに当たるように)
+  await open(page, "/w/me/display");
+  await clickNav(page, "API キー");
+  await expect(page.getByRole("button", { name: "発行する" })).toBeVisible();
+  await page.fill('input[name="name"]', "e2e-leave-guard-key");
+  await pick(page, "範囲", new RegExp(`^${WORKSPACE_NAME}`));
+  await pick(page, "権限", /^閲覧者/);
+  await pick(page, "有効期限", /^1 日/);
+  await page.getByRole("button", { name: "発行する" }).click();
+  const title = page.getByRole("heading", { name: "API キーを発行しました" });
+  await expect(title).toBeFocused();
+  const key = page.getByTestId("issued-key");
+  await expect(key).toContainText(/wtt_/);
+  const leave = page.getByRole("alertdialog", { name: "キーをまだ控えていません" });
+  const stay = leave.getByRole("button", { name: "戻って控える", exact: true });
+
+  // サイドバーのリンク: 確認が出て、「戻って控える」でキーが見えたまま、フォーカスは結果の見出し
+  await navLink(page, "画面表示").click();
+  await expect(leave).toBeVisible();
+  await expect(leave).toContainText("移動すると、このキーは二度と表示できません");
+  await expect(stay).toBeFocused();
+  await stay.press("Enter");
+  await expect(leave).toHaveCount(0);
+  expect(pathname(page)).toBe("/w/me/api-keys");
+  await expect(key).toContainText(/wtt_/);
+  await expect(title).toBeFocused();
+
+  // 戻る: 同じ確認が出て、出ている間は admin への要求が 0 件
+  const reqs = adminRequests(page);
+  try {
+    await back(page);
+    await expect(leave).toBeVisible();
+    await page.waitForTimeout(500);
+    await expect(leave).toBeVisible();
+    expect(pathname(page)).toBe("/w/me/api-keys");
+    expect(reqs.list()).toEqual([]);
+  } finally {
+    reqs.stop();
+  }
+  await stay.press("Enter");
+  await expect(leave).toHaveCount(0);
+  expect(pathname(page)).toBe("/w/me/api-keys");
+  await expect(key).toContainText(/wtt_/);
+
+  // 「移動する」で移る
+  await clickNav(page, "画面表示");
+  await leave.getByRole("button", { name: "移動する", exact: true }).press("Enter");
+  await expect(page).toHaveURL(/\/w\/me\/display$/);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });

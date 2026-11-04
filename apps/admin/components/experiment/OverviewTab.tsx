@@ -31,6 +31,7 @@ export function OverviewTab({
   onAnalyticsOpen,
   lock,
   goalsHref,
+  trafficSent,
 }: TabProps & {
   memoRo: boolean;
   /** 目標の画面(配信条件で目標が 0 件のときの案内のリンク。B66 c) */
@@ -45,9 +46,13 @@ export function OverviewTab({
   analyticsOpen: boolean;
   onAnalyticsOpen: (open: boolean) => void;
   lock: Pick<Experiment, "kind" | "status" | "trafficPercentage">;
+  /** 配信率の欄を保存で送るか(下書きが開いたときの値と違う)。送らない欄には、ほかの人が上げた保存済みの値との比較で赤字を出さない */
+  trafficSent: boolean;
 }) {
   const started = isStartedTest(lock);
   const persistLocked = testLockMessage(lock, "persistAssignment");
+  // 赤字は送る欄のときだけ(保存の前の検査 preSaveLockProblem と同じ条件。名前だけの保存を止めないのに、欄だけ赤いままにしない)
+  const trafficProblem = !ro && trafficSent ? trafficError(lock, draft.traffic) : null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <section className="card" aria-label="基本設定">
@@ -66,7 +71,7 @@ export function OverviewTab({
         <Field
           label="配信率(1〜100%。0% にしたいときは一時停止します)"
           hint={started ? `テストの開始後は、今の値(${lock.trafficPercentage}%)より上げることだけができます` : undefined}
-          error={ro ? null : trafficError(lock, draft.traffic)}
+          error={trafficProblem}
         >
           <input
             type="number"
@@ -74,7 +79,7 @@ export function OverviewTab({
             max={100}
             value={draft.traffic}
             disabled={ro}
-            aria-invalid={!ro && trafficError(lock, draft.traffic) ? true : undefined}
+            aria-invalid={trafficProblem ? true : undefined}
             onChange={(e) => set("traffic", Number(e.target.value))}
           />
         </Field>

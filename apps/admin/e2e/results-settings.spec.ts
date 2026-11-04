@@ -67,13 +67,13 @@ test("results recording: enabling asks with the running-test count; stopping ask
     await page.getByRole("button", { name: "保存" }).click();
     const enable = page.getByRole("alertdialog", { name: "結果の記録を有効にしますか?" });
     await expect(enable).toContainText("実行中の 1 件のテストは対象になりません");
-    await enable.getByRole("button", { name: "キャンセル" }).click();
+    await enable.getByRole("button", { name: "キャンセル" }).press("Enter");
     await expect(enable).toBeHidden();
     expect(patches).toBe(0); // キャンセルでは保存の要求を送らない
     expect(scalar(`select results_enabled from sites where id = '${SITE_RES.id}'`)).toBe(0);
 
     await page.getByRole("button", { name: "保存" }).click();
-    await enable.getByRole("button", { name: "有効にして保存" }).click();
+    await enable.getByRole("button", { name: "有効にして保存" }).press("Enter");
     await expect(page.getByText("保存しました")).toBeVisible();
     await expect(appAlert(page)).toHaveCount(0);
     expect(patches).toBe(1);
@@ -88,14 +88,14 @@ test("results recording: enabling asks with the running-test count; stopping ask
     await page.getByRole("button", { name: "保存" }).click();
     const dialog = page.getByRole("alertdialog", { name: "結果の記録を止めますか?" });
     await expect(dialog).toContainText("記録中の 1 件のテストの記録が止まります");
-    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await dialog.getByRole("button", { name: "キャンセル" }).press("Enter");
     await expect(dialog).toBeHidden();
     expect(patches).toBe(1); // キャンセルでは保存の要求を送らない
     expect(scalar(`select results_enabled from sites where id = '${SITE_RES.id}'`)).toBe(1);
 
     // 確定すると保存され、無効になる
     await page.getByRole("button", { name: "保存" }).click();
-    await dialog.getByRole("button", { name: "止めて保存" }).click();
+    await dialog.getByRole("button", { name: "止めて保存" }).press("Enter");
     await expect(page.getByText("保存しました")).toBeVisible();
     await expect(appAlert(page)).toHaveCount(0);
     expect(patches).toBe(2);

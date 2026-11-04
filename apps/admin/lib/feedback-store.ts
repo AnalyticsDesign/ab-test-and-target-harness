@@ -44,10 +44,17 @@ export type FeedbackSnapshot = {
   dirty: boolean;
   /** どこかの節が保存などの処理中 */
   busy: boolean;
+  /** どこかの節が持つ、未保存とは別の離れる前の確認の種類(B173 第 2 段。今は発行したキーを控えていない = issuedKey だけ) */
+  prompt: LeavePrompt | null;
 };
 
+/** 範囲が登録に載せる、未保存とは別の離れる前の確認の種類 */
+export type LeavePrompt = "issuedKey";
+/** 範囲の登録の 1 件 */
+export type GuardState = { dirty: boolean; busy: boolean; prompt?: LeavePrompt };
+
 /** サーバー描画・ハイドレーションで使う、何も起きていない状態 */
-export const SERVER_SNAPSHOT: FeedbackSnapshot = { nav: null, dirty: false, busy: false };
+export const SERVER_SNAPSHOT: FeedbackSnapshot = { nav: null, dirty: false, busy: false, prompt: null };
 
 // ---- モジュールの状態 ----
 
@@ -65,7 +72,11 @@ let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
 const replacedHrefs = new Set<string>();
 let lastMark: string | null = null;
 let writeSucceeded = false;
-const guards = new Map<string, { dirty: boolean; busy: boolean }>();
+const guards = new Map<string, GuardState>();
+/** 終わった遷移の番号と終わり方(新しい順に最大 NAV_OUTCOME_MEMORY 件)。navOutcome 用(B173 第 2 段) */
+type EndedHow = "ended" | "replaced";
+const endedNavs: { seq: number; how: EndedHow }[] = [];
+const NAV_OUTCOME_MEMORY = 8;
 
 // ---- snapshot ----
 
@@ -73,12 +84,14 @@ const guards = new Map<string, { dirty: boolean; busy: boolean }>();
 function publish(): void {
   let dirty = false;
   let busy = false;
+  let prompt: LeavePrompt | null = null;
   for (const g of guards.values()) {
     dirty ||= g.dirty;
     busy ||= g.busy;
+    prompt ??= g.prompt ?? null;
   }
-  if (nav === snapshot.nav && dirty === snapshot.dirty && busy === snapshot.busy) return;
-  snapshot = { nav, dirty, busy };
+  if (nav === snapshot.nav && dirty === snapshot.dirty && busy === snapshot.busy && prompt === snapshot.prompt) return;
+  snapshot = { nav, dirty, busy, prompt };
   for (const fn of [...listeners]) fn();
 }
 
@@ -141,8 +154,18 @@ function startTimeoutClock(seq: number): void {
   }, NAV_TIMEOUT_MS);
 }
 
-/** 今の遷移を終える。書き込み成功の印も、遷移が終われば用済み */
-function endNavigation(): void {
+/** 終わった遷移の終わり方を覚える(古いものから忘れる) */
+function rememberEnded(seq: number, how: EndedHow): void {
+  endedNavs.unshift({ seq, how });
+  if (endedNavs.length > NAV_OUTCOME_MEMORY) endedNavs.length = NAV_OUTCOME_MEMORY;
+}
+
+/**
+ * 今の遷移を終える。書き込み成功の印も、遷移が終われば用済み。
+ * how = 印で終えた(ended)か、印を待たずに打ち切った(replaced。cancelNavigation)か
+ */
+function endNavigation(how: EndedHow): void {
+  if (nav) rememberEnded(nav.seq, how);
   stopTimers();
   nav = null;
   replacedHrefs.clear();
@@ -160,7 +183,10 @@ export function nextSeq(): number {
 export function startNavigation(input: { href: string; fromUrl: string; key: string | null; deferred?: boolean }): number {
   const seq = nextSeq();
   stopTimers();
-  if (nav) replacedHrefs.add(nav.href);
+  if (nav) {
+    replacedHrefs.add(nav.href);
+    rememberEnded(nav.seq, "replaced");
+  }
   lastStartedSeq = seq;
   const dispatched = !input.deferred;
   nav = { seq, href: input.href, fromUrl: input.fromUrl, key: input.key, visible: false, timedOut: false, dispatched };
@@ -182,7 +208,7 @@ export function startNavigation(input: { href: string; fromUrl: string; key: str
  */
 export function cancelNavigation(): void {
   if (!nav) return;
-  endNavigation();
+  endNavigation("replaced");
 }
 
 /** 後に回した遷移が実際に移り始めたことを知らせる。その番号が今の遷移のときだけ、打ち切りの時計を始める */
@@ -205,10 +231,10 @@ export function reportMark(mark: { url: string; kind: MarkKind }): void {
   lastMark = mark.url;
   if (!nav) return;
   const { url, kind } = mark;
-  if (url === nav.href) return endNavigation();
+  if (url === nav.href) return endNavigation("ended");
   if (replacedHrefs.has(url)) return;
-  if (kind === "error" || kind === "notFound") return endNavigation();
-  if (url !== nav.fromUrl) return endNavigation();
+  if (kind === "error" || kind === "notFound") return endNavigation("ended");
+  if (url !== nav.fromUrl) return endNavigation("ended");
 }
 
 /** 最後に届いた印の URL。無ければ null */
@@ -219,6 +245,17 @@ export function lastMarkUrl(): string | null {
 /** seq(nextSeq で取った番号)より後に、遷移が始まったか */
 export function navStartedAfter(seq: number): boolean {
   return lastStartedSeq > seq;
+}
+
+/**
+ * その番号の遷移がどうなったか(B173 第 2 段。書き込みの後の移動を待つ BusyScope の waitNav が見る)。
+ * pending = 進行中(後に回して移り始めていないものも含む)、ended = 印で終わった、timedOut = 10 秒で打ち切った(次の遷移・印まで残る)、
+ * replaced = 後の遷移に替わった・cancelNavigation で印を待たずに終えた(印が来ていないので ended にしない)。
+ * 終わった遷移は最後の 8 件だけ覚える。覚えていない番号(遷移でない nextSeq の番号・古い番号)は ended
+ */
+export function navOutcome(seq: number): "pending" | "ended" | "timedOut" | "replaced" {
+  if (nav?.seq === seq) return nav.timedOut ? "timedOut" : "pending";
+  return endedNavs.find((e) => e.seq === seq)?.how ?? "ended";
 }
 
 // ---- 書き込みの成功 ----
@@ -238,11 +275,25 @@ export function writeSucceededRecently(): boolean {
 
 // ---- 節の状態 ----
 
-/** 節ごとの未保存・処理中を登録する(null で外す)。snapshot にはどこかが true なら true で出す */
-export function setGuard(scopeId: string, state: { dirty: boolean; busy: boolean } | null): void {
-  if (state) guards.set(scopeId, { dirty: state.dirty, busy: state.busy });
+/**
+ * 節ごとの未保存・処理中・確認の種類を登録する(null で外す)。snapshot にはどこかが true なら true で出す。
+ * prompt はどこかが持てばその値(B173 第 2 段)
+ */
+export function setGuard(scopeId: string, state: GuardState | null): void {
+  if (state) guards.set(scopeId, state.prompt ? { dirty: state.dirty, busy: state.busy, prompt: state.prompt } : { dirty: state.dirty, busy: state.busy });
   else guards.delete(scopeId);
   publish();
+}
+
+/**
+ * 離れる前にどの確認を出すか(null = 確認しない)。保存の途中 > 未保存とは別の種類(prompt) > 未保存(B173 第 2 段)。
+ * 保存の途中を先にするのは、書き込みの結果をこの画面で確かめられなくなることを先に知らせるため
+ */
+export function leavePromptKind(s: FeedbackSnapshot): "saving" | LeavePrompt | "unsaved" | null {
+  if (s.busy) return "saving";
+  if (s.prompt) return s.prompt;
+  if (s.dirty) return "unsaved";
+  return null;
 }
 
 // ---- 選ぶ関数(useFeedbackSelector に渡す。基本の値を返すので、関わりの無い更新では描き直さない) ----
@@ -270,6 +321,11 @@ export function selectScopeSkeleton(scope: { wid: string | null; sid: string | n
 
 // ---- テスト用 ----
 
+/** 購読者の数(waitNav が購読を外し忘れないかの確かめ用) */
+export function listenerCountForTest(): number {
+  return listeners.size;
+}
+
 export function resetFeedbackStoreForTest(): void {
   stopTimers();
   nav = null;
@@ -279,6 +335,7 @@ export function resetFeedbackStoreForTest(): void {
   lastMark = null;
   writeSucceeded = false;
   guards.clear();
+  endedNavs.length = 0;
   listeners.clear();
   snapshot = SERVER_SNAPSHOT;
 }

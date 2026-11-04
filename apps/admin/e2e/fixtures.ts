@@ -112,12 +112,12 @@ export const HERO_TEXT = "E2E から書き換え";
  * admin BFF は接続元 IP を転送しないので(決定 35 (4))、この E2E のすべての無認証 POST は control からは
  * 同じ IP に見え、経路ごとに 1 枠を共有する(apps/control/src/app.ts)。
  *
- * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 34 回(`login(` の呼び出しの実数。publish-flow 10 / audience-flow 10 /
- * version-banner 2 / experiment-kind-flow 1 / login-screen 1 / results-flow 1 / invite-flow 1 / static-delivery 1 / results-settings 1 /
- * variant-ui 1 / write-freeze 1 / request-count 1 / refresh-race 1 / shell-reuse 1 / domains-flow 1、うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 /
- * 招待受諾 2 回(invite-flow 1 / static-delivery 1。`acceptInvite()` は受諾でセッションを得るので、招待されたメンバーの sign-in は数えない)/
+ * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 40 回(`login(` の呼び出しの実数。publish-flow 10 / audience-flow 10 /
+ * version-banner 2 / request-count 3 / experiment-kind-flow 1 / login-screen 1 / results-flow 1 / invite-flow 1 / static-delivery 1 / results-settings 1 /
+ * variant-ui 1 / write-freeze 1 / refresh-race 1 / shell-reuse 1 / domains-flow 1 / experiment-save 1 / leave-guard 1 / nav-feedback 1 / busy-scopes 1、うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 /
+ * 招待受諾 3 回(invite-flow 1 / static-delivery 1 / busy-scopes 1。`acceptInvite()` は受諾でセッションを得るので、招待されたメンバーの sign-in は数えない)/
  * `break-glass/reset-link` 1 回 / `reset-password` 1 回。
- * 1 実行の sign-in の合計(34)は上限(30 回 / 10 秒。`apps/control/wrangler.jsonc` の AUTH_RATE_LIMITER)を超えていて、合計だけでは
+ * 1 実行の sign-in の合計(40)は上限(30 回 / 10 秒。`apps/control/wrangler.jsonc` の AUTH_RATE_LIMITER)を超えていて、合計だけでは
  * 10 秒窓に収まるとは言えない。今は `workers: 1` で直列に走り、各 `login()` の間に画面の遷移とテストの操作が入るので、1 つの 10 秒窓に
  * 入る sign-in は合計よりずっと少ない(窓ごとの実数は測っていない)。これ以上ログインを増やすなら、
  * 各テストでログインし直すのをやめて `storageState` でセッションを引き回すこと(ログインの検証は 1 本残せばよい)。
@@ -311,7 +311,7 @@ export async function changeStatus(page: Page, siteId: string, experimentId: str
   const dialog = page.getByRole("alertdialog", { name: /^(開始|再開|一時停止)/ });
   const first = await firstOf(page, done, dialog, before);
   if (first.kind === "dialog") {
-    await dialog.getByRole("button", { name: /^(開始|再開|一時停止)する$/ }).click();
+    await dialog.getByRole("button", { name: /^(開始|再開|一時停止)する$/ }).press("Enter");
     const second = await firstOf(page, done, null, before);
     if (second.kind === "alert") throw new Error(`changeStatus: the screen stopped after the confirmation without sending the status request: ${second.text}`);
   } else if (first.kind === "alert") {
@@ -319,6 +319,8 @@ export async function changeStatus(page: Page, siteId: string, experimentId: str
   }
   const res = await done;
   expect(res.status()).toBe(200);
+  // B173 第 2 段: 最後の確認は読み直しの反映まで開いたまま(中を「開始中…」などで覆う)。続けて画面を触る呼び出し元のため、閉じるまで待つ
+  if (first.kind === "dialog") await expect(dialog).toBeHidden({ timeout: 15_000 });
   return (await res.json()) as StatusResponse;
 }
 
@@ -397,5 +399,5 @@ export async function pick(scope: Page | Locator, label: string, option: string 
  * 「保存(下書き)」を押した直後に呼ぶ
  */
 export async function confirmRunningTestSave(page: Page): Promise<void> {
-  await page.getByRole("alertdialog", { name: "実行中のテストを変更しますか?" }).getByRole("button", { name: "保存する", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "実行中のテストを変更しますか?" }).getByRole("button", { name: "保存する", exact: true }).press("Enter");
 }

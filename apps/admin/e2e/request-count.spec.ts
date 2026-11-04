@@ -18,7 +18,9 @@ import { ADMIN_URL, CONTROL_URL, WORKSPACE_NAME, controlHeaders, createExperimen
  *   遷移元を開いた後〜落ち着くまでの分(表示の後の先読みなど)と、マウスを乗せたときの先読みの分は別に数えて記録だけする
  * ほかに、一覧を開いて何もしない間の要求(IDLE_LIMITS)と、エクスペリエンスの保存 1 回(SAVE_LIMITS。別の test
  * 「experience save: one write and one refresh …」)を数える。保存の test は、押してから落ち着くまでの窓の admin への要求を
- * 書き込み・読み直し・許したもの(SAVE_ALLOWED)に分け、それ以外の要求が無いことも表明する
+ * 書き込み・読み直し・許したもの(SAVE_ALLOWED)に分け、それ以外の要求が無いことも表明する。
+ * B173 第 2 段: 同じ形で、オーディエンスの保存(audienceSave)・目標の編集(goalEdit)・エクスペリエンスの作成(experimentCreate。読み直しの代わりに
+ * 移った先の HTML)・下書きのテストの開始(statusStart。事前の取得の窓と確定の後の窓に分ける)の 1 回を数える(別の test「stage 2 writes: …」)
  *
  * 数え方: admin の wrangler dev の手元の観測(`/cdn-cgi/local/explorer/api/local/observability/query`。wrangler が起動時のログに案内する、
  * 読み取りだけの SQL の口)を読む。admin への要求 1 件ごとに根の span があり、その中で control へ出した要求が子の fetch の span
@@ -35,7 +37,8 @@ import { ADMIN_URL, CONTROL_URL, WORKSPACE_NAME, controlHeaders, createExperimen
  * 余裕の付け方: 上限 = 直した後の実測(request-count を 3 回走らせたときの最大)+ 1。数は毎回同じ(揺れない)ことを 3 回で確かめてある。
  * 「+ 1」は観測の誤差のためではなく、無関係な小さな変更で毎回上限を上げずに済むための幅。2 増えたら落ちる。
  *
- * 上限を上げるときの手順(REQUEST_LIMITS・IDLE_LIMITS・SAVE_LIMITS の値を変える前、SAVE_ALLOWED に足す前に必ず):
+ * 上限を上げるときの手順(REQUEST_LIMITS・IDLE_LIMITS・SAVE_LIMITS(第 2 段の audienceSave・goalEdit・experimentCreate・statusStart を含む)の値を変える前、
+ * SAVE_ALLOWED に足す前・その件数(count)や control の上限を上げる前に必ず):
  * 1. 先に減らせないかを確かめる: 同じ GET は 1 回の描画の中で lib/control-dedupe.ts がまとめる(controlRequest を通していれば効く)。
  *    互いに依らない取得は lib/loaders.ts の allInOrder で並べる(回数は減らないが直列の待ちが減る)。新しい呼び方で controlRequest を迂回していないか
  * 2. それでも増えるなら、増える理由(どの画面で、どの control の呼び出しが、なぜ要るか)を、上げる値の横のコメントと commit の本文に書いてから上げる
@@ -112,13 +115,68 @@ export const SAVE_LIMITS = {
   // refreshControl の 8 は上の REQUEST_LIMITS.experiment(詳細の遷移 = 実測 8)と同じ: 保存の後の読み直しはその画面の RSC を描き直すだけで、
   // 外枠の /me・/workspaces/summary・/capabilities・/sites/:sid + audiences・goals・experiments/:eid・evaluation-plan を 1 回ずつ呼ぶ(重複なし)
   experimentNameSave: { writeRequests: 1, writeControl: 2, refreshRsc: 1, refreshControl: 9 },
+  // B173 第 2 段(test「stage 2 writes: …」)。実測は 2026-11-04、1 回押し・二度押しとも、3 回の実行で同じ。鍵の意味は上の第 1 段と同じ。
+  // 読み直しの control の数は、どれもその画面の REQUEST_LIMITS の遷移の実測と同じ(読み直しはその画面の RSC を描き直すだけ)。
+  // オーディエンスの保存(名前だけ): writeControl 1(PATCH 1 回)/ refreshControl 7 = REQUEST_LIMITS.audience の遷移の実測 7
+  // (外枠の 4 + audiences/:aid・audiences・goals)
+  audienceSave: { writeRequests: 1, writeControl: 2, refreshRsc: 1, refreshControl: 8 },
+  // 目標の編集(一覧の中で名前を変えて保存): writeControl 1(PATCH 1 回)/ refreshControl 5 = REQUEST_LIMITS.goals の遷移の実測 5(外枠の 4 + goals)
+  goalEdit: { writeRequests: 1, writeControl: 2, refreshRsc: 1, refreshControl: 6 },
+  // エクスペリエンスの作成(作成のフォームから): 作成の後は全画面の移動なので、読み直しの代わりに移った先の HTML を数える。
+  // - navigationHtml = 移った先(エクスペリエンスの詳細)の HTML の要求の数(1 回ちょうど。読み直しの RSC は 0 件で、出たらその他に入って落ちる)
+  // - navigationControl = その HTML の要求が control を呼んだ数
+  // 実測: writeControl 1(POST 1 回)/ navigationControl 8 = REQUEST_LIMITS.experiment の直接の実測 8。
+  // ほかに移った先の StaticHealthBanner の GET /api/control/static/status が 1 件(control 1)出る(SAVE_ALLOWED.experimentCreate)
+  experimentCreate: { writeRequests: 1, writeControl: 2, navigationHtml: 1, navigationControl: 9 },
+  // 下書きのテストの開始: 窓を 2 つに分ける。
+  // - prefetchControl = 事前の取得の窓(開始のボタンを押してから最後の確認が出るまで)の要求が control を呼んだ数。窓の中は
+  //   publish-preview と evaluation-plan の並列の GET がそれぞれ 1 回ちょうど(ほかの要求は無い)
+  // - writeRequests・writeControl・refreshRsc・refreshControl = 確定の後の窓(確定を押す直前から)の数。意味は上の第 1 段と同じ
+  // 実測: prefetchControl 2(GET 2 本が 1 回ずつ)/ writeControl 1(POST 1 回)/ refreshControl 8 = REQUEST_LIMITS.experiment の遷移の実測 8
+  statusStart: { prefetchControl: 3, writeRequests: 1, writeControl: 2, refreshRsc: 1, refreshControl: 9 },
 } as const;
 
 /**
- * 保存の窓(SAVE_LIMITS の test)で、書き込み・読み直しのほかに許す admin への要求。ここに無い要求が窓の中に出たら落とす
+ * 保存の窓で許す admin への要求 1 種類。match = URL の判定 / count = 窓の中のその要求の件数の上限 / control = それらが control を呼んだ数の上限。
+ * URL だけで無制限に除外しない(許したものが決めた回数より多く出たら落とす。B173 第 2 段)
+ */
+type AllowedRule = { match: (url: URL) => boolean; count: number; control: number };
+
+/**
+ * 保存の窓(SAVE_LIMITS の test)で、書き込み・読み直しのほかに許す admin への要求(鍵ごと)。ここに無い要求が窓の中に出たら落とす
  * (余計な往復が増えたことを見張る。最終レビュー FR-Medium-5)。足すときは、なぜ要るかを横に書く
  */
-const SAVE_ALLOWED: ReadonlyArray<(url: URL) => boolean> = [];
+const SAVE_ALLOWED: Record<"experimentNameSave" | "audienceSave" | "goalEdit" | "experimentCreate" | "statusStart", ReadonlyArray<AllowedRule>> = {
+  experimentNameSave: [],
+  audienceSave: [],
+  goalEdit: [],
+  // 作成の後は全画面の移動なので、移った先の layout のクライアント部品 StaticHealthBanner が BFF の GET /api/control/static/status を 1 回出す
+  // (E2E の owner はシステム管理者なので出る。IDLE_LIMITS のコメントの 1 件と同じもの)。control の数 = 実測 1 + 1
+  experimentCreate: [{ match: (u) => u.pathname === "/api/control/static/status", count: 1, control: 2 }],
+  statusStart: [],
+};
+
+/** 窓の中の admin への要求の分け方: 書き込み・読み直し(または移った先の HTML)・許したもの(規則ごと)・その他 */
+type WindowParts = { writes: AdminRequest[]; refreshes: AdminRequest[]; allowed: AdminRequest[][]; others: AdminRequest[] };
+
+/**
+ * 保存の窓の要求を分ける(第 1 段の分け方を、書き込みの URL・読み直しの URL を引数で受ける形にしたもの)。
+ * 1 件は先に当たった 1 つにだけ入る(書き込み → 読み直し → 許したものの規則の順)
+ */
+function classifyWindow(reqs: AdminRequest[], isWrite: (u: URL) => boolean, isRefresh: (u: URL) => boolean, allowed: ReadonlyArray<AllowedRule>): WindowParts {
+  const parts: WindowParts = { writes: [], refreshes: [], allowed: allowed.map(() => []), others: [] };
+  for (const r of reqs) {
+    const u = new URL(r.url);
+    if (isWrite(u)) parts.writes.push(r);
+    else if (isRefresh(u)) parts.refreshes.push(r);
+    else {
+      const i = allowed.findIndex((rule) => rule.match(u));
+      if (i >= 0) parts.allowed[i]!.push(r);
+      else parts.others.push(r);
+    }
+  }
+  return parts;
+}
 
 const SITE_RC = { id: "site_e2e_rcount", name: "E2E Request Count" };
 const EXP = { id: "exp_e2e_rcount", name: "E2E request count experience" };
@@ -599,10 +657,12 @@ test("experience save: one write and one refresh stay within the control request
     browser.stop();
     // 窓の中の admin への要求を分類する: 書き込み(保存の PATCH)・読み直し(詳細の RSC)・許したもの(SAVE_ALLOWED)・その他。
     // 観測の口の span には HTTP のメソッドが無いので、書き込みの path への要求はブラウザ側で見た PATCH の数と照らす(下の表明)
-    const writes = reqs.filter((r) => new URL(r.url).pathname === writePath);
-    const refreshes = reqs.filter((r) => new URL(r.url).pathname === expPath && new URL(r.url).searchParams.has("_rsc"));
-    const allowed = reqs.filter((r) => !writes.includes(r) && !refreshes.includes(r) && SAVE_ALLOWED.some((ok) => ok(new URL(r.url))));
-    const others = reqs.filter((r) => !writes.includes(r) && !refreshes.includes(r) && !allowed.includes(r));
+    const { writes, refreshes, allowed, others } = classifyWindow(
+      reqs,
+      (u) => u.pathname === writePath,
+      (u) => u.pathname === expPath && u.searchParams.has("_rsc"),
+      SAVE_ALLOWED.experimentNameSave,
+    );
     const browserPatches = browser.seen.filter((r) => r.method === "PATCH" && r.pathname === writePath);
     // ブラウザが admin へ送った GET 以外の要求のうち、保存の PATCH でないもの(別の書き込みが増えたら落とす)
     const browserOtherWrites = browser.seen.filter((r) => r.method !== "GET" && r.method !== "HEAD" && !(r.method === "PATCH" && r.pathname === writePath));
@@ -616,7 +676,7 @@ test("experience save: one write and one refresh stay within the control request
       ...result,
       writeByPath: count(writes, wid).byPath,
       refreshByPath: count(refreshes, wid).byPath,
-      allowed: perRequest(allowed, wid),
+      allowed: perRequest(allowed.flat(), wid),
       others: perRequest(others, wid),
       browserPatches: browserPatches.length,
       browserOtherWrites: browserOtherWrites.map((r) => `${r.method} ${symbolize(r.pathname, wid)}`),
@@ -642,4 +702,250 @@ test("experience save: one write and one refresh stay within the control request
   // 二度押し: 1 回目で覆いが出て 2 回目は効かないので、数は 1 回押しと同じ
   const double = await measure("double-click", "E2E save count renamed 2", () => saveButton.dblclick());
   expect.soft(double, "二度押しの数が 1 回押しと同じ").toEqual(single);
+});
+
+/** 書き込みの窓 1 つの数(鍵は SAVE_LIMITS の各項目と同じ名前) */
+type WindowResult = Record<string, number>;
+
+/**
+ * 書き込みの窓 1 つを分け、第 1 段と同じ決まりで表明する(B173 第 2 段)。
+ * 書き込み・読み直し(または移った先の HTML)の要求はちょうど limit の件数、control を呼んだ数は 0 より大きく上限以下、許したものは規則ごとの件数と
+ * control の数が上限以下、その他は 0 件。書き込みの path への要求は、ブラウザが送った write.method の要求の数と同じ(ほかの書き込みも無い)。
+ * refresh.requests・refresh.control = 読み直しの件数・その control の数を入れる鍵の名前(移動のときは navigationHtml・navigationControl)
+ */
+async function checkWriteWindow(
+  testInfo: TestInfo,
+  args: {
+    name: string;
+    wid: string;
+    reqs: AdminRequest[];
+    browser: Array<{ method: string; pathname: string }>;
+    write: { method: string; path: string };
+    refresh: { match: (u: URL) => boolean; requests: string; control: string };
+    allowed: ReadonlyArray<AllowedRule>;
+    limit: Readonly<Record<string, number>>;
+  },
+): Promise<WindowResult> {
+  const { name, wid, reqs, write, refresh, allowed: rules, limit } = args;
+  const { writes, refreshes, allowed, others } = classifyWindow(reqs, (u) => u.pathname === write.path, refresh.match, rules);
+  const browserWrites = args.browser.filter((r) => r.method === write.method && r.pathname === write.path);
+  const browserOtherWrites = args.browser
+    .filter((r) => r.method !== "GET" && r.method !== "HEAD" && !(r.method === write.method && r.pathname === write.path))
+    .map((r) => `${r.method} ${symbolize(r.pathname, wid)}`);
+  const result: WindowResult = {
+    writeRequests: writes.length,
+    writeControl: count(writes, wid).total,
+    [refresh.requests]: refreshes.length,
+    [refresh.control]: count(refreshes, wid).total,
+    // 許したもの(規則ごとの件数と control の数。二度押しと 1 回押しの比べにも入れる)
+    ...Object.fromEntries(allowed.flatMap((a, i) => [[`allowed${i}Requests`, a.length], [`allowed${i}Control`, count(a, wid).total]])),
+  };
+  await record(testInfo, name, {
+    ...result,
+    writeByPath: count(writes, wid).byPath,
+    refreshByPath: count(refreshes, wid).byPath,
+    allowed: allowed.map((a) => perRequest(a, wid)),
+    others: perRequest(others, wid),
+    browserWrites: browserWrites.length,
+    browserOtherWrites,
+    requests: perRequest(reqs, wid),
+    limit,
+  });
+  expect.soft(result.writeRequests, `${name}: 書き込みの要求がちょうど ${limit.writeRequests} 件`).toBe(limit.writeRequests);
+  expect.soft(result[refresh.requests], `${name}: ${refresh.requests} がちょうど ${limit[refresh.requests]} 件`).toBe(limit[refresh.requests]);
+  // control を呼んだ数は、0 件(観測の口が壊れた)で素通りしないよう 0 より大きいことも見る
+  expect.soft(result.writeControl, `${name}: 書き込みが control を呼んだ数が数えられている(≥ 1)`).toBeGreaterThan(0);
+  expect.soft(result.writeControl, `${name}: 書き込みが control を呼んだ数 ≤ ${limit.writeControl}`).toBeLessThanOrEqual(limit.writeControl!);
+  expect.soft(result[refresh.control], `${name}: ${refresh.control} が数えられている(≥ 1)`).toBeGreaterThan(0);
+  expect.soft(result[refresh.control], `${name}: ${refresh.control} ≤ ${limit[refresh.control]}`).toBeLessThanOrEqual(limit[refresh.control]!);
+  rules.forEach((rule, i) => {
+    expect.soft(allowed[i]!.length, `${name}: 許したもの ${i} の件数 ≤ ${rule.count}`).toBeLessThanOrEqual(rule.count);
+    expect.soft(count(allowed[i]!, wid).total, `${name}: 許したもの ${i} が control を呼んだ数 ≤ ${rule.control}`).toBeLessThanOrEqual(rule.control);
+  });
+  expect.soft(browserWrites.length, `${name}: ブラウザが送った ${write.method} の数が、観測の口の書き込みの要求の数と同じ`).toBe(result.writeRequests);
+  expect.soft(browserOtherWrites, `${name}: ${write.method} のほかに書き込みの要求が無い`).toEqual([]);
+  expect.soft(perRequest(others, wid), `${name}: 窓に、書き込み・読み直し・許したもの以外の要求が無い`).toEqual([]);
+  return result;
+}
+
+/**
+ * B173 第 2 段: オーディエンスの保存・目標の編集・エクスペリエンスの作成・下書きのテストの開始の 1 回の回数(1 回押し・二度押し)。
+ * どれも覆いの部品で 1 回の書き込み + 1 回の読み直し(作成は移った先の HTML)にしてあるので、上の保存の test と同じ決まりで見る。
+ * 開始は窓を 2 つに分ける: 事前の取得の窓(開始のボタンを押してから最後の確認が出るまで。publish-preview と evaluation-plan の並列の GET が
+ * それぞれ 1 回ちょうど)と、確定の後の窓(確定を押す直前から。POST 1 + 読み直し 1)。
+ * 専用のサイト(結果を記録しない = 開始が判定の目標で止まらない)を作る。ID は SITE_RC などの ID を含まないものにする(symbolize が置き換えてしまうため)
+ */
+test("stage 2 writes: an audience save, a goal edit, an experiment create and a start stay within the control request budget (single and double press)", async ({ page }, testInfo) => {
+  test.setTimeout(300_000);
+  const started = Date.now();
+  const site = { id: "site_e2e_wcount", name: "E2E Write Count" };
+  const aud = { id: "aud_e2e_wcount", name: "E2E write count audience" };
+  const goal = { id: "goal_e2e_wcount", name: "E2E write count goal" };
+  const starts = ["exp_e2e_wc_start1", "exp_e2e_wc_start2"];
+
+  await login(page);
+  await createSite(page, site);
+  const wid = new URL(page.url()).pathname.split("/")[2]!;
+  const sitePath = new URL(page.url()).pathname;
+  const api = async (method: string, path: string, data: unknown) => (await page.request.fetch(`/api/control${path}`, { method, headers: controlHeaders(), data })).status();
+  expect(await api("POST", `/sites/${site.id}/audiences`, { id: aud.id, name: aud.name, definition: { ctx: "path", op: "regex", value: "^/$" } })).toBe(201);
+  expect(await api("POST", `/sites/${site.id}/goals`, { id: goal.id, name: goal.name, type: "CUSTOM", config: {} })).toBe(201);
+  for (const id of starts) expect(await api("POST", `/sites/${site.id}/experiments`, { id, name: id, urlMatch: { op: "contains", value: "/" } })).toBe(201);
+  // 観測の口が使えること(見えないと下の数が 0 になる。「≥ 1」の表明と合わせた保険)
+  expect(count(await adminRequests(started), wid).total).toBeGreaterThan(0);
+
+  /** 画面を開いて落ち着くまで待つ(開いた分を窓に入れない) */
+  const open = async (path: string) => {
+    await page.goto(path);
+    await waitForHydration(page);
+    await waitQuiet(Date.now() - 5_000);
+  };
+  /** press から done(画面が結果を出した)まで、落ち着くまでの admin への要求とブラウザの要求 */
+  const windowOf = async (press: () => Promise<void>, done: () => Promise<void>) => {
+    const browser = watchBrowserRequests(page);
+    const from = Date.now();
+    await press();
+    await done();
+    const reqs = await adminRequests(from, await waitQuiet(from));
+    browser.stop();
+    return { reqs, browser: browser.seen };
+  };
+  type Press = "single" | "double";
+  const presses: Press[] = ["single", "double"];
+  const pressOf = (button: Locator, how: Press) => () => (how === "single" ? button.click() : button.dblclick());
+
+  await test.step("audienceSave: rename and save", async () => {
+    const audPath = `${sitePath}/audiences/${aud.id}`;
+    const results: WindowResult[] = [];
+    for (const [i, how] of presses.entries()) {
+      await open(audPath);
+      const newName = `E2E write count audience ${i + 1}`;
+      await page.getByLabel("名前", { exact: true }).fill(newName);
+      const w = await windowOf(pressOf(page.getByRole("button", { name: "保存", exact: true }), how), async () => {
+        await expect(page.getByTestId("save-state")).toHaveText("保存しました。次の公開で反映されます");
+      });
+      results.push(
+        await checkWriteWindow(testInfo, {
+          name: `audienceSave-${how}`,
+          wid,
+          ...w,
+          write: { method: "PATCH", path: `/api/control/sites/${site.id}/audiences/${aud.id}` },
+          refresh: { match: (u) => u.pathname === audPath && u.searchParams.has("_rsc"), requests: "refreshRsc", control: "refreshControl" },
+          allowed: SAVE_ALLOWED.audienceSave,
+          limit: SAVE_LIMITS.audienceSave,
+        }),
+      );
+    }
+    expect.soft(results[1], "audienceSave: 二度押しの数が 1 回押しと同じ").toEqual(results[0]);
+  });
+
+  await test.step("goalEdit: rename and save in the list card", async () => {
+    const goalsPath = `${sitePath}/goals`;
+    const list = page.getByTestId("goals-list");
+    const results: WindowResult[] = [];
+    for (const [i, how] of presses.entries()) {
+      await open(goalsPath);
+      const newName = `E2E write count goal ${i + 1}`;
+      // 編集のパネルは保存で閉じるので、押すたびに開き直す
+      await list.getByRole("row").filter({ hasText: goal.id }).getByRole("button", { name: /^編集/ }).click();
+      await list.getByLabel(/^名前/).fill(newName);
+      const w = await windowOf(pressOf(list.getByRole("button", { name: "保存", exact: true }), how), async () => {
+        await expect(list.locator(':scope > [data-testid="card-notice"]').getByRole("status")).toHaveText("保存しました");
+        await expect(list.getByRole("row").filter({ hasText: goal.id })).toContainText(newName);
+      });
+      results.push(
+        await checkWriteWindow(testInfo, {
+          name: `goalEdit-${how}`,
+          wid,
+          ...w,
+          write: { method: "PATCH", path: `/api/control/sites/${site.id}/goals/${goal.id}` },
+          refresh: { match: (u) => u.pathname === goalsPath && u.searchParams.has("_rsc"), requests: "refreshRsc", control: "refreshControl" },
+          allowed: SAVE_ALLOWED.goalEdit,
+          limit: SAVE_LIMITS.goalEdit,
+        }),
+      );
+    }
+    expect.soft(results[1], "goalEdit: 二度押しの数が 1 回押しと同じ").toEqual(results[0]);
+  });
+
+  await test.step("experimentCreate: create from the form and land on the detail (full page load)", async () => {
+    const results: WindowResult[] = [];
+    for (const [i, how] of presses.entries()) {
+      await open(`${sitePath}/experiments/new`);
+      const exp = { id: `exp_e2e_wc_new${i + 1}`, name: `E2E write count new ${i + 1}` };
+      const detailPath = `${sitePath}/experiments/${exp.id}`;
+      await page.fill('input[name="id"]', exp.id);
+      await page.fill('input[name="name"]', exp.name);
+      await page.fill('input[name="value"]', "/");
+      const w = await windowOf(pressOf(page.locator('button[type="submit"]'), how), async () => {
+        await expect(page).toHaveURL((u) => u.pathname === detailPath);
+        await waitForHydration(page);
+        await expect(heading(page, exp.name)).toBeVisible();
+      });
+      results.push(
+        await checkWriteWindow(testInfo, {
+          name: `experimentCreate-${how}`,
+          wid,
+          ...w,
+          write: { method: "POST", path: `/api/control/sites/${site.id}/experiments` },
+          // 移った先の HTML(読み直しの RSC は無い。移った先への RSC の要求はその他に入って落ちる)
+          refresh: { match: (u) => u.pathname === detailPath && !u.searchParams.has("_rsc"), requests: "navigationHtml", control: "navigationControl" },
+          allowed: SAVE_ALLOWED.experimentCreate,
+          limit: SAVE_LIMITS.experimentCreate,
+        }),
+      );
+    }
+    expect.soft(results[1], "experimentCreate: 二度押しの数が 1 回押しと同じ").toEqual(results[0]);
+  });
+
+  await test.step("statusStart: start a draft test (prefetch window + window after the confirm)", async () => {
+    const limit = SAVE_LIMITS.statusStart;
+    const results: Array<{ prefetch: WindowResult; write: WindowResult }> = [];
+    for (const [i, how] of presses.entries()) {
+      const eid = starts[i]!;
+      const detailPath = `${sitePath}/experiments/${eid}`;
+      const previewPath = `/api/control/sites/${site.id}/publish-preview`;
+      const planPath = `/api/control/sites/${site.id}/experiments/${eid}/evaluation-plan`;
+      await open(detailPath);
+      const dialog = page.getByRole("alertdialog", { name: "開始しますか?" });
+
+      // 事前の取得の窓: 開始のボタンを押してから最後の確認が出るまで(確認の前の二度押しは 2 回目が効かない)
+      const pre = await windowOf(pressOf(page.getByRole("button", { name: "開始(公開して配信を始める)" }), how), () => expect(dialog).toBeVisible());
+      const gets = (path: string) => pre.reqs.filter((r) => new URL(r.url).pathname === path);
+      const preOthers = pre.reqs.filter((r) => ![previewPath, planPath].includes(new URL(r.url).pathname));
+      const prefetch: WindowResult = {
+        publishPreview: gets(previewPath).length,
+        evaluationPlan: gets(planPath).length,
+        prefetchControl: count(pre.reqs, wid).total,
+      };
+      await record(testInfo, `statusStart-${how}-prefetch`, { ...prefetch, byPath: count(pre.reqs, wid).byPath, others: perRequest(preOthers, wid), requests: perRequest(pre.reqs, wid), limit });
+      expect.soft(prefetch.publishPreview, `statusStart-${how}: 事前の publish-preview の GET がちょうど 1 件`).toBe(1);
+      expect.soft(prefetch.evaluationPlan, `statusStart-${how}: 事前の evaluation-plan の GET がちょうど 1 件`).toBe(1);
+      expect.soft(pre.browser.filter((r) => r.method !== "GET" && r.method !== "HEAD"), `statusStart-${how}: 確認の前に書き込みの要求が無い`).toEqual([]);
+      expect.soft(prefetch.prefetchControl, `statusStart-${how}: 事前の取得が control を呼んだ数が数えられている(≥ 1)`).toBeGreaterThan(0);
+      expect.soft(prefetch.prefetchControl, `statusStart-${how}: 事前の取得が control を呼んだ数 ≤ ${limit.prefetchControl}`).toBeLessThanOrEqual(limit.prefetchControl);
+      expect.soft(perRequest(preOthers, wid), `statusStart-${how}: 事前の取得の窓に、2 つの GET 以外の要求が無い`).toEqual([]);
+
+      // 確定の後の窓: 確定を押す直前から、結果が出て状態が配信中になるまで(確認のボタンは開いた直後 0.5 秒のマウスを無視するのでキーで押す)
+      const post = await windowOf(
+        () => dialog.getByRole("button", { name: "開始する", exact: true }).press("Enter"),
+        async () => {
+          await expect(page.getByTestId("status-result")).toContainText("を反映しました");
+          await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "running");
+          await expect(page.getByRole("alertdialog")).toHaveCount(0);
+        },
+      );
+      const write = await checkWriteWindow(testInfo, {
+        name: `statusStart-${how}`,
+        wid,
+        ...post,
+        write: { method: "POST", path: `/api/control/sites/${site.id}/experiments/${eid}/status` },
+        refresh: { match: (u) => u.pathname === detailPath && u.searchParams.has("_rsc"), requests: "refreshRsc", control: "refreshControl" },
+        allowed: SAVE_ALLOWED.statusStart,
+        limit: { writeRequests: limit.writeRequests, writeControl: limit.writeControl, refreshRsc: limit.refreshRsc, refreshControl: limit.refreshControl },
+      });
+      results.push({ prefetch, write });
+    }
+    expect.soft(results[1], "statusStart: 二度押しの数が 1 回押しと同じ").toEqual(results[0]);
+  });
 });

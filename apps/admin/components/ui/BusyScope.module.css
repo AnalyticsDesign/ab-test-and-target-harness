@@ -1,6 +1,9 @@
 /* 範囲を包む。覆い(.overlay)をこの範囲の中だけに重ねるため position: relative。
    isolation で z-index をこの範囲の中に閉じ込める(範囲の中の sticky な保存バー(z-index 5)より上に出すため) */
 .scope { position: relative; isolation: isolate; }
+/* 範囲どうしが縦に並ぶと、後の範囲(同じ重なりの階)が前の範囲から下へはみ出したメニュー(Picker の選択肢)の上に描かれて押せなくなる。
+   フォーカスのある範囲(メニューを開いている範囲)を隣の範囲より上に出す(B173 第 2 段 Task 6。メンバーの一覧のロールと招待のフォーム) */
+.scope:focus-within { z-index: 1; }
 
 /* 書き込みの間、範囲を覆う。色は本文の背景色の 60%(トークン --overlay-bg)。クリックは受けて止める(中身は inert でも、見た目の上でも触れないように) */
 .overlay { position: absolute; inset: 0; z-index: 10; background: var(--overlay-bg); cursor: progress; }

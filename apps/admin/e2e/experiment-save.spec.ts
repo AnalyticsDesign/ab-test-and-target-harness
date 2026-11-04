@@ -142,7 +142,7 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
     const patches = patchCount(EXP_RUN.id);
     try {
       // 同じ処理の中で 2 回押す(dblclick だと、1 回目で開いた確認の背面を 2 回目が押して、確認がキャンセルで閉じる。
-      // 背面のクリックで閉じるのは確認のモーダルの決まりなので、ここでは確認が 2 つ開かないこと・送るのが 1 回であることだけを見る)
+      // 第 2 段で開いた直後の 0.5 秒のクリックは無視するようにした(e2e/busy-scopes.spec.ts)。ここでは確認が 2 つ開かないこと・送るのが 1 回であることだけを見る)
       await saveButton().evaluate((el: HTMLButtonElement) => {
         el.click();
         el.click();
@@ -151,7 +151,7 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
       await expect(confirm).toBeVisible();
       await expect(page.getByRole("alertdialog")).toHaveCount(1);
       expect(patches.count()).toBe(0); // 確認の前には送らない
-      await confirm.getByRole("button", { name: "保存する", exact: true }).click();
+      await confirm.getByRole("button", { name: "保存する", exact: true }).press("Enter");
       await expect(saveState()).toHaveText(SAVED);
       await expect(page.getByRole("alertdialog")).toHaveCount(0);
       expect(patches.count()).toBe(1);
@@ -320,6 +320,13 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
   // 「未保存のまま新しい値が届く」場面は、読み直しを 10 秒の打ち切りの後まで止めて作る(打ち切りの後は入力できるので、
   // 止めた読み直しが届く前に名前を変えておける)。素直に「開く → API で上げる → 名前を変えて保存」だと、新しい値が画面に届かず検査が働かない。
   // 読み直しは自分では放さず、画面の状態(打ち切りの文言・入力の反映)を確かめてから release() で通す(打ち切りの後の操作の速さに頼らない)
+  // 配信率の欄に赤字(aria-invalid と文)が出ていないこと
+  const TRAFFIC_LOCKED_TEXT = "テストの開始後は配信率を下げられません";
+  async function expectTrafficFieldClean() {
+    await expect(page.getByRole("spinbutton", { name: /^配信率/ })).not.toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByText(TRAFFIC_LOCKED_TEXT)).toHaveCount(0);
+  }
+
   test("a name-only save on a running test is not blocked by another user's raised traffic that arrived while editing", async () => {
     test.setTimeout(90_000);
     await openExperiment(EXP_RUN.id);
@@ -344,6 +351,8 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
     // 未保存のまま新しい値が届いた(注記が出る)。下書きの名前と配信率(50)は残る
     await expect(page.getByText(SERVER_UPDATED)).toBeVisible();
     await expect(nameInput()).toHaveValue("E2E run rename 2");
+    // 送らない配信率の欄には、保存済みの値(75)より低くても赤字を出さない(B173 第 2 段)。保存の前
+    await expectTrafficFieldClean();
     const bodies: unknown[] = [];
     const onRequest = (req: Request) => {
       if (req.method() === "PATCH" && new URL(req.url()).pathname === `/api/control${apiPath(EXP_RUN.id)}`) bodies.push(req.postDataJSON());
@@ -359,5 +368,14 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
     expect(bodies).toEqual([{ name: "E2E run rename 2" }]);
     const exp = (await control(page, "GET", apiPath(EXP_RUN.id))).json as { name: string; trafficPercentage: number };
     expect(exp).toMatchObject({ name: "E2E run rename 2", trafficPercentage: 75 });
+    // 保存の後も赤字は出ない
+    await expectTrafficFieldClean();
+    // 下書きの配信率を保存済みの 75 より低い 60 に変えると、送る欄になるので赤字と aria-invalid が出る
+    const traffic = page.getByRole("spinbutton", { name: /^配信率/ });
+    await traffic.fill("60");
+    await expect(traffic).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByText(TRAFFIC_LOCKED_TEXT)).toBeVisible();
+    // 欄の min は保存済みの値(75)のまま(送る欄の下限として使う。送らない欄では赤字にしないだけ)
+    await expect(traffic).toHaveAttribute("min", "75");
   });
 });

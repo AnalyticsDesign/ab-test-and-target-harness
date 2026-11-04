@@ -15,22 +15,12 @@ import { Picker } from "../ui/Picker";
 import { ErrorBox } from "../ErrorBox";
 import { ExperimentIdField } from "./ExperimentIdField";
 import { navigateDocument } from "@/lib/navigate";
+import { BusyScope, useBusyAction } from "../ui/BusyScope";
 
-/**
- * 決定 51(設計書 §4.2、モックの複製の画面): 見出しの「複製」から開く。元は変わらず、下書きを作って新しいエクスペリエンスの概要へ移る。
- * 入力欄を持つので外のクリックでは閉じない(Esc と「戻る」で閉じる)。
- * initial = 最初の状態(結果のタブの「<採用> だけを表示する下書きを作成」は、採用したパターンを選んだ状態で開く。D9 ③ Task 15)。
- * report = テストの結果(あれば初期値・プルダウンの判定と上回る確率・選んだパターンへの注意に使う。D9 ③ Task 16)
- */
-export function DuplicateDialog({
-  wid,
-  siteId,
-  experiment,
-  open,
-  onClose,
-  initial,
-  report,
-}: {
+/** 作成の応答が 30 秒で分からなかったとき */
+const CREATE_UNKNOWN = "作成できたか分かりません。再読み込みして確かめてください";
+
+type Props = {
   wid: string;
   siteId: string;
   experiment: Experiment;
@@ -38,11 +28,29 @@ export function DuplicateDialog({
   onClose: () => void;
   initial?: DuplicateState;
   report?: ResultsResponse | null;
-}) {
+};
+
+/**
+ * 決定 51(設計書 §4.2、モックの複製の画面): 見出しの「複製」から開く。元は変わらず、下書きを作って新しいエクスペリエンスの概要へ移る。
+ * 入力欄を持つので外のクリックでは閉じない(Esc と「戻る」で閉じる)。
+ * initial = 最初の状態(結果のタブの「<採用> だけを表示する下書きを作成」は、採用したパターンを選んだ状態で開く。D9 ③ Task 15)。
+ * report = テストの結果(あれば初期値・プルダウンの判定と上回る確率・選んだパターンへの注意に使う。D9 ③ Task 16)。
+ * 作成(POST と外部計測の名前の PATCH)から移った先の画面が開くまで、ダイアログの中を覆って押し直せなくする(B173 第 2 段。二重の作成を止める)。
+ * 範囲(BusyScope)はダイアログを包むが、モーダルの <dialog> は外側の inert から外れるので、見える覆いは ConfirmDialog の busyLabel
+ */
+export function DuplicateDialog(props: Props) {
+  return (
+    <BusyScope id="duplicate-dialog">
+      <DuplicateDialogBody {...props} />
+    </BusyScope>
+  );
+}
+
+function DuplicateDialogBody({ wid, siteId, experiment, open, onClose, initial, report }: Props) {
   const [s, setS] = useState(() => initial ?? initialDuplicateState(experiment, report));
   // 評価時点の前かは今の時刻で決める(評価時点の後でも前の速報が返ることがあるため)
   const now = useNow();
-  const [busy, setBusy] = useState(false);
+  const { busy, run } = useBusyAction();
   const [error, setError] = useState<string | null>(null);
   const single = experiment.kind === "single";
   const notes = duplicateNotes(experiment, s, report, now);
@@ -62,41 +70,42 @@ export function DuplicateDialog({
     <ConfirmDialog
       open={open}
       title="複製して新しいエクスペリエンスを作ります"
-      confirmLabel={busy ? "作成中…" : "下書きを作成"}
+      confirmLabel="下書きを作成"
       cancelLabel="戻る"
       tone="primary"
       dismissOnBackdrop={false}
+      busyLabel={busy ? "作成中…" : null}
       confirmDisabled={busy || s.name.trim() === "" || idProblem !== null || nameProblem !== null}
       onCancel={() => {
         if (!busy) onClose();
       }}
       onConfirm={async () => {
-        setBusy(true);
         setError(null);
-        let created: Pick<Experiment, "id" | "analytics">;
-        try {
-          created = await api<Pick<Experiment, "id" | "analytics">>("POST", `/sites/${siteId}/experiments/${experiment.id}/duplicate`, duplicateBody(s));
-        } catch (e) {
-          setError(describeError(e));
-          setBusy(false);
-          return;
-        }
-        // B103: 外部計測の名前を変えたときだけ 2 回目の要求で直す(複製は元の外部計測を丸ごと写すため)。
-        // 失敗しても複製はできている(下書きなので配信されない)ので、移った先で知らせて直してもらう
-        let analyticsFailed = false;
-        // 土台は複製の応答の外部計測(画面を開いた後に元の extra が直されていても、複製が写した新しい値を保つ。PATCH は丸ごと置き換えのため)
-        const patch = duplicateAnalyticsPatch({ ...experiment, analytics: created.analytics }, s);
-        if (patch) {
-          try {
-            await api("PATCH", `/sites/${siteId}/experiments/${created.id}`, patch);
-          } catch {
-            analyticsFailed = true;
-          }
-        }
-        // 上部バーの「未公開の編集あり」を描き直すため全画面の遷移(作成の画面と同じ理由)。
-        // B108: 移った先の見た目が元とほぼ同じで反応が無いように見えるので、作成したことを知らせる印を付ける(移った先で URL から消す)
-        const q = analyticsFailed ? "?duplicated=1&analyticsFailed=1" : "?duplicated=1";
-        navigateDocument(`/w/${wid}/sites/${siteId}/experiments/${created.id}${q}`);
+        const outcome = await run({
+          label: "作成中…",
+          write: async (signal) => {
+            const created = await api<Pick<Experiment, "id" | "analytics">>("POST", `/sites/${siteId}/experiments/${experiment.id}/duplicate`, duplicateBody(s), { signal });
+            // B103: 外部計測の名前を変えたときだけ 2 回目の要求で直す(複製は元の外部計測を丸ごと写すため)。
+            // 失敗しても複製はできている(下書きなので配信されない)ので、移った先で知らせて直してもらう
+            let analyticsFailed = false;
+            // 土台は複製の応答の外部計測(画面を開いた後に元の extra が直されていても、複製が写した新しい値を保つ。PATCH は丸ごと置き換えのため)
+            const patch = duplicateAnalyticsPatch({ ...experiment, analytics: created.analytics }, s);
+            if (patch) {
+              try {
+                await api("PATCH", `/sites/${siteId}/experiments/${created.id}`, patch, { signal });
+              } catch {
+                analyticsFailed = true;
+              }
+            }
+            return { id: created.id, analyticsFailed };
+          },
+          // 上部バーの「未公開の編集あり」を描き直すため全画面の遷移(作成の画面と同じ理由)。移った先が開くまで覆いと実行権を保つ。
+          // B108: 移った先の見た目が元とほぼ同じで反応が無いように見えるので、作成したことを知らせる印を付ける(移った先で URL から消す)
+          after: "navigate",
+          navigate: ({ id, analyticsFailed }) => navigateDocument(`/w/${wid}/sites/${siteId}/experiments/${id}${analyticsFailed ? "?duplicated=1&analyticsFailed=1" : "?duplicated=1"}`),
+        });
+        if (outcome.kind === "failed") setError(describeError(outcome.error));
+        else if (outcome.kind === "unknown") setError(CREATE_UNKNOWN);
       }}
     >
       <p className="muted">元のエクスペリエンスは変わりません。新しいエクスペリエンスは下書きで作られ、開始するまでサイトには表示されません。</p>

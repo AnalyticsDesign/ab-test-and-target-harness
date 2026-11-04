@@ -131,7 +131,7 @@ test("instance admins see the static delivery banner while deploys fail, members
     await page.getByTestId("static-rebuild").getByRole("button", { name: "公開中の全サイトの配信ファイルを作り直す", exact: true }).click();
     const dialog = page.getByRole("alertdialog", { name: "公開中の全サイトの配信ファイルを作り直しますか" });
     await expect(dialog).toContainText(/公開中の全サイト\(\d+ サイト\)の配信ファイルを、今の公開内容で作り直します/);
-    await dialog.getByRole("button", { name: "作り直す", exact: true }).click();
+    await dialog.getByRole("button", { name: "作り直す", exact: true }).press("Enter");
     const result = page.getByTestId("static-rebuild-result");
     await expect(result.getByRole("heading", { name: "作り直しを受け付けました" })).toBeFocused();
     await expect(result).toContainText(/公開中の \d+ サイトの配信ファイルの作り直しを受け付けました/);

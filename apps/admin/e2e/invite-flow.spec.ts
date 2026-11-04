@@ -32,7 +32,7 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   const row = () => page.getByRole("row").filter({ hasText: canceled });
   await expect(row()).toHaveCount(1);
   await row().getByRole("button", { name: "取り消す" }).click();
-  await page.getByRole("alertdialog", { name: `${canceled} への招待を取り消しますか?` }).getByRole("button", { name: "招待を取り消す" }).click();
+  await page.getByRole("alertdialog", { name: `${canceled} への招待を取り消しますか?` }).getByRole("button", { name: "招待を取り消す" }).press("Enter");
   await expect(row()).toHaveCount(0);
 
   // 招待の再発行と期限の表示(backlog B28)。同じログイン済みの流れに相乗りする
@@ -176,18 +176,20 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   page.on("request", onRequest);
   await pick(page, "Ed のロール", /^閲覧者/);
   await expect(roleDialog).toContainText("「編集者」から「閲覧者」に変更します");
-  await roleDialog.getByRole("button", { name: "キャンセル" }).click();
+  await roleDialog.getByRole("button", { name: "キャンセル" }).press("Enter");
   await expect(roleDialog).toBeHidden();
   await expect(edRow.getByRole("combobox")).toContainText("編集者");
   expect(rolePatches).toBe(0); // キャンセルでは変更の要求を送らない
   await pick(page, "Ed のロール", /^閲覧者/);
-  await roleDialog.getByRole("button", { name: "変更する" }).click();
+  await roleDialog.getByRole("button", { name: "変更する" }).press("Enter");
   await expect(edRow.getByRole("combobox")).toContainText("閲覧者");
   expect(rolePatches).toBe(1);
   page.off("request", onRequest);
   await pick(page, "Ed のロール", /^編集者/);
-  await roleDialog.getByRole("button", { name: "変更する" }).click();
+  await roleDialog.getByRole("button", { name: "変更する" }).press("Enter");
   await expect(edRow.getByRole("combobox")).toContainText("編集者");
+  // 一覧のカードの覆いが外れる(先頭に結果の文が出る)まで待ってから移る(覆いの間の移動は離れる前の確認で止まる。B173 第 2 段)
+  await expect(page.getByTestId("members-list").getByRole("status")).toHaveText("ロールを変更しました");
 
   // B36: オーナー(= 初回セットアップの人 = システム管理者)が editor をシステム管理者にする → メンバー画面に印 → 外す。
   // ログイン済みのこの流れに相乗りする(sign-in の予算を増やさない。fixtures.ts の内訳参照)。
@@ -203,6 +205,7 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await page.getByRole("option", { name: /editor@e2e\.example/ }).click();
   await page.getByRole("button", { name: "システム管理者にする" }).click();
   await expect(adminRows.filter({ hasText: "editor@e2e.example" })).toHaveCount(1);
+  await expect(page.getByTestId("instance-admins-list").getByRole("status")).toHaveText("追加しました");
 
   await openMembers(page);
   const edMember = page.getByTestId("members").getByRole("row").filter({ hasText: "editor@e2e.example" });
@@ -219,7 +222,7 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   const demoteDialog = editor.getByRole("alertdialog", { name: "自分をシステム管理者から外しますか?" });
   // 戻るワークスペースとロールが出る。この時点のワークスペースは WORKSPACE_NAME だけ(E2E Temp はこの後に作る)なので、外れる側は無い
   await expect(demoteDialog).toContainText(`${WORKSPACE_NAME}(編集者)`);
-  await demoteDialog.getByRole("button", { name: "外す" }).click();
+  await demoteDialog.getByRole("button", { name: "外す" }).press("Enter");
   await expect(editor).toHaveURL(/\/w$/); // 全画面で /w へ移る(戻ったワークスペースがあるのでログインしたまま)
   // 昇格前に編集者だったワークスペースでは、編集者として使い続けられる(すべてを失わない)
   await openWorkspace(editor);
@@ -245,8 +248,9 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await fullDialog.getByRole("checkbox", { name: "元のロールに戻さず、すべてのワークスペースから外す" }).check();
   await expect(fullDialog.getByTestId("confirm-option-warning")).toContainText("元のロールには戻さず、次のすべてのワークスペースから外れます");
   await expect(fullDialog).not.toContainText("システム管理者になる前のロールに戻ります");
-  await fullDialog.getByRole("button", { name: "すべてから外す" }).click();
+  await fullDialog.getByRole("button", { name: "すべてから外す" }).press("Enter");
   await expect(adminRows.filter({ hasText: "editor@e2e.example" })).toHaveCount(0);
+  await expect(page.getByTestId("instance-admins-list").getByRole("status")).toHaveText("外しました");
   // 元のロールにも戻らない = オーナーのメンバー画面に editor の行が無い
   await openMembers(page);
   await expect(page.getByTestId("members").getByRole("row").filter({ hasText: "editor@e2e.example" })).toHaveCount(0);

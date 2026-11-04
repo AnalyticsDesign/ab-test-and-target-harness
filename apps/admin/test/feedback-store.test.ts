@@ -9,6 +9,7 @@ import {
   getSnapshot,
   lastMarkUrl,
   markNavigationDispatched,
+  navOutcome,
   navStartedAfter,
   nextSeq,
   normalizeUrl,
@@ -198,6 +199,36 @@ describe("遷移", () => {
     // 遷移が終わった後も、始まったという事実は残る
     reportMark({ url: "/a", kind: "page" });
     expect(navStartedAfter(w)).toBe(true);
+  });
+
+  it("navOutcome tells pending, ended, timedOut and replaced", () => {
+    // 進行中 → 印で終わる
+    const a = startNavigation({ href: "/w/a", fromUrl: "/w", key: null });
+    expect(navOutcome(a)).toBe("pending");
+    reportMark({ url: "/w/a", kind: "page" });
+    expect(navOutcome(a)).toBe("ended");
+    // 別の遷移で替える → 前の番号は replaced
+    const b = startNavigation({ href: "/w/b", fromUrl: "/w", key: null });
+    const c = startNavigation({ href: "/w/c", fromUrl: "/w", key: null });
+    expect(navOutcome(b)).toBe("replaced");
+    expect(navOutcome(c)).toBe("pending");
+    // cancelNavigation で終える → 印が来ていないので replaced
+    cancelNavigation();
+    expect(navOutcome(c)).toBe("replaced");
+    // 10 秒 → timedOut。後に回した遷移は移り始めるまで pending
+    const d = startNavigation({ href: "/w/d", fromUrl: "/w", key: null, deferred: true });
+    vi.advanceTimersByTime(NAV_TIMEOUT_MS);
+    expect(navOutcome(d)).toBe("pending");
+    markNavigationDispatched(d);
+    vi.advanceTimersByTime(NAV_TIMEOUT_MS);
+    expect(navOutcome(d)).toBe("timedOut");
+    // 打ち切られた遷移が後の遷移に替わったら replaced
+    startNavigation({ href: "/w/e", fromUrl: "/w", key: null });
+    expect(navOutcome(d)).toBe("replaced");
+    // 覚えていない番号(遷移でない番号・古すぎる番号)は ended
+    expect(navOutcome(nextSeq())).toBe("ended");
+    for (let i = 0; i < 9; i++) startNavigation({ href: `/w/x${i}`, fromUrl: "/w", key: null });
+    expect(navOutcome(b)).toBe("ended");
   });
 
   it("lastMarkUrl tracks the latest mark", () => {

@@ -6,13 +6,19 @@ import type { ApiKey, Workspace } from "@/lib/types";
 import { Field } from "../Field";
 import { ErrorBox } from "../ErrorBox";
 import { Picker } from "../ui/Picker";
+import { useBusyAction } from "../ui/BusyScope";
+
+/** 30 秒待っても発行の結果が分からない。キーが作られていても、その値はもう表示できない */
+const ISSUE_UNKNOWN = "発行できたか分かりません。再読み込みして一覧を確かめ、キーが作られていなければそのまま、作られていたらそのキーを失効させてから、もう一度発行してください";
 
 export type IssuedResult = ApiKey & { key: string };
 
 /**
  * 「新しい API キーを発行」のカード(決定 54 (11)・B43)。項目は縦に並べ、それぞれに説明。名前・範囲・権限・有効期限の 4 つとも必須で、
  * そろうまで「発行する」は押せず、足りないものを横に出す。権限と有効期限は既定を未選択にする。権限は範囲を選ぶまで押せず、
- * 範囲を替えて選べなくなった権限は state から消す(範囲を戻してもよみがえらない)
+ * 範囲を替えて選べなくなった権限は state から消す(範囲を戻してもよみがえらない)。
+ * 発行は親(ApiKeysPanel)の BusyScope の run で行う(B173 第 2 段)。範囲は結果のカードに入れ替わっても消えないので、
+ * 覆いは読み直しの反映(一覧の新しい行)まで続く
  */
 export function IssueKeyForm({ workspaces, amInstanceAdmin, onIssued }: { workspaces: Workspace[]; amInstanceAdmin: boolean; onIssued: (k: IssuedResult) => void }) {
   const scopes = scopeOptions(workspaces, amInstanceAdmin);
@@ -26,27 +32,29 @@ export function IssueKeyForm({ workspaces, amInstanceAdmin, onIssued }: { worksp
   const [expiry, setExpiry] = useState<ExpiryChoice | null>(null);
   // 期限の目安は、選んだ時刻から数える(描画の中で時計を読まない。B44)。control は発行の時刻から数えるので数秒〜数分ずれ得る目安
   const [chosenAt, setChosenAt] = useState<number | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, run } = useBusyAction();
   const [error, setError] = useState<string | null>(null);
   const missing = issueMissing(name, scope, cap, expiry);
   const deadline = expiry === null || chosenAt === null ? null : expiryAt(expiry, chosenAt);
   async function issue() {
     if (missing || scope === null || cap === null || expiry === null) return;
-    setBusy(true);
     setError(null);
-    try {
-      const k = await api<IssuedResult>("POST", "/me/api-keys", {
-        name: name.trim(),
-        workspaceId: scope === FULL_SCOPE ? null : scope,
-        roleCap: capFromChoice(cap as CapChoice),
-        expiresInDays: expiresInDaysOf(expiry), // 期限なしは送らない(undefined は JSON から落ちる)
-      });
-      onIssued(k);
-    } catch (e) {
-      setError(describeError(e));
-    } finally {
-      setBusy(false);
-    }
+    const body = {
+      name: name.trim(),
+      workspaceId: scope === FULL_SCOPE ? null : scope,
+      roleCap: capFromChoice(cap as CapChoice),
+      expiresInDays: expiresInDaysOf(expiry), // 期限なしは送らない(undefined は JSON から落ちる)
+    };
+    const outcome = await run({
+      label: "発行中…",
+      write: (signal) => api<IssuedResult>("POST", "/me/api-keys", body, { signal }),
+      // 結果のカードは読み直しを待たずに出す(覆いの下で入れ替わり、覆いは読み直しの反映まで続く)
+      onWritten: onIssued,
+      after: "refresh",
+    });
+    // 成功の後はこの部品が結果のカードに入れ替わって消えているので、ここで扱うのは失敗だけ
+    if (outcome.kind === "failed") setError(describeError(outcome.error));
+    else if (outcome.kind === "unknown") setError(ISSUE_UNKNOWN);
   }
   return (
     <section className="card" aria-labelledby="issue-title">

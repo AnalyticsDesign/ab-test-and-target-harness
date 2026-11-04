@@ -1,8 +1,8 @@
 "use client";
 import { useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { useConfirm } from "@/components/ConfirmProvider";
-import { getSnapshot, markNavigationDispatched, normalizeUrl, startNavigation } from "@/lib/feedback-store";
+import { useConfirm, type ConfirmOptions } from "@/components/ConfirmProvider";
+import { getSnapshot, leavePromptKind, markNavigationDispatched, normalizeUrl, startNavigation } from "@/lib/feedback-store";
 import { currentUrl, navigateApp } from "@/lib/navigate";
 import { popstateGuard, type PopstateBlock } from "@/lib/popstate-guard";
 import { deferUntilRefreshed, isRefreshPending } from "@/lib/refresh-wait";
@@ -13,25 +13,43 @@ import { useLeaveGuard, type LeaveAttempt } from "./useLeaveGuard";
 const UNSAVED = { title: "保存していない変更があります", body: "移動すると変更は失われます", confirmLabel: "移動する", cancelLabel: "とどまる", tone: "danger" } as const;
 /** 保存の途中で離れる(書き込みの結果をこの画面では確かめられない) */
 const SAVING = { title: "保存の途中です", body: "移動すると、保存できたかをこの画面では確かめられません", confirmLabel: "移動する", cancelLabel: "とどまる", tone: "primary" } as const;
+/** 発行したキーを控えずに離れる(キーは二度と表示できない)。勧めるのは取りやめの側なので、「戻って控える」を強調し、初めのフォーカスもそちら */
+const ISSUED_KEY = {
+  title: "キーをまだ控えていません",
+  body: "移動すると、このキーは二度と表示できません。控えずに移動した場合は、一覧からこのキーを失効させて、発行し直してください。",
+  confirmLabel: "移動する",
+  cancelLabel: "戻って控える",
+  tone: "danger",
+  emphasizeCancel: true,
+} as const;
+
+/** 確認の種類ごとの文言(B173 第 2 段) */
+const PROMPTS: Record<NonNullable<ReturnType<typeof leavePromptKind>>, ConfirmOptions> = { saving: SAVING, issuedKey: ISSUED_KEY, unsaved: UNSAVED };
+
+/** event の時点の store で、まだ確認が要るか */
+function isGuardedNow(): boolean {
+  return leavePromptKind(getSnapshot()) !== null;
+}
 
 /**
  * 離れる前の確認(B173 第 1 段)。app/w/layout.tsx に 1 つだけ置く。
- * どこかの節(BusyScope)に未保存の変更があるか保存の途中の間だけ、リンク・ログアウト・再読み込み(useLeaveGuard)と
- * ブラウザの戻る・進む(lib/popstate-guard.ts)を止めて確認を出す。保存の途中を優先する(両方なら保存中の文言)。
+ * どこかの節(BusyScope)に未保存の変更があるか・保存の途中か・未保存とは別の確認の種類(prompt。発行したキーを控えていない)を持つ間だけ、
+ * リンク・ログアウト・再読み込み(useLeaveGuard)とブラウザの戻る・進む(lib/popstate-guard.ts)を止めて確認を出す。
+ * 文言は 保存の途中 > prompt > 未保存 の順で選ぶ(feedback-store の leavePromptKind)。
  * 文言は止めた時点の store の値で選ぶ(描画の時点の値だと、保存が終わった直後の操作で古い文言になるため)
  */
 export function PageLeaveGuard() {
   const router = useRouter();
   const ask = useConfirm();
-  const active = useFeedbackSelector((s) => s.dirty || s.busy);
+  const active = useFeedbackSelector((s) => leavePromptKind(s) !== null);
   const timedOut = useFeedbackSelector((s) => s.nav?.timedOut === true);
 
   // onAttempt から最新の bypass・rearm を呼ぶための入れ物(useLeaveGuard の戻り値は描画ごとに作り直される)
   const guard = useRef<ReturnType<typeof useLeaveGuard> | null>(null);
 
   const confirmLeave = useCallback(async (): Promise<boolean> => {
-    const s = getSnapshot();
-    return ask(s.busy ? SAVING : UNSAVED);
+    // 止めた後に状態が変わって種類が無くなっていても(すぐ後に保存が終わった等)、止めた移動には確認を出す(未保存の文言)
+    return ask(PROMPTS[leavePromptKind(getSnapshot()) ?? "unsaved"]);
   }, [ask]);
 
   const onAttempt = useCallback(
@@ -47,7 +65,8 @@ export function PageLeaveGuard() {
     },
     [confirmLeave, router],
   );
-  guard.current = useLeaveGuard(active, (a) => void onAttempt(a));
+  // 止めるかは event の時点の store で決める(範囲が after: "navigate" で自分の登録を外した直後の移動を止めないため。B173 第 2 段)
+  guard.current = useLeaveGuard(active, (a) => void onAttempt(a), isGuardedNow);
 
   const onBlock = useCallback(
     async (b: PopstateBlock) => {

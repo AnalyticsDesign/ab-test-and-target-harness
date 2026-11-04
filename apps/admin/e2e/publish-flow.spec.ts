@@ -257,7 +257,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     // 設定のメニューの「メンバー」(サイト設定の外の画面)は確認が出る。キャンセルなら残り、入力も残る
     await nav.getByRole("link", { name: "メンバー", exact: true }).click();
     await expect(settingsLeave).toBeVisible();
-    await settingsLeave.getByRole("button", { name: "キャンセル" }).click();
+    await settingsLeave.getByRole("button", { name: "キャンセル" }).press("Enter");
     await expect(settingsLeave).toBeHidden();
     await expect(page).toHaveURL(settingsUrl);
     await expect(tzCombo()).toHaveValue("America/New_York");
@@ -265,12 +265,12 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     const backLink = nav.getByRole("link", { name: /^戻る/ });
     await backLink.click();
     await expect(settingsLeave).toBeVisible();
-    await settingsLeave.getByRole("button", { name: "キャンセル" }).click();
+    await settingsLeave.getByRole("button", { name: "キャンセル" }).press("Enter");
     await expect(settingsLeave).toBeHidden();
     await expect(page).toHaveURL(settingsUrl);
     await expect(tzCombo()).toHaveValue("America/New_York"); // 入力は残る
     await backLink.click();
-    await settingsLeave.getByRole("button", { name: "保存せずに移動" }).click();
+    await settingsLeave.getByRole("button", { name: "保存せずに移動" }).press("Enter");
     await expect(page).toHaveURL(new RegExp(`/sites/${SITE.id}$`));
     // 存在しない節は一般の節で開く
     await page.goto(`${settingsUrl}?section=bogus`);
@@ -409,7 +409,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     // 戻った後は結果の見出しにフォーカスがある(ダイアログが閉じた後に移す。リンクに戻らない)
     await expect(page.getByRole("heading", { name: "API キーを発行しました" })).toBeFocused();
     await side.getByRole("link", { name: "画面表示" }).click();
-    await leave.getByRole("button", { name: "移動する" }).click();
+    await leave.getByRole("button", { name: "移動する" }).press("Enter");
     await expect(page).toHaveURL(/\/w\/me\/display$/);
     // 管理者以上は「メンバーの API キー」で、このワークスペースで使えるキーを持ち主付きで見られる
     await page.goto("/w/me/api-keys");
@@ -468,15 +468,18 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await page.mouse.move(5, 5);
     await page.mouse.up();
     await expect(revokeDialog).toBeVisible();
-    await page.mouse.click(5, 5);
-    await expect(revokeDialog).toBeHidden();
+    // 開いてから 0.5 秒の間のクリックは無視する(ダブルクリックの 2 回目で閉じないため。lib/dialog-click.ts)ので、閉じるまで背面を押し直す
+    await expect(async () => {
+      await page.mouse.click(5, 5);
+      await expect(revokeDialog).toBeHidden({ timeout: 200 });
+    }).toPass({ timeout: 5_000 });
     await activeRow.getByRole("button", { name: "失効" }).click();
-    await revokeDialog.getByRole("button", { name: "キャンセル" }).click();
+    await revokeDialog.getByRole("button", { name: "キャンセル" }).press("Enter");
     await expect(revokeDialog).toBeHidden();
     await expect(activeRow.getByRole("button", { name: "失効" })).toBeEnabled(); // 有効な鍵の表に残る
     expect(revokeRequests).toBe(0); // キャンセルでは失効の要求を送らない
     await activeRow.getByRole("button", { name: "失効" }).click();
-    await revokeDialog.getByRole("button", { name: "失効する" }).click();
+    await revokeDialog.getByRole("button", { name: "失効する" }).press("Enter");
     await expect.poll(() => revokeRequests).toBe(1);
     page.off("request", onRequest);
     const revokedTable = page.getByTestId("revoked-api-keys");
@@ -567,7 +570,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
       // openSettings は押した直後に選択中を待つので、確認を挟むここでは使わない
       await nav.getByRole("link", { name: "設定", exact: true }).click();
       const leave = page.getByRole("alertdialog", { name: "保存していない変更があります" });
-      await leave.getByRole("button", { name: "移動する", exact: true }).click();
+      await leave.getByRole("button", { name: "移動する", exact: true }).press("Enter");
       await expect(page).toHaveURL(new RegExp(`/sites/${SITE.id}/settings$`));
       await expect(backLink).toHaveAttribute("href", experimentHref);
       // サイトから開いたので、メニューの先頭は「サイト設定」の節(見出しの下の行にサイト名。切り替えの枠にもサイト名が出るので、見出しの塊で見る)
@@ -763,7 +766,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     const pauseDialog = page.getByRole("alertdialog", { name: "一時停止しますか?" });
     await expect(pauseDialog).toContainText("訪問者への配信がすぐに止まります");
     await expect(pauseDialog).toContainText("このサイト全体を公開します");
-    await pauseDialog.getByRole("button", { name: "キャンセル" }).click();
+    await pauseDialog.getByRole("button", { name: "キャンセル" }).press("Enter");
     await expect(pauseDialog).toHaveCount(0);
     page.off("request", countPosts);
     expect(statusPosts).toBe(0);
@@ -790,6 +793,8 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await page.fill('input[name="value"]', "/thanks");
     await page.getByRole("button", { name: "追加" }).click();
     await expect(page.getByRole("cell", { name: "パス が「/thanks」で始まる" })).toBeVisible();
+    // 追加のフォームは読み直しの反映の後も最短の表示の間は覆われている(B173 第 2 段)。結果の文が出て覆いが外れてから次を入力する
+    await expect(page.getByTestId("goal-add").getByRole("status")).toHaveText("追加しました");
 
     // B45: 目標の削除は押した瞬間に消えるので確認を挟む(キャンセルなら残る →「削除する」で消える)
     await page.fill('input[name="id"]', "g_tmp");
@@ -805,13 +810,15 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     };
     page.on("request", onRequest);
     await tmpRow.getByRole("button", { name: "削除" }).click();
-    await goalDialog.getByRole("button", { name: "キャンセル" }).click();
+    await goalDialog.getByRole("button", { name: "キャンセル" }).press("Enter");
     await expect(goalDialog).toBeHidden();
     await expect(tmpRow).toHaveCount(1);
     expect(goalDeletes).toBe(0); // キャンセルでは削除の要求を送らない
     await tmpRow.getByRole("button", { name: "削除" }).click();
-    await goalDialog.getByRole("button", { name: "削除する" }).click();
+    await goalDialog.getByRole("button", { name: "削除する" }).press("Enter");
     await expect(tmpRow).toHaveCount(0);
+    // 覆いが外れる(一覧のカードの先頭に結果の文が出る)まで待ってから移る(覆いの間の移動は離れる前の確認で止まる。B173 第 2 段)
+    await expect(page.getByTestId("goals-list").getByRole("status")).toHaveText("削除しました");
     expect(goalDeletes).toBe(1);
     page.off("request", onRequest);
 
@@ -909,7 +916,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await expect.poll(unloadIsCancelled).toBe(true);
     await logout();
     await expect(leave).toBeVisible();
-    await leave.getByRole("button", { name: "戻って控える" }).click();
+    await leave.getByRole("button", { name: "戻って控える" }).press("Enter");
     await expect(leave).toBeHidden();
     await expect(page).toHaveURL(/\/w\/me\/api-keys$/);
     // 戻った後は結果の見出しにフォーカスがある(ダイアログが閉じた後に移す。リンクに戻らない)
@@ -920,7 +927,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
 
     await issue("e2e-logout-guard-2");
     await logout();
-    await leave.getByRole("button", { name: "移動する" }).click();
+    await leave.getByRole("button", { name: "移動する" }).press("Enter");
     await expect(page).toHaveURL(/\/login$/);
     expect(logoutPosts).toBe(1); // 「移動する」で 1 回だけ送られる
     expect(unloadPrompts).toBe(0); // ログアウトの全画面の遷移で、ブラウザ標準の確認が二重に出ない

@@ -13,6 +13,16 @@ import { deferUntilRefreshed, isRefreshPending } from "@/lib/refresh-wait";
 
 export { targetScope };
 
+/**
+ * 移動の入口が返す、始めた移動の種類(B173 第 2 段。BusyScope の waitNav が移動の終わりを待つのに使う)。
+ * - document: ページが閉じる移動(window.location.assign・reload)。seq はアプリの中の URL への navigateDocument なら
+ *   startNavigation が始めた store の遷移の番号(打ち切りの文言は NavGate が出す)。reloadDocument・外の URL は null
+ *   (store の遷移を始めないので、待つ側が自分の時計と文言を持つ)
+ * - app: store の遷移を始めた(その番号)
+ * - none: アプリの中の遷移でない・表示を始めない遷移(同じ URL・最後の印と同じ URL)。ページは閉じず、印も来ない
+ */
+export type NavHandle = { kind: "document"; seq: number | null } | { kind: "app"; seq: number } | { kind: "none" };
+
 type NavigateRouter = {
   push(href: string, options?: { scroll?: boolean }): void;
   replace(href: string, options?: { scroll?: boolean }): void;
@@ -59,8 +69,8 @@ export function navigateApp(
   router: NavigateRouter,
   href: string,
   opts: { replace?: boolean; key?: string | null; scroll?: boolean } = {},
-): void {
-  if (!isAppNavigation(href)) return;
+): NavHandle {
+  if (!isAppNavigation(href)) return { kind: "none" };
   const fromUrl = currentUrl();
   const seq = shouldStartNavigation(href, fromUrl)
     ? startNavigation({ href: normalizeUrl(href), fromUrl, key: opts.key ?? null, deferred: isRefreshPending() })
@@ -73,15 +83,18 @@ export function navigateApp(
     if (opts.replace) router.replace(href, options);
     else router.push(href, options);
   });
+  return seq !== undefined ? { kind: "app", seq } : { kind: "none" };
 }
 
 /** 全画面の移動。始まりを知らせてから移る(ページが閉じるまで、150 ms を過ぎればスケルトンが出る) */
-export function navigateDocument(href: string): void {
-  if (isAppNavigation(href)) startNavigation({ href: normalizeUrl(href), fromUrl: currentUrl(), key: null });
+export function navigateDocument(href: string): NavHandle {
+  const seq = isAppNavigation(href) ? startNavigation({ href: normalizeUrl(href), fromUrl: currentUrl(), key: null }) : null;
   window.location.assign(href);
+  return { kind: "document", seq };
 }
 
 /** 今の画面の全画面の読み直し。遷移の始まりは知らせない(行き先が変わらないので、終わりの印が来ない) */
-export function reloadDocument(): void {
+export function reloadDocument(): NavHandle {
   window.location.reload();
+  return { kind: "document", seq: null };
 }

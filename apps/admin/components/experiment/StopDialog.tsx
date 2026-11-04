@@ -3,12 +3,21 @@ import { useEffect, useState } from "react";
 import { api, describeError } from "@/lib/client";
 import type { ResultsResponse } from "@/lib/results-view";
 import { SITE_PUBLISH_NOTE } from "@/lib/start-confirm";
-import { ADOPTION_NOTE_MAX, selectionNotes, stopDialogState, stopDuplicateName, stopDuplicateOption, stopView, submitStop, type StopMessage, type StopMode } from "@/lib/stop-dialog";
+import { ADOPTION_NOTE_MAX, selectionNotes, stopDialogState, stopDuplicateName, stopDuplicateOption, stopView, submitStop, type StopMessage, type StopMode, type StopOutcome } from "@/lib/stop-dialog";
 import type { Experiment } from "@/lib/types";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ErrorBox } from "../ErrorBox";
 import { useNow } from "../LocalTime";
 import { navigateDocument } from "@/lib/navigate";
+import { BusyScope, useBusyAction } from "../ui/BusyScope";
+
+/** 記録の応答が 30 秒で分からなかったとき */
+const WRITE_UNKNOWN = "保存できたか分かりません。再読み込みして確かめてください";
+/** 記録はできたが、読み直しが 10 秒で終わらなかったとき(知らせの最後に足す) */
+const REFRESH_STALE: StopMessage = { tone: "warn", text: "保存しました。画面の表示が古い可能性があります。再読み込みしてください" };
+
+/** 送った結果(採用の記録し直し = PUT だけ / 終了 = 状態の API と複製) */
+type Sent = { mode: "adopt" } | { mode: "stop"; outcome: StopOutcome };
 
 type Props = {
   wid: string;
@@ -28,7 +37,7 @@ type Props = {
   onClose: () => void;
   /**
    * 送り終えたとき。stop = 終了の知らせ(下書きへ移るときは呼ばずに移る)。adopt = 知らせは空。
-   * 呼ぶ側はモーダルを閉じ、画面を読み直す
+   * 呼ぶ側はモーダルを閉じる。終了の後の画面の読み直しはモーダルの中で済ませてから呼ぶ(呼ぶ側で読み直さない。B173 第 2 段)
    */
   onDone: (messages: StopMessage[], created: string | null) => void;
 };
@@ -36,7 +45,10 @@ type Props = {
 /**
  * 終了のモーダル(D9 ③ Task 16、設計書 §8.2、モックの終了のモーダル)と、終了したテストの採用の記録し直し(PUT …/adoption)。
  * 採用の選択肢(判定と上回る確率を添える)・メモ・「<採用> だけを表示する新しいエクスペリエンスも作成する(下書き)」。
- * 終了 + 採用(状態の API)が成功した後に複製の API を呼び、複製が失敗しても終了は取り消さない
+ * 終了 + 採用(状態の API)が成功した後に複製の API を呼び、複製が失敗しても終了は取り消さない。
+ * 送ってから終わるまで、ダイアログの中を「記録中…」で覆う(B173 第 2 段)。下書きへそのまま移るときは移った先が開くまで、
+ * それ以外の終了は画面の読み直しの反映まで開いたまま覆い、反映の後に閉じて知らせを呼ぶ側に渡す。
+ * 範囲(BusyScope)はダイアログを包むが、モーダルの <dialog> は外側の inert から外れるので、見える覆いは ConfirmDialog の busyLabel
  */
 export function StopDialog(p: Props) {
   // 結果は見出しから開いたときだけ読む(結果のタブは読んだものを渡す)
@@ -62,7 +74,11 @@ export function StopDialog(p: Props) {
       </ConfirmDialog>
     );
   }
-  return <StopForm {...p} report={report} />;
+  return (
+    <BusyScope id="stop-dialog">
+      <StopForm {...p} report={report} />
+    </BusyScope>
+  );
 }
 
 const titleOf = (mode: StopMode) => (mode === "stop" ? "終了して結果を記録します" : "採用を記録します");
@@ -75,41 +91,70 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
   const [selected, setSelected] = useState<string | null>(state.initial);
   const [note, setNote] = useState(mode === "adopt" ? (report?.adoption?.note ?? "") : "");
   const [duplicate, setDuplicate] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const { busy, run } = useBusyAction();
   const [error, setError] = useState<string | null>(null);
   const dup = stopDuplicateOption(experiment, selected);
   const notes = selectionNotes(state, experiment, selected);
 
+  const viewOf = (o: StopOutcome) => stopView(o, `/w/${wid}/sites/${siteId}/experiments`);
+
   async function send() {
-    setBusy(true);
     setError(null);
-    try {
-      if (mode === "adopt") {
-        await api("PUT", `/sites/${siteId}/experiments/${experiment.id}/adoption`, { variantId: selected, ...(note.trim() ? { note: note.trim() } : {}) });
-        onDone([], null);
+    const outcome = await run<Sent>({
+      label: "記録中…",
+      write: async (signal) => {
+        if (mode === "adopt") {
+          await api("PUT", `/sites/${siteId}/experiments/${experiment.id}/adoption`, { variantId: selected, ...(note.trim() ? { note: note.trim() } : {}) }, { signal });
+          return { mode: "adopt" };
+        }
+        const stopped = await submitStop(
+          (method, path, body) => api(method, path, body, { signal }),
+          {
+            siteId,
+            experimentId: experiment.id,
+            adoption: { variantId: selected, note },
+            duplicate: duplicate && dup.enabled && selected !== null ? { variantId: selected, name: stopDuplicateName(experiment, selected) } : null,
+          },
+          describeError,
+        );
+        return { mode: "stop", outcome: stopped };
+      },
+      // 採用の記録し直しは画面を読み直さない(結果のタブが onDone で結果を読み直す。今までと同じ往復)。
+      // 終了は、公開も記録も済んで下書きを作れたら、その下書きへ移る(上部バーの「未公開の編集あり」を描き直すため全画面の遷移。複製の画面と同じ)。
+      // それ以外の終了は、画面の読み直しの反映まで開いたまま覆う
+      after: (v) => (v.mode === "adopt" ? "none" : viewOf(v.outcome).navigate ? "navigate" : "refresh"),
+      navigate: (v) => {
+        const created = v.mode === "stop" ? viewOf(v.outcome).created : null;
+        return created ? navigateDocument(created) : { kind: "none" };
+      },
+    });
+    switch (outcome.kind) {
+      case "saved": {
+        if (outcome.value.mode === "adopt") {
+          onDone([], null);
+          return;
+        }
+        const view = viewOf(outcome.value.outcome);
+        // 読み直しが 10 秒で終わらなくても、終了は済んでいる。閉じて、表示が古い可能性を知らせの最後に足す(送り直さない)
+        onDone(outcome.refresh === "timeout" ? [...view.messages, REFRESH_STALE] : view.messages, view.created);
         return;
       }
-      const outcome = await submitStop(
-        (method, path, body) => api(method, path, body),
-        {
-          siteId,
-          experimentId: experiment.id,
-          adoption: { variantId: selected, note },
-          duplicate: duplicate && dup.enabled && selected !== null ? { variantId: selected, name: stopDuplicateName(experiment, selected) } : null,
-        },
-        describeError,
-      );
-      const view = stopView(outcome, `/w/${wid}/sites/${siteId}/experiments`);
-      // 公開も記録も済んで下書きを作れたら、その下書きへ移る(上部バーの「未公開の編集あり」を描き直すため全画面の遷移。複製の画面と同じ)
-      if (view.navigate && view.created) {
-        navigateDocument(view.created);
+      case "navigated":
+        // 下書きへの移動が終わらなかった。終了は済んでいるので閉じて、知らせと下書きへのリンクを出す(もう一度の終了を押せる状態にしない)
+        if (outcome.value.mode === "stop") {
+          const view = viewOf(outcome.value.outcome);
+          onDone(view.messages, view.created);
+        }
         return;
-      }
-      onDone(view.messages, view.created);
-    } catch (e) {
-      // 状態の API(または採用の記録)の失敗。終了していないので、モーダルを開いたままエラーを出す
-      setError(describeError(e));
-      setBusy(false);
+      case "failed":
+        // 状態の API(または採用の記録)の失敗。終了していないので、モーダルを開いたままエラーを出す
+        setError(describeError(outcome.error));
+        return;
+      case "unknown":
+        setError(WRITE_UNKNOWN);
+        return;
+      default:
+        return;
     }
   }
 
@@ -117,10 +162,11 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
     <ConfirmDialog
       open
       title={titleOf(mode)}
-      confirmLabel={busy ? "記録中…" : confirmLabelOf(mode)}
+      confirmLabel={confirmLabelOf(mode)}
       cancelLabel="戻る"
       tone={mode === "stop" ? "danger" : "primary"}
       dismissOnBackdrop={false}
+      busyLabel={busy ? "記録中…" : null}
       confirmDisabled={busy}
       onCancel={() => {
         if (!busy) onClose();

@@ -159,12 +159,21 @@ export function nextStaticHealth(prev: StaticHealthState, res: StaticHealthFetch
   return prev;
 }
 
-/** 全サイトの作り直し。next が null になるまで続きを頼み(1 回目の after は null)、結果を合計する。途中の失敗は投げる(呼ぶ側がエラーの箱に出す) */
-export async function runRebuild(call: (after: string | null) => Promise<RebuildResult>, onProgress: (requested: number) => void): Promise<RebuildTotal> {
+/**
+ * 全サイトの作り直し。next が null になるまで続きを頼み(1 回目の after は null)、結果を合計する。途中の失敗は投げる(呼ぶ側がエラーの箱に出す)。
+ * signal = 打ち切りの合図(BusyScope の 30 秒の上限)。各 POST に渡し、中止の後は続きを頼まない
+ * (上限で結果が分からなくなった後もループが裏で続くと、押し直したときに 2 本走るため。B173 第 2 段)
+ */
+export async function runRebuild(
+  call: (after: string | null, signal?: AbortSignal) => Promise<RebuildResult>,
+  onProgress: (requested: number) => void,
+  signal?: AbortSignal,
+): Promise<RebuildTotal> {
   const total: RebuildTotal = { requested: 0, removed: 0, skippedRemoving: 0, failed: [] };
   let after: string | null = null;
   do {
-    const r: RebuildResult = await call(after);
+    if (signal?.aborted) throw new Error("作り直しを打ち切りました");
+    const r: RebuildResult = await call(after, signal);
     // 続きの ID が進まなければ止める(同じ頁を頼み続けない)
     if (r.next !== null && r.next === after) throw new Error("作り直しの続きを頼めませんでした。時間をおいてもう一度押してください");
     total.requested += r.requested;

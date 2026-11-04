@@ -63,7 +63,8 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
     await dialog.getByRole("radio", { name: /選んだパターンだけを表示する/ }).check();
     await expect(dialog.locator("input").last()).toHaveValue("E2E source(B だけを表示)");
     await expect(dialog.getByText("B には変更が無いため、表示しても今のページと同じです")).toBeVisible();
-    await dialog.getByRole("button", { name: "下書きを作成" }).click();
+    await expect(dialog.getByRole("button", { name: "下書きを作成" })).toBeEnabled();
+    await dialog.getByRole("button", { name: "下書きを作成" }).press("Enter");
     await expect(page).toHaveURL(/\/experiments\/exp_e2e_src-copy$/);
     await expect(page.getByTestId("experiment-kind")).toHaveText("パーソナライズ");
   });
@@ -76,9 +77,12 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
     await page.getByRole("button", { name: "複製" }).click();
     const dialog = page.getByRole("alertdialog", { name: "複製して新しいエクスペリエンスを作ります" });
     await expect(dialog).toBeVisible();
+    // 開いた直後 0.5 秒のクリックは背面でも無視される(lib/dialog-click.ts)ので、それを過ぎてから押す(dismissOnBackdrop={false} を確かめるため。
+    // このページは serial で後のテストも使うので page.clock は入れず、ここだけ時間を待つ)
+    await page.waitForTimeout(600);
     await page.mouse.click(5, 5);
     await expect(dialog).toBeVisible();
-    await dialog.getByRole("button", { name: "戻る" }).click();
+    await dialog.getByRole("button", { name: "戻る" }).press("Enter");
     await expect(dialog).toBeHidden();
   });
 
@@ -102,7 +106,8 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
     await expect(dialog.getByTestId("dup-same-analytics-name")).toBeVisible();
     await nameInput.fill("e2e_source_v2");
     await expect(dialog.getByTestId("dup-same-analytics-name")).toHaveCount(0);
-    await create.click();
+    await expect(create).toBeEnabled();
+    await create.press("Enter");
     // B108: 移った先で作成したことを知らせる。印は URL から消す(再読み込みで出し直さない)
     await expect(page).toHaveURL(/\/experiments\/exp_e2e_src_v2$/);
     await expect(page.getByTestId("duplicated-notice")).toContainText("複製して下書きを作りました");
@@ -136,7 +141,8 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
     await page.route(target, (route) =>
       route.request().method() === "PATCH" ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "internal", message: "injected" }) }) : route.continue(),
     );
-    await dialog.getByRole("button", { name: "下書きを作成" }).click();
+    await expect(dialog.getByRole("button", { name: "下書きを作成" })).toBeEnabled();
+    await dialog.getByRole("button", { name: "下書きを作成" }).press("Enter");
     await expect(page).toHaveURL(/\/experiments\/exp_e2e_src-copy-2$/);
     await page.unroute(target);
     await expect(page.getByTestId("duplicated-notice")).toBeVisible();
@@ -158,7 +164,7 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
     await page.getByRole("button", { name: "開始(公開して配信を始める)" }).click();
     const dialog = page.getByRole("alertdialog", { name: "開始しますか?" });
     await expect(dialog).toContainText("「exp_e2e_ov1」(先に開始・再開)が優先され");
-    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await dialog.getByRole("button", { name: "キャンセル" }).press("Enter");
     await expect(dialog).toBeHidden();
     await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "draft");
   });
@@ -181,7 +187,7 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
     await page.getByRole("button", { name: "再開", exact: true }).click();
     const dialog = page.getByRole("alertdialog", { name: "再開しますか?" });
     await expect(dialog).toContainText("「exp_e2e_ov2」(先に開始・再開)が優先され");
-    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await dialog.getByRole("button", { name: "キャンセル" }).press("Enter");
     await expect(dialog).toBeHidden();
     await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "paused");
     expect(posted).toBe(false);
@@ -207,12 +213,17 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
       const done = page.waitForResponse((r) => r.url().includes("/experiments/exp_e2e_dbl/status") && r.request().method() === "POST");
       await page.getByRole("button", { name: "開始(公開して配信を始める)" }).dblclick();
       // D9 ③: 下書きのテストの開始は必ず確認を出す(このサイトは結果を記録しないので「開始しますか?」)。
-      // 確認の「開始する」も二度押しして、状態の要求が 1 回だけであることを確かめる
+      // 確認の「開始する」も二度押しして、状態の要求が 1 回だけであることを確かめる。開いた直後 0.5 秒のマウスのクリックは無視する
+      // (B173 第 2 段。dblclick だと 2 回とも無視されうる)ので、同じ処理の中で 2 回押す(experiment-save.spec.ts と同じ。detail が 0 の押下は無視しない)
       const dialog = page.getByRole("alertdialog", { name: "開始しますか?" });
-      await dialog.getByRole("button", { name: "開始する", exact: true }).dblclick();
+      await dialog.getByRole("button", { name: "開始する", exact: true }).evaluate((el: HTMLButtonElement) => {
+        el.click();
+        el.click();
+      });
       expect((await done).status()).toBe(200);
       await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "running");
-      await expect(page.locator("main").getByRole("alert")).toContainText("を反映しました");
+      await expect(page.getByTestId("status-result")).toHaveRole("status");
+      await expect(page.getByTestId("status-result")).toContainText("を反映しました");
       expect(posts).toHaveLength(1);
     } finally {
       page.off("request", onRequest);
@@ -233,7 +244,7 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
       const dialog = page.getByRole("alertdialog", { name: "開始しますか?" });
       await expect(dialog).toContainText("結果はツール上に残りません");
       await expect(dialog.getByRole("listitem")).toHaveCount(0); // 重なりの一覧は出ない
-      await dialog.getByRole("button", { name: "開始する", exact: true }).click();
+      await dialog.getByRole("button", { name: "開始する", exact: true }).press("Enter");
       expect((await done).status()).toBe(200);
       await expect(page.getByRole("alertdialog")).toHaveCount(0);
       await expect(page.getByTestId("start-warning")).toContainText("結果はツール上に残りません。後から結果の記録を有効にしても、このテストの結果は記録されません");

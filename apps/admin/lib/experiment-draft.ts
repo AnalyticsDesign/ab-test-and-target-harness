@@ -114,6 +114,13 @@ const analyticsBody = (d: Draft) =>
   d.expName || Object.keys(d.extra).length ? { ...(d.expName ? { overrides: { experimentName: d.expName } } : {}), ...(Object.keys(d.extra).length ? { extra: d.extra } : {}) } : null;
 
 /**
+ * 配信率の欄が PATCH の body に載るか(自分が変えたときだけ載る)。experimentPatchBody と、画面の赤字(OverviewTab)が同じ条件を見るための関数
+ */
+export function isTrafficSent(initial: Draft, current: Draft): boolean {
+  return initial.traffic !== current.traffic;
+}
+
+/**
  * 本体の PATCH の body(B173 第 1 段 Q10・spec §6.1)。自分が変えた欄だけを載せる: 開いた後にほかの人が変えた、自分の変えていない欄を上書きしないため
  * (control の PATCH はどの欄も省略できる)。外部計測は名前と追加の項目をまとめた 1 つの値なので、どちらかが変われば全体を送る。
  * 画面で表せない保存値(raw)の配信条件は送らない。メモ(description)は別の段で送るので載せない
@@ -123,7 +130,7 @@ export function experimentPatchBody(initial: Draft, current: Draft): Record<stri
   if (initial.name !== current.name) body.name = current.name;
   if (!same(initial.urlMatch, current.urlMatch)) body.urlMatch = current.urlMatch;
   if (!same(initial.targeting, current.targeting)) Object.assign(body, targetingBody(current.targeting));
-  if (initial.traffic !== current.traffic) body.trafficPercentage = current.traffic;
+  if (isTrafficSent(initial, current)) body.trafficPercentage = current.traffic;
   if (initial.persist !== current.persist) body.persistAssignment = current.persist;
   if (initial.expName !== current.expName || !same(initial.extra, current.extra)) body.analytics = analyticsBody(current);
   return body;
