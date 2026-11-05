@@ -200,6 +200,7 @@ pnpm install       # 依存の導入(Node 24 以上)
 pnpm test          # 単体テスト(全パッケージ)
 pnpm e2e           # E2E(sample-site + wrangler dev + Playwright)
 pnpm e2e:admin     # 管理画面の E2E
+pnpm e2e:admin -- leave-guard.spec.ts   # 1 ファイルだけ(pnpm e2e も同じ形。先に流れる前提のテストがあれば、それも一緒に流れる)
 pnpm typecheck     # 型チェック(全パッケージ)
 pnpm docs:check    # 文書のリンク・パス検査
 ```

@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "e2e": "playwright test",
+    "e2e": "node ../../tools/run-playwright.mjs .",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
