@@ -275,6 +275,53 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
     await expect(nameInput()).toHaveValue(savedName);
   });
 
+  // B189(オーディエンスの I3 と同じ): A を表示 → B を保存(成功)→ 読み直しが時間切れ(props は A のまま)→ C に編集 → 破棄 = B に戻る。
+  // 次の PATCH も B を基準に組む(メモだけ変えたら、名前は送らない)
+  test("discard after a save whose refresh timed out goes back to the saved value", async () => {
+    test.setTimeout(90_000);
+    await openExperiment(EXP.id);
+    const patchPath = `/api/control${apiPath(EXP.id)}`;
+    const isPatch = (r: Request) => r.method() === "PATCH" && new URL(r.url()).pathname === patchPath;
+    const memoInput = () => page.getByRole("region", { name: "基本設定" }).getByLabel("メモ(社内用。外部には出力されません)");
+    // 読み直しは 2 回目の PATCH を確かめ終わるまで止める(届くと props が B になり、直す前のコードでも通ってしまう)
+    const held = await holdRefresh(page, expPath(EXP.id), null);
+    const memo = `disc memo ${Date.now()}`;
+    try {
+      await nameInput().fill("E2E disc B");
+      const first = page.waitForRequest(isPatch);
+      await saveButton().click();
+      expect((await first).postDataJSON()).toEqual({ name: "E2E disc B" });
+      await expect(appAlert(page).filter({ hasText: REFRESH_TIMEOUT })).toBeVisible({ timeout: 15_000 });
+      await expect(overlay()).toHaveCount(0);
+      await expect(saveState()).toHaveText("変更はありません");
+      // C に編集してから破棄 → 保存した B に戻る(保存の前の値ではない)
+      await nameInput().fill("E2E disc C");
+      await expect(saveState()).toHaveText("未保存の変更あり");
+      await page.getByRole("button", { name: "破棄" }).click();
+      await expect(nameInput()).toHaveValue("E2E disc B");
+      await expect(saveState()).toHaveText("変更はありません");
+      // 次の保存はメモだけ: PATCH は 1 回で、名前を載せない
+      await memoInput().fill(memo);
+      const patches = countRequests(page, isPatch);
+      try {
+        const second = page.waitForRequest(isPatch);
+        await saveButton().click();
+        expect((await second).postDataJSON()).toEqual({ description: memo });
+        await expect(appAlert(page).filter({ hasText: REFRESH_TIMEOUT })).toBeVisible({ timeout: 15_000 });
+        await expect(overlay()).toHaveCount(0);
+        expect(patches.count()).toBe(1);
+      } finally {
+        patches.stop();
+      }
+    } finally {
+      held.release();
+      await held.undo();
+    }
+    const after = await control(page, "GET", apiPath(EXP.id));
+    expect(after.json?.name).toBe("E2E disc B");
+    expect(after.json?.description).toBe(memo);
+  });
+
   test("the open tab is not rewritten by the server value after a save", async () => {
     await openExperiment(EXP.id);
     await nameInput().fill("E2E save tab");

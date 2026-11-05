@@ -159,6 +159,37 @@ export function acceptSavedDraft(sent: Draft, current: Draft): { base: Draft; dr
   return { base: sent, draft: current };
 }
 
+/**
+ * 破棄で戻す値(B189。オーディエンスの破棄と同じ考え)。saved = 自分の保存で送った値(下の savedAfter が持つ間だけ)。
+ * 保存の後の読み直しが時間切れで props が保存の前の値のままでも、破棄で保存の前の値へ戻さない。持っていなければ、届いているサーバーの値
+ */
+export function discardTarget(input: { server: Draft; saved: Draft | null }): Draft {
+  return input.saved ?? input.server;
+}
+
+/** 破棄の戻り先(saved)を動かす出来事。written = 自分の保存の書き込みが成功した直後(読み直しの前)・serverArrived = 新しいサーバーの値が届いた・refreshed = 自分の保存の後の読み直しが終わった */
+export type SavedEvent = { kind: "written"; sent: Draft } | { kind: "serverArrived" } | { kind: "refreshed"; timedOut: boolean };
+
+/**
+ * B189: 破棄の戻り先として送った値を持つのは、書き込みの成功の後、画面が新しいサーバーの値になるまでの間だけ。
+ * - written: 送った値を持つ
+ * - serverArrived: 捨てる(届いた値が戻り先になる)
+ * - refreshed: 読み直しが画面に反映されたら捨てる(評価計画だけの保存のように、サーバーの値の鍵が変わらない保存でも残さない。最終レビュー M1)。
+ *   時間切れなら持ち続ける(props は保存の前の値のままのため)
+ * 守らない場面: 前の保存の時間切れの読み直しが、次の保存の written の後に遅れて届くと、serverArrived で捨て、届いた値(前の保存の値)が戻り先になる。
+ * これは直す前の reconcileServerUpdate と同じ挙動で、悪くはしていない
+ */
+export function savedAfter(saved: Draft | null, event: SavedEvent): Draft | null {
+  switch (event.kind) {
+    case "written":
+      return event.sent;
+    case "serverArrived":
+      return null;
+    case "refreshed":
+      return event.timedOut ? saved : null;
+  }
+}
+
 /** エクスペリエンスの外部計測を値の検査の形にする(名前の空欄は「指定なし」で、analyticsValueErrors が見ない) */
 const experimentAnalyticsOf = (d: Draft) => ({ overrides: { experimentName: d.expName }, extra: d.extra });
 

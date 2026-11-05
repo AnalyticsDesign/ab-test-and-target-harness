@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { api, ApiClientError, fieldErrors } from "@/lib/client";
 import { toChangeWire } from "@/lib/change-wire";
 import { historyStaleAfterSave, saveErrorMessage } from "@/lib/experiment-save";
-import { tabsFor, draftOf, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, acceptSavedDraft, reconcileServerUpdate, saveSteps, type Draft, type EditorTab } from "@/lib/experiment-draft";
+import { tabsFor, discardTarget, draftOf, savedAfter, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, acceptSavedDraft, reconcileServerUpdate, saveSteps, type Draft, type EditorTab } from "@/lib/experiment-draft";
 import { extensionErrors, planDirty, planFormErrors, planFormState, planMode, planPutBody, syncPlanState, type PlanForm, type PlanView } from "@/lib/evaluation-plan";
 import { archivedTestBanner, lockedFieldChanges, needsRunningTestConfirm, preSaveLockProblem, RUNNING_TEST_CONFIRM } from "@/lib/test-locks";
 import { emptyHtmlIndex, firstEmptyHtml } from "@/lib/change-issues";
@@ -75,11 +75,17 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
   const [draft, setDraft] = useState<Draft>(server);
   // 未保存の変更があるまま、新しいサーバーの値が届いた印(帯の左に注記を出す)
   const [notice, setNotice] = useState(false);
+  // 自分の保存で送った値(B189)。書き込みの成功の後、画面が新しいサーバーの値になるまでの破棄の戻り先(持つ間は savedAfter が決める)。
+  // 保存の後の読み直しが時間切れになると props は保存の前の値のままなので、それに戻さないために持つ
+  const [saved, setSaved] = useState<Draft | null>(null);
   const [serverSeen, setServerSeen] = useState(serverKey);
   if (serverSeen !== serverKey) {
     // 描画中の state の調整(前の値を覚えて比べる。評価計画の planSeen と同じ形)。自分の保存では、書き込みの成功の直後(読み直しの前)に
     // base と draft を送った値にしてあるので、ここで未保存の変更が無いと判断され、届いた値(ほかの人が変えた欄も含む)がそのまま入る
     setServerSeen(serverKey);
+    // 新しいサーバーの値が届いたので、破棄の戻り先はこちらにする(B189)。書き込みの成功(written)より前に届いた読み直しとは取り違えない
+    // (後の written が送った値を持ち直す)。前の保存の時間切れの読み直しが written の後に遅れて届く場面は、直す前と同じ挙動(savedAfter のコメント)
+    setSaved((s) => savedAfter(s, { kind: "serverArrived" }));
     const next = reconcileServerUpdate({ base, draft, server });
     setBase(next.base);
     setDraft(next.draft);
@@ -103,10 +109,14 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
   const bodyDirty = isDirty(base, draft);
   const planIsDirty = planDirty(plan.view, plan.form);
 
-  /** 破棄(Q20): 本体と評価計画の入力・延ばすときの理由を、最新のサーバーの値に戻す */
+  /**
+   * 破棄(Q20): 本体と評価計画の入力・延ばすときの理由を、最後に確かめた保存済みの値に戻す。本体は、自分の保存の後に新しいサーバーの値が
+   * 届いていなければ送った値、届いていればその値(B189)。評価計画は PUT の応答を基準にしてあるので、その値
+   */
   const resetToServer = () => {
-    setBase(server);
-    setDraft(server);
+    const back = discardTarget({ server, saved });
+    setBase(back);
+    setDraft(back);
     setNotice(false);
     setPlan((p) => ({ view: p.view, form: p.view ? planFormState(p.view) : null }));
     setPlanReason("");
@@ -118,6 +128,7 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
   const acceptSaved = (sent: Draft, fresh: PlanView | null) => {
     setBase(sent);
     setDraft((current) => acceptSavedDraft(sent, current).draft);
+    setSaved((s) => savedAfter(s, { kind: "written", sent }));
     setNotice(false);
     setPlanReason("");
     if (fresh) setPlan({ view: fresh, form: planFormState(fresh) });
@@ -204,6 +215,7 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
         onResetToServer={resetToServer}
         onSaved={acceptSaved}
         onHistoryStale={() => setSavedCount((n) => n + 1)}
+        onRefreshed={(timedOut) => setSaved((s) => savedAfter(s, { kind: "refreshed", timedOut }))}
         plan={plan}
         onPlan={setPlan}
         planReason={planReason}
@@ -222,19 +234,21 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
 
 function ExperimentEditorBody({
   site, experiment, goals, audiences, role, imageMode, tab, onTab, variant, onVariant, animate, historyKey, cardOpen, onCardOpen, wid, recording, resultsStore,
-  base, draft, setDraft, notice, onResetToServer, onSaved, onHistoryStale, plan, onPlan, planReason, onPlanReason, onStop,
+  base, draft, setDraft, notice, onResetToServer, onSaved, onHistoryStale, onRefreshed, plan, onPlan, planReason, onPlanReason, onStop,
 }: BodyProps & {
   tab: EditorTab; onTab: (t: EditorTab) => void; variant: string | null; onVariant: (id: string | null) => void; animate: boolean; cardOpen: Record<string, boolean>; onCardOpen: (key: string, open: boolean) => void;
   /** 変更履歴のタブの読み直しの鍵(自分の保存で記録が増えた(かもしれない)回数と状態。外枠が作る) */
   historyKey: string;
   /** 基準(未保存の判定と PATCH に載せる欄の基準)・下書き・注記の印(外枠が持つ) */
   base: Draft; draft: Draft; setDraft: Dispatch<SetStateAction<Draft>>; notice: boolean;
-  /** 破棄: 本体と評価計画を最新のサーバーの値に戻す */
+  /** 破棄: 本体と評価計画を最後に確かめた保存済みの値に戻す(外枠の resetToServer) */
   onResetToServer: () => void;
   /** 保存の書き込みが成功した直後(読み直しの前)。sent = 送った下書き、fresh = 評価計画の PUT の応答(送らなければ null) */
   onSaved: (sent: Draft, fresh: PlanView | null) => void;
   /** 全段の成功のほかで、記録が増えた(かもしれない)保存の後: 途中の段まで書けて失敗した・書けたか分からない(変更履歴のタブを読み直す) */
   onHistoryStale: () => void;
+  /** 保存の後の読み直しが終わった(timedOut = 10 秒で反映されなかった)。破棄の戻り先の持ち方を決める(B189) */
+  onRefreshed: (timedOut: boolean) => void;
   /** 評価計画の状態(外枠が持つ) */
   plan: PlanState; onPlan: (p: PlanState) => void; planReason: string; onPlanReason: (r: string) => void;
   /** 結果のタブの帯から終了のモーダルを開く(管理者以上・実行中か一時停止中のテストだけ。外枠が渡す) */
@@ -466,6 +480,7 @@ function ExperimentEditorBody({
     if (historyStaleAfterSave(outcome, progress.savedSomething)) onHistoryStale();
     switch (outcome.kind) {
       case "saved":
+        onRefreshed(outcome.refresh !== "done"); // 反映を確かめられたときだけ戻り先を捨てる(この保存は after: "refresh" なので skipped にはならない)
         // 読み直しを待ち切れなかったときは、本文の先頭に再読み込みの案内を出す(文が「保存しました」で始まるので、帯の文は重ねない)
         if (outcome.refresh === "timeout") setError(REFRESH_TIMEOUT);
         else setSavedMessage(planBody ? SAVED_WITH_PLAN : SAVED);

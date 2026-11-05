@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EDITOR_TABS, draftOf, tabsFor, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, acceptSavedDraft, reconcileServerUpdate, saveSteps, targetingBody, type Draft } from "@/lib/experiment-draft";
+import { EDITOR_TABS, draftOf, tabsFor, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, acceptSavedDraft, reconcileServerUpdate, saveSteps, targetingBody, discardTarget, savedAfter, type Draft } from "@/lib/experiment-draft";
 import type { Experiment } from "@/lib/types";
 
 const EXP = {
@@ -212,6 +212,50 @@ describe("B173 第 1 段 Task 7: 変えた欄だけを送る・評価計画を�
     const sent = { ...draftOf(EXP), name: "mine" };
     const s = { ...sent, traffic: 20 };
     expect(reconcileServerUpdate({ base: sent, draft: sent, server: s })).toEqual({ base: s, draft: s, notice: false });
+  });
+  // B189: A を表示 → B を保存(成功)→ 読み直しが時間切れ(props は A のまま)→ C に編集 → 破棄 = B に戻り、次の PATCH も B が基準
+  it("discard after an own save whose refresh timed out goes back to the sent value, until a newer server value arrives", () => {
+    const shownA = draftOf(EXP);
+    const sentB = { ...shownA, name: "B" };
+    // 新しいサーバーの値がまだ届いていない(saved = 送った値): 破棄先は B
+    const back = discardTarget({ server: shownA, saved: sentB });
+    expect(back).toBe(sentB);
+    expect(isDirty(back, { ...sentB, name: "C" })).toBe(true);
+    expect(isDirty(back, sentB)).toBe(false);
+    // 次の PATCH は B を基準に組む(メモだけ変えたら名前は載らない)
+    expect(experimentPatchBody(back, { ...sentB, description: "memo" })).toEqual({});
+    expect(saveSteps(back, { ...sentB, description: "memo" }, "draft", { dirty: false }).patchExperiment).toBe(false);
+    // 届いた後(外枠が saved を null に戻す)は、届いたサーバーの値
+    const newer = { ...sentB, traffic: 20 };
+    expect(discardTarget({ server: newer, saved: null })).toBe(newer);
+  });
+  // B189 最終レビュー M4: 外枠の出来事の順(written → 読み直し → serverArrived)をたどり、新しいサーバーの値が届いたら送った値を捨てる
+  it("savedAfter: a newer server value replaces the sent value as the discard target", () => {
+    const shownA = draftOf(EXP);
+    const sentB = { ...shownA, name: "B" };
+    let saved = savedAfter(null, { kind: "written", sent: sentB });
+    // 読み直しが時間切れ: 持ち続ける(props は A のまま)
+    saved = savedAfter(saved, { kind: "refreshed", timedOut: true });
+    expect(discardTarget({ server: shownA, saved })).toBe(sentB);
+    // 後から新しいサーバーの値(ほかの人の配信率の変更も入った B')が届く: 捨てて、届いた値が戻り先
+    const arrived = { ...sentB, traffic: 20 };
+    saved = savedAfter(saved, { kind: "serverArrived" });
+    expect(saved).toBeNull();
+    expect(discardTarget({ server: arrived, saved })).toBe(arrived);
+    // 書き込みの成功より前に届いた読み直しは、後の written が送った値を持ち直す(取り違えない)
+    const early = savedAfter(savedAfter(null, { kind: "serverArrived" }), { kind: "written", sent: sentB });
+    expect(discardTarget({ server: shownA, saved: early })).toBe(sentB);
+  });
+  // B189 最終レビュー M1: 評価計画だけの保存は、サーバーの値の鍵を変えない(serverArrived が来ない)。読み直しが反映されたら捨てる
+  it("savedAfter: a refresh that landed drops the sent value even when the server key did not change", () => {
+    // 未保存のまま新しい値 A' が届いて注記が出た後、本体の入力を元に戻し(base = A = draft)、評価計画だけを保存した
+    const a = draftOf(EXP);
+    const aNewer = { ...a, traffic: 20 };
+    let saved = savedAfter(null, { kind: "written", sent: a });
+    saved = savedAfter(saved, { kind: "refreshed", timedOut: false });
+    expect(saved).toBeNull();
+    // 破棄は、古い A ではなく届いている A' に戻る
+    expect(discardTarget({ server: aNewer, saved })).toBe(aNewer);
   });
 });
 
