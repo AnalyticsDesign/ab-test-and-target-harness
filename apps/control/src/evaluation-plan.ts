@@ -1,8 +1,10 @@
 // D9 ③(plan ③ の K7・K8・K9、設計書 §5): 評価計画の受け口(zod)・読み込み・開始の検査・容量の見込み・書き込みの文。
 // 型・既定値・範囲の規則は packages/stats の evaluation-plan.ts が正(ここでは zod で型と整数だけを見て、範囲は planIssues に任せる)
+import { sql, type SqlBool } from "kysely";
 import { z } from "zod";
 import { DEFAULT_PLAN, defaultBaseline, planIssues, type EvaluationDefinition, type EvaluationPlan } from "@wtt/stats";
-import type { Db, ExperimentRow, VariantRow } from "./db";
+import { changedFieldsDetail, type AuditSql } from "./audit";
+import { sqlStatement, type Db, type ExperimentRow, type VariantRow } from "./db";
 import type { Env } from "./env";
 import { ApiError } from "./errors";
 
@@ -115,6 +117,29 @@ export function samePlan(a: EvaluationPlan, b: EvaluationPlan): boolean {
     a.rope === b.rope &&
     a.threshold === b.threshold &&
     definitionEquals(a.definition, b.definition)
+  );
+}
+
+/** 計画の項目(B129: experiment.evaluation_plan の記録の detail.fields の順。集計の定義は PUT で変えられないので含めない) */
+const PLAN_FIELDS = ["primaryGoalId", "baselineVariantId", "minDays", "maxWeeks", "targetPerVariant", "delta", "rope", "threshold"] as const;
+/** B129: 2 つの計画で値が違う項目の名前(記録の detail.fields) */
+export function changedPlanFields(a: EvaluationPlan, b: EvaluationPlan): string[] {
+  return PLAN_FIELDS.filter((k) => a[k] !== b[k]);
+}
+
+/**
+ * B129 final review(2026-11-05 FR-Medium-2):下書きの計画の保存の記録の detail(`{fields}`)を、記録の文の中で今の計画の行と比べて作る。
+ * 下書きの保存は読んだ version を条件にしないので、読んだ後に別の人の保存が入ると、読んだ計画との比べ(changedPlanFields)では
+ * 実際に書き換えた項目(別の人の値を戻した項目)が抜けるため。`planJson` = 記録の文で読む今の行の plan_json(行が無ければ NULL)。
+ * 行が無いときは読んだ計画(既定の計画)と比べる(行が無いまま書く INSERT の枝は、読んだときも行が無かった)。往復は増えない
+ */
+export function draftPlanChangedDetail(planJson: AuditSql, read: EvaluationPlan, next: EvaluationPlan): AuditSql {
+  return changedFieldsDetail(
+    PLAN_FIELDS.map((k) => ({
+      key: k,
+      changed: sql<SqlBool>`case when ${planJson} is null then ${sql.lit(read[k] !== next[k] ? 1 : 0)}
+        else not (json_extract(${planJson}, ${sql.lit(`$.${k}`)}) is ${next[k]}) end`,
+    })),
   );
 }
 
@@ -246,6 +271,14 @@ export function fixPlanStatement(
 }
 
 /**
+ * 下書きの計画の保存が書く条件: 親が下書きで、計画がまだ固定されていない(行が無ければ固定されていない)。
+ * B129: draftPlanUpsert の INSERT と UPDATE の両方の枝と、その前に置く experiment.evaluation_plan の記録の文が使う
+ */
+export const draftPlanWritable = (siteId: string, eid: string) =>
+  sql<SqlBool>`exists (select 1 from experiments where site_id = ${siteId} and id = ${eid} and status = 'draft')
+    and not exists (select 1 from evaluation_plans where site_id = ${siteId} and experiment_id = ${eid} and fixed_at is not null)`;
+
+/**
  * 下書きの計画の保存(K9)。親が下書きで、計画がまだ固定されていないときだけ書く(INSERT と UPDATE の両方の枝で絞る)。
  * 読んだ後に開始が割り込んでも、固定した計画を上書きしない
  */
@@ -253,17 +286,27 @@ export function draftPlanUpsert(
   env: Env,
   a: { siteId: string; experimentId: string; plan: EvaluationPlan; userId: string; now: number },
 ): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO evaluation_plans (site_id, experiment_id, plan_json, version, update_token, updated_by, updated_at)
-     SELECT ?1, ?2, ?3, 1, ?4, ?5, ?6
-     WHERE EXISTS (SELECT 1 FROM experiments WHERE site_id = ?1 AND id = ?2 AND status = 'draft')
+  const writable = draftPlanWritable(a.siteId, a.experimentId);
+  return sqlStatement(
+    env.DB,
+    sql`INSERT INTO evaluation_plans (site_id, experiment_id, plan_json, version, update_token, updated_by, updated_at)
+     SELECT ${a.siteId}, ${a.experimentId}, ${JSON.stringify(a.plan)}, 1, ${crypto.randomUUID()}, ${a.userId}, ${a.now}
+     WHERE ${writable}
      ON CONFLICT (site_id, experiment_id) DO UPDATE SET
        plan_json = excluded.plan_json, version = evaluation_plans.version + 1, update_token = excluded.update_token,
        updated_by = excluded.updated_by, updated_at = excluded.updated_at
-     WHERE evaluation_plans.fixed_at IS NULL
-       AND EXISTS (SELECT 1 FROM experiments WHERE site_id = ?1 AND id = ?2 AND status = 'draft')`,
-  ).bind(a.siteId, a.experimentId, JSON.stringify(a.plan), crypto.randomUUID(), a.userId, a.now);
+     WHERE ${writable}`,
+  );
 }
+
+/**
+ * 開始後の延長の 1 文目(CAS)の条件: 読んだ version・読んだ到達の時刻のまま・固定済み・親が実行中か一時停止中(K9)。
+ * B129: extensionBatch の 1 文目と、その前に置く experiment.evaluation_plan の記録の文が使う(`evaluation_plans` の行を読む文の中で使う)
+ */
+export const extensionWritable = (a: { siteId: string; experimentId: string; readVersion: number; readReachedAt: number | null }) =>
+  sql<SqlBool>`evaluation_plans.site_id = ${a.siteId} and evaluation_plans.experiment_id = ${a.experimentId}
+    and evaluation_plans.version = ${a.readVersion} and evaluation_plans.reached_at is ${a.readReachedAt} and evaluation_plans.fixed_at is not null
+    and exists (select 1 from experiments where site_id = ${a.siteId} and id = ${a.experimentId} and status in ('running', 'paused'))`;
 
 /**
  * 開始後の延長の batch(K9)。1 文目の UPDATE は「読んだ version・読んだ到達の時刻のまま」「固定済み」「親が実行中か一時停止中」の
@@ -288,11 +331,11 @@ export function extensionBatch(
   const token = crypto.randomUUID();
   const mine = "EXISTS (SELECT 1 FROM evaluation_plans WHERE site_id = ?1 AND experiment_id = ?2 AND update_token = ?3)";
   const stmts = [
-    env.DB.prepare(
-      `UPDATE evaluation_plans SET plan_json = ?4, version = version + 1, update_token = ?3, updated_by = ?5, updated_at = ?6
-       WHERE site_id = ?1 AND experiment_id = ?2 AND version = ?7 AND reached_at IS ?8 AND fixed_at IS NOT NULL
-         AND EXISTS (SELECT 1 FROM experiments WHERE site_id = ?1 AND id = ?2 AND status IN ('running', 'paused'))`,
-    ).bind(a.siteId, a.experimentId, token, JSON.stringify(a.after), a.userId, a.now, a.readVersion, a.readReachedAt),
+    sqlStatement(
+      env.DB,
+      sql`UPDATE evaluation_plans SET plan_json = ${JSON.stringify(a.after)}, version = version + 1, update_token = ${token}, updated_by = ${a.userId}, updated_at = ${a.now}
+       WHERE ${extensionWritable(a)}`,
+    ),
     env.DB.prepare(
       `INSERT INTO evaluation_plan_changes (site_id, experiment_id, at, by, before_json, after_json, reason)
        SELECT ?1, ?2, ?4, ?5, ?6, ?7, ?8 WHERE ${mine}`,

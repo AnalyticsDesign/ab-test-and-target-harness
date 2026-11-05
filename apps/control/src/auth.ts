@@ -6,6 +6,7 @@ import { adminAc, defaultStatements, memberAc, ownerAc } from "better-auth/plugi
 import { sql } from "kysely";
 import type { Env } from "./env";
 import { hasAccess, hasLiveInvitation } from "./access";
+import { actorFromUser, writeAuditAfterDb } from "./audit";
 import { getDb } from "./db";
 import { authD1Dialect } from "./auth-d1-dialect";
 import { timingSafeEqualString } from "./ids";
@@ -66,6 +67,14 @@ export function loginMethodOf(path: string | undefined): LoginMethod | null {
   if (path === "/sign-in/email" || path === "/sign-up/email") return "password";
   if (path?.startsWith("/callback/")) return "google";
   return null;
+}
+
+/**
+ * B129: D1 の session."loginMethod" に入っている値を LoginMethod に読む(想定外の値・NULL は null = 分からない)。
+ * requireSession が getSession の返すセッションの追加の列から読み、操作の記録の経路(google / password / unknown)にする
+ */
+export function asLoginMethod(v: unknown): LoginMethod | null {
+  return v === "password" || v === "google" ? v : null;
 }
 
 function buildAuth(env: Env) {
@@ -167,11 +176,29 @@ function buildAuth(env: Env) {
            * (cron/break-glass-sweep.ts)の前に始まったログインが、掃除の後にセッションを作れてしまう。記録が無ければそのセッションを消して断る。
            * 掃除の 2 つの削除は 1 つの batch なので、保存が掃除の前ならその batch が消し、後ならこの確かめが消す(どちらの順でも残らない)。
            * ctx.path は basePath(/auth)を含まない endpoint の path(上の before と同じ)
+           *
+           * B129(spec §3.1・Q13): 確かめが通ったら、/sign-in/email のときだけ auth.password_login を「後」の書き方で記録する
+           * (/sign-up/email = 初期設定・招待の Bearer 無しの受諾は、setup.complete・invitation.accept の行がある)。断ったログインは記録しない。
+           * 書けなくてもログインは成功のまま(ログだけ)。操作した人の控え(メール・名前)は確かめの 1 文で一緒に読む(往復は記録の +1 だけ)。
+           * ctx は better-auth 1.4.21 の getCurrentAuthContext() が返す endpoint の文脈で、path は toAuthEndpoints が endpoint.path から入れる
+           * (B179 の版上げで path の入り方が変わると、loginMethod の印と同じくここも記録しなくなる。password_login_is_recorded が落ちて気づける)
            */
           after: async (session, ctx) => {
             if (!session || (ctx?.path !== "/sign-in/email" && ctx?.path !== "/sign-up/email")) return;
-            const r = await sql<{ n: number }>`select count(*) as n from account where "userId" = ${session.userId} and "providerId" = 'credential'`.execute(db);
-            if (Number(r.rows[0]?.n ?? 0) > 0) return;
+            const r = await sql<{ n: number; email: string | null; name: string | null }>`
+              select count(*) as n, (select email from "user" where id = ${session.userId}) as email, (select name from "user" where id = ${session.userId}) as name
+              from account where "userId" = ${session.userId} and "providerId" = 'credential'`.execute(db);
+            const row = r.rows[0];
+            if (Number(row?.n ?? 0) > 0) {
+              if (ctx?.path === "/sign-in/email") {
+                await writeAuditAfterDb(env.DB, () => {
+                  if (typeof row?.email !== "string") throw new Error("no user for the session");
+                  const user = { id: session.userId, email: row.email, name: row.name ?? "" };
+                  return { actor: actorFromUser(user, "password"), event: { action: "auth.password_login", target: { type: "user", id: user.id, label: user.email } } };
+                });
+              }
+              return;
+            }
             await sql`delete from session where id = ${session.id}`.execute(db);
             throw new APIError("UNAUTHORIZED", { message: "password_login_disabled" });
           },

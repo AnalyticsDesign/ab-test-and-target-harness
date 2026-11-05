@@ -1,8 +1,10 @@
 import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
-import { sql } from "kysely";
+import { sql, type SqlBool } from "kysely";
 import { z } from "zod";
-import type { AppEnv } from "../app";
+import type { AppEnv, SessionUser } from "../app";
+import { actorFromUser, auditStatement } from "../audit";
+import { sqlStatement } from "../db";
 import { ApiError, validationFailed } from "../errors";
 import { createWorkspace, grantInstanceAdmin } from "../instance-admins";
 import { UsageSettingsSchema } from "../instance-settings";
@@ -104,6 +106,8 @@ setupRoutes.post(
     };
     let token: string | null = null;
     let userId: string;
+    /** B129: setup.complete の操作した人(作った人) */
+    let user: SessionUser;
     // (2) user を作る
     try {
       // 決定 46 (4): パスワードは control が乱数で持たせるだけ(誰も知らない)。ログインは常に Google、非常時はリセットから
@@ -115,6 +119,7 @@ setupRoutes.post(
       });
       token = headers.get("set-auth-token");
       userId = response.user.id;
+      user = { id: response.user.id, email: response.user.email, name: response.user.name };
     } catch (e) {
       const status = (e as { status?: string }).status;
       await compensate();
@@ -140,14 +145,28 @@ setupRoutes.post(
       // 別のリクエストが stale の lock を取り直し(この試行の行を消し)ていたら、更新は 0 行になる → throw して補償へ。
       // 0 行でも batch の中の他の文は実行されてしまうので、設定の insert は「自分の完了が書けたとき」だけ行が入る
       // insert … select … where exists にして、完了の update の後ろに置く(設定だけが残ることを文の側で防ぐ。補償で消すと相手の設定まで消しうる)
+      // B129(Q13・Q17): 同じ batch の完了の update の後に setup.complete を記録する。条件は設定の insert と同じ「自分の完了が書けた」
+      // (completedByMe。lock を取り直された試行では書かない)。actor は作った人・経路 setup(c の actor は使わない)。
+      // 記録が書けなければ完了ごと戻り、下の catch の 503 setup_failed になる
+      const completedByMe = sql<SqlBool>`exists (select 1 from setup_lock where id = 1 and completed = 1 and created_at = ${now})`;
       const stmts = [c.env.DB.prepare("update setup_lock set completed = 1 where id = 1 and completed = 0 and created_at = ?1").bind(now)];
       if (parsed.usageVisibility) {
         stmts.push(
-          c.env.DB.prepare(
-            "insert into instance_settings (key, value, updated_at, updated_by) select 'usageVisibility', ?1, ?2, null where exists (select 1 from setup_lock where id = 1 and completed = 1 and created_at = ?3) on conflict(key) do update set value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by",
-          ).bind(JSON.stringify(parsed.usageVisibility), Date.now(), now),
+          sqlStatement(
+            c.env.DB,
+            sql`insert into instance_settings (key, value, updated_at, updated_by) select 'usageVisibility', ${JSON.stringify(parsed.usageVisibility)}, ${Date.now()}, null
+              where ${completedByMe} on conflict(key) do update set value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+          ),
         );
       }
+      stmts.push(
+        auditStatement(
+          c.env.DB,
+          actorFromUser(user, "setup"),
+          { action: "setup.complete", workspaceId, target: { type: "workspace", id: workspaceId, label: parsed.workspaceName } },
+          { guard: completedByMe },
+        ),
+      );
       const [completion] = await c.env.DB.batch(stmts);
       if (completion?.meta.changes !== 1) throw new Error("setup_lock was taken over by another setup request before completion");
       // sign-up が作ったセッションは返さずに消す(setup token の持ち主にパスワードなしのセッションを渡さない)。

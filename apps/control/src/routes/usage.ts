@@ -3,8 +3,11 @@ import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
+import { auditActor, auditStatement } from "../audit";
+import { toStatement } from "../db";
 import { validationFailed } from "../errors";
-import { readInstanceSettings, UsageSettingsSchema, usageSettingsOf, writeInstanceSettings } from "../instance-settings";
+import { capacityLevel } from "../evaluation-plan";
+import { type ControlDbSize, instanceSettingsChangeDetail, instanceSettingsUpsert, readInstanceSettings, readInstanceSettingsWithControlDbSize, UsageSettingsSchema, usageSettingsOf } from "../instance-settings";
 import { errorResponses } from "../openapi";
 import { assertCanReadUsage, requireInstanceAdmin } from "../roles";
 import { refreshSiteRecords } from "../site-records";
@@ -17,6 +20,18 @@ import { RESOURCE_IDS } from "../usage/limits";
  * 通知はしない(エージェントが GET /usage を定期的に読んで知らせる)。設定の変更はシステム管理者のセッションだけ(session-only.ts)
  */
 export const usageRoutes = new Hono<AppEnv>();
+
+/** B129(Q10・Q24): 制御用の D1 の大きさ(保持の Cron が 1 日 1 回書く)。GET /usage と GET /usage/settings の両方に載せる */
+const ControlCapacitySchema = z
+  .object({
+    sizeBytes: z.number().int().describe("制御用のデータベース(サイト・エクスペリエンス・メンバー・操作の記録などを持つ)の大きさ(バイト)"),
+    measuredAt: z.number().int().describe("測った時刻(epoch ミリ秒)"),
+    level: z
+      .enum(["ok", "warning", "critical"])
+      .describe("ok = 上限(500 MB)の 80% 未満、warning = 80% 以上、critical = 95% 以上(上限に近い。上限に達すると管理画面と API の書き込みが失敗する)"),
+  })
+  .nullable()
+  .describe("制御用のデータベースの使用量(導入全体。1 日 1 回測る)。まだ測っていなければ null");
 
 const Status = z.enum(["ok", "warning", "critical", "exhausted", "within_reference", "over_reference", "not_judged"]);
 const ResourceSchema = z.object({
@@ -38,13 +53,24 @@ const UsageSchema = z.object({
   worst: z.object({ id: z.enum(RESOURCE_IDS), status: Status, ratio: z.number() }).nullable().describe("止まる危険のある資源のうち、割合が最も高いもの"),
   settings: UsageSettingsSchema,
   resources: z.array(ResourceSchema),
+  controlCapacity: ControlCapacitySchema,
 });
 const SettingsViewSchema = UsageSettingsSchema.extend({
   configured: z.boolean().describe("Cloudflare の API トークンとアカウント ID が設定されているか(読み取り専用。PATCH では変えられない)"),
+  controlCapacity: ControlCapacitySchema.describe(
+    "制御用のデータベースの使用量(導入全体。1 日 1 回測る)。まだ測っていなければ null。GET /usage の controlCapacity と同じ値で、使用量の取得が未設定・失敗のとき(GET /usage が 503)もここで読める",
+  ),
 });
 const PatchSchema = UsageSettingsSchema.partial()
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: "変更する項目を 1 つ以上指定してください" });
+
+/** 閾値は計測用の D1 と同じ(capacityLevel)。制御用の D1 は 95% で何も止めないので、stopped を critical と呼ぶ */
+const controlCapacityOf = (size: ControlDbSize | null) => {
+  if (!size) return null;
+  const level = capacityLevel(size.sizeBytes);
+  return { ...size, level: level === "stopped" ? ("critical" as const) : level };
+};
 
 usageRoutes.get(
   "/usage",
@@ -59,9 +85,11 @@ usageRoutes.get(
   }),
   requireSession,
   async (c) => {
-    const settings = await readInstanceSettings(c.get("db"));
+    // B129(Q10・Q24): 制御用の D1 の大きさ(保持の Cron が 1 日 1 回書く)は設定と同じ 1 回の SELECT で読む(往復は増えない)
+    const { settings, controlDbSize } = await readInstanceSettingsWithControlDbSize(c.get("db"));
     await assertCanReadUsage(c, settings.usageVisibility);
-    return c.json(await getUsage(c.env, usageSettingsOf(settings)));
+    const usage = await getUsage(c.env, usageSettingsOf(settings));
+    return c.json({ ...usage, controlCapacity: controlCapacityOf(controlDbSize) });
   },
 );
 
@@ -78,9 +106,10 @@ usageRoutes.get(
   }),
   requireSession,
   async (c) => {
-    const settings = await readInstanceSettings(c.get("db"));
+    // B129: 制御用の D1 の大きさも同じ 1 回の SELECT で読む(往復は増えない)。GET /usage が 503 でも画面に大きさを出すため
+    const { settings, controlDbSize } = await readInstanceSettingsWithControlDbSize(c.get("db"));
     await assertCanReadUsage(c, settings.usageVisibility);
-    return c.json({ ...usageSettingsOf(settings), configured: usageConfig(c.env) !== null });
+    return c.json({ ...usageSettingsOf(settings), configured: usageConfig(c.env) !== null, controlCapacity: controlCapacityOf(controlDbSize) });
   },
 );
 
@@ -102,7 +131,21 @@ usageRoutes.patch(
   async (c) => {
     const db = c.get("db");
     const body = c.req.valid("json");
-    await writeInstanceSettings(db, body, c.get("user").id);
+    // B129: upsert の前に usage.settings_change を記録する(2 文の batch。往復は 1 回のまま)。送った項目の前の値を同じ文で読む。
+    // 設定の upsert に条件は無いので記録も無条件
+    const now = Date.now();
+    const upsert = instanceSettingsUpsert(db, body, c.get("user").id, now);
+    if (upsert) {
+      await c.env.DB.batch([
+        auditStatement(
+          c.env.DB,
+          auditActor(c),
+          { action: "usage.settings_change", workspaceId: null, target: { type: "instance" }, detail: instanceSettingsChangeDetail(body) },
+          { now },
+        ),
+        toStatement(c.env, upsert),
+      ]);
+    }
     const after = await readInstanceSettings(db);
     // plan12 K10: プランを送ったときは、新しい訪問者の予算の既定が変わりうるので全サイトの KV の記録をその場で書き直す
     // (書けなかった分は site-settings-refresh が翌日までに直す)。同じプランの再送でも書き直す(前回の書き直しが途中で止まっていた場合のやり直しになる)

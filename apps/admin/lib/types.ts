@@ -176,15 +176,24 @@ export type Audience = { id: string; name: string; description: string; definiti
 
 /** `GET /usage/settings`(backlog D10)。見られる人・Cloudflare のプラン・Paid の 1 日の目安を画面に出すか */
 export type UsageSettings = { usageVisibility: "members" | "instance_admins"; cloudflarePlan: "free" | "paid"; showPaidReference: boolean };
-/** `GET /usage/settings` の応答。configured = Cloudflare の API トークンとアカウント ID が設定されているか(読み取り専用) */
-export type UsageSettingsView = UsageSettings & { configured: boolean };
+/**
+ * `GET /usage/settings` の応答。configured = Cloudflare の API トークンとアカウント ID が設定されているか(読み取り専用)。
+ * controlCapacity(B129)= 制御用のデータベースの大きさ(GET /usage と同じ値。GET /usage が 503 でも読める)。古い control は欄を返さない(undefined)
+ */
+export type UsageSettingsView = UsageSettings & { configured: boolean; controlCapacity?: ControlCapacity | null };
 export type UsageStatus = "ok" | "warning" | "critical" | "exhausted" | "within_reference" | "over_reference" | "not_judged";
 /** `GET /usage` の資源。limit が null = 止まらない資源(Paid の日次・Paid の保存量)で、reference が目安 */
 export type UsageResource = {
   id: string; kind: "daily" | "capacity"; unit: "count" | "bytes"; used: number; limit: number | null; ratio: number | null; status: UsageStatus;
   projectedExhaustAt: number | null; reference: { value: number; ratio: number } | null; breakdown: Array<{ name: string; used: number }>;
 };
-export type UsageReport = { plan: "free" | "paid"; asOf: number; resetAt: number; worst: { id: string; status: UsageStatus; ratio: number } | null; settings: UsageSettings; resources: UsageResource[] };
+/**
+ * B129(Q10・Q24): 制御用のデータベース(wtt-control)の大きさ。保持の Cron が 1 日 1 回測る。段階は結果のデータベースと同じ閾値(80% / 95%)。
+ * 制御用のデータベースは記録を止めないので、critical は「上限に近い(達すると書き込みが失敗する)」の意味
+ */
+export type ControlCapacity = { sizeBytes: number; measuredAt: number; level: "ok" | "warning" | "critical" };
+/** controlCapacity: まだ測っていなければ null。古い control は欄を返さない(undefined) */
+export type UsageReport = { plan: "free" | "paid"; asOf: number; resetAt: number; worst: { id: string; status: UsageStatus; ratio: number } | null; settings: UsageSettings; resources: UsageResource[]; controlCapacity?: ControlCapacity | null };
 
 /**
  * `GET /static/status`(7o K12。システム管理者だけ)。設置タグの配信ファイルの配置の状態(すべてのワークスペース)。

@@ -125,7 +125,7 @@ describe("usage routes (D10)", () => {
     expect(ok.status).toBe(200);
     expect(await json(ok)).toEqual({ usageVisibility: "members", cloudflarePlan: "paid", showPaidReference: false });
     // configured は読み取り専用(テストの既定は未設定 = false)。PATCH の応答には含めない
-    expect(await json(await call("GET", "/usage/settings", { token: owner.token }))).toEqual({ usageVisibility: "members", cloudflarePlan: "paid", showPaidReference: false, configured: false });
+    expect(await json(await call("GET", "/usage/settings", { token: owner.token }))).toEqual({ usageVisibility: "members", cloudflarePlan: "paid", showPaidReference: false, configured: false, controlCapacity: null });
   });
 
   it("paid with the reference hidden on screen still returns the reference (K13)", async () => {

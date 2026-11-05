@@ -30,12 +30,13 @@ export type TabProps = { draft: Draft; set: <K extends keyof Draft>(key: K, valu
 /**
  * タブの内部の ID(表示は「基本設定」/「パターン」/「評価計画」/「結果」)。B77 K16: 外部計測のタブは基本設定の下部のカードに移した。古い ?tab=analytics は pickParam の既定で overview に落ちる。
  * plan(評価計画)と results(結果)はテストだけ(D9 ③ Task 14・15。パーソナライズでは呼び出し側が overview に落とす = tabsFor)。
- * 結果は下書きでは押せない(「開始後に表示されます」。設計書 §10)
+ * 結果は下書きでは押せない(「開始後に表示されます」。設計書 §10)。
+ * history(変更履歴。B129 spec §7.1)は全員・両方の種別に出し、並びの最後(パーソナライズではパターンの次)
  */
-export const EDITOR_TABS = ["overview", "variants", "plan", "results"] as const;
+export const EDITOR_TABS = ["overview", "variants", "plan", "results", "history"] as const;
 export type EditorTab = (typeof EDITOR_TABS)[number];
 
-/** 種別ごとに出すタブ(評価計画と結果はテストだけ。設計書 §10) */
+/** 種別ごとに出すタブ(評価計画と結果はテストだけ。設計書 §10。変更履歴は両方) */
 export function tabsFor(kind: Experiment["kind"]): readonly EditorTab[] {
   return kind === "test" ? EDITOR_TABS : EDITOR_TABS.filter((t) => t !== "plan" && t !== "results");
 }

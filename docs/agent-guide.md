@@ -29,13 +29,13 @@
 - ワークスペースの作成・削除
 - ログインとログイン状態の操作(`/auth/*`)
 
-読み取り(メンバー・招待・システム管理者の一覧)は鍵でもできます。鍵の用途は、サイト・エクスペリエンス・目標・オーディエンスの運用(作る・直す・公開する・読む)です。
+読み取り(メンバー・招待・システム管理者の一覧と、操作の記録)は鍵でもできます。鍵の用途は、サイト・エクスペリエンス・目標・オーディエンスの運用(作る・直す・公開する・読む)です。
 
 | ロール | エージェントにできること | 使いどころ |
 |---|---|---|
-| 閲覧者(`viewer`) | 読み取り(エクスペリエンス(`experiment`)の閲覧・`evaluate`・`draft-bootstrap`・`analytics-recipe`) | 分析・監査だけを任せる |
+| 閲覧者(`viewer`) | 読み取り(エクスペリエンス(`experiment`)の閲覧・変更履歴・`evaluate`・`draft-bootstrap`・`analytics-recipe`) | 分析・監査だけを任せる |
 | 編集者(`editor`) | 上記 + エクスペリエンス / パターン(`variant`)/ 変更(`change`。コードの変更を含む)の**下書き**作成・編集 | 人間が公開する運用(推奨) |
-| 管理者(`admin`) | 上記 + **公開・開始・一時停止・再開・終了**(= 訪問者に届く操作) | 人間のゲートを置かない運用 |
+| 管理者(`admin`) | 上記 + **公開・開始・一時停止・再開・終了**(= 訪問者に届く操作)・ワークスペースの操作の記録の読み取り | 人間のゲートを置かない運用 |
 
 **被害半径**: 管理者の権限の鍵は、コードの変更(HTML / CSS / CUSTOM_JS)を含むエクスペリエンスを**そのまま本番のサイトで実行**できます。
 これは GTM のカスタム HTML と同じ信頼レベルです。人間が公開のボタンを押す運用にしたいなら権限を「編集者」にした鍵にし、公開は管理画面から人間が行ってください。**ただし、公開されるのは「公開を押した時点でサイトに保存されているすべての内容」で、公開の直前に見た確認画面の内容に固定されるわけではありません**。また、エクスペリエンスの開始・一時停止・再開・終了は確認画面を通らずにサイト全体を自動で公開します(実行中・一時停止中のエクスペリエンスの変更も、編集者がいつでも保存できます)。編集者の鍵が保存した内容を人間が確かめてから本番に出す運用にするなら、公開や状態の変更の前に `GET /sites/{sid}/publish-preview` で未公開の変更(著者・時刻・コードを含むか)を見て、その内容のまま公開します。
@@ -382,6 +382,40 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/duplicate" 
 - `mode: "variant"` が写す変更は、テストで**実際に配信していた中身**です(配信を確かめた定義。終了したテストは終了の直前のもの)。保存したが公開していない編集は入りません。配信を確かめた定義が無いとき(開始していない下書きなど)は、保存済みの変更を写します
 - `mode: "same"` は保存済みの中身をそのまま写し、評価計画も初期値として写します(下書きの間は変えられます)
 - どちらも、結果・採用の記録・履歴は写しません
+
+### レシピ 8: 操作の記録と変更履歴を読む
+
+control は、人とアクセス権の操作と、サイト・エクスペリエンス・目標・オーディエンス・公開の変更を、1 回の操作ごとに 1 行の要約で記録します(365 日残る。記録の範囲と読み方は運用ガイドの「[操作の記録と変更履歴](operations.md#操作の記録と変更履歴)」)。読む API は 3 本で、どれも GET です。
+
+| API | 読めるもの | 使える鍵 |
+|---|---|---|
+| `GET /sites/{sid}/experiments/{eid}/history` | 1 つのエクスペリエンスの記録(変更履歴)と、作った人・最後に変えた人(`createdBy`・`updatedBy`) | 閲覧者以上(そのエクスペリエンスを読める鍵ならどれでも) |
+| `GET /workspaces/{wid}/audit-events` | そのワークスペースのすべての記録 | そのワークスペースで管理者以上。鍵の権限も管理者以上(または本人と同じ) |
+| `GET /audit-events` | 導入全体の記録(各行に今のワークスペースの名前 `workspaceName`) | システム管理者の、本人と同じ権限のすべてのワークスペースの鍵だけ |
+
+```bash
+# エクスペリエンスの変更履歴(新しい順に 100 件)
+curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/history" -H "Authorization: Bearer $AB_API_KEY" \
+  | jq '.events[] | {at, action, via, who: .actor.name, detail}'
+
+# ワークスペースの直近 7 日の記録を、続きの cursor をたどって全部読む(since・until は epoch ミリ秒)
+SINCE=$(( ($(date +%s) - 7 * 86400) * 1000 )); CURSOR=""
+while :; do
+  PAGE=$(curl -sS -G "$AB_CONTROL_URL/workspaces/$WID/audit-events" -H "Authorization: Bearer $AB_API_KEY" \
+    --data-urlencode "since=$SINCE" ${CURSOR:+--data-urlencode "cursor=$CURSOR"})
+  echo "$PAGE" | jq -c '.events[]'
+  CURSOR=$(echo "$PAGE" | jq -r '.nextCursor // empty'); [ -z "$CURSOR" ] && break
+done
+```
+
+- **並び**: 新しい順(`at` の降順)。1 回に `limit`(1〜100、既定 100)件まで。続きがあれば `nextCursor` が入るので、そのまま `cursor` に渡します(最後のページは `null`)。壊れた `cursor` と範囲外の `limit` は 422 `validation_failed`
+- **絞り込み**(ワークスペースと導入全体の 2 本): `since`・`until`(epoch ミリ秒。既定は 30 日前から今。365 日より前は 365 日前にそろえる)、`category`(`access` = 人とアクセス権・導入の設定 / `content` = サイト・エクスペリエンスなど)、`elevated=true`(ログイン方法がパスワードか非常用トークンの記録だけ)。導入全体は `workspaceId` で 1 つのワークスペースに、`workspaceId=none` でどのワークスペースにも属さない操作に絞れます
+- **行の形**: `action`(操作。値の一覧と意味は `/openapi.json` の説明)・`via`(ログイン方法。`google` / `password` / `unknown` / `api_key` / `break_glass` / `setup` / `system`)・`actor`(操作した人。非常用トークンと定期処理は `null`)・`apiKey`(鍵からの操作のとき、その鍵の ID と記録した時点の名前)・`target`(対象)・`detail`(前後の値・件数・値が変わった項目の名前などの要約)。名前とメールアドレスは記録した時点の控えです(操作した人が消えていれば `actor.email` は `null` で、控えの名前だけが入る)。あなたの鍵の操作は `via: "api_key"` と鍵の名前で記録されるので、鍵の名前は用途が分かるものにしてもらってください
+- **メールアドレス**: 呼び出しの権限が管理者以上のときだけ入ります。編集者・閲覧者の権限では、`email` が `null` で名前だけが入り(名前が空ならメールアドレスの @ より前)、人と招待の対象の `target.label` も @ より前だけ(名前の有無を問わない)、`apiKey.name` もメールアドレスの形なら @ より前だけ、`detail` の中のメールアドレスは `null` です
+- **招待の ID は API キーには出しません**: 招待(`target.type` が `invitation`)の `target.id` は `null` です(招待の一覧と同じ理由)
+- **`detail` の読み方**: `api_key.create`・`member.reset_link`・`break_glass.reset_link`・`static.rebuild` の `outcome` の無い行は、操作を始める前に書いた受け付けの行です。`api_key.create` は、発行に成功すると `outcome: "succeeded"` の行(`target.id` が鍵の ID)が、失敗すると `outcome: "failed"` の行が続きます。再設定リンクの発行は、失敗したときだけ `outcome: "failed"` の行が続きます(`static.rebuild` には続く行がありません)。`reason: "reverted"` は失敗して戻した行(公開・サイト設定の保存)、`reason: "create_failed"` はサイトの作成の取り消しの行です。更新の記録(`site.update`・`experiment.update`・`experiment.evaluation_plan`・`goal.update`・`audience.update`・`usage.settings_change`)は、保存の時点の値と比べて値が変わった項目だけを持ちます(`fields` が変わった項目の名前、前後を持つ項目は `{from, to}`。同じ値を送り直した項目は入らない)。変わった項目が無い保存は `fields: []`(`usage.settings_change` は `{}`)です。`experiment.variants`・`experiment.changes` は前後(`from`・`to`)をそのまま持つので、前後が同じこともあります。変更の中身(HTML・CSS・JS・配信条件)の前後の違いは残りません。公開した中身は公開履歴(`GET /sites/{sid}/publishes`)で読みます
+- 変更履歴は、今のエクスペリエンスの記録だけを返します(同じ ID で作り直したものの前の記録は含まない)。消したエクスペリエンスの記録は、ワークスペースの記録で読みます
+- 記録を変える・消す API はありません
 
 ---
 

@@ -13,6 +13,8 @@ declare global {
       TEST_REPAIR_SQL: string;
       /** backlog B35: control / core の src の中身(キー = control/… / core/…)。glossary.test.ts が読む */
       TEST_SOURCES: Record<string, string>;
+      /** B129 plan Task 5: test/audit-*.test.ts の中身(キー = ファイル名)。audit-coverage.test.ts が読む */
+      TEST_AUDIT_TESTS: Record<string, string>;
       /** B148: 本番の wrangler.jsonc(control と、開発リポジトリにだけある公開版の overlay)の生の文字列(キー = リポジトリの根からのパス)。domain-probe.test.ts が読む */
       TEST_WRANGLER_CONFIGS: Record<string, string>;
     }

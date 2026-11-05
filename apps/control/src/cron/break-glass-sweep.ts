@@ -1,4 +1,6 @@
 // apps/control/src/cron/break-glass-sweep.ts
+import { sql, type SqlBool } from "kysely";
+import { auditStatement, systemActor } from "../audit";
 import { passwordLoginOpen } from "../break-glass";
 import { NOT_FROZEN_SQL } from "../write-freeze";
 import type { CronJob } from "./runner";
@@ -18,6 +20,9 @@ import type { CronJob } from "./runner";
  * **配分**: 結果のジョブの配分表(runner.ts の allotQueries)を変えないよう queryShare は持たない(site-settings-refresh と同じ)。
  * 使う D1 のクエリは凍結の確かめ 1 + batch 1 の 2 件で、全体の残りに収まるかを ctx.queries.use で確かめ、足りなければ次の実行に回す
  * (登録は最後。前のジョブが使った残りの中で動く)
+ *
+ * B129(spec §3.1 の break_glass.sweep): batch の先頭に記録の 1 文を置く(同じ batch なのでクエリの数は変わらない)。
+ * guard = 消すパスワードの記録がある + 凍結の印が無い(2 つの削除の文と同じ条件)。件数は削除の前に同じ文の中で、削除の文と同じ選び方で数える
  */
 const NAME = "break-glass-sweep";
 
@@ -35,7 +40,21 @@ export const breakGlassSweep: CronJob = {
       return { more: true };
     }
     await ctx.assertNotFrozen();
-    const [sessions, accounts] = await ctx.env.DB.batch([
+    const credential = sql`select "userId" from account where "providerId" = 'credential'`;
+    const [, sessions, accounts] = await ctx.env.DB.batch([
+      auditStatement(
+        ctx.env.DB,
+        systemActor,
+        {
+          action: "break_glass.sweep",
+          target: { type: "instance" },
+          detail: {
+            passwords: sql`(select count(*) from account where "providerId" = 'credential')`,
+            sessions: sql`(select count(*) from session where "userId" in (${credential}))`,
+          },
+        },
+        { guard: sql<SqlBool>`exists (${credential}) and ${sql.raw(NOT_FROZEN_SQL)}` },
+      ),
       ctx.env.DB.prepare(`delete from session where "userId" in (select "userId" from account where "providerId" = 'credential') and ${NOT_FROZEN_SQL}`),
       ctx.env.DB.prepare(`delete from account where "providerId" = 'credential' and ${NOT_FROZEN_SQL}`),
     ]);

@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { api, ApiClientError, fieldErrors } from "@/lib/client";
 import { toChangeWire } from "@/lib/change-wire";
-import { saveErrorMessage } from "@/lib/experiment-save";
+import { historyStaleAfterSave, saveErrorMessage } from "@/lib/experiment-save";
 import { draftOf, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, reconcileServerUpdate, saveSteps, type Draft, type EditorTab } from "@/lib/experiment-draft";
 import { extensionErrors, planDirty, planFormErrors, planFormState, planMode, planPutBody, syncPlanState, type PlanForm, type PlanView } from "@/lib/evaluation-plan";
 import { archivedTestBanner, lockedFieldChanges, needsRunningTestConfirm, preSaveLockProblem, RUNNING_TEST_CONFIRM } from "@/lib/test-locks";
@@ -21,6 +21,7 @@ import { OverviewTab } from "./experiment/OverviewTab";
 import { VariantsTab } from "./experiment/VariantsTab";
 import { EvaluationPlanTab } from "./experiment/EvaluationPlanTab";
 import { ResultsTab } from "./experiment/ResultsTab";
+import { HistoryTab } from "./experiment/HistoryTab";
 import { StopDialog, StopNotices } from "./experiment/StopDialog";
 import type { ResultsResponse } from "@/lib/results-view";
 import type { StopMessage } from "@/lib/stop-dialog";
@@ -94,6 +95,9 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
     setPlan((p) => syncPlanState(p, body.initialPlan));
   }
   const [planReason, setPlanReason] = useState("");
+  // 変更履歴のタブの読み直しの印(B129 spec §7.1)。自分の保存の書き込みが成功するたびに進める(タブを開いていれば、タブの中で読み直す)。
+  // 途中の段まで書けて失敗したとき・書けたか分からないときも進める(onHistoryStale。B129 final review)
+  const [savedCount, setSavedCount] = useState(0);
   const bodyDirty = isDirty(base, draft);
   const planIsDirty = planDirty(plan.view, plan.form);
 
@@ -112,6 +116,7 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
     setNotice(false);
     setPlanReason("");
     if (fresh) setPlan({ view: fresh, form: planFormState(fresh) });
+    setSavedCount((n) => n + 1);
   };
 
   // 離れる前の確認(本体と評価計画の未保存・保存の途中)は、下の BusyScope の dirty を見る PageLeaveGuard(app/w/layout.tsx)が出す
@@ -163,6 +168,7 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
           replaceParam("variant", id);
         }}
         animate={switched}
+        historyKey={`${savedCount}:${body.experiment.status}`}
         cardOpen={cardOpen}
         onCardOpen={onCardOpen}
         base={base}
@@ -171,6 +177,7 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
         notice={notice}
         onResetToServer={resetToServer}
         onSaved={acceptSaved}
+        onHistoryStale={() => setSavedCount((n) => n + 1)}
         plan={plan}
         onPlan={setPlan}
         planReason={planReason}
@@ -187,16 +194,20 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
 }
 
 function ExperimentEditorBody({
-  site, experiment, goals, audiences, role, imageUpload, tab, onTab, variant, onVariant, animate, cardOpen, onCardOpen, wid, recording, resultsStore,
-  base, draft, setDraft, notice, onResetToServer, onSaved, plan, onPlan, planReason, onPlanReason, onStop,
+  site, experiment, goals, audiences, role, imageUpload, tab, onTab, variant, onVariant, animate, historyKey, cardOpen, onCardOpen, wid, recording, resultsStore,
+  base, draft, setDraft, notice, onResetToServer, onSaved, onHistoryStale, plan, onPlan, planReason, onPlanReason, onStop,
 }: BodyProps & {
   tab: EditorTab; onTab: (t: EditorTab) => void; variant: string | null; onVariant: (id: string | null) => void; animate: boolean; cardOpen: Record<string, boolean>; onCardOpen: (key: string, open: boolean) => void;
+  /** 変更履歴のタブの読み直しの鍵(自分の保存で記録が増えた(かもしれない)回数と状態。外枠が作る) */
+  historyKey: string;
   /** 基準(未保存の判定と PATCH に載せる欄の基準)・下書き・注記の印(外枠が持つ) */
   base: Draft; draft: Draft; setDraft: Dispatch<SetStateAction<Draft>>; notice: boolean;
   /** 破棄: 本体と評価計画を最新のサーバーの値に戻す */
   onResetToServer: () => void;
   /** 保存の書き込みが成功した直後(読み直しの前)。sent = 送った下書き、fresh = 評価計画の PUT の応答(送らなければ null) */
   onSaved: (sent: Draft, fresh: PlanView | null) => void;
+  /** 全段の成功のほかで、記録が増えた(かもしれない)保存の後: 途中の段まで書けて失敗した・書けたか分からない(変更履歴のタブを読み直す) */
+  onHistoryStale: () => void;
   /** 評価計画の状態(外枠が持つ) */
   plan: PlanState; onPlan: (p: PlanState) => void; planReason: string; onPlanReason: (r: string) => void;
   /** 結果のタブの帯から終了のモーダルを開く(管理者以上・実行中か一時停止中のテストだけ。外枠が渡す) */
@@ -236,6 +247,8 @@ function ExperimentEditorBody({
   const steps = saveSteps(base, draft, experiment.status, { dirty: planIsDirty });
   const memoChanged = steps.experimentMemo || steps.variantMemos.length > 0;
   const emptyHtmlAt = emptyHtml ? emptyHtmlIndex(variants, emptyHtml) : null;
+  // 変更履歴の採用の記録はパターンの ID だけを持つので、保存済みのパターンの名前を渡す
+  const variantNames = useMemo(() => Object.fromEntries((experiment.variants ?? []).map((v) => [v.id, v.name])), [experiment.variants]);
 
   // エクスペリエンスの外部計測のカード: まだ開閉を覚えていなければ、基本設定を最初に表示したときの規則で決めてすぐ覚える
   // (設定があれば開き、なければ畳む。編集中に設定を全部消しても勝手に閉じない。B77 Q30b。パターンのカードは VariantsTab が同じことをする)
@@ -423,6 +436,7 @@ function ExperimentEditorBody({
       },
       after: "refresh",
     });
+    if (historyStaleAfterSave(outcome, progress.savedSomething)) onHistoryStale();
     switch (outcome.kind) {
       case "saved":
         // 読み直しを待ち切れなかったときは、本文の先頭に再読み込みの案内を出す(文が「保存しました」で始まるので、帯の文は重ねない)
@@ -430,7 +444,8 @@ function ExperimentEditorBody({
         else setSavedMessage(planBody ? SAVED_WITH_PLAN : SAVED);
         return;
       case "failed": {
-        // 途中の段の失敗では読み直さない: 読み直すと、エラーの表示と「HTML タイプに切り替える」の導線を、届いた値で消すおそれがあるため。
+        // 途中の段の失敗ではページの読み直し(router.refresh)はしない(変更履歴のタブは onHistoryStale で読み直す):
+        // 読み直すと、エラーの表示と「HTML タイプに切り替える」の導線を、届いた値で消すおそれがあるため。
         // 手動の再読み込みを促すに留める(saveErrorMessage)
         const e = outcome.error;
         const errPath = e instanceof ApiClientError ? (e.extra.issues?.[0]?.path ?? e.extra.path) : undefined;
@@ -494,6 +509,8 @@ function ExperimentEditorBody({
                 { id: "results", label: "結果", disabled: experiment.status === "draft", hint: experiment.status === "draft" ? "開始後に表示されます" : undefined },
               ]
             : []),
+          // B129 spec §7.1: 変更履歴は全員・両方の種別に出し、最後に置く(パーソナライズではパターンの次)
+          { id: "history", label: "変更履歴" },
         ]}
       />
       {tab === "overview" ? (
@@ -551,6 +568,19 @@ function ExperimentEditorBody({
             canDuplicate={canEdit}
             onStop={onStop}
             canAdopt={(role === "owner" || role === "admin") && experiment.status === "archived"}
+          />
+        </TabPanel>
+      ) : null}
+      {tab === "history" ? (
+        <TabPanel id="history" animate={animate}>
+          {/* タブを開いている間だけ描く = 開くまで変更履歴を読まない(エクスペリエンスの画面の要求数を変えない。spec §10.6) */}
+          <HistoryTab
+            siteId={site.id}
+            experimentId={experiment.id}
+            publishHistoryHref={`/w/${wid}/sites/${site.id}/history`}
+            createdAt={experiment.createdAt}
+            variantNames={variantNames}
+            reloadKey={historyKey}
           />
         </TabPanel>
       ) : null}

@@ -1,9 +1,24 @@
 import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
+import { expressionBuilder, sql, type Expression, type ExpressionBuilder, type SqlBool } from "kysely";
 import { z } from "zod";
+import { AnalyticsSettingsSchema } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
+import {
+  auditActor,
+  auditCapText,
+  auditChanged,
+  auditFromTo,
+  auditStatement,
+  changedFieldsDetail,
+  sameJsonText,
+  unchangedValues,
+  type AuditColumnValue,
+  type AuditFieldChange,
+  type UserActor,
+} from "../audit";
 import { resultsStore } from "../capabilities";
-import { toStatement, type SiteRow } from "../db";
+import { toStatement, type SiteRow, type Tables } from "../db";
 import { ensureInstallMarker, installHashOf, mergeProbeResults, probeDomains, probeOverrideFromEnv, readProbeSettings } from "../domain-probe";
 import type { DomainRow } from "../domains";
 import { ApiError, notFound, siteIdTaken, validationFailed } from "../errors";
@@ -31,6 +46,7 @@ import {
   legacyDomainFieldsError,
   SiteCreateSchema,
   SitePatchSchema,
+  type SitePatch,
   putSiteRecords,
   releaseHosts,
   resetVerdictsFromModeA,
@@ -113,6 +129,108 @@ const SiteCreatedSchema = SiteJsonSchema.extend({
 const DEFAULT_VISITOR_COOKIE_NAME = "_wtt_vid";
 const DEFAULT_UUID_COOKIE_NAME = "_wtt_uuid";
 
+/**
+ * B129(spec §3.1 の区分 content・§5.1・§5.2): サイトの操作の記録。作成は insert の後(無条件。世代は insert と同じ値)、
+ * 設定の保存・削除は操作の文の前に置き、前の値を同じ文で読む。削除と作成の取り消しは、削除の文と同じ条件の断片を targetFrom の WHERE に使う
+ * (0 行なら記録しない。Review Focus 1)。戻しの batch(作成の取り消し・設定の KV の失敗)には戻しの記録を足す(記録は消せないため)
+ */
+const siteEb = expressionBuilder<Tables, "sites">();
+/** 記録の targetFrom: サイトの行(target_id = ID・target_label = 名前、detail・guard が読む列は `cols`) */
+const siteTarget = (where: (eb: ExpressionBuilder<Tables, "sites">) => Expression<SqlBool>, cols: readonly (keyof SiteRow & string)[] = []) =>
+  sql`select id as target_id, name as target_label${sql.join(cols.map((col) => sql`, ${sql.ref(col)}`), sql``)} from sites where ${where(siteEb)}`;
+const siteById = (id: string) => (eb: ExpressionBuilder<Tables, "sites">) => eb("id", "=", id);
+/** 作成の取り消し(作成の後の失敗で行を消す)。記録の site.delete(`reason: "create_failed"`)を削除と同じ batch に置く(往復は 1 回のまま) */
+const undoCreateBatch = (c: Context<AppEnv>, actor: UserActor, site: Pick<SiteRow, "id" | "workspace_id">) =>
+  c.env.DB.batch([
+    auditStatement(c.env.DB, actor, {
+      action: "site.delete",
+      workspaceId: site.workspace_id,
+      siteId: site.id,
+      target: { type: "site" },
+      targetFrom: siteTarget(siteById(site.id)),
+      detail: { reason: "create_failed" },
+    }),
+    toStatement(c.env, c.get("db").deleteFrom("sites").where(siteById(site.id))),
+  ]);
+
+/**
+ * site.update の detail の欄(欄の順 = SitePatchSchema の順)。col = 比べる列(保存する形)。fromTo があれば前後(from = 記録の文で sites から読む、
+ * to = 保存する行の値)、無ければ名前だけ(長い値の欄: タグを置くドメイン・外部計測の名前・BigQuery のデータセット)。bool = 0/1 の列を true/false にする。
+ * same = 読んだ行の値と保存する値が同じ意味かの比べ方(既定は値の一致)。B129 final review(R64): 記録するのは値が変わった欄だけ
+ */
+type SameValue = (a: AuditColumnValue, b: AuditColumnValue) => boolean;
+/** タグを置くドメイン: 一覧の値の並び(行ごとの判定・確かめた時刻は比べない。判定は保存のたびに変わりうるが、利用者が変えた欄ではない) */
+const sameDomainValues: SameValue = (a, b) => {
+  const values = (j: AuditColumnValue) => JSON.stringify((JSON.parse(String(j)) as DomainRow[]).map((d) => d.value));
+  return values(a) === values(b);
+};
+/** 外部計測: 既定値で埋めた形(null = 作成のときの値 = 既定値。古い版が書いた行は dataLayerName を持たない)を、鍵の順を問わず比べる */
+const sameSiteAnalytics: SameValue = (a, b) => {
+  const filled = (j: AuditColumnValue): string | null => {
+    try {
+      const r = AnalyticsSettingsSchema.safeParse(j === null ? {} : JSON.parse(String(j)));
+      return r.success ? JSON.stringify(r.data) : (j as string | null);
+    } catch {
+      return j as string | null;
+    }
+  };
+  return sameJsonText(filled(a), filled(b));
+};
+const SITE_UPDATE_FIELDS: ReadonlyArray<{ key: keyof SitePatch; col: keyof SiteRow & string; fromTo?: true; bool?: true; same?: SameValue }> = [
+  { key: "name", col: "name", fromTo: true },
+  { key: "domains", col: "domains_json", same: sameDomainValues },
+  { key: "mode", col: "mode", fromTo: true },
+  { key: "idSource", col: "id_source", fromTo: true },
+  { key: "retentionDays", col: "retention_days", fromTo: true },
+  { key: "forgetOnRevoke", col: "forget_on_revoke", fromTo: true, bool: true },
+  { key: "timezone", col: "timezone", fromTo: true },
+  { key: "resultsEnabled", col: "results_enabled", fromTo: true, bool: true },
+  { key: "resultsRetentionDays", col: "results_retention_days", fromTo: true },
+  { key: "newProfileBudgetPerDay", col: "new_profile_budget_per_day", fromTo: true },
+  { key: "consentMode", col: "consent_mode", fromTo: true },
+  { key: "decisionTimeoutMs", col: "decision_timeout_ms", fromTo: true },
+  { key: "visitorCookieName", col: "visitor_cookie_name", fromTo: true },
+  { key: "uuidCookieEnabled", col: "uuid_cookie_enabled", fromTo: true, bool: true },
+  { key: "uuidCookieName", col: "uuid_cookie_name", fromTo: true },
+  { key: "shareSubdomains", col: "share_subdomains", fromTo: true, bool: true },
+  { key: "analytics", col: "analytics_json", same: sameSiteAnalytics },
+  { key: "ga4PropertyId", col: "ga4_property_id", fromTo: true },
+  { key: "bigqueryDataset", col: "bigquery_dataset" },
+];
+
+/**
+ * 設定の保存の記録(site.update)。保存の batch の先頭に置く(保存の batch に条件は無いので、記録も行があれば書く)。
+ * fields = 送った欄のうち、値が変わった欄の名前(欄の順)。比べるのは記録の文の中の今の行(t)と保存する行(next)の列の値
+ * (読んだ行 site と同じ意味の値も変わらずに数える。unchangedValues)。変わった欄が無ければ `{fields: []}`
+ */
+function siteUpdateAudit(c: Context<AppEnv>, actor: UserActor, site: SiteRow, body: SitePatch, next: SiteRow, now: number): D1PreparedStatement {
+  const sent = SITE_UPDATE_FIELDS.filter((f) => body[f.key] !== undefined);
+  const changes: AuditFieldChange[] = sent.map((f) => {
+    const column = sql`t.${sql.ref(f.col)}`;
+    const nextValue = next[f.col] as AuditColumnValue;
+    const changed = auditChanged(column, unchangedValues(nextValue, site[f.col] as AuditColumnValue, f.same));
+    if (!f.fromTo) return { key: f.key, changed };
+    const from = f.bool ? sql`json(case when ${column} = 1 then 'true' else 'false' end)` : auditCapText(column);
+    return { key: f.key, changed, fromTo: auditFromTo(from, f.bool ? nextValue === 1 : nextValue) };
+  });
+  // 一覧に無い欄(SitePatchSchema に足して、ここに足し忘れた欄)は比べられないので、送ったら名前だけを残す
+  const unknown = Object.keys(body).filter((k) => body[k as keyof SitePatch] !== undefined && !SITE_UPDATE_FIELDS.some((f) => f.key === k));
+  changes.push(...unknown.map((key) => ({ key, changed: sql<SqlBool>`1` })));
+  return auditStatement(
+    c.env.DB,
+    actor,
+    {
+      action: "site.update",
+      workspaceId: site.workspace_id,
+      siteId: site.id,
+      target: { type: "site" },
+      targetFrom: siteTarget(siteById(site.id), sent.map((f) => f.col)),
+      detail: changedFieldsDetail(changes),
+    },
+    { now },
+  );
+}
+
 /** 衝突の相手から 422 sharing_conflict を作る。相手のワークスペースを見られる人にだけサイト名を出す(spec Q23) */
 async function conflictError(c: Context<AppEnv>, conflict: Pick<SharingConflict, "siteId" | "workspaceId" | "domain"> | null, hint: string) {
   if (!conflict) return sharingConflictError(null, null, hint);
@@ -194,6 +312,8 @@ siteRoutes.post(
       new_profile_budget_per_day: null,
       // B139: 新しい Site は共有をオンで作る。自動の移行(既存の行だけ)の対象にはしない
       share_subdomains: 1, previous_cookie_domains_json: "[]", share_migration_pending: 0,
+      // B129(Q14・Q29): サイトの世代。同じ ID で作り直すと新しい値になり、前の世代の記録を変更履歴に出さない
+      generation: crypto.randomUUID(),
     };
     // Cookie 名は base に直接入れる(patch で渡すと、新しいサイトなのに既定の名前を旧名として残し、旧名の後始末と共有の衝突の検査の対象にしてしまう)
     const patch = { mode: body.mode, domains: body.domains, uuidCookieEnabled: body.uuidCookieEnabled };
@@ -238,12 +358,20 @@ siteRoutes.post(
     // 順序: sites 行(FK の親)+ 共有の予約(同じ batch。同時の作成で予約に負けたら行も残さず 422)→ host 所有権 → KV。
     // claimHosts が 409 なら sites 行を消して返す(review r2 CX-High-6。予約は FK の CASCADE で消える)
     const claims = claimsOf(next, nowSec);
+    const actor = auditActor(c);
     // B155: 取り直しの付け替えは INSERT の前(守りの文は置かない。別のワークスペースの退役の ID への INSERT は D1 のトリガーが断る。Q10)
+    // B129: 作成の記録は insert の後(無条件。batch が断られれば記録も残らない)。世代は insert と同じ値
     try {
       await c.env.DB.batch([
         ...(reclaimFrom !== null ? [reassignRetiredStatement(c.env.DB, id, wid, reclaimFrom)] : []),
         toStatement(c.env, db.insertInto("sites").values(next)),
         ...claimStatements(c.env.DB, next.id, claims, nowSec),
+        auditStatement(
+          c.env.DB,
+          actor,
+          { action: "site.create", workspaceId: wid, siteId: next.id, generation: { site: next.generation }, target: { type: "site", id: next.id, label: next.name }, detail: { domain: next.domain } },
+          { now },
+        ),
       ]);
     } catch (e) {
       // ここまで KV にも host にも何も書いていない
@@ -259,17 +387,18 @@ siteRoutes.post(
       if (/UNIQUE constraint failed: sites\.id/.test(String(e))) throw siteIdTaken(id);
       throw e;
     }
+    // B129: 作成の後の失敗で行を消すときは、消す文と同じ batch に作成の取り消しの記録を足す(undoCreateBatch)
     try {
       await claimHosts(db, next.id, JSON.parse(next.hosts_json));
     } catch (e) {
-      await db.deleteFrom("sites").where("id", "=", next.id).execute();
+      await undoCreateBatch(c, actor, next);
       throw e;
     }
     // Plan 2 繰越の順序契約: settings record(+ host)を先に書き、config は Publish で書く
     try {
       await putSiteRecords(c.env, next, { plan: probeSettings.plan, collectUntil: {} }); // 新しい Site には run が無い(収集の締め切りの表は空)
     } catch (e) {
-      await db.deleteFrom("sites").where("id", "=", next.id).execute(); // site_hosts は CASCADE
+      await undoCreateBatch(c, actor, next); // site_hosts は CASCADE
       // settings の put だけ成功して host の put で落ちた場合、KV に孤児の settings record が残る。
       // D1 を巻き戻したなら KV も巻き戻す(ベストエフォート。失敗しても元の 503 を返す)
       await deleteSiteRecords(c.env, db, next, []).catch(() => {});
@@ -424,18 +553,25 @@ siteRoutes.patch(
     const oldClaims = claimsOf(site, nowSec);
     const newClaims = claimsOf(next, nowSec);
     const pendingStmt = choosesSharing ? [c.env.DB.prepare("update sites set share_migration_pending = 0 where id = ?").bind(next.id)] : [];
-    // (3) site_hosts の入れ替え・共有の予約の入れ替え・sites の更新を 1 batch
+    const actor = auditActor(c);
+    // (3) site_hosts の入れ替え・共有の予約の入れ替え・sites の更新を 1 batch。B129: 先頭に設定の保存の記録(前の値を同じ文で読む)
     const writeD1 = () =>
       c.env.DB.batch([
+        siteUpdateAudit(c, actor, site, body, next, nowMs),
         c.env.DB.prepare("delete from site_hosts where site_id = ?").bind(next.id),
         ...nextHosts.map((h) => c.env.DB.prepare("insert into site_hosts (host, site_id) values (?, ?)").bind(h, next.id)),
         ...claimStatements(c.env.DB, next.id, newClaims, nowSec),
         ...pendingStmt,
         ...compileUpdate(c.env, db, next, { markStaticStale: staticChanged }),
       ]);
-    /** batch の失敗を封筒にする。予約の主キーの違反 = 同時の保存で共有の衝突に負けた(422)。それ以外は host の取り合い(409) */
-    const batchError = async (e: unknown): Promise<ApiError> => {
+    /**
+     * batch の失敗を封筒にする。予約の主キーの違反 = 同時の保存で共有の衝突に負けた(422)。site_hosts の主キーの違反 = host の取り合い(409)。
+     * それ以外(記録の文の失敗・D1 の障害など)は投げられた例外のまま返し、errorHandler が 500 にする
+     * (B129 final review: 以前はどの失敗も 409 host_in_use に丸めていたので、記録の文の失敗や D1 の障害も「ホスト名の登録が競合しました」になっていた)
+     */
+    const batchError = async (e: unknown): Promise<unknown> => {
       if (isClaimConflict(e)) return conflictError(c, await claimHolder(c.env.DB, next.id, newClaims, nowSec), SHARING_CONFLICT_HINT);
+      if (!/UNIQUE constraint failed: site_hosts\./.test(String(e))) return e;
       // review r2 finding 4: 409 は errorHandler の 5xx ログにも乗らないので、生の例外(D1 の制約名やテーブル名を
       // 含み得る)を封筒の message に流していた ── spec §13.5 の「message は日本語の文」に反するだけでなく、
       // その内部情報を外部エージェント含む全クライアントにそのまま返してしまう。ここで診断用に一度だけログし、
@@ -456,9 +592,12 @@ siteRoutes.patch(
       } catch (e) {
         // 先に D1 を旧値に戻す(releaseHosts は D1 に持ち主が居ない host だけを消すので、戻した後に呼ぶ)。予約は戻す間に他のサイトが取った組を飛ばす。
         // 配信ファイルの世代は戻さない(印が立ったままなら、旧い設定で作り直すだけ)。
-        // 戻す batch 自体が落ちたら、D1 は新しい値のまま。KV は戻さず(D1 と比べる Cron が D1 に合わせる)500 にする
+        // 戻す batch 自体が落ちたら、D1 は新しい値のまま。KV は戻さず(D1 と比べる Cron が D1 に合わせる)500 にする。
+        // B129: 戻す batch に site.update の戻しの記録(`reason: "reverted"`。保存の記録は消せないため)
         try {
           await c.env.DB.batch([
+            // 戻す update(compileUpdate)と同じ条件(id の一致)の targetFrom で読む。保存と戻しの間にサイトが消えていれば 0 行(消えたサイトの行を世代 NULL で残さない)
+            auditStatement(c.env.DB, actor, { action: "site.update", workspaceId: site.workspace_id, siteId: site.id, target: { type: "site" }, targetFrom: siteTarget(siteById(site.id)), detail: { reason: "reverted" } }),
             c.env.DB.prepare("delete from site_hosts where site_id = ?").bind(site.id),
             ...prevHosts.map((h) => c.env.DB.prepare("insert or ignore into site_hosts (host, site_id) values (?, ?)").bind(h, site.id)),
             ...claimStatements(c.env.DB, site.id, oldClaims, nowSec, { orIgnore: true }),
@@ -540,10 +679,18 @@ siteRoutes.delete(
     // 7i plan K23: D1 の削除は、Site の行の static_removing がまだ自分の token のときだけ。削除の途中で「配信ファイルを作り直す」が
     // 印を消していたら(配信を戻した)削除を取りやめる。子のテーブルは sites の FK CASCADE で消える
     // D9 ③(K6 (1)): 同じ batch で、削除の DELETE の前に run_id を持つエクスペリエンスを計測用 D1 の削除待ちに積む(条件は削除と同じ token)
+    // B129: 削除の記録は削除の文の前に、削除と同じ条件(deletable)で置く(同時の削除に負けた要求は 0 行。名前・ドメインは消える前の行から読む)
     const now = Date.now();
-    const [, del] = await c.env.DB.batch([
+    const deletable = (eb: ExpressionBuilder<Tables, "sites">) => eb.and([eb("id", "=", site.id), eb("static_removing", "=", token)]);
+    const [, , del] = await c.env.DB.batch([
       toStatement(c.env, enqueuePurgeQuery(db, { kind: "site", siteId: site.id, token }, now)),
-      toStatement(c.env, db.deleteFrom("sites").where("id", "=", site.id).where("static_removing", "=", token)),
+      auditStatement(
+        c.env.DB,
+        auditActor(c),
+        { action: "site.delete", workspaceId: site.workspace_id, siteId: site.id, target: { type: "site" }, targetFrom: siteTarget(deletable, ["domain"]), detail: { domain: sql`t.domain` } },
+        { now },
+      ),
+      toStatement(c.env, db.deleteFrom("sites").where(deletable)),
     ]);
     if ((del?.meta.changes ?? 0) === 0) throw staticRemoveConflict();
     // K6・K12: 応答の後に 1 回だけ個票を消し始める(残りは Cron が queue から消す)

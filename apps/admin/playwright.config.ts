@@ -127,5 +127,6 @@ export default defineConfig({
     { name: "busy-scopes", testMatch: /busy-scopes\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // B173 第 2 段: オーディエンスの保存(覆い・二度押し・変えた欄だけの PATCH・届いた値の取り込みと注記・離れる前の確認・作成の後の移動)。専用のサイトを作る(目標は作らない)
     { name: "audience-save", testMatch: /audience-save\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    { name: "audit-log", testMatch: /audit-log\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
   ],
 });

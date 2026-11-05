@@ -4,6 +4,7 @@ import { sql } from "kysely";
 import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
 import { revokeSessionsIfNoAccess } from "../access";
+import { auditActor } from "../audit";
 import { ApiError, notFound, validationFailed } from "../errors";
 import { grantInstanceAdmin, listInstanceAdminCandidates, listInstanceAdmins, revokeInstanceAdmin } from "../instance-admins";
 import { errorResponses } from "../openapi";
@@ -61,7 +62,7 @@ instanceAdminRoutes.post(
     const userId = r.rows[0]?.id;
     if (!userId) throw userNotFound();
     // backlog B41 (1): メンバーから外した人(user 行は残る)は昇格させない。判定は昇格の文の条件で行う
-    const result = await grantInstanceAdmin(c.env, userId, c.get("user").id, { requireMember: true });
+    const result = await grantInstanceAdmin(c.env, userId, c.get("user").id, { requireMember: true, audit: { actor: auditActor(c) } });
     if (result === "not_member") throw userNotFound();
     return c.json({ userId }, result === "granted" ? 201 : 200);
   },
@@ -104,7 +105,7 @@ instanceAdminRoutes.delete(
   async (c) => {
     const userId = c.req.param("userId");
     const query = c.req.valid("query");
-    const result = await revokeInstanceAdmin(c.env, userId, { restore: query.restore !== "false", revokedBy: c.get("user").id });
+    const result = await revokeInstanceAdmin(c.env, userId, { restore: query.restore !== "false", revokedBy: c.get("user").id, audit: { actor: auditActor(c) } });
     if (result === "not_admin") throw notFound();
     if (result === "last") throw new ApiError(409, "last_instance_admin", { hint: "先に別のユーザーをシステム管理者にしてください" });
     // 元のロールに戻ったワークスペースが無く、有効な招待も無ければログイン状態を切る(B20 と同じ。自分を外した場合は自分も)

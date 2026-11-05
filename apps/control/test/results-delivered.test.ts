@@ -31,6 +31,7 @@ import {
   testEnv,
   testEnvWith,
   TEXT_CHANGE,
+  userActor,
 } from "./helpers";
 
 // D9 ③(設計書 §5.5、plan ③ の K14・Task 7): 届く定義の記録・配信の確認・テスト中の変更
@@ -338,7 +339,7 @@ describe("届く定義(D9 ③ K14)", () => {
     expect((await setText(owner.token, sid, "exp_t", "Changed")).status).toBe(200);
     // 自分より新しい版が先に active になっている = この Publish は superseded
     await sql`update sites set active_version = 999 where id = ${sid}`.execute(db());
-    const r = await publishSite({ ...testEnv, DEPLOYER: fakeDeployer() }, db(), await siteRow(sid), owner.userId);
+    const r = await publishSite({ ...testEnv, DEPLOYER: fakeDeployer() }, db(), await siteRow(sid), userActor(owner.userId));
     expect(r).toMatchObject({ ok: true, superseded: true });
     expect(await rows(sid)).toHaveLength(1);
   });
@@ -461,7 +462,7 @@ describe("届く定義(D9 ③ K14)", () => {
     await transition(owner.token, sid, "exp_t", "running");
     expect((await setText(owner.token, sid, "exp_t", "Changed")).status).toBe(200);
     const wrapped = beforeD1Batch(env.DB, () => env.DB.prepare("delete from experiments where site_id = ? and id = ?").bind(sid, "exp_t").run());
-    const r = await publishSite({ ...testEnv, DB: wrapped }, db(), await siteRow(sid), owner.userId);
+    const r = await publishSite({ ...testEnv, DB: wrapped }, db(), await siteRow(sid), userActor(owner.userId));
     expect(r).toMatchObject({ ok: true, superseded: false });
     expect((await siteRow(sid)).active_version).toBe((r as { version: number }).version);
     expect(await rows(sid)).toEqual([]); // 消えたエクスペリエンスの行は外部キーの CASCADE で消え、新しい版の行も足さない
@@ -478,7 +479,7 @@ describe("届く定義(D9 ③ K14)", () => {
       expect((await setText(owner.token, sid, "exp_t", "Hello")).status).toBe(200);
       reverted = (await publishOk(owner.token, sid)).version;
     });
-    const a = await publishSite({ ...testEnv, DB: wrapped }, db(), await siteRow(sid), owner.userId);
+    const a = await publishSite({ ...testEnv, DB: wrapped }, db(), await siteRow(sid), userActor(owner.userId));
     expect(a).toMatchObject({ ok: true, superseded: false });
     expect(reverted).toBe((a as { version: number }).version + 1);
     const rs = await rows(sid);

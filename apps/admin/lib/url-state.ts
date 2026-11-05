@@ -36,3 +36,13 @@ export function replaceParam(key: string, value: string | null): void {
   window.history.replaceState(window.history.state, "", next);
   window.dispatchEvent(new Event(URL_PARAM_EVENT));
 }
+
+/**
+ * B129: search 全体を置き換える(複数の値を 1 回で書く絞り込み = 設定の「操作の記録」)。search は `?…` か空。
+ * replaceParam と同じく history.replaceState だけで、ルーターを通さない(再読み込みもサーバーへの再取得も起きない)。ブラウザ専用
+ */
+export function replaceSearch(search: string): void {
+  if (typeof window === "undefined") return;
+  window.history.replaceState(window.history.state, "", `${window.location.pathname}${search}${window.location.hash}`);
+  window.dispatchEvent(new Event(URL_PARAM_EVENT));
+}

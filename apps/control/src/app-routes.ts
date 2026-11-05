@@ -10,6 +10,7 @@ import { AGENT_GUIDE } from "./generated/agent-guide";
 import { agentRoutes } from "./routes/agent";
 import { apiKeyRoutes } from "./routes/api-keys";
 import { assetRoutes } from "./routes/assets";
+import { auditEventRoutes } from "./routes/audit-events";
 import { breakGlassRoutes } from "./routes/break-glass";
 import { capabilityRoutes } from "./routes/capabilities";
 import { evaluationPlanRoutes } from "./routes/evaluation-plan";
@@ -96,6 +97,7 @@ app.route("/", capabilityRoutes);
 app.route("/", usageRoutes);
 app.route("/", breakGlassRoutes);
 app.route("/", agentRoutes);
+app.route("/", auditEventRoutes);
 
 const SessionUserSchema = z.object({
   id: z.string(),

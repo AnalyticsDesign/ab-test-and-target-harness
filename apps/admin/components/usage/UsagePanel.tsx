@@ -2,7 +2,9 @@
 "use client";
 import { useState } from "react";
 import { api } from "@/lib/client";
-import type { UsageReport, UsageSettings } from "@/lib/types";
+import type { ControlCapacity, UsageReport, UsageSettings } from "@/lib/types";
+import { controlCapacityView } from "@/lib/usage";
+import { LocalTime } from "../LocalTime";
 import { ErrorBox } from "../ErrorBox";
 import { SubmitButton } from "../SubmitButton";
 import { PageHeader } from "../ui/PageHeader";
@@ -17,7 +19,7 @@ type UsageResult = { ok: true; report: UsageReport } | { ok: false; title: strin
  * backlog D10: 使用状況の設定(見られる人・プラン・1 日の目安の表示)と詳細。設定の変更はシステム管理者のセッションだけ。
  * プランは自動では判定できない(請求の権限を求めないため)ので、契約に合わせて選んでもらう
  */
-export function UsagePanel({ settings, usage }: { settings: UsageSettings; usage: UsageResult }) {
+export function UsagePanel({ settings, usage, controlCapacity }: { settings: UsageSettings; usage: UsageResult; controlCapacity: ControlCapacity | null | undefined }) {
   return (
     <div>
       <PageHeader title="Cloudflare 使用状況" />
@@ -36,6 +38,8 @@ export function UsagePanel({ settings, usage }: { settings: UsageSettings; usage
           <p>{usage.hint}</p>
         </div>
       )}
+      {/* GET /usage が失敗しても出す(値は page.tsx が pickControlCapacity で GET /usage/settings から選ぶ) */}
+      <ControlCapacityCard cap={controlCapacity} />
     </div>
   );
 }
@@ -88,5 +92,35 @@ function UsageSettingsForm({ settings }: { settings: UsageSettings }) {
       {notice.status ? <p role="status">{notice.status}</p> : null}
       <SubmitButton busy={false} disabled={!dirty}>保存</SubmitButton>
     </form>
+  );
+}
+
+/**
+ * B129(Q10・Q24): 制御用のデータベース(サイト・エクスペリエンス・メンバー・操作の記録などを持つ)の大きさ。GET /usage/settings の controlCapacity を出す
+ * (GET /usage が 503 でも出す。この画面の control への要求は増やさない)。段階の帯はサイト設定の計測用のデータベースの容量と同じ形(warning = 黄の帯、critical = 赤の箱)。
+ * まだ測っていなければ「まだ測っていません(1 日 1 回測ります)」。古い control(欄が無い)では節ごと出さない
+ */
+function ControlCapacityCard({ cap }: { cap: ControlCapacity | null | undefined }) {
+  const view = controlCapacityView(cap);
+  if (!view) return null;
+  return (
+    <section className="card" aria-labelledby="control-capacity" data-testid="control-capacity" data-level={view.level}>
+      <h2 id="control-capacity">制御用のデータベース</h2>
+      <p>
+        {view.size}
+        {view.measuredAt !== null ? (
+          <span className="muted">
+            {" "}
+            (<LocalTime at={view.measuredAt} kind="deadline" /> に測定)
+          </span>
+        ) : null}
+      </p>
+      {view.warning ? (
+        <p className={view.level === "critical" ? "error-box" : "banner-warn"} style={{ display: "block" }} role="status" data-testid="control-capacity-warning">
+          {view.warning}
+        </p>
+      ) : null}
+      <p className="muted">サイト・エクスペリエンス・メンバー・操作の記録などを保存するデータベースです(上限 500 MB)。</p>
+    </section>
   );
 }

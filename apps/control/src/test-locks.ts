@@ -54,6 +54,30 @@ export function assertTestEditable(
   if (patch.persistAssignment !== undefined && (patch.persistAssignment ? 1 : 0) !== exp.persist_assignment) throw testSettingLocked("persistAssignment");
 }
 
+/**
+ * 書き込みの文の条件: 対象のエクスペリエンスの行(`experiments` を直接書く文と、その前に置く記録の文用。B129: 操作の文と記録の文が同じ断片を使う)
+ */
+export const thisExperiment = (siteId: string, eid: string) => (eb: ExpressionBuilder<Tables, "experiments">) =>
+  eb.and([eb("experiments.site_id", "=", siteId), eb("experiments.id", "=", eid)]);
+
+/**
+ * PATCH(メモだけの PATCH を除く)の書き込みの条件(D9 ③ の K10)。読んだ状態のまま・終了したテストでない。テストは加えて、配信率は今の値以上・
+ * 割当の固定は今の値のまま(下書きは下げても変えてもよい)。B129: 更新の文と、その前に置く experiment.update の記録の文が使う
+ */
+export const experimentPatchWritable =
+  (exp: Pick<ExperimentRow, "site_id" | "id" | "kind" | "status">, patch: { trafficPercentage?: number; persistAssignment?: boolean }) =>
+  (eb: ExpressionBuilder<Tables, "experiments">) => {
+    const isTest = exp.kind === "test";
+    const { trafficPercentage, persistAssignment } = patch;
+    return eb.and([
+      thisExperiment(exp.site_id, exp.id)(eb),
+      eb("experiments.status", "=", exp.status),
+      notArchivedTest(eb),
+      ...(isTest && trafficPercentage !== undefined ? [eb.or([eb("experiments.status", "=", "draft"), eb("experiments.traffic_percentage", "<=", trafficPercentage)])] : []),
+      ...(isTest && persistAssignment !== undefined ? [eb.or([eb("experiments.status", "=", "draft"), eb("experiments.persist_assignment", "=", persistAssignment ? 1 : 0)])] : []),
+    ]);
+  };
+
 /** 書き込みの文の条件: 親が終了したテストでない(`experiments` を直接更新する文用) */
 export const notArchivedTest = (eb: ExpressionBuilder<Tables, "experiments">) =>
   eb.not(eb.and([eb("experiments.kind", "=", "test"), eb("experiments.status", "=", "archived")]));

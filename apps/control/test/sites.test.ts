@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { kvKeys, parseSiteSettings } from "@wtt/core";
-import { call, json, setupOwner, inviteAndJoin, createSite, failingKv, failingD1Insert, fakeEdgePing, seedEdgeDomains, setEdgeDomains, siteRow, expectEnvelope } from "./helpers";
+import { call, json, setupOwner, inviteAndJoin, createSite, failingKv, failingD1Insert, SITE_HOSTS_PK_VIOLATION, fakeEdgePing, seedEdgeDomains, setEdgeDomains, siteRow, expectEnvelope } from "./helpers";
 import { getDb } from "../src/db";
 import { releaseHosts, siteToSettings } from "../src/site-settings";
 
@@ -210,13 +210,14 @@ describe("sites", () => {
     expect(await env.DB.prepare("select site_id from site_hosts where host = ?").bind("c.example.org").first()).toBeNull();
   });
   it("host batch failure on patch removes the kv host keys it wrote", async () => {
-    // failingD1Insert(Task 1 の helpers)は site_hosts への insert を含む batch 全体を失敗させる
+    // failingD1Insert(Task 1 の helpers)は site_hosts への insert を含む batch 全体を失敗させる。
+    // 409 host_in_use になるのは site_hosts の主キーの違反だけ(B129 final review。ほかの失敗は 500)なので、その文言で投げる
     const { token, workspaceId } = await setupOwner();
     // B148 Task 4: 作成の 1 行目は Cloudflare 外(404)にして、ホストを持たない状態から始める
     fakeEdgePing.set("www.hb-base.com", () => new Response("not found", { status: 404 }));
     const { id } = await createSite(token, workspaceId, { id: "site_hb", mode: "B", domain: "www.hb-base.com" });
     const domains = await seedEdgeDomains(id, ["hb.example.com"]); // B148 Task 2: 判定は D1 に直接置く
-    const res = await call("PATCH", `/sites/${id}`, { token, body: { domains, visitorCookieName: "_new_vid" }, envOverride: { DB: failingD1Insert(env.DB, "site_hosts") } });
+    const res = await call("PATCH", `/sites/${id}`, { token, body: { domains, visitorCookieName: "_new_vid" }, envOverride: { DB: failingD1Insert(env.DB, "site_hosts", SITE_HOSTS_PK_VIOLATION) } });
     expect(res.status).toBe(409);
     // review r2 finding 4: この catch はかつて生の例外(String(e))を message に流していた。
     // ErrorEnvelopeSchema には string 型としか宣言していないので通ってしまう ── ここで日本語文字を含む
@@ -456,7 +457,7 @@ describe("host release order (plan12 K14 (c))", () => {
         return typeof v === "function" ? v.bind(target) : v;
       },
     }) as KVNamespace;
-    const res = await call("PATCH", `/sites/${a.id}`, { token, body: { domains: ["new.example.com"] }, envOverride: { DB: failingD1Insert(env.DB, "site_hosts"), CONFIG_KV: recordingKv } });
+    const res = await call("PATCH", `/sites/${a.id}`, { token, body: { domains: ["new.example.com"] }, envOverride: { DB: failingD1Insert(env.DB, "site_hosts", SITE_HOSTS_PK_VIOLATION), CONFIG_KV: recordingKv } });
     expect(res.status).toBe(409);
     expect(deletes).not.toContain(kvKeys.host("keep.example.com")); // D1 が確定しなかったので、外そうとした host の KV は消していない
     expect(await env.CONFIG_KV.get(kvKeys.host("keep.example.com"))).toBe(a.id); // 外そうとした host は D1 も KV も旧値のまま

@@ -1,6 +1,6 @@
-import { Kysely, type Generated } from "kysely";
+import { DummyDriver, Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler, type Generated, type RawBuilder } from "kysely";
 import { D1Dialect } from "kysely-d1";
-import type { ExperimentKind } from "@wtt/core";
+import type { AuditCategory, AuditVia, ExperimentKind } from "@wtt/core";
 import type { Env } from "./env";
 
 // Better Auth 生成テーブル(migrations/0001_better_auth.sql)。列名は camelCase
@@ -41,6 +41,11 @@ export type SiteRow = {
    * domain・allowed_origins_json・hosts_json は保存のたびに deriveDomainColumns で一覧から導いて書く
    */
   domains_json: string;
+  /**
+   * migrations/0023_audit_events.sql(B129 Q14・Q25): サイトの世代。作るたびに control が crypto.randomUUID() を入れる
+   * (同じ ID で作り直すと新しい値)。既存の行と、世代を書かない古い control の作成は、マイグレーションとトリガーが乱数で埋める
+   */
+  generation: string;
 };
 export type SiteHostRow = { host: string; site_id: string };
 /** migrations/0007_audiences.sql。definition_json = 保存する形の配信条件(core の Targeting) */
@@ -62,6 +67,8 @@ export type ExperimentRow = {
   /** migrations/0015_variant_original_and_memo.sql(B77): メモ(社内用。外部には出力しない。1,000 字まで) */
   description: string;
   created_by: string; updated_by: string; created_at: number; updated_at: number;
+  /** migrations/0023_audit_events.sql(B129 Q14・Q25): エクスペリエンスの世代。SiteRow の generation と同じ決まり(作成と複製で新しい値) */
+  generation: string;
 };
 /** original = オリジナル(0 / 1。変更を持たず元のページを見せる)・description = メモ(同 0015、B77) */
 export type VariantRow = {
@@ -137,6 +144,34 @@ export type ResultsInterimCacheRow = { site_id: string; experiment_id: string; c
 export type ResultsStoreStatusRow = { id: number; size_bytes: number; measured_at: number };
 export type CronCursorRow = { job: string; day: string; cursor: string | null };
 
+/**
+ * migrations/0023_audit_events.sql(B129、spec §4.1)。管理の操作の記録。id は SQLite の rowid(足すときは省く)、at は epoch ミリ秒。
+ * トリガーで追記だけ(UPDATE は断り、DELETE は 365 日より前の行だけ通す)。外部キーなし(対象が消えても控えの列で読む)
+ */
+export type AuditEventRow = {
+  id: Generated<number>;
+  at: number;
+  category: AuditCategory;
+  action: string;
+  workspace_id: string | null;
+  site_id: string | null;
+  experiment_id: string | null;
+  site_generation: string | null;
+  experiment_generation: string | null;
+  via: AuditVia;
+  actor_user_id: string | null;
+  actor_email: string | null;
+  actor_name: string | null;
+  api_key_id: string | null;
+  api_key_name: string | null;
+  target_type: string | null;
+  target_id: string | null;
+  target_label: string | null;
+  detail_json: Generated<string>;
+};
+/** 同上。保持の Cron の 1 日の枠(1 行だけ。id = 1、day = D1 の時計の UTC 日 YYYY-MM-DD、last_limit = その batch の削除の上限。Q15・Q26) */
+export type AuditRetentionStateRow = { id: number; day: string; deleted: number; run_id: string; last_limit: number };
+
 export interface Tables {
   user: UserRow;
   verification: VerificationRow;
@@ -173,11 +208,32 @@ export interface Tables {
   results_interim_cache: ResultsInterimCacheRow;
   results_store_status: ResultsStoreStatusRow;
   cron_cursors: CronCursorRow;
+  audit_events: AuditEventRow;
+  audit_retention_state: AuditRetentionStateRow;
 }
 export type Db = Kysely<Tables>;
 
 export function getDb(env: Env): Db {
   return new Kysely<Tables>({ dialect: new D1Dialect({ database: env.DB }) });
+}
+
+/** 文を組み立てるだけの Kysely(実行しない。D1 の dialect と同じ SQLite の compiler で `?` の bind を作る) */
+export const sqlCompiler = new Kysely<Tables>({
+  dialect: {
+    createAdapter: () => new SqliteAdapter(),
+    createDriver: () => new DummyDriver(),
+    createIntrospector: (db) => new SqliteIntrospector(db),
+    createQueryCompiler: () => new SqliteQueryCompiler(),
+  },
+});
+
+/**
+ * Kysely の `sql` で書いた 1 文を D1 の prepared statement にする(batch に積む)。B129: 操作の文と記録の文が同じ条件の断片
+ * (`sql` の式)を使うとき、操作の文もこれで組む(bind は字面の順の `?` で付く。`?1` などの番号付きの生の SQL と混ぜない)
+ */
+export function sqlStatement(DB: D1Database, q: RawBuilder<unknown>): D1PreparedStatement {
+  const c = q.compile(sqlCompiler);
+  return DB.prepare(c.sql).bind(...c.parameters);
 }
 
 /** Kysely でビルドした文を D1 の prepared statement にする(batch = 1 トランザクション用) */

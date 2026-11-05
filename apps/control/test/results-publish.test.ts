@@ -5,7 +5,7 @@ import { RUN_ID_RE, type CompiledConfig } from "@wtt/core";
 import { getDb } from "../src/db";
 import { publishSite } from "../src/publish";
 import { collectionStops } from "../src/results/report";
-import { call, choosePrimaryGoal, createExperiment, experimentRow, json, publishRes, RESULTS_STORE, runDirect, setupOwner, siteRow, testEnv, TEXT_CHANGE } from "./helpers";
+import { call, choosePrimaryGoal, createExperiment, experimentRow, json, publishRes, RESULTS_STORE, runDirect, setupOwner, siteRow, testEnv, TEXT_CHANGE, userActor } from "./helpers";
 
 // D9 ②(設計書 §6.3・§9.3、plan ② の K15・Task 11): Publish が compiled config に results を出し、収集の状態の変化を記録する
 
@@ -211,7 +211,7 @@ describe("Publish の results(D9 ②)", () => {
     const db = getDb(env);
     // activation の前に追い越された(自分より新しい版が先に active になった)
     await db.updateTable("sites").set({ active_version: 9 }).where("id", "=", sid).execute();
-    const r = await publishSite(testEnv, db, await siteRow(sid), owner.userId);
+    const r = await publishSite(testEnv, db, await siteRow(sid), userActor(owner.userId));
     expect(r).toMatchObject({ ok: true, superseded: true });
     expect(await logRows(sid)).toEqual([]);
     // activation の後、active の put の最中に追い越された(published_status と同じ fence で書かない)

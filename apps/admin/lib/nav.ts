@@ -24,6 +24,8 @@ const SETTINGS_NAV: Array<{ href: string; label: string; icon: IconName; section
   { href: "/w/me/usage", label: "Cloudflare 使用状況", icon: "gauge", section: "system", prefetch: false },
   // 7o K14: prefetch を止める: この画面は control の GET /static/status(= デプロイ専用の Worker への問い合わせ)を呼ぶ
   { href: "/w/me/static-delivery", label: "配信ファイル", icon: "upload", section: "system", prefetch: false },
+  // B129(spec §7.2): 導入全体の操作の記録。読むのは control の D1 だけ(外部の使用量を増やさない)なので先読みは止めない
+  { href: "/w/me/audit-events", label: "操作の記録", icon: "history", section: "system" },
 ];
 
 const SITE_RE = /^\/w\/[^/]+\/sites\/[^/]+(?:\/([^/]+))?/;
@@ -68,6 +70,8 @@ export type SettingsPage =
   | { kind: "site"; wid: string; sid: string }
   | { kind: "members"; wid: string }
   | { kind: "member-api-keys"; wid: string }
+  /** B129: ワークスペースの操作の記録(管理者以上) */
+  | { kind: "audit-events"; wid: string }
   | { kind: "me"; path: string };
 
 /** pathname(search・hash は無視)を区切り。末尾のスラッシュは無視する */
@@ -82,6 +86,7 @@ export function settingsPageOf(pathname: string): SettingsPage | null {
   if (wid === "me") return { kind: "me", path: pathname }; // ワークスペースの ID はランダムな 32 字なので "me" と重ならない
   if (parts.length === 3 && parts[2] === "members") return { kind: "members", wid };
   if (parts.length === 3 && parts[2] === "api-keys") return { kind: "member-api-keys", wid };
+  if (parts.length === 3 && parts[2] === "audit-events") return { kind: "audit-events", wid };
   if (parts.length === 5 && parts[2] === "sites" && parts[4] === "settings") return { kind: "site", wid, sid: parts[3]! };
   return null;
 }
@@ -119,7 +124,7 @@ export function originOfPath(path: string): SettingsOrigin | null {
 
 /**
  * サイドバーの文脈(K5)。サイドバーは layout に居て遷移をまたいで残るので、いまの画面は pathname から決める。
- * 設定の画面(settingsPageOf が null でない = サイト設定・メンバー・メンバーの API キー・`/w/me/*`)は設定のメニュー、
+ * 設定の画面(settingsPageOf が null でない = サイト設定・メンバー・メンバーの API キー・操作の記録・`/w/me/*`)は設定のメニュー、
  * それ以外は originOfPath と同じ区切り(home / workspace / site)。区切りの読み方を 1 か所にするため originOfPath をそのまま使う
  */
 export type SidebarContext = SettingsOrigin | { kind: "settings"; page: SettingsPage };
@@ -139,7 +144,7 @@ const shrunk = (page: SettingsPage): RememberedOrigin => {
 /**
  * 覚えた origin が、この設定の画面で使えるか。
  * - site の画面: 同じサイトのときだけ(別のサイトの設定を開いたら、そのサイトが起点)
- * - members / member-api-keys: 同じワークスペースの workspace、または同じワークスペースの site
+ * - members / member-api-keys / audit-events: 同じワークスペースの workspace、または同じワークスペースの site
  * - me: どの origin でも(個人・システムの画面はどこからでも開ける)
  */
 function fitsPage(page: SettingsPage, o: SettingsOrigin): boolean {
@@ -148,6 +153,7 @@ function fitsPage(page: SettingsPage, o: SettingsOrigin): boolean {
       return o.kind === "site" && o.wid === page.wid && o.sid === page.sid;
     case "members":
     case "member-api-keys":
+    case "audit-events":
       return (o.kind === "site" || o.kind === "workspace") && o.wid === page.wid;
     case "me":
       return true;
@@ -213,7 +219,7 @@ type GroupCtx = { workspaces: WorkspaceSummary[]; instanceAdmin: boolean };
 
 /**
  * 設定のメニューの節。開いた階層の節が先頭で、上の階層が続く(site → workspace → personal → system)。
- * - workspace: 管理者以上だけ(メンバーと、メンバーの API キーは管理者以上の機能)。満たさなければ節ごと出さない
+ * - workspace: 管理者以上だけ(メンバー・メンバーの API キー・操作の記録は管理者以上の機能)。満たさなければ節ごと出さない
  * - site の「危険な操作」: そのワークスペースのオーナーだけ
  * - system: システム管理者だけ
  * - summary に無いサイト・ワークスペース(権限が無い・消えた)の節は出さない
@@ -249,6 +255,8 @@ export function settingsGroups(origin: SettingsOrigin, ctx: GroupCtx): SettingsG
       items: [
         { key: "members", href: `/w/${ws.id}/members`, label: "メンバー", icon: "users" },
         { key: "member-api-keys", href: `/w/${ws.id}/api-keys`, label: "メンバーの API キー", icon: "key" },
+        // B129(spec §7.2): このワークスペースの操作の記録(管理者以上。節ごと管理者以上なのでここに置くだけでよい)
+        { key: "audit-events", href: `/w/${ws.id}/audit-events`, label: "操作の記録", icon: "history" },
       ],
     });
   }

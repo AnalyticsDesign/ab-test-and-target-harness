@@ -38,6 +38,7 @@ const RULES: Array<{ re: RegExp; use: string; allow: Allow[] }> = [
     allow: [
       { file: "components/LocalTime.tsx", line: /setNow\(Date\.now\(\)\)/, why: "useNow の effect の中だけで読む" },
       { file: "components/api-keys/IssueKeyForm.tsx", line: /setChosenAt\(Date\.now\(\)\)/, why: "期限を選んだイベントの中で読む" },
+      { file: "components/audit/AuditLogPanel.tsx", line: /auditApiQuery\(next, Date\.now\(\)\)/, why: "絞り込みを変えたイベントの中で、読み直す範囲(直近 N 日の起点)を作る。描画の文字にはしない" },
     ],
   },
   {

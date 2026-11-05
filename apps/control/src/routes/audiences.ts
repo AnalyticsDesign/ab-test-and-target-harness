@@ -1,9 +1,11 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
+import { expressionBuilder, sql, type ExpressionBuilder } from "kysely";
 import { z } from "zod";
 import { TargetingInputSchema, targetingReferences } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
-import type { AudienceRow, Db, ExperimentRow } from "../db";
+import { auditActor, auditChanged, auditStatement, changedFieldsDetail, sameJsonText, unchangedValues, type AuditDetail, type AuditFieldChange, type AuditSql } from "../audit";
+import { toStatement, type AudienceRow, type Db, type ExperimentRow, type SiteRow, type Tables } from "../db";
 import { ApiError, notFound } from "../errors";
 import { SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
@@ -47,6 +49,39 @@ const AudienceJsonSchema = z.object({
   createdAt: z.number().int().describe("epoch ミリ秒"),
   updatedAt: z.number().int().describe("epoch ミリ秒"),
 });
+
+/**
+ * B129(spec §3.1 の区分 content): オーディエンスの記録。目標と同じ形(1 文の execute を `env.DB.batch([操作, 記録])` に。往復は 1 回のまま。
+ * 作成は insert の後、変更・削除は操作の文の前に、操作の文と同じ条件(thisAudience)の targetFrom で置く)
+ */
+const thisAudience = (siteId: string, aid: string) => (eb: ExpressionBuilder<Tables, "audiences">) => eb.and([eb("site_id", "=", siteId), eb("id", "=", aid)]);
+function audienceAudit(
+  c: Context<AppEnv>,
+  site: Pick<SiteRow, "id" | "workspace_id">,
+  aid: string,
+  action: "audience.create" | "audience.update" | "audience.delete",
+  detail: AuditDetail | AuditSql,
+  label?: string,
+) {
+  const event =
+    label !== undefined
+      ? { target: { type: "audience" as const, id: aid, label } }
+      : {
+          target: { type: "audience" as const },
+          // 変更の記録は今の値(name・description・definition_json)を t から読んで比べる
+          targetFrom: sql`select id as target_id, name as target_label, name, description, definition_json from audiences where ${thisAudience(site.id, aid)(expressionBuilder<Tables, "audiences">())}`,
+        };
+  return auditStatement(c.env.DB, auditActor(c), { action, workspaceId: site.workspace_id, siteId: site.id, detail, ...event });
+}
+/**
+ * オーディエンスの PATCH の欄(記録の detail.fields の順)と比べる列。名前だけで値は持たない(定義の中身も持たない)。
+ * json = 鍵の順を問わずに読んだ行と比べる。B129 final review(R64): 記録するのは値が変わった欄だけ
+ */
+const AUDIENCE_PATCH_FIELDS = [
+  { key: "name", col: "name" },
+  { key: "description", col: "description" },
+  { key: "definition", col: "definition_json", json: true },
+] as const satisfies ReadonlyArray<{ key: string; col: keyof AudienceRow; json?: true }>;
 
 export type AudienceUsage = Map<string, Array<{ id: string; name: string; status: ExperimentRow["status"]; kind: ExperimentRow["kind"] }>>;
 
@@ -134,7 +169,7 @@ audienceRoutes.post(
     await assertTargetingRefs(db, site, definition, "definition");
     const now = Date.now();
     const row: AudienceRow = { site_id: site.id, id: body.id, name: body.name, description: body.description, definition_json: JSON.stringify(definition), created_at: now, updated_at: now };
-    await db.insertInto("audiences").values(row).execute();
+    await c.env.DB.batch([toStatement(c.env, db.insertInto("audiences").values(row)), audienceAudit(c, site, row.id, "audience.create", {}, row.name)]);
     await touchSite(db, site.id, now);
     return c.json(audienceJson(row, new Map()), 201);
   },
@@ -189,7 +224,12 @@ audienceRoutes.patch(
       await assertTargetingRefs(db, site, definition, "definition");
       patch.definition_json = JSON.stringify(definition);
     }
-    await db.updateTable("audiences").set(patch).where("site_id", "=", site.id).where("id", "=", row.id).execute();
+    // 送った欄のうち、書く値(patch)が記録の文の中の今の行(t)と違う欄だけを記録する(変わらなければ fields: []。updated_at は進む)
+    const changes: AuditFieldChange[] = AUDIENCE_PATCH_FIELDS.filter((f) => body[f.key] !== undefined).map((f) => ({
+      key: f.key,
+      changed: auditChanged(sql`t.${sql.ref(f.col)}`, unchangedValues(patch[f.col] ?? null, row[f.col], "json" in f ? sameJsonText : undefined)),
+    }));
+    await c.env.DB.batch([audienceAudit(c, site, row.id, "audience.update", changedFieldsDetail(changes)), toStatement(c.env, db.updateTable("audiences").set(patch).where(thisAudience(site.id, row.id)))]);
     await touchSite(db, site.id, now);
     return c.json(audienceJson({ ...row, ...patch }, await audienceUsage(db, site.id)));
   },
@@ -225,7 +265,7 @@ audienceRoutes.delete(
         hint: hints.join("。"),
       });
     }
-    await db.deleteFrom("audiences").where("site_id", "=", site.id).where("id", "=", row.id).execute();
+    await c.env.DB.batch([audienceAudit(c, site, row.id, "audience.delete", {}), toStatement(c.env, db.deleteFrom("audiences").where(thisAudience(site.id, row.id)))]);
     await touchSite(db, site.id, Date.now());
     return c.body(null, 204);
   },

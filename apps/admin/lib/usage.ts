@@ -1,5 +1,5 @@
 // apps/admin/lib/usage.ts
-import type { UsageReport, UsageResource, UsageSettings, UsageStatus } from "./types";
+import type { ControlCapacity, UsageReport, UsageResource, UsageSettings, UsageStatus } from "./types";
 
 /** backlog D10: 使用状況の表示の判断(純関数)。判定そのものは control が行い、ここは見せ方だけ */
 /** Paid の 1 日分 = 月額 $5 に含まれる量 ÷ 30(control の usage/limits.ts と同じ値) */
@@ -210,4 +210,45 @@ export function summaryView(i: SummaryInput): SummaryView {
     return adminOnly({ kind: "unavailable", ...usageFailure(i.usage.status, i.usage.data), adminLine });
   }
   return { kind: "ok", report: i.usage.report, adminLine };
+}
+
+/**
+ * B129: 使用状況の画面の「制御用のデータベース」に使う値。GET /usage/settings の値を先に使う(GET /usage が未設定・Cloudflare 側の失敗で
+ * 503 でも出すため)。両方にあるときも設定の値を使う: どちらも同じ描画で同じ行を読んだ値なので、出どころを 1 つにして、
+ * GET /usage の成否で値が入れ替わらないようにする。設定に欄が無い(古い control)ときだけ GET /usage の値。どちらにも無ければ undefined(節ごと出さない)
+ */
+export function pickControlCapacity(settings: { controlCapacity?: ControlCapacity | null }, report: Pick<UsageReport, "controlCapacity"> | null): ControlCapacity | null | undefined {
+  if (settings.controlCapacity !== undefined) return settings.controlCapacity;
+  return report?.controlCapacity;
+}
+
+/** 制御用のデータベース(wtt-control)の上限(D1 の 1 つのデータベースの上限。結果のデータベースと同じ 500 MB) */
+const CONTROL_DB_LIMIT_MB = 500;
+
+export type ControlCapacityView = {
+  level: "unmeasured" | "ok" | "warning" | "critical";
+  /** 大きさの 1 行(まだ測っていなければその旨) */
+  size: string;
+  measuredAt: number | null;
+  /** 帯の文(ok・まだ測っていないときは null) */
+  warning: string | null;
+};
+
+/**
+ * B129(Q10・Q24): 使用状況の画面の「制御用のデータベース」の表示。段階は control が決める(結果のデータベースと同じ 80% / 95%)。
+ * まだ測っていない(null)ときは「まだ測っていません(1 日 1 回測ります)」。古い control(欄が無い = undefined)では出さない。
+ * 制御用のデータベースは記録を止めないので、結果のデータベースの「記録を止めている」の言い方は使わない(上限に達すると書き込みが失敗する、と書く)。
+ * 知らない段階(新しい control)は warning として出す(黙って ok にしない)
+ */
+export function controlCapacityView(cap: ControlCapacity | null | undefined): ControlCapacityView | null {
+  if (cap === undefined) return null;
+  if (cap === null) return { level: "unmeasured", size: "まだ測っていません(1 日 1 回測ります)", measuredAt: null, warning: null };
+  // 1 MB 未満(作ったばかりの導入)は「約 0 MB」にせず「1 MB 未満」と言う
+  const size = cap.sizeBytes < 1e6 ? `1 MB 未満 / ${CONTROL_DB_LIMIT_MB} MB` : `約 ${Math.floor(cap.sizeBytes / 1e6)} MB / ${CONTROL_DB_LIMIT_MB} MB`;
+  const after = "上限に達すると、管理画面と API からの保存・変更が失敗します。不要になったサイト・エクスペリエンスを削除してください(操作の記録は 365 日で消えます)";
+  if (cap.level === "ok") return { level: "ok", size, measuredAt: cap.measuredAt, warning: null };
+  if (cap.level === "critical") {
+    return { level: "critical", size, measuredAt: cap.measuredAt, warning: `制御用のデータベースの使用量が上限の 95% 以上になり、上限に近づいています(${size})。${after}` };
+  }
+  return { level: "warning", size, measuredAt: cap.measuredAt, warning: `制御用のデータベースの使用量が上限の 80% 以上になりました(${size})。${after}` };
 }

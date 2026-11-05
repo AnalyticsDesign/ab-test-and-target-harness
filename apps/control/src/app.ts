@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import { API_CONTRACT_VERSION, API_VERSION_HEADER, CLIENT_IP_HEADER, MIN_CLIENT_VERSION, MIN_CLIENT_VERSION_HEADER } from "@wtt/core";
 import { KEY_EXPIRED_HINT, isKeyExpired, keyExpiresAt } from "./api-key-expiry";
-import { apiKeyFromHeaders, getAuth, type Auth, type Role } from "./auth";
+import { apiKeyFromHeaders, asLoginMethod, getAuth, type Auth, type LoginMethod, type Role } from "./auth";
 import { requestBodyLimit } from "./body-limit";
 import { getDb, type Db } from "./db";
 import { ApiError, errorHandler, notFound } from "./errors";
@@ -15,10 +15,22 @@ export type SessionUser = { id: string; email: string; name: string };
  * `keyScope` = この要求が API キー経由のときの範囲(backlog B42。フル / 1 つのワークスペース)。セッション経由は null。
  * 判定に使うのは `roles.ts` だけ(認可の集約)
  * `sessionId` = セッション経由の要求のセッションの id(B112: 鍵の発行の口がセッションの作り方を引く)。API キー経由は null
+ * `loginMethod` = セッション経由の要求の、セッションを作った経路(B112 の session."loginMethod"。印が無ければ null)。API キー経由は null
+ * `apiKey` = API キー経由の要求の鍵の ID と名前(B129: 操作の記録の控え)。セッション経由は null。
+ * loginMethod・apiKey は requireSession が既に読む値から作る(追加の照会なし。操作の記録の audit.ts の auditActor が使う)
  */
 export type AppEnv = {
   Bindings: Env;
-  Variables: { auth: Auth; db: Db; user: SessionUser; roleCap: Role | null; keyScope: KeyScope | null; sessionId: string | null };
+  Variables: {
+    auth: Auth;
+    db: Db;
+    user: SessionUser;
+    roleCap: Role | null;
+    keyScope: KeyScope | null;
+    sessionId: string | null;
+    loginMethod: LoginMethod | null;
+    apiKey: { id: string; name: string | null } | null;
+  };
 };
 
 export function createApp(): Hono<AppEnv> {
@@ -118,6 +130,7 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
   const isApiKeyRequest = Boolean(apiKeyFromHeaders(c.req.raw.headers));
   let roleCap: Role | null = null;
   let keyScope: KeyScope | null = null;
+  let apiKey: { id: string; name: string | null } | null = null;
   if (isApiKeyRequest) {
     // B42(brief K15・K14): 失効の正(apikey_revocations)と、持ち主がいまシステム管理者かを、鍵の行と 1 回で引く
     const row = await c
@@ -127,6 +140,8 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
       .leftJoin("instance_admins", "instance_admins.user_id", "apikey.userId")
       .select([
         "apikey.metadata as metadata",
+        // B129: 操作の記録の控え(鍵の名前)。同じ照会で読む(照会は増やさない。テスト require_session_adds_no_d1_query)
+        "apikey.name as name",
         "apikey.expiresAt as nativeExpiresAt",
         "apikey_revocations.revoked_at as revokedAt",
         "instance_admins.user_id as instanceAdminId",
@@ -145,10 +160,19 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
     // 範囲の判定の後に置く = 壊れた metadata の鍵は上の「発行し直す」案内のまま(期限の案内に化けない)。失効は期限より先に判定済み
     const expiresAt = keyExpiresAt(row.metadata, row.nativeExpiresAt == null ? null : new Date(row.nativeExpiresAt).getTime());
     if (isKeyExpired(expiresAt, Date.now())) throw new ApiError(401, "unauthorized", { hint: KEY_EXPIRED_HINT });
+    apiKey = { id: session.session.id, name: row.name };
   }
   c.set("roleCap", roleCap);
   c.set("keyScope", keyScope);
   // B112: 鍵の要求では session.id が apikey の行の id(上の B33 のコメント)なので、セッションの id としては入れない
   c.set("sessionId", isApiKeyRequest ? null : session.session.id);
+  // B129: セッションを作った経路は、getSession が返すセッションの追加の列(auth.ts の session.additionalFields)から読む(照会は増やさない)。
+  // better-auth 1.4.21 の getSession は session の行を select * で読み、additionalFields の列も session.session に入れて返す
+  // (型も additionalFields から推論される)。
+  // 鍵の要求の session は apiKey プラグインの作る mock(列を持たない)なので、鍵の要求では読まない。
+  // 見張り(B179 の版上げ): getSession が追加の列を返さなくなると、すべてのセッションの記録の経路が unknown になる
+  // (test/audit.test.ts の actor_from_google_session・actor_from_password_session が落ちる)
+  c.set("loginMethod", isApiKeyRequest ? null : asLoginMethod(session.session.loginMethod));
+  c.set("apiKey", apiKey);
   await next();
 });

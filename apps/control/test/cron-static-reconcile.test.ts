@@ -517,8 +517,8 @@ describe("static-reconcile (7o K13)", () => {
     });
   });
 
-  it("CRON_JOBS の最後に、配分を持たない 15 分ごとのジョブとして登録する", () => {
-    expect(CRON_JOBS.at(-1)).toBe(staticReconcileJob);
+  it("CRON_JOBS の最後(B129 Task 9 の audit-retention の前)に、配分を持たない 15 分ごとのジョブとして登録する", () => {
+    expect(CRON_JOBS.at(-2)).toBe(staticReconcileJob);
     expect(staticReconcileJob).toMatchObject({ name: "static-reconcile", cadence: { every: "tick" }, writesControl: true });
     expect(staticReconcileJob.queryShare).toBeUndefined();
   });

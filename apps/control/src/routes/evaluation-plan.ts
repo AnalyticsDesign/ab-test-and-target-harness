@@ -1,18 +1,24 @@
 import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
+import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
 import { z } from "zod";
 import { utcDay } from "@wtt/core";
 import { evaluationPoint, extensionIssues, planCautions } from "@wtt/stats";
 import { requireSession, type AppEnv } from "../app";
+import { auditActor, auditStatement, type AuditSql } from "../audit";
 import type { Db, ExperimentRow, SiteRow, VariantRow } from "../db";
 import type { Env } from "../env";
 import { ApiError, notFound, validationFailed } from "../errors";
 import {
   assertPlanValid,
+  changedPlanFields,
+  draftPlanChangedDetail,
   draftPlanUpsert,
+  draftPlanWritable,
   EvaluationPlanJsonSchema,
   EvaluationPlanPutSchema,
   extensionBatch,
+  extensionWritable,
   loadPlan,
   mergePlan,
   samePlan,
@@ -200,9 +206,24 @@ evaluationPlanRoutes.put(
     const now = Date.now();
     const userId = c.get("user").id;
 
+    // B129: 書く文の前に experiment.evaluation_plan を記録する(条件は書く文と同じ断片。detail = 読んだ計画と比べて変えた項目の名前)
+    const audit = (detail: { fields: string[] } | AuditSql, targetFrom: RawBuilder<unknown>, guard?: Expression<SqlBool>) =>
+      auditStatement(
+        c.env.DB,
+        auditActor(c),
+        { action: "experiment.evaluation_plan", workspaceId: site.workspace_id, siteId: site.id, experimentId: exp.id, target: { type: "experiment" }, targetFrom, detail },
+        { guard, now },
+      );
     if (exp.status === "draft") {
-      // 下書き: 親が下書きのまま・計画が未固定のときだけ書く(読んだ後に開始が割り込んでも、固定した計画を上書きしない)
-      const [r] = await c.env.DB.batch([draftPlanUpsert(c.env, { siteId: site.id, experimentId: exp.id, plan: next, userId, now })]);
+      // 下書き: 親が下書きのまま・計画が未固定のときだけ書く(読んだ後に開始が割り込んでも、固定した計画を上書きしない)。
+      // 下書きの保存は読んだ version を条件にしないので、記録の fields は記録の文の中で今の計画の行(t.plan_json)と比べて作る
+      // (読んだ後に別の人の保存が入っても、この保存が実際に書き換えた項目を記録する。B129 final review 2026-11-05 FR-Medium-2)
+      const draftTarget = sql`select e.id as target_id, e.name as target_label, p.plan_json as plan_json from experiments e
+        left join evaluation_plans p on p.site_id = e.site_id and p.experiment_id = e.id where e.site_id = ${site.id} and e.id = ${exp.id}`;
+      const [, r] = await c.env.DB.batch([
+        audit(draftPlanChangedDetail(sql`t.plan_json`, current.plan, next), draftTarget, draftPlanWritable(site.id, exp.id)),
+        draftPlanUpsert(c.env, { siteId: site.id, experimentId: exp.id, plan: next, userId, now }),
+      ]);
       if ((r?.meta.changes ?? 0) === 0) throw await conflictAfterRace(db, site.id, exp.id, "テストが開始されました。開始後は期間と人数を延ばす変更だけができます。画面を読み込み直してください");
     } else {
       // 開始後(実行中・一時停止中)。結果を記録しないサイトで開始したテストは計画を固定していないので、変えられない
@@ -222,19 +243,21 @@ evaluationPlanRoutes.put(
       if (fields.length > 0) throw new ApiError(409, "evaluation_plan_locked", { fields, hint: LOCKED_HINT });
       if (!samePlan(plan.plan, next) && plan.version !== null) {
         // 読んだ version・到達の時刻は、到達の確認の後に読み直した値(確認で到達を記録した直後の延長が、自分の記録で 409 にならないため)
-        const [upd] = await c.env.DB.batch(
-          extensionBatch(c.env, {
-            siteId: site.id,
-            experimentId: exp.id,
-            before: plan.plan,
-            after: next,
-            readVersion: plan.version,
-            readReachedAt: plan.reachedAt,
-            reason: body.reason ?? null,
-            userId,
-            now,
-          }),
-        );
+        const ext = {
+          siteId: site.id,
+          experimentId: exp.id,
+          before: plan.plan,
+          after: next,
+          readVersion: plan.version,
+          readReachedAt: plan.reachedAt,
+          reason: body.reason ?? null,
+          userId,
+          now,
+        };
+        // B129: 記録の対象の行は CAS の条件(extensionWritable)に合う計画の行のエクスペリエンス(理由の本文は持たない)
+        const extensionTarget = sql`select e.id as target_id, e.name as target_label from evaluation_plans
+          join experiments e on e.site_id = evaluation_plans.site_id and e.id = evaluation_plans.experiment_id where ${extensionWritable(ext)}`;
+        const [, upd] = await c.env.DB.batch([audit({ fields: changedPlanFields(plan.plan, next) }, extensionTarget), ...extensionBatch(c.env, ext)]);
         if ((upd?.meta.changes ?? 0) === 0) throw await conflictAfterRace(db, site.id, exp.id, RACE_HINT);
         // K11: 延ばした計画(目標を増やしたときは到達を消した計画)で収集の締め切りを書き直す(投げない。失敗は印を立て Cron が直す)
         await rewriteCollectUntil(c.env, db, site.id, apiGuard(c.env));

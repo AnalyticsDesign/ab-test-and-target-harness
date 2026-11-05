@@ -1,6 +1,7 @@
 // apps/control/src/cron/jobs.ts
 import { resultsAccountGuard } from "./account-guard";
 import { breakGlassSweep } from "./break-glass-sweep";
+import { auditRetentionJob } from "./audit-retention";
 import { configCleanupJob } from "./config-cleanup";
 import { resultsCapacityJob, resultsCollectUntilJob, resultsDailyJob, resultsDeliveryJob, resultsPurgeJob } from "./results-jobs";
 import { siteSettingsRefreshJob } from "./site-settings-refresh";
@@ -18,5 +19,7 @@ import type { CronJob } from "./runner";
  * これも配分を持たず(配分表は変わらない)、使う 2 件が全体の残りに収まるかを自分で確かめる
  * plan12 K14: config-cleanup(日次。古い版の config を公開の無い日にも消す)を最後に足す。配分を持たず、使う D1 のクエリを自分で数える
  * 7o K13: static-reconcile(15 分ごと)を最後に足す。配分を持たず、使う D1 のクエリを自分で確かめる
+ * B129 Task 9: audit-retention(日次。操作の記録の 366 日より前の行を 1 日 5,000 行まで消す)を最後に足す。配分(queryShare)を持たないのは、
+ * 結果のジョブの配分表を変えないため(1 日 1 回で使う D1 のクエリは 4〜5 件。全体の残りに収まるかを自分で確かめる)
  */
-export const CRON_JOBS: readonly CronJob[] = [resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob, staticReconcileJob];
+export const CRON_JOBS: readonly CronJob[] = [resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob, staticReconcileJob, auditRetentionJob];

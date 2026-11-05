@@ -208,3 +208,53 @@ describe("usage view (D10)", () => {
     expect(row).toMatchObject({ ratioText: "", meter: null, status: { text: "判定していません", tone: "ok" } });
   });
 });
+
+// B129(Q10・Q24): 制御用のデータベースの大きさ(GET /usage の controlCapacity)。結果のデータベースの容量と同じ段階(80% / 95%)
+describe("controlCapacityView", () => {
+  it("control_capacity_banner_levels", async () => {
+    const { controlCapacityView } = await import("@/lib/usage");
+    const at = 1_700_000_000_000;
+    const ok = controlCapacityView({ sizeBytes: 120_400_000, measuredAt: at, level: "ok" });
+    expect(ok).toEqual({ level: "ok", size: "約 120 MB / 500 MB", measuredAt: at, warning: null });
+    const warn = controlCapacityView({ sizeBytes: 410_000_000, measuredAt: at, level: "warning" });
+    expect(warn?.level).toBe("warning");
+    expect(warn?.warning).toContain("80% 以上");
+    expect(warn?.warning).toContain("上限に達すると");
+    const critical = controlCapacityView({ sizeBytes: 480_000_000, measuredAt: at, level: "critical" });
+    expect(critical?.level).toBe("critical");
+    expect(critical?.warning).toContain("95% 以上");
+    expect(critical?.warning).toContain("約 480 MB / 500 MB");
+    // 制御用のデータベースは記録を止めない。結果のデータベースの言い方(記録を止めている)を使わない
+    for (const v of [warn, critical]) expect(v?.warning).not.toMatch(/止め/);
+    // 1 MB 未満(作ったばかりの導入)は「約 0 MB」と出さない
+    expect(controlCapacityView({ sizeBytes: 450_000, measuredAt: at, level: "ok" })?.size).toBe("1 MB 未満 / 500 MB");
+    expect(controlCapacityView({ sizeBytes: 1_000_000, measuredAt: at, level: "ok" })?.size).toBe("約 1 MB / 500 MB");
+    // 知らない段階(新しい control)は警告として扱う(黙って ok にしない)
+    expect(controlCapacityView({ sizeBytes: 1, measuredAt: at, level: "someday" as never })?.level).toBe("warning");
+  });
+
+  it("control_capacity_not_measured_yet", async () => {
+    const { controlCapacityView } = await import("@/lib/usage");
+    expect(controlCapacityView(null)).toEqual({ level: "unmeasured", size: "まだ測っていません(1 日 1 回測ります)", measuredAt: null, warning: null });
+    // 古い control(欄が無い)では出さない
+    expect(controlCapacityView(undefined)).toBeNull();
+  });
+});
+
+// B129: GET /usage が失敗しても(未設定・Cloudflare 側の失敗)、GET /usage/settings の controlCapacity で「制御用のデータベース」を出す
+describe("pickControlCapacity", () => {
+  const cap = (sizeBytes: number) => ({ sizeBytes, measuredAt: 1, level: "ok" as const });
+  it("control_capacity_shown_when_usage_fails", async () => {
+    const { pickControlCapacity } = await import("@/lib/usage");
+    // GET /usage が失敗(report なし)でも、設定の値を使う
+    expect(pickControlCapacity({ controlCapacity: cap(5) }, null)).toEqual(cap(5));
+    expect(pickControlCapacity({ controlCapacity: null }, null)).toBeNull(); // まだ測っていない
+    // 両方にあるときは設定の値(同じ描画で同じ行を読んだ値。どちらの取得が失敗しても同じ出どころにする)
+    expect(pickControlCapacity({ controlCapacity: cap(5) }, report({ controlCapacity: cap(7) }))).toEqual(cap(5));
+    expect(pickControlCapacity({ controlCapacity: null }, report({ controlCapacity: cap(7) }))).toBeNull();
+    // 設定に欄が無い(古い control)ときだけ GET /usage の値。どちらにも無ければ undefined(節ごと出さない)
+    expect(pickControlCapacity({}, report({ controlCapacity: cap(7) }))).toEqual(cap(7));
+    expect(pickControlCapacity({}, null)).toBeUndefined();
+    expect(pickControlCapacity({}, report())).toBeUndefined();
+  });
+});

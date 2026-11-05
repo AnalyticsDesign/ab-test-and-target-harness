@@ -1,4 +1,4 @@
-import { sql, type ExpressionBuilder } from "kysely";
+import { expressionBuilder, sql, type ExpressionBuilder, type RawBuilder, type SqlBool } from "kysely";
 import {
   analyticsWarnings,
   bakeBootstrap,
@@ -15,6 +15,7 @@ import {
   type StaticGeneration,
 } from "@wtt/core";
 import { RUNTIME_HASH, RUNTIME_SOURCE } from "@wtt/runtime/source";
+import { auditStatement, type AuditDetail, type AuditStatementOpts, type UserActor } from "./audit";
 import { edgeOrigin } from "./capabilities";
 import { toStatement, type Db, type ExperimentRow, type SiteRow, type Tables } from "./db";
 import type { Env } from "./env";
@@ -256,10 +257,24 @@ function failure(code: string, version: number | null, raw: string): PublishResu
 }
 
 /**
+ * B129(spec §3.1 の publish.publish・§5.2): 公開の記録。activation の CAS の batch(後。この要求の印 = 自分の版が active)、
+ * 追い越しの文(後。無条件)、KV の失敗で D1 を戻す batch(前。戻す文と同じ条件)に 1 文ずつ置く(往復は増えない)。
+ * CAS より前の失敗(版の予約・compile・config の put・読み戻し)では D1 の配信中の状態は変わらないので記録しない。
+ * actor = 公開した人(published_by は actor.userId)。状態の変更の後の自動の公開も、状態を変えた人
+ */
+function publishAudit(env: Env, actor: UserActor, site: SiteRow, detail: AuditDetail, opts: AuditStatementOpts & { targetFrom?: RawBuilder<unknown> } = {}): D1PreparedStatement {
+  const { targetFrom, ...rest } = opts;
+  const target = targetFrom ? { target: { type: "site" as const }, targetFrom } : { target: { type: "site" as const, id: site.id, label: site.name } };
+  return auditStatement(env.DB, actor, { action: "publish.publish", workspaceId: site.workspace_id, siteId: site.id, detail, ...target }, rest);
+}
+
+/**
  * spec §13.6 の Publish。手順 1〜6 を 1 関数で行い、activation 前の失敗は旧 version を active のまま残す。
  * nowMs は cleanup の時刻判定(テストで注入)。KV / D1 の呼び出しはここに閉じる(compile は core の純関数)
+ * actor = 公開した人(B129: published_by は actor.userId。公開の記録 publish.publish の操作した人)
  */
-export async function publishSite(env: Env, db: Db, site: SiteRow, userId: string, nowMs = Date.now()): Promise<PublishResult> {
+export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserActor, nowMs = Date.now()): Promise<PublishResult> {
+  const userId = actor.userId;
   await reconcileActive(env, db, site.id);
   // 手順 2: version を予約(UNIQUE(site_id, version) で競合を検出して取り直す)
   let version: number | null = null;
@@ -371,12 +386,21 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, userId: strin
     // D9 ③(K14): 届く定義の行は CAS と同じ batch(1 トランザクション)で、「この版が active」を条件に足す。
     // 行がある ⇔ この版を activation した(記録の取りこぼし・並行する Publish との順の入れ替わり・出し直しの待ちの間の確認で前の行に当たる、が起きない)。
     // 世代は出し直しの後に入れる(それまでは NULL)
-    const [upd] = await env.DB.batch([toStatement(env, cas), ...deliveries.map((d) => toStatement(env, deliveredDefinitionInsert(db, site.id, version, null, d, true)))]);
+    // B129: 公開の記録は CAS の後に、この要求の印(自分の版が active)を guard にして置く(CAS に負けた試みでは 0 行)
+    const [upd] = await env.DB.batch([
+      toStatement(env, cas),
+      ...deliveries.map((d) => toStatement(env, deliveredDefinitionInsert(db, site.id, version, null, d, true))),
+      publishAudit(env, actor, site, { version, superseded: false }, { guard: sql<SqlBool>`(select active_version from sites where id = ${site.id}) = ${version}`, now: nowMs }),
+    ]);
     activated = (upd?.meta.changes ?? 0) > 0;
   }
   if (!activated) {
     // 追い越された(または CAS が競り負け続けた)。KV は触らず履歴だけ残す(次の Publish が最新を活性化する)
-    await db.updateTable("publishes").set({ status: "superseded" }).where("id", "=", rowId).execute();
+    // B129: 追い越しの文と同じ batch に記録(無条件。1 文の execute を 2 文の batch にした)
+    await env.DB.batch([
+      toStatement(env, db.updateTable("publishes").set({ status: "superseded" }).where("id", "=", rowId)),
+      publishAudit(env, actor, site, { version, superseded: true }, { now: nowMs }),
+    ]);
     return { ok: true, version, needsProfile: config.needsProfile, superseded: true, staticDeploy: "skipped", warnings };
   }
   // KV `active` の put(書く値は D1 最新版。review r2 CX-High-4)
@@ -384,13 +408,13 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, userId: strin
   try {
     written = await putActiveLatest(env, db, site.id);
   } catch (e) {
-    // 成否不明(put は通ったが throw した可能性)なので stale を立て、D1 は prev に戻す(まだ自分の版のときだけ)
-    await db
-      .updateTable("sites")
-      .set({ active_version: prev, last_activated_at: prevActivatedAt, active_kv_stale: 1 })
-      .where("id", "=", site.id)
-      .where("active_version", "=", version)
-      .execute();
+    // 成否不明(put は通ったが throw した可能性)なので stale を立て、D1 は prev に戻す(まだ自分の版のときだけ)。
+    // B129: 戻す文の前に、戻す文と同じ条件(stillMine)で戻しの記録(`reason: "reverted"`。CAS の記録は消せないため)
+    const stillMine = (eb: ExpressionBuilder<Tables, "sites">) => eb.and([eb("id", "=", site.id), eb("active_version", "=", version)]);
+    await env.DB.batch([
+      publishAudit(env, actor, site, { version, reason: "reverted" }, { targetFrom: sql`select id as target_id, name as target_label from sites where ${stillMine(expressionBuilder<Tables, "sites">())}` }),
+      toStatement(env, db.updateTable("sites").set({ active_version: prev, last_activated_at: prevActivatedAt, active_kv_stale: 1 }).where(stillMine)),
+    ]);
     await markFailed(db, rowId, "kv_rate_limited", String(e));
     return failure("kv_rate_limited", version, String(e));
   }

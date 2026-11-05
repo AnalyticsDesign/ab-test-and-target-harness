@@ -1,15 +1,16 @@
 import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
-import { sql } from "kysely";
+import { sql, type SqlBool } from "kysely";
 import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
 import { revokeSessionsForEmailIfNoAccess, revokeSessionsIfNoAccess } from "../access";
-import { revokeKeysStatements } from "../api-key-revocation";
-import { bearerHeaders, ROLES } from "../auth";
+import { revocableKeys, revokeKeysStatements, type RevokeKeysTarget } from "../api-key-revocation";
+import { actorFromUser, auditActor, auditStatement, writeAuditAfter, writeAuditAfterDb, writeAuditBefore, type AuditEvent } from "../audit";
+import { asLoginMethod, bearerHeaders, ROLES } from "../auth";
 import { PASSWORD_LOGIN_DISABLED_HINT, passwordLoginOpen } from "../break-glass";
 import { ApiError, ROLE_JA, notFound, parseJson, validationFailed } from "../errors";
 import { createWorkspace, isInstanceAdmin } from "../instance-admins";
-import { toStatement } from "../db";
+import { sqlStatement, toStatement } from "../db";
 import { enqueuePurgeQuery, kickOffPurgeForSites } from "../results/purge";
 import { errorResponses } from "../openapi";
 import { invalidateResetLinks, issueResetUrl } from "../reset-link";
@@ -67,6 +68,21 @@ function sameOrigin(a: string, b: string): boolean {
     return false;
   }
 }
+
+/**
+ * ロールの変更・メンバーを外す文の条件(member 表の行を `member` で読む)。B129: 操作の文と記録の文(記録を前に置く)が同じ断片を使う
+ * (Review Focus 1: 断られた操作の記録を残さない・通った操作の記録を欠かさない)。
+ * (1) 対象がシステム管理者でない(決定 53 (6) / K9。事前チェックだけだと、チェックと書き込みの間の昇格で守れない)
+ * (2) 最後の OWNER を降格させない・外させない(2 人の OWNER の同時の操作で 0 人にならない。review r2 CX-Medium-5)
+ */
+const memberWritable = (memberId: string, wid: string) => sql<SqlBool>`member.id = ${memberId} and member."organizationId" = ${wid}
+  and not exists (select 1 from instance_admins a where a.user_id = member."userId")
+  and (member.role != 'owner' or (select count(*) from member m2 where m2."organizationId" = ${wid} and m2.role = 'owner') > 1)`;
+/** 記録の targetFrom: memberWritable の行の人(target_id = user ID・target_label = メール)と今のロール */
+const memberTarget = (memberId: string, wid: string) =>
+  sql`select u.id as target_id, u.email as target_label, member.role as role from member join "user" u on u.id = member."userId" where ${memberWritable(memberId, wid)}`;
+/** 招待の取り消しの条件(別 Workspace の ID・受諾済み・取り消し済み・存在しない、はすべて偽)。取り消しの文と記録の文が使う */
+const pendingInvitation = (id: string, wid: string) => sql<SqlBool>`invitation.id = ${id} and invitation."organizationId" = ${wid} and invitation.status = 'pending'`;
 
 /** member 表の UNIQUE 違反か(例外そのものと、cause の連鎖の message を見る。他の表・他の種類の失敗は false) */
 function isMemberUniqueViolation(e: unknown): boolean {
@@ -185,7 +201,7 @@ workspaceRoutes.post(
     // 決定 53 (4)(11) / K5: organization 行とシステム管理者全員の OWNER 行を 1 つの batch で書く(作成者もシステム管理者なので含まれる)
     let id: string;
     try {
-      id = await createWorkspace(c.env, body.name);
+      id = await createWorkspace(c.env, body.name, { audit: { actor: auditActor(c) } });
     } catch (e) {
       throw new ApiError(500, "workspace_create_failed", { detail: String(e) });
     }
@@ -263,13 +279,25 @@ workspaceRoutes.delete(
     // 印を消した Site があれば取りやめる)。件数の条件(最後の 1 つ)と同じ 1 文に入れる。
     // member・invitation・sites / site_hosts / publishes は organization の FK CASCADE で落ちる
     // D9 ③(K6 (1)): 同じ batch で、削除の DELETE の前に配下の Site の run を計測用 D1 の削除待ちに積む(条件は削除の文と同じ)
+    // B129: 同じ batch の削除の文の前に workspace.delete を記録する(条件は削除の文と同じ断片 deletable。名前とサイトの数は削除の前に読む)
     const now = Date.now();
-    const [, del] = await c.env.DB.batch([
+    const deletable = sql<SqlBool>`organization.id = ${wid} and (select count(*) from organization) > 1
+      and not exists (select 1 from sites where workspace_id = ${wid} and (static_removing is null or static_removing <> ${token}))`;
+    const [, , del] = await c.env.DB.batch([
       toStatement(c.env, enqueuePurgeQuery(db, { kind: "workspace", workspaceId: wid, token }, now)),
-      c.env.DB.prepare(
-        `delete from organization where id = ?1 and (select count(*) from organization) > 1
-          and not exists (select 1 from sites where workspace_id = ?1 and (static_removing is null or static_removing <> ?2))`,
-      ).bind(wid, token),
+      auditStatement(
+        c.env.DB,
+        auditActor(c),
+        {
+          action: "workspace.delete",
+          workspaceId: wid,
+          target: { type: "workspace" },
+          targetFrom: sql`select id as target_id, name as target_label from organization where ${deletable}`,
+          detail: { sites: sql`(select count(*) from sites where workspace_id = ${wid})` },
+        },
+        { now },
+      ),
+      sqlStatement(c.env.DB, sql`delete from organization where ${deletable}`),
     ]);
     if ((del?.meta.changes ?? 0) === 0) {
       // どちらの条件で 0 行になったかを、件数で返し分ける
@@ -345,16 +373,18 @@ workspaceRoutes.patch(
     if (!target) throw notFound();
     // owner を付け外しできるのは owner だけ(admin が自分を owner に昇格させる経路を塞ぐ)
     assertCanTouchOwner(me, target.role, body.role);
-    // 2 つの条件を同じ文に入れる: (1) 対象がシステム管理者でない(決定 53 (6) / K9。事前チェックだけだと、チェックと書き込みの間の昇格で守れない)
-    // (2) 最後の OWNER を降格させない(2 人の OWNER の同時降格で 0 人にならない。review r2 CX-Medium-5)
+    // 2 つの条件(システム管理者でない・最後の OWNER でない)を同じ文に入れる(memberWritable)。
     // Role の変更と、変わる前に発行された再設定リンクの削除を 1 つの batch で行う(どちらか片方だけが残らない。K9 の昇格と同じ流儀)。
-    // 変更が 0 行(409 の分岐)でも削除は走るが、使えなくなるのは非常時専用のリンクだけなので害は無い
-    const [upd] = await c.env.DB.batch([
-      c.env.DB.prepare(
-        `update member set role = ?1 where id = ?2 and "organizationId" = ?3
-         and not exists (select 1 from instance_admins a where a.user_id = member."userId")
-         and (role != 'owner' or (select count(*) from member m2 where m2."organizationId" = ?3 and m2.role = 'owner') > 1)`,
-      ).bind(body.role, memberId, wid),
+    // 変更が 0 行(409 の分岐)でも削除は走るが、使えなくなるのは非常時専用のリンクだけなので害は無い。
+    // B129: 変更の文の前に member.role_change を記録する(条件は変更の文と同じ memberWritable。前のロールを同じ文で読み、同じロールへの変更は書かない)
+    const [, upd] = await c.env.DB.batch([
+      auditStatement(
+        c.env.DB,
+        auditActor(c),
+        { action: "member.role_change", workspaceId: wid, target: { type: "user" }, targetFrom: memberTarget(memberId, wid), detail: { from: sql`t.role`, to: body.role } },
+        { guard: sql<SqlBool>`t.role != ${body.role}` },
+      ),
+      sqlStatement(c.env.DB, sql`update member set role = ${body.role} where ${memberWritable(memberId, wid)}`),
       c.env.DB.prepare(`delete from verification where identifier like 'reset-password:%' and value = ?1`).bind(target.userId),
     ]);
     if ((upd?.meta.changes ?? 0) === 0) {
@@ -383,21 +413,33 @@ workspaceRoutes.delete(
     if (!target) throw notFound();
     assertCanTouchOwner(me, target.role);
     if (target.userId === c.get("user").id) throw new ApiError(409, "cannot_remove_self", { message: "自分自身は外せません", hint: "ほかの管理者かオーナーに外してもらってください" });
-    // 2 つの条件を同じ文に入れる: (1) 対象がシステム管理者でない(K9) (2) 最後の OWNER を削除させない(review r2 CX-Medium-5)
+    // 2 つの条件(システム管理者でない・最後の OWNER でない)を同じ文に入れる(memberWritable)。
     // B156(G16): 同じ batch で、その人のこのワークスペースの鍵を失効させる。失効の文は「その人がもうこのワークスペースのメンバーでない」
-    // ときだけ書く(外す文が 0 行 = 409 の分岐では鍵に触れない)
-    const [del] = await c.env.DB.batch([
-      c.env.DB.prepare(
-        `delete from member where id = ?1 and "organizationId" = ?2
-         and not exists (select 1 from instance_admins a where a.user_id = member."userId")
-         and (role != 'owner' or (select count(*) from member m2 where m2."organizationId" = ?2 and m2.role = 'owner') > 1)`,
-      ).bind(memberId, wid),
+    // ときだけ書く(外す文が 0 行 = 409 の分岐では鍵に触れない)。
+    // B129: 外す文と失効の文の前に member.remove を記録する(条件は外す文と同じ memberWritable。同時の削除で負けた要求は書かない)。
+    // revokedKeys は失効の文の条件のうち「どの鍵か」(revocableKeys)だけを削除の前に数える(Q19。「もうメンバーでない」の印は含めない)
+    const now = Date.now();
+    const keys: RevokeKeysTarget = { kind: "workspace", workspaceId: wid };
+    const [, del] = await c.env.DB.batch([
+      auditStatement(
+        c.env.DB,
+        auditActor(c),
+        {
+          action: "member.remove",
+          workspaceId: wid,
+          target: { type: "user" },
+          targetFrom: memberTarget(memberId, wid),
+          detail: { role: sql`t.role`, revokedKeys: sql`(select count(*) from (${revocableKeys(target.userId, keys)}))` },
+        },
+        { now },
+      ),
+      sqlStatement(c.env.DB, sql`delete from member where ${memberWritable(memberId, wid)}`),
       ...revokeKeysStatements(c.env.DB, {
         userId: target.userId,
-        target: { kind: "workspace", workspaceId: wid },
+        target: keys,
         revokedBy: c.get("user").id,
-        now: Date.now(),
-        guard: `not exists (select 1 from member m where m."organizationId" = ?4 and m."userId" = ?1)`,
+        now,
+        guard: sql<SqlBool>`not exists (select 1 from member m where m."organizationId" = ${wid} and m."userId" = ${target.userId})`,
       }),
     ]);
     if ((del?.meta.changes ?? 0) === 0) {
@@ -486,6 +528,13 @@ workspaceRoutes.post(
         console.error("failed to tidy away expired invitations", e);
       }
     }
+    // B129: invitation.create は「後」(ライブラリが招待を作った後に別の 1 文。書けなくても発行は成功のまま。往復 +1)
+    await writeAuditAfter(c, () => ({
+      action: "invitation.create",
+      workspaceId: wid,
+      target: { type: "invitation", id: inv.id, label: email },
+      detail: { role: body.role, extended },
+    }));
     return c.json({ id: inv.id, url: `${c.env.AB_ADMIN_URL}/invite/${inv.id}`, expiresAt: epochMs(inv.expiresAt), extended }, 201);
   },
 );
@@ -541,10 +590,20 @@ workspaceRoutes.delete(
     await requireWorkspaceRole(c, wid, "admin");
     const db = c.get("db");
     // 別 Workspace の ID・受諾済み・取り消し済み・存在しない、を区別させない(すべて 404)。
-    // 取り消した行のメールは returning で同じ 1 文から受ける(読んでから書くと、その間の受諾とすれ違う)
-    const upd = await sql<{ email: string }>`update invitation set status = 'canceled'
-      where id = ${id} and "organizationId" = ${wid} and status = 'pending' returning email`.execute(db);
-    const email = upd.rows[0]?.email;
+    // 取り消した行のメールは returning で同じ 1 文から受ける(読んでから書くと、その間の受諾とすれ違う)。
+    // B129: 取り消しの文の前に invitation.cancel を記録する(2 文の batch。往復は 1 回のまま)。条件は取り消しの文と同じ pendingInvitation で、
+    // 宛先のメールと role を同じ文で invitation から読む
+    const [, upd] = await c.env.DB.batch([
+      auditStatement(c.env.DB, auditActor(c), {
+        action: "invitation.cancel",
+        workspaceId: wid,
+        target: { type: "invitation" },
+        targetFrom: sql`select id as target_id, email as target_label, role from invitation where ${pendingInvitation(id, wid)}`,
+        detail: { role: sql`t.role` },
+      }),
+      sqlStatement(c.env.DB, sql`update invitation set status = 'canceled' where ${pendingInvitation(id, wid)} returning email`),
+    ]);
+    const email = (upd?.results as Array<{ email: string }> | undefined)?.[0]?.email;
     if (!email) throw notFound();
     // 招待だけを頼りにログインしていた人のログイン状態を切る(B20)。その user が居なければ何もしない
     await revokeSessionsForEmailIfNoAccess(db, email);
@@ -680,8 +739,23 @@ workspaceRoutes.post(
       if (status === "FORBIDDEN" || status === "BAD_REQUEST") throw new ApiError(403, "invitation_email_mismatch");
       throw e;
     }
-    // 受諾と同時に発行された token を消す。ここの delete が D1 障害で失敗した場合だけ、受諾済みの所属と有効な token が残る(P14 の残余)
-    if (who) await invalidateResetLinks(c.get("db"), who.user.id);
+    // B129: invitation.accept は「後」。この経路は requireSession を通らない(c に user が無い)ので、受けた人(who)から actor を作る。
+    // 経路(Q13): Bearer 無し(この要求でアカウントを作った)は password、Bearer ありは受けた人のセッションの loginMethod
+    const signUp = bearer === null;
+    try {
+      // 受諾と同時に発行された token を消す。ここの delete が D1 障害で失敗した場合だけ、受諾済みの所属と有効な token が残る(P14 の残余)
+      if (who) await invalidateResetLinks(c.get("db"), who.user.id);
+    } finally {
+      // 受諾は上で確定しているので、後片付けが失敗しても記録は試す(失敗はそのまま 500 で上げる。B129 final review 2026-11-05 FR-Medium-1)。
+      // writeAuditAfterDb は投げない(失敗はログだけ)ので、後片付けの例外を置き換えない
+      await writeAuditAfterDb(c.env.DB, () => {
+        if (!who) throw new Error("no session for the accepted invitation");
+        return {
+          actor: actorFromUser(who.user, signUp ? "password" : asLoginMethod(who.session.loginMethod)),
+          event: { action: "invitation.accept", workspaceId: inv.organizationId, target: { type: "invitation", id: inv.id, label: inv.email }, detail: { role: inv.role, signUp } },
+        };
+      });
+    }
     return c.json({ token, workspaceId: inv.organizationId, userId: who?.user.id ?? null });
   },
 );
@@ -715,7 +789,15 @@ workspaceRoutes.post(
     await assertCanTouchInstanceAdmin(c, target.userId);
     await assertCanResetMember(c, wid, target.userId);
     if (!passwordLoginOpen(c.env)) throw new ApiError(409, "password_login_disabled", { hint: PASSWORD_LOGIN_DISABLED_HINT });
-    const url = await issueResetUrl(c, target.email);
+    // B129(Q11): member.reset_link は「前」。発行の前に 1 文で書き、書けなければ発行しない(500)。発行・読み直しが失敗したら
+    // 同じ action で outcome = failed の行を足す(「後」の書き方。書けなくても元の失敗をそのまま返す)
+    const event: AuditEvent = { action: "member.reset_link", workspaceId: wid, target: { type: "user", id: target.userId, label: target.email } };
+    await writeAuditBefore(c.env.DB, auditActor(c), event);
+    const failed = async (e: unknown): Promise<never> => {
+      await writeAuditAfter(c, () => ({ ...event, detail: { outcome: "failed" } }));
+      throw e;
+    };
+    const url = await issueResetUrl(c, target.email).catch(failed);
     // K9 (2) / r2 CX-High-6: 発行の直後に読み直す。事前の判定の後に対象がシステム管理者へ昇格していたら、発行した token を消して断る
     // (Better Auth の token の作成には条件を入れられない。この読み直しの後に昇格が入った場合は、昇格の batch が token を消す)
     try {
@@ -727,8 +809,16 @@ workspaceRoutes.post(
       assertCanTouchOwner(me, now?.role);
     } catch (e) {
       const token = new URL(url).searchParams.get("token");
-      if (token) await sql`delete from verification where identifier = ${`reset-password:${token}`}`.execute(db);
-      throw e;
+      // 消す文が失敗しても failed の行と元の失敗(403 など)を返す(記録が抜けたり、例外が置き換わったりしない)。ログにメールは出さない
+      try {
+        if (token) await sql`delete from verification where identifier = ${`reset-password:${token}`}`.execute(db);
+      } catch (d) {
+        console.error("reset link: failed to delete the issued token after refusing it; the token remains until it expires", {
+          name: d instanceof Error ? d.name : typeof d,
+          message: d instanceof Error ? d.message : String(d),
+        });
+      }
+      return failed(e);
     }
     // 発行の記録(URL・メールは書かない)。管理画面の発行結果カード以外に痕跡が残らなかったので足す
     console.log("reset link issued", JSON.stringify({ by: c.get("user").id, target: target.userId, workspace: wid }));

@@ -1,11 +1,14 @@
 import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
+import { sql, type SqlBool } from "kysely";
 import { z } from "zod";
+import { keyWorkspaceId } from "../api-key-revocation";
 import { keyExpiresAt, unusableSince } from "../api-key-expiry";
 import { requireSession, type AppEnv } from "../app";
+import { auditActor, auditStatement, writeAuditAfter, writeAuditBefore, type AuditEvent } from "../audit";
 import { API_KEY_PREFIX, ROLES } from "../auth";
 import { PASSWORD_SESSION_KEY_HINT, passwordSessionVerdict } from "../break-glass";
-import type { Db } from "../db";
+import { sqlStatement, type Db } from "../db";
 import { ApiError, validationFailed } from "../errors";
 import { errorResponses } from "../openapi";
 import {
@@ -234,6 +237,16 @@ apiKeyRoutes.post(
       ...(roleCap ? { roleCap } : {}),
       expiresAt,
     };
+    // B129(Q11・Q22): api_key.create は「前」。発行の前に 1 文で書き、書けなければ発行しない(500)。鍵の ID は発行の前には無いので、
+    // 発行に成功したら鍵の ID を持つ outcome = succeeded の行を、失敗したら outcome = failed の行を「後」の書き方で足す
+    // (どちらも書けなくても発行の成否はそのまま。往復は成功・失敗とも +2)
+    const event: AuditEvent = {
+      action: "api_key.create",
+      workspaceId: scope.kind === "workspace" ? scope.workspaceId : null,
+      target: { type: "api_key", label: body.name },
+      detail: { scope: scope.kind, workspaceId: scope.kind === "workspace" ? scope.workspaceId : null, roleCap, expiresAt },
+    };
+    await writeAuditBefore(c.env.DB, auditActor(c), event);
     // B112: 判定の後にセッションが消えた(ログアウト・非常口の掃除とのすれ違い)とき、Better Auth 1.4.21 の createApiKey は
     // APIError(statusCode 401、UNAUTHORIZED_OR_INVALID_SESSION)を投げる(test/api-keys.test.ts の session_gone_after_verdict_is_401 で確認)。
     // 500 に落とさず 401 にそろえる。それ以外は今までどおり上げる
@@ -243,10 +256,12 @@ apiKeyRoutes.post(
         body: { name: body.name, metadata },
         headers: c.req.raw.headers,
       })
-      .catch((e: unknown) => {
+      .catch(async (e: unknown) => {
+        await writeAuditAfter(c, () => ({ ...event, detail: { ...event.detail, outcome: "failed" } }));
         if ((e as { statusCode?: number } | null)?.statusCode === 401) throw new ApiError(401, "unauthorized");
         throw e;
       });
+    await writeAuditAfter(c, () => ({ ...event, target: { type: "api_key", id: k.id, label: k.name ?? body.name }, detail: { ...event.detail, outcome: "succeeded" } }));
     const names = await workspaceNames(c.get("db"), scope.kind === "workspace" ? [scope.workspaceId] : []);
     return c.json({ id: k.id, key: k.key, name: k.name, roleCap: roleCapFromMetadata(metadataText(k.metadata)), expiresAt, ...scopeView(scope, names) }, 201);
   },
@@ -264,12 +279,23 @@ apiKeyRoutes.delete(
     const userId = c.get("user").id;
     // brief K15: 失効の正は apikey_revocations(Better Auth の鍵の検証は行を丸ごと書き戻すので、enabled だけでは失効が消えうる)。
     // 所有者の確認と「まだ失効していない」は INSERT の条件で行う(他人の鍵・失効済みの鍵は存在を漏らさない 404)。enabled = 0 も書く
-    // (boolean = 整数の保存形式が前提。epochMs の上のコメント = B23 ⑨)
-    const [inserted] = await c.env.DB.batch([
-      c.env.DB.prepare(
-        `insert into apikey_revocations (key_id, revoked_at, revoked_by)
-         select id, ?1, ?2 from apikey where id = ?3 and userId = ?2 and not exists (select 1 from apikey_revocations where key_id = ?3)`,
-      ).bind(Date.now(), userId, kid),
+    // (boolean = 整数の保存形式が前提。epochMs の上のコメント = B23 ⑨)。
+    // B129: 失効の文の前に api_key.revoke を記録する(条件は失効の文と同じ断片 revocable。鍵の名前と範囲のワークスペースを同じ文で読む)
+    const now = Date.now();
+    const revocable = sql<SqlBool>`a.id = ${kid} and a.userId = ${userId} and not exists (select 1 from apikey_revocations r where r.key_id = a.id)`;
+    const [, inserted] = await c.env.DB.batch([
+      auditStatement(
+        c.env.DB,
+        auditActor(c),
+        {
+          action: "api_key.revoke",
+          workspaceId: sql`t.workspace_id`,
+          target: { type: "api_key" },
+          targetFrom: sql`select a.id as target_id, a.name as target_label, ${keyWorkspaceId(sql.ref("a.metadata"))} as workspace_id from apikey a where ${revocable}`,
+        },
+        { now },
+      ),
+      sqlStatement(c.env.DB, sql`insert into apikey_revocations (key_id, revoked_at, revoked_by) select a.id, ${now}, ${userId} from apikey a where ${revocable}`),
       c.env.DB.prepare(`update apikey set enabled = 0 where id = ?1 and exists (select 1 from apikey_revocations where key_id = ?1)`).bind(kid),
     ]);
     if (!inserted?.meta.changes) throw new ApiError(404, "not_found");
@@ -385,20 +411,31 @@ apiKeyRoutes.delete(
     // brief K18 / 差分レビュー r1 の CX-H3: 事前の判定の後に状態が変わっても誤って失効しないよう、認可の条件をすべて文に入れる
     // (対象がいまこのワークスペースのメンバー・呼ぶ人がいま ADMIN 以上・呼ぶ人が OWNER でなければ対象が OWNER でない・
     // 呼ぶ人がシステム管理者でなければ対象がシステム管理者でない・まだ失効していない)。失効の正は apikey_revocations(K15)
+    // B129: 失効の文の前に api_key.revoke_member を記録する(条件は失効の文と同じ断片 revocable。鍵の名前と持ち主のメールを同じ文で読む)
     const actor = c.get("user").id;
-    const [inserted] = await c.env.DB.batch([
-      c.env.DB.prepare(
-        `insert into apikey_revocations (key_id, revoked_at, revoked_by)
-         select a.id, ?1, ?2 from apikey a
-         where a.id = ?3
-           and not exists (select 1 from apikey_revocations r where r.key_id = a.id)
-           and exists (select 1 from member t where t."organizationId" = ?4 and t."userId" = a.userId)
-           and exists (select 1 from member m where m."organizationId" = ?4 and m."userId" = ?2 and m.role in ('owner', 'admin'))
-           and (exists (select 1 from member m where m."organizationId" = ?4 and m."userId" = ?2 and m.role = 'owner')
-                or not exists (select 1 from member t where t."organizationId" = ?4 and t."userId" = a.userId and t.role = 'owner'))
-           and (exists (select 1 from instance_admins where user_id = ?2)
-                or not exists (select 1 from instance_admins where user_id = a.userId))`,
-      ).bind(Date.now(), actor, kid, wid),
+    const now = Date.now();
+    const revocable = sql<SqlBool>`a.id = ${kid}
+      and not exists (select 1 from apikey_revocations r where r.key_id = a.id)
+      and exists (select 1 from member t where t."organizationId" = ${wid} and t."userId" = a.userId)
+      and exists (select 1 from member m where m."organizationId" = ${wid} and m."userId" = ${actor} and m.role in ('owner', 'admin'))
+      and (exists (select 1 from member m where m."organizationId" = ${wid} and m."userId" = ${actor} and m.role = 'owner')
+           or not exists (select 1 from member t where t."organizationId" = ${wid} and t."userId" = a.userId and t.role = 'owner'))
+      and (exists (select 1 from instance_admins where user_id = ${actor})
+           or not exists (select 1 from instance_admins where user_id = a.userId))`;
+    const [, inserted] = await c.env.DB.batch([
+      auditStatement(
+        c.env.DB,
+        auditActor(c),
+        {
+          action: "api_key.revoke_member",
+          workspaceId: wid,
+          target: { type: "api_key" },
+          targetFrom: sql`select a.id as target_id, a.name as target_label, u.email as owner from apikey a join "user" u on u.id = a.userId where ${revocable}`,
+          detail: { owner: sql`t.owner` },
+        },
+        { now },
+      ),
+      sqlStatement(c.env.DB, sql`insert into apikey_revocations (key_id, revoked_at, revoked_by) select a.id, ${now}, ${actor} from apikey a where ${revocable}`),
       c.env.DB.prepare(`update apikey set enabled = 0 where id = ?1 and exists (select 1 from apikey_revocations where key_id = ?1)`).bind(kid),
     ]);
     if (!inserted?.meta.changes) {

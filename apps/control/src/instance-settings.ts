@@ -1,4 +1,6 @@
+import { sql } from "kysely";
 import { z } from "zod";
+import { auditChanged, changedFieldsDetail, type AuditFieldChange, type AuditSql } from "./audit";
 import type { Db } from "./db";
 
 /**
@@ -43,8 +45,14 @@ const KEYS = Object.keys(SCHEMAS) as Array<keyof InstanceSettings>;
 
 export async function readInstanceSettings(db: Db): Promise<InstanceSettings> {
   const rows = await db.selectFrom("instance_settings").select(["key", "value"]).where("key", "in", KEYS).execute();
+  return settingsOfRows(rows);
+}
+
+/** instance_settings の行から設定を作る(KEYS 以外の行は無視する) */
+function settingsOfRows(rows: ReadonlyArray<{ key: string; value: string }>): InstanceSettings {
   const out: InstanceSettings = { ...INSTANCE_SETTING_DEFAULTS };
   for (const row of rows) {
+    if (!(KEYS as readonly string[]).includes(row.key)) continue;
     const key = row.key as keyof InstanceSettings;
     let parsed: unknown;
     try {
@@ -58,13 +66,48 @@ export async function readInstanceSettings(db: Db): Promise<InstanceSettings> {
   return out;
 }
 
+/**
+ * B129(spec §10.4・Q10・Q24): 制御用の D1(wtt-control)の大きさ。保持の Cron(cron/audit-retention.ts)が 1 日 1 回、D1 の応答の
+ * meta.size_after を書く(結果の D1 の results_store_status と同じ考え方)。値は `{ sizeBytes, measuredAt }` の JSON。
+ * 使用状況の口の 3 項目(UsageSettingsSchema)には入れない(自分の口 = GET /usage の controlCapacity を持つ)
+ */
+export const CONTROL_DB_SIZE_KEY = "control_db_size";
+export type ControlDbSize = { sizeBytes: number; measuredAt: number };
+const ControlDbSizeSchema = z.object({ sizeBytes: z.number().int().nonnegative(), measuredAt: z.number().int() });
+
+/** 行が無い(まだ測っていない)・読めない値は null(設定の破損で使用状況の口を止めない) */
+function controlDbSizeOf(value: string | undefined): ControlDbSize | null {
+  if (value === undefined) return null;
+  try {
+    const r = ControlDbSizeSchema.safeParse(JSON.parse(value));
+    return r.success ? r.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * GET /usage 用: 設定と制御用の D1 の大きさを instance_settings の 1 回の SELECT で読む(readInstanceSettings の往復に相乗りする。往復は増えない)
+ */
+export async function readInstanceSettingsWithControlDbSize(db: Db): Promise<{ settings: InstanceSettings; controlDbSize: ControlDbSize | null }> {
+  const rows = await db.selectFrom("instance_settings").select(["key", "value"]).where("key", "in", [...KEYS, CONTROL_DB_SIZE_KEY]).execute();
+  return { settings: settingsOfRows(rows), controlDbSize: controlDbSizeOf(rows.find((r) => r.key === CONTROL_DB_SIZE_KEY)?.value) };
+}
+
 /** Cloudflare のプラン(KV の Site の設定の記録に書く新しい訪問者の予算の既定が決まる。plan12 K10) */
 export const readCloudflarePlan = async (db: Db): Promise<CloudflarePlan> => (await readInstanceSettings(db)).cloudflarePlan;
 
 export async function writeInstanceSettings(db: Db, patch: Partial<InstanceSettings>, updatedBy: string | null, now = Date.now()): Promise<void> {
+  await instanceSettingsUpsert(db, patch, updatedBy, now)?.execute();
+}
+
+/**
+ * 設定の upsert の文(書く項目が無ければ null)。B129: PATCH /usage/settings は、この文と記録の文を 1 つの batch に積む(往復は 1 回のまま)
+ */
+export function instanceSettingsUpsert(db: Db, patch: Partial<InstanceSettings>, updatedBy: string | null, now = Date.now()) {
   const rows = KEYS.filter((k) => patch[k] !== undefined).map((k) => ({ key: k, value: JSON.stringify(patch[k]), updated_at: now, updated_by: updatedBy }));
-  if (rows.length === 0) return;
-  await db
+  if (rows.length === 0) return null;
+  return db
     .insertInto("instance_settings")
     .values(rows)
     .onConflict((oc) =>
@@ -73,6 +116,20 @@ export async function writeInstanceSettings(db: Db, patch: Partial<InstanceSetti
         updated_at: eb.ref("excluded.updated_at"),
         updated_by: eb.ref("excluded.updated_by"),
       })),
-    )
-    .execute();
+    );
+}
+
+/**
+ * B129: `usage.settings_change` の detail。送った項目のうち値が変わった項目だけ `{ from, to }`(変わらなければ `{}`。B129 final review = R64)。
+ * from は記録の文の中で今の行から読む(記録を upsert の前に置く。行が無い・読めない JSON は既定値。readInstanceSettings と同じく
+ * 設定の破損で操作を止めない)、to は要求の値。比べるのは JSON の形(json() で整えた文字列)どうし。
+ * 値が変わらない保存も行は残す(upsert は無条件で updated_at を書き、プランの再送では全サイトの KV の記録も書き直すため)
+ */
+export function instanceSettingsChangeDetail(patch: Partial<InstanceSettings>): AuditSql {
+  const changes: AuditFieldChange[] = KEYS.filter((k) => patch[k] !== undefined).map((k) => {
+    const from = sql`json(coalesce((select case when json_valid(value) then value end from instance_settings where key = ${k}), ${JSON.stringify(INSTANCE_SETTING_DEFAULTS[k])}))`;
+    const to = JSON.stringify(patch[k]);
+    return { key: k, changed: auditChanged(from, [to]), fromTo: sql`json_object('from', ${from}, 'to', json(${to}))` };
+  });
+  return changedFieldsDetail(changes, { names: false });
 }

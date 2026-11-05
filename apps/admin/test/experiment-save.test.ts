@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiClientError } from "../lib/client";
-import { saveErrorMessage } from "../lib/experiment-save";
+import { historyStaleAfterSave, saveErrorMessage } from "../lib/experiment-save";
 
 // backlog D13 / 決定 56 (5): エクスペリエンスの保存は 3 段の要求。凍結で途中から断られたら「再読み込み」ではなく「もう一度保存」を案内する
 // (再読み込みすると、まだ保存されていない入力が消える)
@@ -50,5 +50,18 @@ describe("saveErrorMessage", () => {
     expect(text).not.toContain("/openapi.json");
     // 何も保存されていない 426 は封筒のまま(ほかの画面のエラーと同じ出し方)
     expect(saveErrorMessage(tooOld, false)).toBe(`管理画面が古い版です ${realHint}`);
+  });
+});
+
+// B129 final review: 変更履歴のタブの読み直し。全段の成功(onWritten)のほかに、途中の段まで書けて失敗したときと、書けたか分からないときも
+// 記録が増えている(かもしれない)ので読み直す。何も書かずに失敗した・取りやめた・別の画面へ移り始めたときは読み直さない
+describe("historyStaleAfterSave", () => {
+  it("history_reloads_after_partial_save_or_unknown", () => {
+    expect(historyStaleAfterSave({ kind: "failed" }, true)).toBe(true);
+    expect(historyStaleAfterSave({ kind: "unknown" }, false)).toBe(true);
+    expect(historyStaleAfterSave({ kind: "unknown" }, true)).toBe(true);
+    expect(historyStaleAfterSave({ kind: "failed" }, false)).toBe(false);
+    // 成功は onWritten が進める(ここでは二重に進めない)
+    for (const kind of ["saved", "navigated", "cancelled", "discarded", "ignored"] as const) expect(historyStaleAfterSave({ kind }, true), kind).toBe(false);
   });
 });

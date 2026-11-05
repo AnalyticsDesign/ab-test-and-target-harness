@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
 import { sql } from "kysely";
-import { active, call, createExperiment, createSite, expectEnvelope, inviteAndJoin, json, publishRes, runDirect, setupOwner, siteRow, testEnv, TEXT_CHANGE } from "./helpers";
+import { active, call, createExperiment, createSite, expectEnvelope, inviteAndJoin, json, publishRes, runDirect, setupOwner, siteRow, testEnv, TEXT_CHANGE, userActor } from "./helpers";
 import { getDb } from "../src/db";
 import { publishSite } from "../src/publish";
 
@@ -189,7 +189,7 @@ describe("POST /sites/:sid/evaluate (spec §13.10 / 決定 39 (2) (7))", () => {
       },
     }) as KVNamespace;
     const stuck = { ...testEnv, CONFIG_KV: droppedActivePut };
-    for (let i = 1; i <= 6; i++) expect((await publishSite(stuck, db, await siteRow(sid), owner.userId, t0 + i * 1000)).ok).toBe(true); // v2..v7
+    for (let i = 1; i <= 6; i++) expect((await publishSite(stuck, db, await siteRow(sid), userActor(owner.userId), t0 + i * 1000)).ok).toBe(true); // v2..v7
     expect(await active(sid)).toBe("1"); // KV はまだ v1 を指している
     expect((await siteRow(sid)).active_version).toBe(7); // D1 だけが先に進んだ
 

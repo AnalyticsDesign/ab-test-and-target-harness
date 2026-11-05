@@ -14,9 +14,10 @@ import { siteSettingsRefreshJob } from "../src/cron/site-settings-refresh";
 import { breakGlassSweep } from "../src/cron/break-glass-sweep";
 import { configCleanupJob } from "../src/cron/config-cleanup";
 import { staticReconcileJob } from "../src/cron/static-reconcile";
+import { auditRetentionJob } from "../src/cron/audit-retention";
 import { publishSite } from "../src/publish";
 import { siteToSettings } from "../src/site-settings";
-import { call, createExperiment, createSite, failingKv, fakeDeployer, runDirect, setupOwner, siteRow, siteWithRunning, testEnv, TEXT_CHANGE } from "./helpers";
+import { call, createExperiment, createSite, failingKv, fakeDeployer, runDirect, setupOwner, siteRow, siteWithRunning, testEnv, TEXT_CHANGE, userActor } from "./helpers";
 
 // D9 ②(plan ② の K5・K6・K12、設計書 §9.4・§6.9)
 
@@ -168,7 +169,7 @@ describe("cron runner (D9 ② K5・K6)", () => {
 
   it("registers the account guard in CRON_JOBS", () => {
     // D9 ③(K17): 結果のジョブ 5 本を results-account-guard の後に、この順で(どれも wtt-control に書く)
-    expect(CRON_JOBS).toEqual([resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob, staticReconcileJob]);
+    expect(CRON_JOBS).toEqual([resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob, staticReconcileJob, auditRetentionJob]);
     expect(CRON_JOBS.slice(1).map((j) => [j.name, j.cadence, j.writesControl])).toEqual([
       ["results-delivery", { every: "tick" }, true],
       ["results-collect-until", { every: "tick" }, true],
@@ -179,11 +180,13 @@ describe("cron runner (D9 ② K5・K6)", () => {
       ["break-glass-sweep", { every: "tick" }, true],
       ["config-cleanup", { daily: { afterUtcHour: 1 } }, true],
       ["static-reconcile", { every: "tick" }, true],
+      ["audit-retention", { daily: { afterUtcHour: 19 } }, true], // B129 Task 9
     ]);
     // plan12 K13: 配分(queryShare)を持たない(結果のジョブの配分表を変えない)
     expect(breakGlassSweep.queryShare).toBeUndefined();
     expect(configCleanupJob.queryShare).toBeUndefined();
     expect(staticReconcileJob.queryShare).toBeUndefined(); // 7o K13
+    expect(auditRetentionJob.queryShare).toBeUndefined(); // B129 Task 9
     expect(resultsAccountGuard).toMatchObject({ name: "results-account-guard", cadence: { every: "tick" }, writesControl: false });
   });
 });
@@ -427,7 +430,7 @@ describe("config-cleanup (plan12 K14 (b))", () => {
   const configExists = async (sid: string, v: number) => (await env.CONFIG_KV.get(kvKeys.config(sid, v))) !== null;
   /** 公開を n 回する(時刻は 1 秒ずつ。5 分以内なので公開のときの掃除は何も消さない) */
   async function publishTimes(owner: Awaited<ReturnType<typeof setupOwner>>, sid: string, n: number) {
-    for (let i = 0; i < n; i++) expect((await publishSite(deployEnv(), getDb(env), await siteRow(sid), owner.userId, t0 + i * 1000)).ok).toBe(true);
+    for (let i = 0; i < n; i++) expect((await publishSite(deployEnv(), getDb(env), await siteRow(sid), userActor(owner.userId), t0 + i * 1000)).ok).toBe(true);
   }
   async function secondSite(owner: Awaited<ReturnType<typeof setupOwner>>) {
     const { id: sid } = await createSite(owner.token, owner.workspaceId, { id: "site_second", domain: "second.example.com" });
@@ -441,7 +444,7 @@ describe("config-cleanup (plan12 K14 (b))", () => {
     expect(new Date(T).getUTCHours()).toBeGreaterThanOrEqual(1);
     expect(configCleanupJob).toMatchObject({ name: "config-cleanup", cadence: { daily: { afterUtcHour: 1 } }, writesControl: true });
     expect(configCleanupJob.queryShare).toBeUndefined();
-    expect(CRON_JOBS.at(-2)).toBe(configCleanupJob);
+    expect(CRON_JOBS.at(-3)).toBe(configCleanupJob); // 後ろに static-reconcile(7o K13)と audit-retention(B129 Task 9)
   });
 
   it("deletes the retired versions on a day without a publish and keeps the served one", async () => {

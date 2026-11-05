@@ -1,4 +1,5 @@
 import { ApiClientError, describeError } from "./client";
+import type { BusyOutcome } from "./run-busy";
 
 /**
  * エクスペリエンスの保存(概要 → パターン → パターンごとの変更の 3 段)が失敗したときの文。
@@ -19,4 +20,15 @@ export function saveErrorMessage(e: unknown, savedSomething: boolean): string {
     return `${message}(一部は保存されています。ページを再読み込みしてください。未保存の入力は消えます)`;
   }
   return `${text}(一部は保存されています。最新の状態を確認するにはこの画面を再読み込みしてください)`;
+}
+
+/**
+ * B129 final review: 保存の結果のうち、変更履歴のタブを読み直すもの(全段の成功は onWritten が読み直しの印を進めるので含めない)。
+ * - failed で savedSomething: 途中の段まで書けた(その段の記録が増えている)
+ * - unknown: 30 秒待っても結果が分からない(書けていれば記録が増えている)
+ * 何も書かずに失敗した・取りやめた・別の画面へ移り始めた・実行中だったときは読み直さない(タブの読み直しは開いている間だけの 1 本)。
+ * navigated(書けた後に移動が始まった)は全段の成功と同じく onWritten が進める
+ */
+export function historyStaleAfterSave(outcome: { kind: BusyOutcome<unknown>["kind"] }, savedSomething: boolean): boolean {
+  return outcome.kind === "unknown" || (outcome.kind === "failed" && savedSomething);
 }

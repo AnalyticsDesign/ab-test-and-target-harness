@@ -10,7 +10,7 @@ import { ADMIN_URL, CONTROL_URL, WORKSPACE_NAME, controlHeaders, createExperimen
  * 同じ GET のまとめが外れ、1 画面で約 20 回の往復と CPU の超過(exceededResources)になって、気づくまで 9 日かかった。
  *
  * 対象の画面(SCREENS): ホーム・ワークスペースのホーム・サイトのトップ(= エクスペリエンスの一覧)・目標・オーディエンスの一覧・
- * エクスペリエンスの詳細・オーディエンスの詳細(設定)・サイト設定・メンバー(ワークスペースの設定)・公開・公開履歴。
+ * エクスペリエンスの詳細・オーディエンスの詳細(設定)・サイト設定・メンバー(ワークスペースの設定)・公開・公開履歴・操作の記録(ワークスペース・導入全体。B129)。
  * B148: サイト設定のドメインの節(siteSettingsDomains)は、直接(?section=domains)・節のリンク・節の保存 1 回を SCREENS の外で数える(節の切り替えはルーターを通らない)。
  * 目標には詳細の画面が無い(一覧の中で編集する)ので、目標の一覧で代える。画面ごとに次の 2 通りを数える:
  * - 直接: page.goto で URL を開く(HTML の要求)
@@ -58,7 +58,9 @@ type ScreenName =
   | "siteSettingsDomains"
   | "members"
   | "publish"
-  | "history";
+  | "history"
+  | "auditLog"
+  | "instanceAuditLog";
 
 /**
  * 回数の上限(画面ごと。直す側が変えやすいよう 1 か所に置く)。値 = 実測 + 1(余裕の付け方はファイルの先頭)。
@@ -81,6 +83,10 @@ export const REQUEST_LIMITS: Record<ScreenName, { direct: number; navigation: nu
   members: { direct: 6, navigation: 6 }, // 実測 5 / 5(サイトの外。+ members・invitations)
   publish: { direct: 6, navigation: 6 }, // 実測 5 / 5(+ publish-preview)
   history: { direct: 6, navigation: 6 }, // 実測 5 / 5(+ publishes)
+  // B129(spec §10.6): 設定の「操作の記録」。外枠の 3 本 + 記録の 1 本(ワークスペースは workspaces/:wid/audit-events、導入全体は audit-events)。
+  // `/workspaces` を直接読まない(一覧は summary から作る)
+  auditLog: { direct: 5, navigation: 5 }, // 実測 4 / 4(2026-11-04。+ workspaces/:wid/audit-events)
+  instanceAuditLog: { direct: 5, navigation: 5 }, // 実測 4 / 4(2026-11-04。+ audit-events)
 };
 
 /**
@@ -358,6 +364,28 @@ const SCREENS: Screen[] = [
     },
     link: (p) => p.getByTestId("version-popover").getByRole("link", { name: "すべての公開履歴 →", exact: true }),
   },
+  // B129: ワークスペースの操作の記録。メンバーの画面から設定のメニューのワークスペースの節で(システムの節にも同じ名前があるので href で引く)
+  {
+    name: "auditLog",
+    path: ({ wid }) => `/w/${wid}/audit-events`,
+    ready: async (p) => {
+      await expect(heading(p, "操作の記録")).toBeVisible();
+      await expect(p.getByTestId("audit-table")).toBeVisible();
+    },
+    from: ({ wid }) => `/w/${wid}/members`,
+    link: (p) => p.getByRole("navigation", { name: "メインメニュー" }).locator('a[href$="/audit-events"]:not([href="/w/me/audit-events"])'),
+  },
+  // B129: 導入全体の操作の記録。個人の API キーの画面から設定のメニューのシステムの節の最後で
+  {
+    name: "instanceAuditLog",
+    path: () => "/w/me/audit-events",
+    ready: async (p) => {
+      await expect(heading(p, "操作の記録")).toBeVisible();
+      await expect(p.getByTestId("audit-table")).toBeVisible();
+    },
+    from: () => "/w/me/api-keys",
+    link: (p) => p.getByRole("navigation", { name: "メインメニュー" }).locator('a[href="/w/me/audit-events"]'),
+  },
 ];
 
 /** 画面ごとの実測(最後の表) */
@@ -368,8 +396,8 @@ type Row = { direct: number | null; navigation: number | null; prefetchOnHover: 
  * (別のテストに分けると、serial では前のテストの失敗で後が走らず、全画面の数が 1 回で出ない)。ログインも 1 回で済む(fixtures.ts の login() の予算)
  */
 test("main screens: control requests per view stay within the budget (direct HTML / client navigation RSC)", async ({ page }, testInfo) => {
-  // 11 画面 × (直接 + 遷移元 + ホバー + 押した後)の落ち着き待ち(各 2 秒以上)が要るので、既定の 60 秒では足りない
-  test.setTimeout(300_000);
+  // 13 画面 × (直接 + 遷移元 + ホバー + 押した後)の落ち着き待ち(各 2 秒以上)が要るので、既定の 60 秒では足りない
+  test.setTimeout(360_000);
   // 観測の口の span は E2E の実行全体でたまるので、読むのはここから後の分だけにする(窓が無いと trace_id の結合が重い)
   const started = Date.now();
   const ids: Ids = { wid: "" };

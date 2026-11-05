@@ -19,6 +19,7 @@ import {
   siteWithRunning,
   TEXT_CHANGE,
   testEnv,
+  userActor,
 } from "./helpers";
 import { getDb } from "../src/db";
 import type { Env } from "../src/env";
@@ -172,12 +173,12 @@ describe("publish (spec §13.6)", () => {
     const db = getDb(env);
     const site = await siteRow(sid);
     const t0 = 1_800_000_000_000;
-    for (let i = 0; i < 6; i++) expect((await publishSite(deployEnv(), db, site, owner.userId, t0 + i * 1000)).ok).toBe(true);
+    for (let i = 0; i < 6; i++) expect((await publishSite(deployEnv(), db, site, userActor(owner.userId), t0 + i * 1000)).ok).toBe(true);
     // 6 版すべて 5 分以内に active だったので削除されない
     for (let v = 1; v <= 6; v++) expect(await config(sid, v)).not.toBeNull();
     // 10 分後の 7 回目(plan12 K14 (b): 「直近 5 版」の保持はやめた)。掃除は配信ファイルの出し直しより前に走るので、その時点で配信ファイルが
     // 配っている版は v6。残るのは v6 以上(= 配信ファイルが配る版以上。v6・v7)だけで、v1〜v5 は削除
-    expect((await publishSite(deployEnv(), db, await siteRow(sid), owner.userId, t0 + 600_000)).ok).toBe(true);
+    expect((await publishSite(deployEnv(), db, await siteRow(sid), userActor(owner.userId), t0 + 600_000)).ok).toBe(true);
     for (let v = 1; v <= 5; v++) expect(await config(sid, v)).toBeNull();
     for (let v = 6; v <= 7; v++) expect(await config(sid, v)).not.toBeNull();
     const deleted = await db.selectFrom("publishes").select(["version", "kv_deleted"]).where("site_id", "=", sid).orderBy("version").execute();
@@ -188,16 +189,16 @@ describe("publish (spec §13.6)", () => {
     const { owner, sid } = await siteWithRunning();
     const db = getDb(env);
     const t0 = 1_800_000_000_000;
-    for (let i = 0; i < 7; i++) expect((await publishSite(deployEnv(), db, await siteRow(sid), owner.userId, t0 + i * 1000)).ok).toBe(true);
+    for (let i = 0; i < 7; i++) expect((await publishSite(deployEnv(), db, await siteRow(sid), userActor(owner.userId), t0 + i * 1000)).ok).toBe(true);
     expect(await active(sid)).toBe("7");
     // 10 分後に失敗する Publish(put で落ちる)。cleanup は走らず、active の v7 と直近版はそのまま
-    const r = await publishSite(deployEnv({ CONFIG_KV: failingKv(/config:v8$/) }), db, await siteRow(sid), owner.userId, t0 + 600_000);
+    const r = await publishSite(deployEnv({ CONFIG_KV: failingKv(/config:v8$/) }), db, await siteRow(sid), userActor(owner.userId), t0 + 600_000);
     expect(r.ok).toBe(false);
     expect(await active(sid)).toBe("7");
     expect(await config(sid, 7)).not.toBeNull();
     for (let v = 3; v <= 6; v++) expect(await config(sid, v)).not.toBeNull(); // 5 分以内に有効だった版も失敗 Publish に巻き込まれない(掃除は走らない)
     // 読み戻し失敗(hash 不一致)でも v9 のキーは片付け、active は触らない
-    const r2 = await publishSite(deployEnv({ CONFIG_KV: failingKv(/config:v9$/, "get") }), db, await siteRow(sid), owner.userId, t0 + 601_000);
+    const r2 = await publishSite(deployEnv({ CONFIG_KV: failingKv(/config:v9$/, "get") }), db, await siteRow(sid), userActor(owner.userId), t0 + 601_000);
     expect(r2.ok).toBe(false);
     expect(await config(sid, 9)).toBeNull();
     expect(await config(sid, 7)).not.toBeNull();
@@ -329,7 +330,7 @@ describe("publish (spec §13.6)", () => {
     const { owner, sid } = await siteWithRunning();
     const db = getDb(env);
     const t0 = 1_800_000_000_000;
-    expect((await publishSite(deployEnv(), db, await siteRow(sid), owner.userId, t0)).ok).toBe(true); // v1(KV active = "1")
+    expect((await publishSite(deployEnv(), db, await siteRow(sid), userActor(owner.userId), t0)).ok).toBe(true); // v1(KV active = "1")
     // `:active` への put を握りつぶす KV = put は成功を返すが KV は更新されない(= 成否不明のまま取り残された状態)
     const droppedActivePut = new Proxy(env.CONFIG_KV, {
       get(t, p) {
@@ -342,12 +343,12 @@ describe("publish (spec §13.6)", () => {
       },
     }) as KVNamespace;
     const stuck = deployEnv({ CONFIG_KV: droppedActivePut });
-    for (let i = 1; i < 7; i++) expect((await publishSite(stuck, db, await siteRow(sid), owner.userId, t0 + i * 1000)).ok).toBe(true); // v2..v7
+    for (let i = 1; i < 7; i++) expect((await publishSite(stuck, db, await siteRow(sid), userActor(owner.userId), t0 + i * 1000)).ok).toBe(true); // v2..v7
     expect(await active(sid)).toBe("1"); // edge はまだ v1 を配信している
     expect((await siteRow(sid)).active_version).toBe(7); // D1 だけが先に進んだ
     // 10 分後の Publish。v1 は新しい版に押し出され activated_at も 10 分前 —
     // 守れるのは「KV の active が v1 を指している」という事実だけ(v8 は今書いた版)
-    expect((await publishSite(stuck, db, await siteRow(sid), owner.userId, t0 + 600_000)).ok).toBe(true); // v8
+    expect((await publishSite(stuck, db, await siteRow(sid), userActor(owner.userId), t0 + 600_000)).ok).toBe(true); // v8
     expect(await active(sid)).toBe("1");
     expect(await config(sid, 1)).not.toBeNull(); // 配信中の config は消さない
     // 「直近 5 版」は無いので消える。配信ファイルが配っている版(v7。掃除の時点)以上の v7・v8 は残り、v2〜v6 は消える
@@ -360,7 +361,7 @@ describe("publish (spec §13.6)", () => {
     const { owner, sid } = await siteWithRunning();
     const db = getDb(env);
     const t0 = 1_800_000_000_000;
-    for (let i = 0; i < 7; i++) expect((await publishSite(deployEnv(), db, await siteRow(sid), owner.userId, t0 + i * 1000)).ok).toBe(true);
+    for (let i = 0; i < 7; i++) expect((await publishSite(deployEnv(), db, await siteRow(sid), userActor(owner.userId), t0 + i * 1000)).ok).toBe(true);
     // 7 版目の掃除の時点では 7 版すべてが 5 分以内に有効だった → 全部残る
     for (let v = 1; v <= 7; v++) expect(await config(sid, v)).not.toBeNull();
     // 5 分より後に cleanupOldVersions を呼ぶ(Cron と同じ呼び方)。7 版目だけが残る
@@ -415,10 +416,10 @@ describe("publish (spec §13.6)", () => {
   it("a publish overtaken by a newer activation is recorded as superseded", async () => {
     const { owner, sid } = await siteWithRunning();
     const db = getDb(env);
-    expect((await publishSite(testEnv, db, await siteRow(sid), owner.userId)).ok).toBe(true); // v1
+    expect((await publishSite(testEnv, db, await siteRow(sid), userActor(owner.userId))).ok).toBe(true); // v1
     // 自分より新しい version が先に active になった状態(別 isolate の Publish が勝った)
     await db.updateTable("sites").set({ active_version: 9 }).where("id", "=", sid).execute();
-    const r = await publishSite(testEnv, db, await siteRow(sid), owner.userId);
+    const r = await publishSite(testEnv, db, await siteRow(sid), userActor(owner.userId));
     expect(r).toMatchObject({ ok: true, version: 2, superseded: true, staticDeploy: "skipped" });
     expect(await active(sid)).toBe("1"); // KV の active は触らない
     const row = await db.selectFrom("publishes").select("status").where("site_id", "=", sid).where("version", "=", 2).executeTakeFirstOrThrow();

@@ -1,9 +1,11 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
+import { expressionBuilder, sql, type ExpressionBuilder } from "kysely";
 import { z } from "zod";
 import { GoalAnalyticsRequestSchema, GoalAnalyticsSchema, GoalInputSchema, targetingReferences, type GoalAnalytics } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
-import type { Db } from "../db";
+import { auditActor, auditChanged, auditStatement, changedFieldsDetail, sameJsonText, unchangedValues, type AuditDetail, type AuditFieldChange, type AuditSql } from "../audit";
+import { toStatement, type Db, type GoalRow, type SiteRow, type Tables } from "../db";
 import { ApiError, notFound, validationFailed } from "../errors";
 import { isReservedId, reservedIdMessage, SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
@@ -33,6 +35,32 @@ const GoalCreate = z
     else if (isReservedId(v.id)) ctx.addIssue({ code: "custom", path: ["id"], message: reservedIdMessage(v.id) });
   });
 const GoalPatch = z.strictObject({ name: z.string().min(1).optional(), config: z.unknown().optional(), analytics: GoalAnalyticsRequest.optional() });
+
+/**
+ * B129(spec §3.1 の区分 content): 目標の記録。1 文の execute だった書き込みを `env.DB.batch([操作, 記録])` にする(往復は 1 回のまま)。
+ * 作成は insert の後(無条件)、変更・削除は操作の文の前に、操作の文と同じ条件(thisGoal)の targetFrom で置く(0 行なら記録しない)
+ */
+const thisGoal = (siteId: string, gid: string) => (eb: ExpressionBuilder<Tables, "goals">) => eb.and([eb("site_id", "=", siteId), eb("id", "=", gid)]);
+function goalAudit(c: Context<AppEnv>, site: Pick<SiteRow, "id" | "workspace_id">, gid: string, action: "goal.create" | "goal.update" | "goal.delete", detail: AuditDetail | AuditSql, label?: string) {
+  const event =
+    label !== undefined
+      ? { target: { type: "goal" as const, id: gid, label } }
+      : {
+          target: { type: "goal" as const },
+          // 変更の記録は今の値(name・config_json・analytics_json)を t から読んで比べる
+          targetFrom: sql`select id as target_id, name as target_label, name, config_json, analytics_json from goals where ${thisGoal(site.id, gid)(expressionBuilder<Tables, "goals">())}`,
+        };
+  return auditStatement(c.env.DB, auditActor(c), { action, workspaceId: site.workspace_id, siteId: site.id, detail, ...event });
+}
+/**
+ * 目標の PATCH の欄(記録の detail.fields の順)と比べる列。名前だけで値は持たない。json = 鍵の順を問わずに読んだ行と比べる。
+ * B129 final review(R64): 記録するのは値が変わった欄だけ
+ */
+const GOAL_PATCH_FIELDS = [
+  { key: "name", col: "name" },
+  { key: "config", col: "config_json", json: true },
+  { key: "analytics", col: "analytics_json", json: true },
+] as const satisfies ReadonlyArray<{ key: keyof z.infer<typeof GoalPatch>; col: keyof GoalRow; json?: true }>;
 
 const parseGoalAnalytics = (json: string | null): GoalAnalytics | null => (json ? (JSON.parse(json) as GoalAnalytics) : null);
 
@@ -175,7 +203,7 @@ goalRoutes.post(
       throw new ApiError(409, "id_taken", { message: "この ID は既に使われています", hint: "別の ID を指定してください" });
     const now = Date.now();
     const row = { site_id: site.id, id: body.id, name: body.name, type: body.type, config_json: JSON.stringify(config), analytics_json: body.analytics ? JSON.stringify(body.analytics) : null, created_at: now, updated_at: now };
-    await db.insertInto("goals").values(row).execute();
+    await c.env.DB.batch([toStatement(c.env, db.insertInto("goals").values(row)), goalAudit(c, site, row.id, "goal.create", {}, row.name)]);
     await touchSite(db, site.id, now);
     return c.json(goalJson(row, (await goalRunningTests(db, site.id)).get(row.id) ?? []), 201);
   },
@@ -217,7 +245,12 @@ goalRoutes.patch(
       ...(body.analytics !== undefined ? { analytics_json: body.analytics ? JSON.stringify(body.analytics) : null } : {}),
       updated_at: now,
     };
-    await db.updateTable("goals").set(patch).where("site_id", "=", site.id).where("id", "=", row.id).execute();
+    // 送った欄のうち、書く値(patch)が記録の文の中の今の行(t)と違う欄だけを記録する(変わらなければ fields: []。updated_at は進む)
+    const changes: AuditFieldChange[] = GOAL_PATCH_FIELDS.filter((f) => body[f.key] !== undefined).map((f) => ({
+      key: f.key,
+      changed: auditChanged(sql`t.${sql.ref(f.col)}`, unchangedValues(patch[f.col] ?? null, row[f.col], "json" in f ? sameJsonText : undefined)),
+    }));
+    await c.env.DB.batch([goalAudit(c, site, row.id, "goal.update", changedFieldsDetail(changes)), toStatement(c.env, db.updateTable("goals").set(patch).where(thisGoal(site.id, row.id)))]);
     await touchSite(db, site.id, now);
     return c.json(goalJson({ ...row, ...patch }, (await goalRunningTests(db, site.id)).get(row.id) ?? []));
   },
@@ -265,7 +298,7 @@ goalRoutes.delete(
         hint: hints.join("。"),
       });
     }
-    await db.deleteFrom("goals").where("site_id", "=", site.id).where("id", "=", gid).execute();
+    await c.env.DB.batch([goalAudit(c, site, gid, "goal.delete", {}), toStatement(c.env, db.deleteFrom("goals").where(thisGoal(site.id, gid)))]);
     await touchSite(db, site.id, Date.now());
     return c.body(null, 204);
   },

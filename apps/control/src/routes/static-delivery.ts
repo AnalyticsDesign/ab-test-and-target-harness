@@ -3,6 +3,7 @@ import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
 import { SITE_ID_RE } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
+import { auditActor, writeAuditBefore } from "../audit";
 import { edgeOrigin } from "../capabilities";
 import { validationFailed } from "../errors";
 import { errorResponses } from "../openapi";
@@ -87,6 +88,9 @@ staticDeliveryRoutes.post(
   async (c) => {
     const { after } = c.req.valid("json");
     const status = await readInstanceStatus(c.env);
+    // B129(spec §3.1・§5.3): 作り直しは多くのサイトへの依頼に分かれて 1 つの batch に入らないので、始める前に記録する(「前」。往復 +1)。
+    // 書けなければそのまま投げて 500 にし、作り直しを始めない。デプロイ専用の Worker に届かない(上の 503)ときは何もしないので記録しない
+    await writeAuditBefore(c.env.DB, auditActor(c), { action: "static.rebuild", workspaceId: null, target: { type: "instance" }, detail: { after: after ?? null } });
     const out = await rebuildStaticFiles(c.env, c.get("db"), { after: after ?? null }, { status, now: Date.now(), force: true });
     return c.json({ requested: out.requested.length, removed: out.removed.length, skippedRemoving: out.skippedRemoving.length, failed: out.failed, next: out.next });
   },

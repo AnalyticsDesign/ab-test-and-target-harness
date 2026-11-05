@@ -6,7 +6,7 @@ import type { Env } from "../src/env";
 import { isRetiredSiteIdAbort } from "../src/retired-sites";
 import {
   beforeD1Batch,
-  beforeD1Query,
+  beforeD1BatchMatching,
   call,
   choosePrimaryGoal,
   createExperiment,
@@ -168,8 +168,9 @@ describe("削除したサイトの ID の退役(B155)", () => {
     const host = "claimed.example.com";
     await createSite(owner.token, owner.workspaceId, { id: "site_host_owner", mode: "B", domain: host });
     // 同じホストを使う Mode B のサイトの作成: sites の batch は通り、claimHosts が host_in_use で落ちて sites の行を消して戻す
+    // (B129: 戻しの DELETE は作成の取り消しの記録と同じ batch に入ったので、batch の前に差し込む)
     let ran = 0;
-    const hooked = beforeD1Query(env.DB, /^delete from "?sites"?/i, async () => {
+    const hooked = beforeD1BatchMatching(env.DB, /^delete from "?sites"?/i, async () => {
       ran++;
     });
     const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, {
@@ -191,7 +192,7 @@ describe("削除したサイトの ID の退役(B155)", () => {
     const owner = await setupOwner();
     const id = "site_kv_rejected";
     let ran = 0;
-    const hooked = beforeD1Query(env.DB, /^delete from "?sites"?/i, async () => {
+    const hooked = beforeD1BatchMatching(env.DB, /^delete from "?sites"?/i, async () => {
       ran++;
     });
     const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, {
@@ -212,7 +213,7 @@ describe("削除したサイトの ID の退役(B155)", () => {
     const owner = await setupOwner();
     const id = "site_overlap";
     // 作成の batch の後・戻しの DELETE の前に、別の要求の削除がこのサイトに印(token)を付けた重なり。戻しの DELETE でもトリガーが記録する(安全側)
-    const hooked = beforeD1Query(env.DB, /^delete from "?sites"?/i, async () => {
+    const hooked = beforeD1BatchMatching(env.DB, /^delete from "?sites"?/i, async () => {
       await env.DB.prepare("update sites set static_removing = 'racing-delete-token' where id = ?").bind(id).run();
     });
     const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, {

@@ -1,4 +1,5 @@
 import { utcDay } from "@wtt/core";
+import { sql, type Expression, type SqlBool } from "kysely";
 import type { Db, ExperimentRow, SiteRow } from "../db";
 import type { Env } from "../env";
 import { loadPlan, type LoadedPlan } from "../evaluation-plan";
@@ -27,10 +28,26 @@ export async function recordStop(
   site: SiteRow,
   /** 終了した後の行(status = archived、stopped_at = 終了の時刻) */
   exp: ExperimentRow,
-  a: { adoption: { variantId: string | null; note: string } | null; userId: string; now: number; estimate: number; guard: WriteGuard },
+  a: {
+    adoption: { variantId: string | null; note: string } | null;
+    /**
+     * B129(2026-11-05 ユーザー決定 Q276): 採用の記録(experiment.adoption)の文を作る。採用を書く batch の、採用の upsert の直前に置く。
+     * `guard` = 採用の upsert と同じ成立の条件(requireSnapshot のときは結果の記録があること。それ以外は無条件)。往復は増えない
+     */
+    adoptionAudit?: (guard: Expression<SqlBool> | undefined) => D1PreparedStatement;
+    userId: string;
+    now: number;
+    estimate: number;
+    guard: WriteGuard;
+  },
 ): Promise<boolean> {
-  const adoptionOf = (requireSnapshot: boolean) =>
-    a.adoption ? [adoptionUpsert(env, site.id, exp.id, { variantId: a.adoption.variantId, note: a.adoption.note, by: a.userId, at: a.now }, { requireSnapshot })] : [];
+  const adoptionOf = (requireSnapshot: boolean): D1PreparedStatement[] => {
+    if (!a.adoption) return [];
+    const upsert = adoptionUpsert(env, site.id, exp.id, { variantId: a.adoption.variantId, note: a.adoption.note, by: a.userId, at: a.now }, { requireSnapshot });
+    if (!a.adoptionAudit) return [upsert];
+    const guard = requireSnapshot ? sql<SqlBool>`exists (select 1 from result_snapshots where site_id = ${site.id} and experiment_id = ${exp.id})` : undefined;
+    return [a.adoptionAudit(guard), upsert];
+  };
   const adoption = adoptionOf(false);
   const write = async (stmts: D1PreparedStatement[]): Promise<D1Result[]> => {
     if (stmts.length === 0) return [];

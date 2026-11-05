@@ -1,0 +1,6 @@
+/* B129: 設定の「操作の記録」の絞り込みの並び(1 つの部品の中の並べ方。admin_ui_rules 6) */
+.filters { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; margin-bottom: 16px; }
+.filters :global(.field) { margin-bottom: 0; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; min-height: var(--control-h); }
+.range { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; }
+.range :global(.field) { margin-bottom: 0; }

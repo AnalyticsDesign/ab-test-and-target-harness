@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
 import type { AppEnv } from "../app";
+import { breakGlassActor, writeAuditAfterDb, writeAuditBefore, type AuditEvent } from "../audit";
 import { googleConfigured } from "../auth";
 import { breakGlassToken, passwordLoginOpen } from "../break-glass";
 import { notFound, validationFailed } from "../errors";
@@ -54,11 +55,19 @@ breakGlassRoutes.post(
       .get("db")
       .selectFrom("member")
       .innerJoin("user", "user.id", "member.userId")
-      .select(["user.email as email"])
+      .select(["user.id as userId", "user.email as email"])
       .where("member.role", "=", "owner")
       .where("user.email", "=", body.email.toLowerCase())
       .executeTakeFirst();
     if (!owner) throw notFound();
-    return c.json({ url: await issueResetUrl(c, owner.email) });
+    // B129(Q11): break_glass.reset_link は「前」。操作した人なし・経路 break_glass・導入全体(workspace_id NULL)。凍結中も書く(spec §5.4)。
+    // 書けなければ発行しない(500)。発行が失敗したら outcome = failed の行を足す(書けなくても元の失敗をそのまま返す)
+    const event: AuditEvent = { action: "break_glass.reset_link", target: { type: "user", id: owner.userId, label: owner.email } };
+    await writeAuditBefore(c.env.DB, breakGlassActor, event);
+    const url = await issueResetUrl(c, owner.email).catch(async (e: unknown) => {
+      await writeAuditAfterDb(c.env.DB, () => ({ actor: breakGlassActor, event: { ...event, detail: { outcome: "failed" } } }));
+      throw e;
+    });
+    return c.json({ url });
   },
 );

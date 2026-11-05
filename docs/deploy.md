@@ -2029,6 +2029,23 @@ runtime を作り直したら control と deployer も必ず再デプロイす�
 - **この版より前に開いた管理画面のタブは、凍結を外した後の最初の保存で「管理画面が古い版です」(426)になる**。ページを再読み込みすれば直る。API で `domain`・`allowedOrigins`・`hosts` を書き込んでいるエージェントや手順は、`domains` に書き換える(古い欄を送ると 422 `legacy_domain_fields`)
 - 凍結を外した後、Mode B のサイトはドメインの節で一度保存すると、一覧のドメインごとに Cloudflare 経由かを確かめる。保存するまでは、今の `hosts` にあったドメインは Cloudflare 経由、それ以外は確かめていないドメイン(Cloudflare 外として動く)のまま
 
+**操作の記録を足すリリースの更新**(CHANGELOG の目印「操作の記録を足す」)。追加の手順は無く、マイグレーションは上の 2 つ目のブロックの手順 2 で当たる。次の点に注意する:
+
+- マイグレーション(D1 の `0023_audit_events.sql`)は control の deploy(手順 3)より前に当てる。2 つ目のブロックの順のままでよい。順を誤って control を先にデプロイすると、新しい control は記録の表が無いので、記録を伴う変更操作(保存・公開・メンバーの操作など)がすべて 500 になる
+- このマイグレーションは、操作の記録の表 `audit_events`(と索引)と、保持の定期処理が 1 日に消した数を持つ 1 行の表 `audit_retention_state` を作る。`sites`・`experiments` には世代の列 `generation` を足し、既存の行を乱数で埋める(同じ ID で作り直したサイト・エクスペリエンスの前の記録を、変更履歴に混ぜないため)。既存の行で書き換えるのはこの列だけ。トリガーを 4 つ作る: `audit_events_no_update`(記録の書き換えを断る)・`audit_events_keep_365d`(365 日より新しい記録の削除を断る)・`sites_fill_generation`・`experiments_fill_generation`(世代を入れずに作られた行に世代を入れる。凍結を入れる前に届いていた前の版の control の作成や、前の版に戻しているあいだの作成で起きる)
+- admin は control より後にデプロイする(手順 4 の順のまま)。逆にすると、エクスペリエンスの「変更履歴」タブと設定の「操作の記録」が開けない案内になる(ほかは壊れない)
+- 凍結の中で、6.4 の確認と一緒に次を確かめる。期待と違えば凍結を外さずに調べる:
+
+  ```bash
+  pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select (select count(*) from sqlite_master where name like 'audit_events%') as audit_objects, (select count(*) from sqlite_master where type = 'trigger' and name in ('sites_fill_generation', 'experiments_fill_generation')) as fill_triggers, (select count(*) from audit_retention_state) as retention_rows, (select count(*) from sites where generation is null) + (select count(*) from experiments where generation is null) as missing_generation"   # 期待: audit_objects 10(表 1・索引 7・トリガー 2)・fill_triggers 2・retention_rows 1・missing_generation 0
+  ```
+
+  管理画面で、エクスペリエンスの「変更履歴」タブと、設定の「操作の記録」(「ワークスペース」と「システム」の見出しの下)が開くことも確かめる(凍結中は、パスワードでのログインと非常用トークンでの再設定リンクの発行のほかは記録が増えないので、一覧は空でよい)
+- 凍結を外した後に、管理画面で、システム管理者でないメンバーのロールを 1 回変えて元に戻し、そのワークスペースの「操作の記録」に 2 行出ることを確かめる(システム管理者のほかにメンバーがいなければ、下書きのエクスペリエンスのメモを保存し、「変更履歴」タブに 1 行出ることを確かめる)。出なければ、もう一度凍結を入れて調べる
+- この版より前の操作は記録に無い。記録は 365 日残り、control の定期処理(今の 15 分ごとの Cron の中。Cron Trigger の本数は増えない)が 1 日 1 回、それより古い記録を消す
+- 前の版へ戻すとき(6.5)に、データベースを戻す必要は無い。前の版の control は記録の表と世代の列を使わない。戻しているあいだの操作は記録されず、そのあいだに作ったサイト・エクスペリエンスにはトリガーが世代を入れるので、新しい版に戻した後の操作は変更履歴に出る
+- edge・deployer・runtime・計測用のデータベース(`wtt-results`)は変わらない(この変更のための deploy は要らない)
+
 ```bash
 pnpm -C apps/admin build && pnpm -C apps/admin deploy:cf   # 4. admin
 ```
@@ -2342,7 +2359,7 @@ Zero Trust(Free で 50 ユーザーまで)の Access アプリケーション(Se
 
    `$BG` はこのシェルの中だけで使う(手順 2 で curl の標準入力に渡す)。別のシェルで続けるなら、`read -rs BG` で入力してから手順 2 を実行する(入力は画面に出ない)。
 
-   secret の反映には数秒かかることがある。`curl -sS "<control URL>/login-options"` が `"passwordLogin":true` を返すのを確かめてから次へ進む(反映前は次の手順が 404 になる)
+   secret の反映には数秒かかることがある。`curl -sS "<control URL>/login-options"` が `"passwordLogin":true` を返すのを確かめてから次へ進む(反映前は次の手順が 404 になる)。置いた時刻(開いた時刻)を `deploy-log.md` などに控える(閉じた後に、操作の記録をこの時刻から見る)
 
 2. オーナーのパスワード再設定リンクを得る(オーナー以外のメールアドレスや、違うトークンには 404 が返る。control の前段に WAF のレート制限を入れている導入では、連打すると遮断される)
 
@@ -2365,6 +2382,8 @@ Zero Trust(Free で 50 ユーザーまで)の Access アプリケーション(Se
    curl -sS "<control URL>/login-options"   # 期待: "passwordLogin":false
    ```
 
+   消した時刻(閉じた時刻)も控える。
+
    閉じた後の注意:
 
    - **閉じてから通常 15 分以内に、パスワードの記録と、パスワードの記録を持つ人のログイン状態(Google でログインしたものを含む)がすべて消える**(control の 15 分ごとの定期処理。その回の処理の量が多いと次の回に回る。書き込みの凍結中は、凍結を外した後の最初の処理で消える)。非常口でパスワードを使った人は、閉じた後に 1 回 Google でログインし直す。パスワードは残らないので、次の非常時もトークンを置いて再設定リンクから入り直す
@@ -2374,6 +2393,15 @@ Zero Trust(Free で 50 ユーザーまで)の Access アプリケーション(Se
      pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select count(*) as passwords from account where \"providerId\" = 'credential'"
      ```
 
+   - **操作の記録で、開いていた間のすべての操作を確かめる**: 左メニューの下の「設定」→「操作の記録」(「システム」の見出しの下。システム管理者)で、期間に開いた時刻と閉じた時刻を入れ(「非常口を開いていた期間で絞る」)、種類は「すべて」のまま、すべてのログイン方法の操作を見る。閉じた後も、上の削除が済むまでは、開いているあいだに作ったログイン状態が使えるので、終わりの時刻は閉じた時刻より余裕を見て後にする(閉じた直後に見るなら、終わりは空 = 今まででよい)。「パスワードのログイン・非常口だけ」の絞り込みは補助にとどめる。開いているあいだに招待を受けて入った人が、その後 Google でログインして行った操作(API キーの発行など)は、ログイン方法が Google になり、この絞り込みには出ないため。読み方は[運用ガイド 6 節](operations.md#操作の記録と変更履歴)
+   - 管理画面に入れないとき(Google のログインが直らないまま閉じたなど)は、同じ期間の記録を wrangler で読む。`<開いた時刻の ms>`・`<終わりの時刻の ms>` は控えた時刻を epoch ミリ秒にした値(例: `jq -n '"2026-01-01T00:00:00Z" | fromdate * 1000'`。終わりは上と同じく余裕を見て後にする)。出力にはメールアドレスが入るので、ファイルに残すなら所有者だけが開ける `deploy-backups/` に置く:
+
+     ```bash
+     pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select datetime(at / 1000, 'unixepoch') as at_utc, action, via, actor_email, api_key_name, target_type, target_label, detail_json from audit_events where at >= <開いた時刻の ms> and at < <終わりの時刻の ms> order by at, id"
+     ```
+
+   - **期間は自分で入れる**: 画面が記録から出す期間の初期値(非常用トークンでの最初の再設定リンクの発行から、次の「パスワードのログインを閉じた後の掃除」まで)は目安で、実際より狭くなりうる。再設定リンクを出す前の招待の受諾は入らず、閉じた後の掃除は消すものが無いと記録されないため。手順 1 と 4 で控えた、secret を置いた時刻と消した時刻で確かめる
+   - **記録を見た後も、下の各一覧(メンバーの API キー・メンバー・招待・システム管理者・ロール)を目で確かめる**。招待の発行・受諾・パスワードでのログインと、API キーの発行の成功の行は、操作の後に別に書くので、D1 が一時的に失敗すると記録だけが欠けることがある(control のログに `audit: failed to record` が出る)
    - 開いているあいだも、パスワードでログインしたセッションからは API キーを発行できない(Google でログインし直せば発行できる)。ただし、開いているあいだに招待を受けて入った人は、自分の Google のアカウントでログインして鍵を発行できる。鍵はこの削除では消えないので、閉じた後は毎回、管理画面の各ワークスペースの「メンバーの API キー」(左メニューの下の「設定」の「ワークスペース」の見出しの下。管理者以上)の一覧で心当たりの無い鍵が無いかを確かめ、あれば失効させる([運用ガイド 6 節](operations.md#api-キー))。開いているあいだに受諾された招待で増えたメンバーと、発行された招待も残るので、メンバー一覧と招待一覧に心当たりの無いものが無いかを確かめる(次の 2 つの箇条)
    - 意図せず開いていた疑いがあるときは、閉じるだけでなく、心当たりのあるユーザーをメンバー一覧から外す。外した時点でその人のログイン状態も切れる(他のワークスペースにも所属している人は、そちらの資格が残るのでログイン状態も残る。必要なら各ワークスペースから外す)
    - まだ受けられていない招待に心当たりがあれば、招待一覧から取り消す。必要なら後から招待し直す
@@ -2511,12 +2539,18 @@ curl -sS "<control URL>/login-options"   # "passwordLogin":true なら開いて�
 pnpm -C apps/control exec wrangler secret delete AB_BREAK_GLASS_TOKEN   # 開いているときだけ。閉じた後に上の curl が "passwordLogin":false を返すことを確かめる
 ```
 
-4. **人とアクセス権の一覧を控える**。D1 を戻すと、戻した時点より後に外したメンバー・下げたロール・取り消した招待・システム管理者から外したことが、戻した時点の状態に戻る。これらには変更の時刻が残らないので、戻す前と戻した後の一覧を比べて見つける(手順 6)。1 行が 1 件で、列は 種類(`member` = メンバー / `invitation` = 受諾待ちの招待 / `instance_admin` = システム管理者)・メールアドレス・ワークスペースの名前・ロール・ワークスペースの ID の順。ワークスペースの名前は重なることがあるので、ID も控える。ファイルにはメールアドレスが入るので、10.1 の控えと同じく所有者だけが開ける `deploy-backups/` に置く。下の 2 行(SQL と関数の定義)は、手順 6・7 でも同じシェルで使う。別のシェルで続けるときは、この 2 行を流し直す:
+4. **人とアクセス権の一覧と、操作の記録を控える**。D1 を戻すと、戻した時点より後に外したメンバー・下げたロール・取り消した招待・システム管理者から外したことが、戻した時点の状態に戻る。一覧そのものには変更の時刻が残らないので、戻す前と戻した後の一覧を比べて見つける(手順 6)。1 行が 1 件で、列は 種類(`member` = メンバー / `invitation` = 受諾待ちの招待 / `instance_admin` = システム管理者)・メールアドレス・ワークスペースの名前・ロール・ワークスペースの ID の順。ワークスペースの名前は重なることがあるので、ID も控える。ファイルにはメールアドレスが入るので、10.1 の控えと同じく所有者だけが開ける `deploy-backups/` に置く。下の 2 行(SQL と関数の定義)は、手順 6・7 でも同じシェルで使う。別のシェルで続けるときは、この 2 行を流し直す:
 
 ```bash
 ACCESS_SQL="select 'member' as kind, lower(u.email) as email, o.name as workspace, m.role as role, o.id as workspace_id from member m join \"user\" u on u.id = m.\"userId\" join organization o on o.id = m.\"organizationId\" union all select 'invitation', lower(i.email), o.name, coalesce(i.role, ''), o.id from invitation i join organization o on o.id = i.\"organizationId\" where i.status = 'pending' union all select 'instance_admin', lower(u.email), '', '', '' from instance_admins a join \"user\" u on u.id = a.user_id order by kind, email, workspace_id"
 access_list() { pnpm -C apps/control exec wrangler d1 execute "$1" --remote --json --command "$ACCESS_SQL" | jq -r '.[0].results[] | [.kind, .email, .workspace, .role, .workspace_id] | @tsv'; }
 mkdir -p "$PWD/deploy-backups" && chmod 700 "$PWD/deploy-backups" && access_list wtt-control > "$PWD/deploy-backups/access-before.tsv" && test -s "$PWD/deploy-backups/access-before.tsv" && wc -l < "$PWD/deploy-backups/access-before.tsv"   # 期待: 1 以上の数(何も出ない・エラーなら取れていない。先へ進まない)
+```
+
+続けて、戻した時点より後の操作の記録を控える。操作の記録(運用ガイド 6 節)には誰がいつ変えたかが残るが、D1 を戻すと記録も戻した時点のものに戻り、その後の記録は消えるため。`<戻す時刻の ms>` は手順 2 の時刻を epoch ミリ秒にした値(手順 6 の `<戻した時刻の ms>` と同じ。例: `jq -n '"2026-01-01T00:00:00Z" | fromdate * 1000'`)。手順 1 の控え(export)にも入っているが、戻すと消える分だけを読みやすい形で残し、手順 6 で何が戻ったかを確かめるのに使う。戻したデータベースには入れ直さない(戻して取り消された操作の記録になるため)。メールアドレスが入るので `deploy-backups/` に置く:
+
+```bash
+pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --json --command "select * from audit_events where at >= <戻す時刻の ms> order by id" | jq '.[0].results' > "$PWD/deploy-backups/audit-events-before.json" && test -s "$PWD/deploy-backups/audit-events-before.json" && jq length "$PWD/deploy-backups/audit-events-before.json"   # 期待: 0 以上の数(エラーなら取れていない。先へ進まない)
 ```
 
 5. **戻す**。戻すコマンドに、凍結の入れ直し・全員のセッションの削除・すべての API キーの失効を `&&` でつなぎ、1 回で実行する。戻した直後から、この 3 つが済むまでの間を短くし、順番を崩さないため:
@@ -2549,7 +2583,7 @@ pnpm -C apps/control exec wrangler d1 time-travel restore wtt-control --bookmark
 access_list wtt-control > "$PWD/deploy-backups/access-after.tsv" && test -s "$PWD/deploy-backups/access-after.tsv" && { diff "$PWD/deploy-backups/access-before.tsv" "$PWD/deploy-backups/access-after.tsv" > "$PWD/deploy-backups/access-diff.txt"; cat "$PWD/deploy-backups/access-diff.txt"; }   # 何も出なければ、人とアクセス権は戻す前と同じ
 ```
 
-`<` で始まる行は戻すと消えたもの、`>` で始まる行は戻すと生き返ったもの。行の形ごとに次のように扱う:
+`<` で始まる行は戻すと消えたもの、`>` で始まる行は戻すと生き返ったもの。誰がいつ変えたものかは、手順 4 で控えた `audit-events-before.json`(戻した時点より後の操作の記録。`action` が操作、`actor_email` が操作した人、`target_label` が対象)で確かめられる。行の形ごとに次のように扱う:
 
 | diff の行 | 意味 | すること | いつ |
 |---|---|---|---|

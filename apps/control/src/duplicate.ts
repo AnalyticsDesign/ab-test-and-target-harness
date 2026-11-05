@@ -26,8 +26,11 @@ export async function retiredIds(db: Db, siteId: string): Promise<Set<string>> {
   return new Set(rows.map((r) => r.experiment_id));
 }
 
-/** 元がまだ読んだ版のままか(3 文に共通の条件)。調べてから書くまでの間に元が編集・削除されたら、どの文も 0 行になる */
-const sourceUnchanged = (o: CopyOptions) => (eb: ExpressionBuilder<Tables, any>) =>
+/**
+ * 元がまだ読んだ版のままか(3 文に共通の条件)。調べてから書くまでの間に元が編集・削除されたら、どの文も 0 行になる。
+ * B129: 複製の batch の先頭に置く experiment.duplicate の記録の文も、この条件を guard に使う
+ */
+export const sourceUnchanged = (o: CopyOptions) => (eb: ExpressionBuilder<Tables, any>) =>
   eb.exists(eb.selectFrom("experiments as g").select("g.id").where("g.site_id", "=", o.siteId).where("g.id", "=", o.sourceId).where("g.updated_at", "=", o.sourceUpdatedAt));
 
 /** 新しいエクスペリエンスの行を、元が読んだ版のままのときだけ入れる(INSERT … SELECT … WHERE。0 行なら元が変わった) */
@@ -65,6 +68,8 @@ export function duplicateExperimentRow(e: ExperimentRow, o: CopyOptions): Experi
     updated_by: o.user,
     created_at: o.now,
     updated_at: o.now,
+    // B129(Q14・Q29): 複製は別のエクスペリエンス。元の世代は写さず新しく振る
+    generation: crypto.randomUUID(),
   };
 }
 

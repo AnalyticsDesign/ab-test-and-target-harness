@@ -183,9 +183,9 @@ describe("nav", () => {
   it("settings_groups_workspace_and_personal_items", () => {
     const gs = settingsGroups({ kind: "workspace", wid: "ws1" }, { workspaces: wsOf("admin"), instanceAdmin: true });
     expect(gs.map((g) => [g.heading, g.name])).toEqual([["ワークスペース", "ワークスペース1"], ["個人", null], ["システム", null]]);
-    expect(gs[0]!.items.map((i) => i.href)).toEqual(["/w/ws1/members", "/w/ws1/api-keys"]);
+    expect(gs[0]!.items.map((i) => i.href)).toEqual(["/w/ws1/members", "/w/ws1/api-keys", "/w/ws1/audit-events"]);
     expect(gs[1]!.items.map((i) => i.href)).toEqual(["/w/me/api-keys", "/w/me/display"]);
-    expect(gs[2]!.items.map((i) => i.href)).toEqual(["/w/me/instance-admins", "/w/me/workspaces", "/w/me/usage", "/w/me/static-delivery"]);
+    expect(gs[2]!.items.map((i) => i.href)).toEqual(["/w/me/instance-admins", "/w/me/workspaces", "/w/me/usage", "/w/me/static-delivery", "/w/me/audit-events"]);
   });
 
   it("settings_entry_href_per_origin", () => {
@@ -213,12 +213,40 @@ describe("nav", () => {
     expect(all.filter((i) => i.prefetch !== undefined).map((i) => i.href)).toEqual(["/w/me/usage", "/w/me/static-delivery"]);
   });
 
-  // 7o K14: 配信ファイルの画面はシステムの節の最後。先読みでデプロイ専用の Worker を呼ばない(使用状況と同じ)
-  it("settings_groups_static_delivery_last_in_system_and_admin_only", () => {
+  // 7o K14: 配信ファイルの画面はシステムの節の最後(B129 で、その後ろに操作の記録が付いた)。先読みでデプロイ専用の Worker を呼ばない(使用状況と同じ)
+  it("settings_groups_static_delivery_before_audit_events_in_system_and_admin_only", () => {
     const sys = settingsGroups({ kind: "home" }, { workspaces: [], instanceAdmin: true }).find((g) => g.scope === "system")!;
-    expect(sys.items.at(-1)).toEqual({ key: "/w/me/static-delivery", href: "/w/me/static-delivery", label: "配信ファイル", icon: "upload", prefetch: false });
+    expect(sys.items.at(-2)).toEqual({ key: "/w/me/static-delivery", href: "/w/me/static-delivery", label: "配信ファイル", icon: "upload", prefetch: false });
     const notAdmin = settingsGroups({ kind: "site", wid: "ws1", sid: "s1" }, { workspaces: wsOf("owner"), instanceAdmin: false }).flatMap((g) => g.items);
     expect(notAdmin.map((i) => i.href)).not.toContain("/w/me/static-delivery");
+  });
+
+  // B129(spec §7.2): 操作の記録。ワークスペースの節(管理者以上)は「メンバーの API キー」の次、システムの節(システム管理者)は最後。先読みは止めない
+  it("settings_groups_audit_events_for_admins_and_instance_admins", () => {
+    const labelsOf = (role: Role, instanceAdmin: boolean) =>
+      settingsGroups({ kind: "workspace", wid: "ws1" }, { workspaces: wsOf(role), instanceAdmin }).map((g) => [g.scope, g.items.map((i) => i.label)] as const);
+    for (const role of ["owner", "admin"] as const) {
+      const ws = labelsOf(role, false).find(([s]) => s === "workspace")!;
+      expect(ws[1]).toEqual(["メンバー", "メンバーの API キー", "操作の記録"]);
+    }
+    for (const role of ["editor", "viewer"] as const) {
+      expect(labelsOf(role, false).flatMap(([, items]) => items)).not.toContain("操作の記録");
+    }
+    const sys = settingsGroups({ kind: "home" }, { workspaces: [], instanceAdmin: true }).find((g) => g.scope === "system")!;
+    expect(sys.items.at(-1)).toEqual({ key: "/w/me/audit-events", href: "/w/me/audit-events", label: "操作の記録", icon: "history" });
+    expect(settingsGroups({ kind: "home" }, { workspaces: [], instanceAdmin: false }).flatMap((g) => g.items.map((i) => i.href))).not.toContain("/w/me/audit-events");
+    const wsItem = settingsGroups({ kind: "workspace", wid: "ws1" }, { workspaces: wsOf("admin"), instanceAdmin: false })[0]!.items.at(-1)!;
+    expect(wsItem).toEqual({ key: "audit-events", href: "/w/ws1/audit-events", label: "操作の記録", icon: "history" });
+  });
+
+  it("audit_events_page_is_a_workspace_settings_page", () => {
+    expect(settingsPageOf("/w/ws1/audit-events")).toEqual({ kind: "audit-events", wid: "ws1" });
+    expect(settingsPageOf("/w/ws1/audit-events?days=7")).toEqual({ kind: "audit-events", wid: "ws1" });
+    expect(sidebarContext("/w/me/audit-events")).toEqual({ kind: "settings", page: { kind: "me", path: "/w/me/audit-events" } });
+    // サイトから開いた記憶は、同じワークスペースの操作の記録でも保つ(メンバーと同じ)
+    const site = { origin: { kind: "site", wid: "ws1", sid: "s1" }, backHref: "/w/ws1/sites/s1" } as const;
+    expect(resolveOrigin({ kind: "audit-events", wid: "ws1" }, site)).toBe(site);
+    expect(resolveOrigin({ kind: "audit-events", wid: "ws2" }, site)).toEqual({ origin: { kind: "workspace", wid: "ws2" }, backHref: "/w/ws2" });
   });
 
   it("next_remembered_aligns_origin_with_destination_and_keeps_it", () => {

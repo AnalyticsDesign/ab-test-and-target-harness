@@ -75,6 +75,14 @@ export default defineConfig(async () => {
         .filter((f) => f.endsWith(".ts") && !f.startsWith("generated"))
         .map((f) => [`${prefix}/${f}`, readFileSync(path.join(dir, f), "utf8")]),
     );
+  // B129 plan Task 5: 操作の記録のテストのファイル(test/audit-*.test.ts)の中身。audit-coverage.test.ts が、記録する経路の一覧
+  // (src/audit.ts の AUDITED_ROUTES)が名指すテストの名前が実際にあるかを見る(workerd の中からはファイルを読めないため)
+  const testDir = path.join(import.meta.dirname, "test");
+  const auditTests = Object.fromEntries(
+    readdirSync(testDir)
+      .filter((f) => /^audit-.*\.test\.ts$/.test(f))
+      .map((f) => [f, readFileSync(path.join(testDir, f), "utf8")]),
+  );
   const sources = {
     ...readSources("control", path.join(import.meta.dirname, "src")),
     ...readSources("core", path.join(import.meta.dirname, "../../packages/core/src")),
@@ -90,6 +98,7 @@ export default defineConfig(async () => {
             TEST_MIGRATIONS: migrations,
             TEST_RESULTS_MIGRATIONS: resultsMigrations,
             TEST_SOURCES: sources,
+            TEST_AUDIT_TESTS: auditTests,
             // B148: E2E だけの変数(AB_PROBE_ORIGIN_OVERRIDE・AB_E2E_PROBE_OVERRIDE_ENABLED)が本番の設定に無いことを domain-probe.test.ts が見る(生の文字列で渡す)。
             // release/ は公開リポジトリに無いので、overlay はあるときだけ渡す(公開リポジトリでは apps/control/wrangler.jsonc だけを見る)
             TEST_WRANGLER_CONFIGS: wranglerConfigsForProbeCheck(),

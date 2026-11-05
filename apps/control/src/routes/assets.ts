@@ -4,12 +4,13 @@ import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
 import { assetMaxMb } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
+import { auditActor, auditStatement } from "../audit";
 import { assetUploadBodyLimit } from "../body-limit";
 import { imageStore, IMAGE_DISABLED_HINT } from "../capabilities";
 import { ApiError, notFound, validationFailed } from "../errors";
 import { newId, SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
-import type { SiteRow } from "../db";
+import { toStatement, type SiteRow } from "../db";
 import { loadSite } from "../roles";
 
 export const assetRoutes = new Hono<AppEnv>();
@@ -176,15 +177,26 @@ assetRoutes.post(
     const publicUrl = `${store.publicBase}/${key}`;
     // R2 が先。put が落ちれば D1 に行が残らない(逆順だと参照先の無い行が残る)。
     // D1 が落ちたら R2 の孤児を消しにいく(ベストエフォート。失敗しても元のエラーを返す)
+    // B129(spec §3.1): 画像の行と記録を 1 つの batch に(往復は 1 回のまま。記録が書けなければ行も残らず、R2 の孤児を消す)。
+    // 画像はエクスペリエンスの変更履歴に出さない(experiment_id を持たない)ので、どのエクスペリエンスの画像かは detail に持つ
     await store.bucket.put(key, bytes, { httpMetadata: { contentType: file.type, cacheControl: "public, max-age=31536000, immutable" } });
     try {
-      await db
-        .insertInto("assets")
-        .values({
-          id, site_id: site.id, experiment_id: experimentId, r2_key: key, public_url: publicUrl,
-          mime: file.type, size: file.size, created_by: c.get("user").id, created_at: Date.now(),
-        })
-        .execute();
+      const now = Date.now();
+      await c.env.DB.batch([
+        toStatement(
+          c.env,
+          db.insertInto("assets").values({
+            id, site_id: site.id, experiment_id: experimentId, r2_key: key, public_url: publicUrl,
+            mime: file.type, size: file.size, created_by: c.get("user").id, created_at: now,
+          }),
+        ),
+        auditStatement(
+          c.env.DB,
+          auditActor(c),
+          { action: "asset.upload", workspaceId: site.workspace_id, siteId: site.id, target: { type: "asset", id, label: file.name }, detail: { bytes: file.size, type: file.type, experiment: experimentId } },
+          { now },
+        ),
+      ]);
     } catch (e) {
       await store.bucket.delete(key).catch(() => {});
       throw e;

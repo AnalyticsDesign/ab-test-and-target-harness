@@ -1210,7 +1210,7 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
         .run();
       sites.push(sid);
     }
-    // 1. 凍結中: 10 本のうち wtt-control に書く 9 本とも見送る(results-account-guard は wtt-control に書かないので動く)
+    // 1. 凍結中: 11 本のうち wtt-control に書く 10 本とも見送る(results-account-guard は wtt-control に書かないので動く。audit-retention は B129 Task 9)
     await freeze();
     const report = await runCron(cronEnv(), at("2026-11-20T23:00:00Z"), CRON_JOBS);
     expect(report).toEqual([
@@ -1224,6 +1224,7 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
       { job: "break-glass-sweep", outcome: "skipped_frozen" },
       { job: "config-cleanup", outcome: "skipped_frozen" },
       { job: "static-reconcile", outcome: "skipped_frozen" },
+      { job: "audit-retention", outcome: "skipped_frozen" },
     ]);
     await env.DB.prepare("delete from instance_settings where key = 'writeFreeze'").run();
     // 2. 実行中の凍結: デプロイ専用の Worker の応答を待つ間に凍結 → 配信の確認は書かずに止まる。後のジョブも最初の書き込みの前に止まる

@@ -23559,10 +23559,46 @@
                       "type": "null"
                     }
                   ]
+                },
+                "controlCapacity": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "level": {
+                          "enum": [
+                            "critical",
+                            "ok",
+                            "warning"
+                          ],
+                          "type": "string"
+                        },
+                        "measuredAt": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "sizeBytes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "level",
+                        "measuredAt",
+                        "sizeBytes"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
                 "asOf",
+                "controlCapacity",
                 "plan",
                 "resetAt",
                 "resources",
@@ -23689,11 +23725,47 @@
                     "members"
                   ],
                   "type": "string"
+                },
+                "controlCapacity": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "level": {
+                          "enum": [
+                            "critical",
+                            "ok",
+                            "warning"
+                          ],
+                          "type": "string"
+                        },
+                        "measuredAt": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "sizeBytes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "level",
+                        "measuredAt",
+                        "sizeBytes"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
                 "cloudflarePlan",
                 "configured",
+                "controlCapacity",
                 "showPaidReference",
                 "usageVisibility"
               ],
@@ -27097,6 +27169,1266 @@
               "required": [
                 "domains",
                 "name"
+              ],
+              "type": "object"
+            }
+          }
+        }
+      },
+      "GET /audit-events": {
+        "parameters": {
+          "query:category": {
+            "required": false,
+            "schema": {
+              "enum": [
+                "access",
+                "content"
+              ],
+              "type": "string"
+            }
+          },
+          "query:cursor": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "query:elevated": {
+            "required": false,
+            "schema": {
+              "enum": [
+                "false",
+                "true"
+              ],
+              "type": "string"
+            }
+          },
+          "query:limit": {
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "query:since": {
+            "required": false,
+            "schema": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "query:until": {
+            "required": false,
+            "schema": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "query:workspaceId": {
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "application/json": {
+              "properties": {
+                "events": {
+                  "items": {
+                    "properties": {
+                      "action": {
+                        "enum": [
+                          "api_key.create",
+                          "api_key.revoke",
+                          "api_key.revoke_member",
+                          "asset.upload",
+                          "audience.create",
+                          "audience.delete",
+                          "audience.update",
+                          "auth.password_login",
+                          "break_glass.reset_link",
+                          "break_glass.sweep",
+                          "experiment.adoption",
+                          "experiment.changes",
+                          "experiment.create",
+                          "experiment.delete",
+                          "experiment.duplicate",
+                          "experiment.evaluation_plan",
+                          "experiment.memo",
+                          "experiment.status",
+                          "experiment.update",
+                          "experiment.variant_memo",
+                          "experiment.variants",
+                          "goal.create",
+                          "goal.delete",
+                          "goal.update",
+                          "instance_admin.grant",
+                          "instance_admin.revoke",
+                          "invitation.accept",
+                          "invitation.cancel",
+                          "invitation.create",
+                          "member.remove",
+                          "member.reset_link",
+                          "member.role_change",
+                          "publish.publish",
+                          "publish.static_redeploy",
+                          "setup.complete",
+                          "site.create",
+                          "site.delete",
+                          "site.update",
+                          "static.rebuild",
+                          "usage.settings_change",
+                          "workspace.create",
+                          "workspace.delete"
+                        ],
+                        "type": "string"
+                      },
+                      "actor": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "email": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              },
+                              "name": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              },
+                              "userId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "email",
+                              "name",
+                              "userId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "apiKey": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "at": {
+                        "type": "number"
+                      },
+                      "category": {
+                        "enum": [
+                          "access",
+                          "content"
+                        ],
+                        "type": "string"
+                      },
+                      "detail": {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "experimentId": {
+                        "type": [
+                          "null",
+                          "string"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "siteId": {
+                        "type": [
+                          "null",
+                          "string"
+                        ]
+                      },
+                      "target": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "id": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              },
+                              "label": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              },
+                              "type": {
+                                "enum": [
+                                  "api_key",
+                                  "asset",
+                                  "audience",
+                                  "experiment",
+                                  "goal",
+                                  "instance",
+                                  "invitation",
+                                  "site",
+                                  "user",
+                                  "variant",
+                                  "workspace"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "label",
+                              "type"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "via": {
+                        "enum": [
+                          "api_key",
+                          "break_glass",
+                          "google",
+                          "password",
+                          "setup",
+                          "system",
+                          "unknown"
+                        ],
+                        "type": "string"
+                      },
+                      "workspaceId": {
+                        "type": [
+                          "null",
+                          "string"
+                        ]
+                      },
+                      "workspaceName": {
+                        "type": [
+                          "null",
+                          "string"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "actor",
+                      "apiKey",
+                      "at",
+                      "category",
+                      "detail",
+                      "experimentId",
+                      "id",
+                      "siteId",
+                      "target",
+                      "via",
+                      "workspaceId",
+                      "workspaceName"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "nextCursor": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                }
+              },
+              "required": [
+                "events",
+                "nextCursor"
+              ],
+              "type": "object"
+            }
+          },
+          "401": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "403": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "422": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          }
+        }
+      },
+      "GET /sites/{sid}/experiments/{eid}/history": {
+        "parameters": {
+          "path:eid": {
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "path:sid": {
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "query:cursor": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "query:limit": {
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "application/json": {
+              "properties": {
+                "createdBy": {
+                  "properties": {
+                    "email": {
+                      "type": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "name": {
+                      "type": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "userId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email",
+                    "name",
+                    "userId"
+                  ],
+                  "type": "object"
+                },
+                "events": {
+                  "items": {
+                    "properties": {
+                      "action": {
+                        "enum": [
+                          "api_key.create",
+                          "api_key.revoke",
+                          "api_key.revoke_member",
+                          "asset.upload",
+                          "audience.create",
+                          "audience.delete",
+                          "audience.update",
+                          "auth.password_login",
+                          "break_glass.reset_link",
+                          "break_glass.sweep",
+                          "experiment.adoption",
+                          "experiment.changes",
+                          "experiment.create",
+                          "experiment.delete",
+                          "experiment.duplicate",
+                          "experiment.evaluation_plan",
+                          "experiment.memo",
+                          "experiment.status",
+                          "experiment.update",
+                          "experiment.variant_memo",
+                          "experiment.variants",
+                          "goal.create",
+                          "goal.delete",
+                          "goal.update",
+                          "instance_admin.grant",
+                          "instance_admin.revoke",
+                          "invitation.accept",
+                          "invitation.cancel",
+                          "invitation.create",
+                          "member.remove",
+                          "member.reset_link",
+                          "member.role_change",
+                          "publish.publish",
+                          "publish.static_redeploy",
+                          "setup.complete",
+                          "site.create",
+                          "site.delete",
+                          "site.update",
+                          "static.rebuild",
+                          "usage.settings_change",
+                          "workspace.create",
+                          "workspace.delete"
+                        ],
+                        "type": "string"
+                      },
+                      "actor": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "email": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              },
+                              "name": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              },
+                              "userId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "email",
+                              "name",
+                              "userId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "apiKey": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "at": {
+                        "type": "number"
+                      },
+                      "category": {
+                        "enum": [
+                          "access",
+                          "content"
+                        ],
+                        "type": "string"
+                      },
+                      "detail": {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "experimentId": {
+                        "type": [
+                          "null",
+                          "string"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "siteId": {
+                        "type": [
+                          "null",
+                          "string"
+                        ]
+                      },
+                      "target": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "id": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              },
+                              "label": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              },
+                              "type": {
+                                "enum": [
+                                  "api_key",
+                                  "asset",
+                                  "audience",
+                                  "experiment",
+                                  "goal",
+                                  "instance",
+                                  "invitation",
+                                  "site",
+                                  "user",
+                                  "variant",
+                                  "workspace"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "label",
+                              "type"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "via": {
+                        "enum": [
+                          "api_key",
+                          "break_glass",
+                          "google",
+                          "password",
+                          "setup",
+                          "system",
+                          "unknown"
+                        ],
+                        "type": "string"
+                      },
+                      "workspaceId": {
+                        "type": [
+                          "null",
+                          "string"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "actor",
+                      "apiKey",
+                      "at",
+                      "category",
+                      "detail",
+                      "experimentId",
+                      "id",
+                      "siteId",
+                      "target",
+                      "via",
+                      "workspaceId"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "nextCursor": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "updatedBy": {
+                  "properties": {
+                    "email": {
+                      "type": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "name": {
+                      "type": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "userId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email",
+                    "name",
+                    "userId"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "createdBy",
+                "events",
+                "nextCursor",
+                "updatedBy"
+              ],
+              "type": "object"
+            }
+          },
+          "401": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "403": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "404": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "422": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          }
+        }
+      },
+      "GET /workspaces/{wid}/audit-events": {
+        "parameters": {
+          "path:wid": {
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "query:category": {
+            "required": false,
+            "schema": {
+              "enum": [
+                "access",
+                "content"
+              ],
+              "type": "string"
+            }
+          },
+          "query:cursor": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "query:elevated": {
+            "required": false,
+            "schema": {
+              "enum": [
+                "false",
+                "true"
+              ],
+              "type": "string"
+            }
+          },
+          "query:limit": {
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "query:since": {
+            "required": false,
+            "schema": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "query:until": {
+            "required": false,
+            "schema": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "application/json": {
+              "properties": {
+                "events": {
+                  "items": {
+                    "properties": {
+                      "action": {
+                        "enum": [
+                          "api_key.create",
+                          "api_key.revoke",
+                          "api_key.revoke_member",
+                          "asset.upload",
+                          "audience.create",
+                          "audience.delete",
+                          "audience.update",
+                          "auth.password_login",
+                          "break_glass.reset_link",
+                          "break_glass.sweep",
+                          "experiment.adoption",
+                          "experiment.changes",
+                          "experiment.create",
+                          "experiment.delete",
+                          "experiment.duplicate",
+                          "experiment.evaluation_plan",
+                          "experiment.memo",
+                          "experiment.status",
+                          "experiment.update",
+                          "experiment.variant_memo",
+                          "experiment.variants",
+                          "goal.create",
+                          "goal.delete",
+                          "goal.update",
+                          "instance_admin.grant",
+                          "instance_admin.revoke",
+                          "invitation.accept",
+                          "invitation.cancel",
+                          "invitation.create",
+                          "member.remove",
+                          "member.reset_link",
+                          "member.role_change",
+                          "publish.publish",
+                          "publish.static_redeploy",
+                          "setup.complete",
+                          "site.create",
+                          "site.delete",
+                          "site.update",
+                          "static.rebuild",
+                          "usage.settings_change",
+                          "workspace.create",
+                          "workspace.delete"
+                        ],
+                        "type": "string"
+                      },
+                      "actor": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "email": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              },
+                              "name": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              },
+                              "userId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "email",
+                              "name",
+                              "userId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "apiKey": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "at": {
+                        "type": "number"
+                      },
+                      "category": {
+                        "enum": [
+                          "access",
+                          "content"
+                        ],
+                        "type": "string"
+                      },
+                      "detail": {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "experimentId": {
+                        "type": [
+                          "null",
+                          "string"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "siteId": {
+                        "type": [
+                          "null",
+                          "string"
+                        ]
+                      },
+                      "target": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "id": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              },
+                              "label": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ]
+                              },
+                              "type": {
+                                "enum": [
+                                  "api_key",
+                                  "asset",
+                                  "audience",
+                                  "experiment",
+                                  "goal",
+                                  "instance",
+                                  "invitation",
+                                  "site",
+                                  "user",
+                                  "variant",
+                                  "workspace"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "label",
+                              "type"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "via": {
+                        "enum": [
+                          "api_key",
+                          "break_glass",
+                          "google",
+                          "password",
+                          "setup",
+                          "system",
+                          "unknown"
+                        ],
+                        "type": "string"
+                      },
+                      "workspaceId": {
+                        "type": [
+                          "null",
+                          "string"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "actor",
+                      "apiKey",
+                      "at",
+                      "category",
+                      "detail",
+                      "experimentId",
+                      "id",
+                      "siteId",
+                      "target",
+                      "via",
+                      "workspaceId"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "nextCursor": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                }
+              },
+              "required": [
+                "events",
+                "nextCursor"
+              ],
+              "type": "object"
+            }
+          },
+          "401": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "403": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "404": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "422": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
               ],
               "type": "object"
             }

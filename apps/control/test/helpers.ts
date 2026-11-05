@@ -27,6 +27,7 @@ import { createWorkspace, grantInstanceAdmin } from "../src/instance-admins";
 import { getDb, type ExperimentRow, type SiteRow } from "../src/db";
 import type { BudgetStatus, Env, LeaseResult, ReadReservation, ResultsBudgetRpc, ResultsHealthRpc, StopPeriod, StopReason } from "../src/env";
 import { ErrorEnvelopeSchema } from "../src/openapi";
+import { actorFromUser, auditStatement, type UserActor } from "../src/audit";
 
 export const SETUP_TOKEN = "test-setup-token"; // vitest.config.ts の miniflare.bindings と一致
 
@@ -260,6 +261,12 @@ export function uniqueEmail(prefix = "user"): string {
 }
 
 /**
+ * B129 Task 7: publishSite を直接呼ぶテストの操作した人(公開の記録の actor。published_by は userId)。
+ * 経路は google(setupOwner の OWNER は Google のログイン)。控えのメール・名前は持たない
+ */
+export const userActor = (userId: string): UserActor => ({ via: "google", userId, email: null, name: null, apiKeyId: null, apiKeyName: null });
+
+/**
  * テストの準備を軽くする直書き(2026-11-03、テストの見直し): user・Google の account・session を D1 に直接入れる。
  * 以前の setupOwner は POST /setup → Google ログインの偽の流れ(start → callback → 交換)の 4 往復で、
  * /setup の中の sign-up がパスワードの hash(scrypt)を計算し、ほぼ全テスト(639 回)がここから始まるので control のテストの
@@ -310,8 +317,16 @@ export async function setupOwner(): Promise<{ token: string; workspaceId: string
   await grantInstanceAdmin(testEnv, userId, null);
   const workspaceId = await createWorkspace(testEnv, "Workspace A");
   // 以後の POST /setup を閉じる(本物の /setup と同じ完了の行)。素の insert にして、行がもうある(前のテストの残り・
-  // 同じテストでの 2 回目の呼び出し・先に /setup を通した)ときは、上書きせずにここで落とす
-  await env.DB.prepare("insert into setup_lock (id, created_at, completed) values (1, ?1, 1)").bind(Date.now()).run();
+  // 同じテストでの 2 回目の呼び出し・先に /setup を通した)ときは、上書きせずにここで落とす。
+  // B129: 本物の /setup は完了の batch で setup.complete を 1 行記録するので、同じ batch でその行も入れる(行の形を本物に揃える)
+  await env.DB.batch([
+    env.DB.prepare("insert into setup_lock (id, created_at, completed) values (1, ?1, 1)").bind(Date.now()),
+    auditStatement(env.DB, actorFromUser({ id: userId, email, name: "Owner" }, "setup"), {
+      action: "setup.complete",
+      workspaceId,
+      target: { type: "workspace", id: workspaceId, label: "Workspace A" },
+    }),
+  ]);
   const token = await seedSession(userId);
   return { token, workspaceId, userId, email };
 }
@@ -361,9 +376,15 @@ export async function expectEnvelope(res: Response): Promise<Record<string, unkn
 /** 失敗注入された statement の目印(`batch` は run/first/all を呼ばないので、SQL ではなくこの印で見分ける) */
 const FAILING_STMT = Symbol.for("wtt.failingD1Statement");
 
-/** `insert into "<table>"` で始まる SQL だけを throw させる D1 ラッパ(setup の原子性テスト用 / Task 3 の site_hosts batch 用) */
-export function failingD1Insert(db: D1Database, table: string): D1Database {
-  const boom = async () => { throw new Error(`injected d1 insert failure for ${table}`); };
+/**
+ * `insert into "<table>"` で始まる SQL だけを throw させる D1 ラッパ(setup の原子性テスト用 / Task 3 の site_hosts batch 用)。
+ * message = 投げる例外の文言(既定は注入の印だけ。制約の違反を装うときは D1 の文言を渡す。例: site_hosts の主キーの違反)
+ */
+/** site_hosts の主キーの違反(同時の保存でホスト名の取り合いに負けた)の D1 の文言 */
+export const SITE_HOSTS_PK_VIOLATION = "D1_ERROR: UNIQUE constraint failed: site_hosts.host: SQLITE_CONSTRAINT (injected)";
+
+export function failingD1Insert(db: D1Database, table: string, message = `injected d1 insert failure for ${table}`): D1Database {
+  const boom = async () => { throw new Error(message); };
   // kysely-d1 は prepare().bind(...).all() の順に呼ぶ。bind() は新しい statement を返すため、
   // 包み直さないと proxy を抜けて本物の statement が実行されてしまう
   const failing = (stmt: D1PreparedStatement): D1PreparedStatement =>
@@ -465,6 +486,39 @@ export function beforeD1Batch(db: D1Database, hook: () => Promise<unknown>): D1D
 }
 
 /**
+ * B129(plan Task 3): `sqlPattern` に合う文を含む最初の batch の直前に、`hook` を 1 回だけ走らせる D1 ラッパ。
+ * 1 つの要求が batch を何回も使うとき(初期設定: 昇格・ワークスペースの作成・完了)に、狙った batch の前に別の要求の書き込みを差し込む。
+ * batch は文の中身を直接読むので、prepare の SQL を控えておき、包まない本物の文で見分ける(bind は新しい文を返すので控えを移す)。
+ * `ran()` = 差し込みが実際に走ったか
+ */
+export function beforeD1BatchMatching(db: D1Database, sqlPattern: RegExp, hook: () => Promise<unknown>): { db: D1Database; ran(): boolean } {
+  let ran = false;
+  const sqlOf = new WeakMap<object, string>();
+  const remember = (stmt: D1PreparedStatement, sqlText: string): D1PreparedStatement => {
+    sqlOf.set(stmt, sqlText);
+    const bind = stmt.bind.bind(stmt);
+    return Object.assign(stmt, { bind: (...args: unknown[]) => remember(bind(...args), sqlText) });
+  };
+  const wrapped = new Proxy(db, {
+    get(target, prop) {
+      const v = Reflect.get(target, prop);
+      if (prop === "prepare") return (sqlText: string) => remember(target.prepare(sqlText), sqlText);
+      if (prop === "batch") {
+        return async (stmts: D1PreparedStatement[]) => {
+          if (!ran && stmts.some((s) => sqlPattern.test(sqlOf.get(s) ?? ""))) {
+            ran = true;
+            await hook();
+          }
+          return target.batch(stmts);
+        };
+      }
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  }) as D1Database;
+  return { db: wrapped, ran: () => ran };
+}
+
+/**
  * B112: `sql` が `sqlPattern` に合う最初の文の実行(all / first / run / raw)の直前に、`hook` を 1 回だけ走らせる D1 ラッパ。
  * 判定の照会とその後の処理のあいだに別の要求(セッションの削除など)が割り込んだ状態を作る。
  * `bind` で包み直しても効く(`pausingD1Insert` と同じ包み方。kysely-d1 は prepare().bind().all() で流す)。
@@ -558,6 +612,62 @@ export function pausingD1Insert(db: D1Database, table: string, at: "before" | "a
     },
   }) as D1Database;
   return { db: wrapped, reached, release };
+}
+
+/**
+ * B129(plan Task 2): D1 の往復を数える D1 ラッパ。文 1 つの実行(all / first / run / raw)と、batch(1 回 = 1 往復)を別々に数え、
+ * 実行した SQL を順に控える(batch の中の文は `batchSql` に入れる)。往復の上限を数字で固定するテスト
+ * (`require_session_adds_no_d1_query`・B129 の各 Task の `*_round_trips_unchanged` など)が使う。
+ * getAuth は env.DB ごとに組み立てるので、envOverride の DB にこれを渡すと Better Auth の照会も数えられる。
+ * `reset()` で数を 0 に戻す(準備の往復を数えから外す)
+ */
+export type D1Counts = { queries: number; batches: number; sql: string[]; batchSql: string[][] };
+export function countingD1(db: D1Database): { db: D1Database; counts(): D1Counts; reset(): void } {
+  let state: D1Counts = { queries: 0, batches: 0, sql: [], batchSql: [] };
+  /** 包んだ文 → 本物の文(batch には本物を渡す。batch は文の中身を直接読むため) */
+  const real = new WeakMap<object, D1PreparedStatement>();
+  const sqlOf = new WeakMap<object, string>();
+  const counted = (stmt: D1PreparedStatement, sqlText: string): D1PreparedStatement => {
+    const wrapped = new Proxy(stmt, {
+      get(s, p) {
+        if (p === "run" || p === "first" || p === "all" || p === "raw") {
+          const f = Reflect.get(s, p) as (...a: unknown[]) => Promise<unknown>;
+          return (...args: unknown[]) => {
+            state.queries++;
+            state.sql.push(sqlText);
+            return f.apply(s, args);
+          };
+        }
+        if (p === "bind") return (...args: unknown[]) => counted(s.bind(...args), sqlText);
+        const x = Reflect.get(s, p);
+        return typeof x === "function" ? x.bind(s) : x;
+      },
+    });
+    real.set(wrapped, stmt);
+    sqlOf.set(wrapped, sqlText);
+    return wrapped;
+  };
+  const wrapped = new Proxy(db, {
+    get(target, prop) {
+      const v = Reflect.get(target, prop);
+      if (prop === "prepare") return (sqlText: string) => counted(target.prepare(sqlText), sqlText);
+      if (prop === "batch") {
+        return (stmts: D1PreparedStatement[]) => {
+          state.batches++;
+          state.batchSql.push(stmts.map((s) => sqlOf.get(s) ?? "?"));
+          return target.batch(stmts.map((s) => real.get(s) ?? s));
+        };
+      }
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  }) as D1Database;
+  return {
+    db: wrapped,
+    counts: () => ({ queries: state.queries, batches: state.batches, sql: [...state.sql], batchSql: state.batchSql.map((b) => [...b]) }),
+    reset: () => {
+      state = { queries: 0, batches: 0, sql: [], batchSql: [] };
+    },
+  };
 }
 
 /** createSite の既定のドメインの連番 */

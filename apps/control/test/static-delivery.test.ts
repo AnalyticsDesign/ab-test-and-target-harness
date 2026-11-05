@@ -6,7 +6,7 @@ import { getDb } from "../src/db";
 import type { Env } from "../src/env";
 import { publishSite, type PublishResult } from "../src/publish";
 import { bootstrapSettingsChanged, genOf, reconcileStatic, requestStaticDeploy } from "../src/static-delivery";
-import { call, fakeDeployer, inviteAndJoin, json, otherStaticInput, setupOwner, staticInputOf, statusOf, testEnv } from "./helpers";
+import { call, fakeDeployer, inviteAndJoin, json, otherStaticInput, setupOwner, staticInputOf, statusOf, testEnv, userActor } from "./helpers";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -308,7 +308,7 @@ describe("static delivery (決定 52)", () => {
     let t = Date.now();
     for (let i = 0; i < 6; i++) {
       t += 5 * 60_000 + 1;
-      expect(await publishSite(pendingEnv, s.db, await s.row(), s.userId, t)).toMatchObject({ ok: true, staticDeploy: "pending" });
+      expect(await publishSite(pendingEnv, s.db, await s.row(), userActor(s.userId), t)).toMatchObject({ ok: true, staticDeploy: "pending" });
     }
     expect(await env.CONFIG_KV.get(kvKeys.config(s.siteId, served))).not.toBeNull(); // 配信ファイルが配っている版の config は残る
   });
@@ -321,13 +321,13 @@ describe("static delivery (決定 52)", () => {
     let t = Date.now();
     // 次の版は pending のまま(デプロイ専用の Worker の alarm で後から成功し、配信ファイルはこの版を配っている想定。control は確かめていない)
     t += 1;
-    const next = await publishSite(pendingEnv, s.db, await s.row(), s.userId, t);
+    const next = await publishSite(pendingEnv, s.db, await s.row(), userActor(s.userId), t);
     expect(next).toMatchObject({ ok: true, staticDeploy: "pending" });
     const alarmVersion = (next as { version: number }).version;
     // GET なし(自己修復で確かめない)で、さらに 6 版を 5 分を越えて Publish する
     for (let i = 0; i < 6; i++) {
       t += 5 * 60_000 + 1;
-      expect(await publishSite(pendingEnv, s.db, await s.row(), s.userId, t)).toMatchObject({ ok: true, staticDeploy: "pending" });
+      expect(await publishSite(pendingEnv, s.db, await s.row(), userActor(s.userId), t)).toMatchObject({ ok: true, staticDeploy: "pending" });
     }
     expect((await s.row()).static_served_version).toBe(confirmed);
     // 確かめ済みの版以上は残す(配る版は前にしか進まない)ので、alarm で配られた版の config も残る
@@ -344,21 +344,21 @@ describe("static delivery (決定 52)", () => {
     // 最初の版を長く配る(配信ファイルの更新は pending のまま 5 版、5 分を越えて Publish する)
     for (let i = 0; i < 5; i++) {
       t += 5 * 60_000 + 1;
-      await publishSite(pendingEnv, s.db, await s.row(), s.userId, t);
+      await publishSite(pendingEnv, s.db, await s.row(), userActor(s.userId), t);
     }
     // 次の Publish で配信ファイルが新しい版に切り替わる
     t += 5 * 60_000 + 1;
-    expect(await publishSite(deployEnv, s.db, await s.row(), s.userId, t)).toMatchObject({ ok: true, staticDeploy: "deployed" });
+    expect(await publishSite(deployEnv, s.db, await s.row(), userActor(s.userId), t)).toMatchObject({ ok: true, staticDeploy: "deployed" });
     expect((await s.row()).static_prev_served_version).toBe(first);
     // settle は実時刻で static_served_at を書くので、テストの時刻 t に合わせる
     await s.db.updateTable("sites").set({ static_served_at: t }).where("id", "=", s.siteId).execute();
     // 切り替えの直後の掃除: 前に配っていた版は残る(ブラウザに残る前の bootstrap が decision でその版を求める)
     t += 1;
-    await publishSite(pendingEnv, s.db, await s.row(), s.userId, t);
+    await publishSite(pendingEnv, s.db, await s.row(), userActor(s.userId), t);
     expect(await env.CONFIG_KV.get(kvKeys.config(s.siteId, first))).not.toBeNull();
     // 切り替えから 5 分の後の掃除で消える
     t += 5 * 60_000 + 1;
-    await publishSite(pendingEnv, s.db, await s.row(), s.userId, t);
+    await publishSite(pendingEnv, s.db, await s.row(), userActor(s.userId), t);
     expect(await env.CONFIG_KV.get(kvKeys.config(s.siteId, first))).toBeNull();
   });
 
@@ -376,7 +376,7 @@ describe("static delivery (決定 52)", () => {
           return async (key: string, ...rest: unknown[]) => {
             if (!hook.fired && key === kvKeys.active(s.siteId)) {
               hook.fired = true;
-              hook.later = await publishSite(plainEnv, s.db, await s.row(), s.userId, Date.now()); // 後の Publish を最後まで走らせる
+              hook.later = await publishSite(plainEnv, s.db, await s.row(), userActor(s.userId), Date.now()); // 後の Publish を最後まで走らせる
             }
             return (t.get as (...a: unknown[]) => unknown).call(t, key, ...rest);
           };
@@ -385,7 +385,7 @@ describe("static delivery (決定 52)", () => {
         return typeof v === "function" ? v.bind(t) : v;
       },
     });
-    const earlier = await publishSite({ ...plainEnv, CONFIG_KV: hookedKv }, s.db, await s.row(), s.userId, Date.now());
+    const earlier = await publishSite({ ...plainEnv, CONFIG_KV: hookedKv }, s.db, await s.row(), userActor(s.userId), Date.now());
     const later = hook.later!;
     if (!earlier.ok || !later.ok) throw new Error("publish failed");
     expect(later.version).toBeGreaterThan(earlier.version);

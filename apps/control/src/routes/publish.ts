@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
-import type { ExperimentRow } from "../db";
+import { auditActor, auditStatement } from "../audit";
+import { toStatement, type ExperimentRow } from "../db";
 import { notFound, validationFailed } from "../errors";
 import { overlapWarnings } from "../experiment-order";
 import { SLUG_RE } from "../ids";
@@ -125,7 +126,7 @@ publishRoutes.post(
   requireSession,
   async (c) => {
     const { site } = await loadSite(c, c.req.param("sid"), "admin");
-    return c.json(publicPublishResult(await publishSite(c.env, c.get("db"), site, c.get("user").id)));
+    return c.json(publicPublishResult(await publishSite(c.env, c.get("db"), site, auditActor(c))));
   },
 );
 
@@ -144,8 +145,12 @@ publishRoutes.post(
   async (c) => {
     const { site } = await loadSite(c, c.req.param("sid"), "admin");
     const db = c.get("db");
-    // 7i plan K23: 途中で止まった削除を取りやめる(削除の印を消す)。この後に古い削除が D1 を消そうとしても、印が違うので消えない
-    await db.updateTable("sites").set({ static_removing: null }).where("id", "=", site.id).execute();
+    // 7i plan K23: 途中で止まった削除を取りやめる(削除の印を消す)。この後に古い削除が D1 を消そうとしても、印が違うので消えない。
+    // B129: 同じ batch に publish.static_redeploy の記録(UPDATE の後。UPDATE に条件が無いので無条件。1 文の execute を 2 文の batch にした)
+    await c.env.DB.batch([
+      toStatement(c.env, db.updateTable("sites").set({ static_removing: null }).where("id", "=", site.id)),
+      auditStatement(c.env.DB, auditActor(c), { action: "publish.static_redeploy", workspaceId: site.workspace_id, siteId: site.id, target: { type: "site", id: site.id, label: site.name }, detail: {} }),
+    ]);
     // 作り直しは前回と同じ中身でもデプロイさせる(配信専用の Worker の実物が記録とずれたときの直し)。
     // 削除の墓標に負けている・デプロイ専用の Worker の記録が D1 より先行している・同じ世代で中身が違う(D1 を戻した後など)なら、
     // epoch をその受け付け済みの世代 + 1 に進めて 1 回だけ出し直す(自動では戻さない。戻すのはこの操作だけ。plan K2、7o K7)
