@@ -54,14 +54,7 @@ function settingsOfRows(rows: ReadonlyArray<{ key: string; value: string }>): In
   for (const row of rows) {
     if (!(KEYS as readonly string[]).includes(row.key)) continue;
     const key = row.key as keyof InstanceSettings;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(row.value);
-    } catch {
-      continue; // 読めない値は既定値のまま
-    }
-    const r = SCHEMAS[key].safeParse(parsed);
-    if (r.success) (out as Record<string, unknown>)[key] = r.data;
+    (out as Record<string, unknown>)[key] = parseInstanceSetting(key, row.value);
   }
   return out;
 }
@@ -92,6 +85,22 @@ function controlDbSizeOf(value: string | undefined): ControlDbSize | null {
 export async function readInstanceSettingsWithControlDbSize(db: Db): Promise<{ settings: InstanceSettings; controlDbSize: ControlDbSize | null }> {
   const rows = await db.selectFrom("instance_settings").select(["key", "value"]).where("key", "in", [...KEYS, CONTROL_DB_SIZE_KEY]).execute();
   return { settings: settingsOfRows(rows), controlDbSize: controlDbSizeOf(rows.find((r) => r.key === CONTROL_DB_SIZE_KEY)?.value) };
+}
+
+/**
+ * 1 行の値(JSON)をキーの型に解く。行が無い(undefined)・JSON として読めない・知らない値は、そのキーの既定値。
+ * readInstanceSettings と、ほかの読み取りとまとめて読む呼び出し(B182: Cron の実行の最初の batch)が同じ規則で解くために使う
+ */
+export function parseInstanceSetting<K extends keyof InstanceSettings>(key: K, value: string | undefined): InstanceSettings[K] {
+  if (value === undefined) return INSTANCE_SETTING_DEFAULTS[key];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return INSTANCE_SETTING_DEFAULTS[key]; // 読めない値は既定値のまま
+  }
+  const r = SCHEMAS[key].safeParse(parsed);
+  return r.success ? (r.data as InstanceSettings[K]) : INSTANCE_SETTING_DEFAULTS[key];
 }
 
 /** Cloudflare のプラン(KV の Site の設定の記録に書く新しい訪問者の予算の既定が決まる。plan12 K10) */

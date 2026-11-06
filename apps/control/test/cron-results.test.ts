@@ -564,6 +564,39 @@ describe("results-capacity(K18)", () => {
     expect(next.calls.filter((c) => c.method === "stop").map((c) => c.args)).toEqual([["capacity", at("2026-12-02T23:00:00Z"), T23 + HOUR]]);
   });
 
+  test("capacity stop is set again after midnight while the batch keeps failing", { timeout: 30_000 }, async () => {
+    // B182 Task 1: 実行の最初の batch と cron_job_runs の読み取りが投げ続けても(1 つずつの読み取りに戻る回が続いても)、
+    // 凍結でなければ容量の確かめは動き、UTC 0 時を過ぎた最初の実行で容量の停止を立てる
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const owner = await setupOwner();
+    await recordingSite(owner);
+    const T23 = at("2026-12-01T23:00:00Z");
+    const failing = new Proxy(env.DB, {
+      get(t, p) {
+        if (p === "batch")
+          return async () => {
+            throw new Error("injected batch failure");
+          };
+        if (p === "prepare")
+          return (q: string) => {
+            if (q.includes('from "cron_job_runs"')) throw new Error("injected cron_job_runs read failure");
+            return t.prepare(q);
+          };
+        const v = Reflect.get(t, p);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    }) as D1Database;
+    const budget = fakeResultsBudget();
+    const e = cronEnv(budget, fakeResultsHealth(), { DB: failing, RESULTS_DB: sizedResultsDb(() => LIMIT * 0.96) });
+    const jobs = [resultsCapacityJob, resultsPurgeJob];
+    await runCron(e, T23 + 45 * MIN, jobs);
+    const stops = () => budget.calls.filter((c) => c.method === "stop").map((c) => c.args);
+    expect(stops()).toEqual([]); // 23 時台は削除を待つ(削除の記録を読めないので立てない)
+    await runCron(e, T23 + HOUR, jobs);
+    expect(stops()).toEqual([["capacity", at("2026-12-02T23:00:00Z"), T23 + HOUR]]);
+  });
+
   test("purge_runs_during_capacity_stop", async () => {
     // 容量の停止中 → 23 時台に停止を立てず期限の個票を消す → 測り直して 95% 未満なら停止しない / まだ 95% 以上なら立て直す
     const owner = await setupOwner();
@@ -1024,65 +1057,63 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
     }
   });
 
-  test("B93: プランは paidExtraShare を持つジョブが due のときだけ読み、読めなければ Free の配分で動く", async () => {
+  test("B93: Paid の配分はプランが paid で paidExtraShare を持つジョブが due の実行だけ。行が無い・読めない値・知らない値・読み取りの失敗は Free の配分", async () => {
     const used: Record<string, number> = {};
     const jobs = () => fakeJobs(used).map((j) => (j.name === "purge" ? { ...j, paidExtraShare: 100 } : j));
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const lastRun = () => JSON.parse(String(log.mock.calls.filter((c) => c[0] === "cron run").at(-1)![1])) as { queryLimit: number };
-    await env.DB.prepare("insert into instance_settings (key, value, updated_at, updated_by) values ('cloudflarePlan', '\"paid\"', 1, null)").run();
-    // daily は済んだ日の 23 時: purge が due → Paid の配分 116
-    await env.DB.prepare("insert into cron_job_runs (job, last_run_day, last_success_at) values ('daily', '2026-11-20', 0)").run();
     const t23 = tickSlot(at("2026-11-20T23:00:00Z"));
-    // プランの読み取り(readInstanceSettings の `"key" in (…)`。凍結の読み取りは `"key" = ?`)を数え、throwPlan なら投げる D1
-    let planReads = 0;
-    let throwPlan = false;
-    const isPlanRead = (q: string) => q.includes('from "instance_settings"') && q.includes('"key" in');
-    const spyDb = new Proxy(env.DB, {
+    await env.DB.prepare("insert into cron_job_runs (job, last_run_day, last_success_at) values ('daily', '2026-11-20', 0)").run();
+    /** k 日後の 23 時台(daily は済み・purge が due)に、プランの行を value にして実行する(null = 行を消す) */
+    const runDay = async (k: number, value: string | null, e: Env = testEnv) => {
+      clear(used);
+      await env.DB.prepare("delete from instance_settings where key = 'cloudflarePlan'").run();
+      if (value !== null) await env.DB.prepare("insert into instance_settings (key, value, updated_at, updated_by) values ('cloudflarePlan', ?, 1, null)").bind(value).run();
+      await env.DB.prepare("delete from cron_job_runs where job = 'purge'").run();
+      await env.DB.prepare("update cron_job_runs set last_run_day = ? where job = 'daily'").bind(new Date(t23 + k * DAY).toISOString().slice(0, 10)).run();
+      await runCron(e, t23 + k * DAY, jobs());
+    };
+    // (a) paid・purge が due → purge の配分 116・全体の上限 140
+    await runDay(0, '"paid"');
+    expect(used.purge).toBe(116);
+    expect(lastRun().queryLimit).toBe(140);
+    // paid でも purge が due でない実行は Free と同じ上限
+    clear(used);
+    await runCron(testEnv, tickSlot(at("2026-11-21T12:00:00Z")), jobs());
+    expect(used.purge).toBeUndefined();
+    expect(lastRun().queryLimit).toBe(40);
+    // (b) 設定の行が無い (c) 値が JSON として読めない (d) 知らない値 → 既定(Free)
+    for (const [k, value] of [
+      [1, null],
+      [2, "not json"],
+      [3, '"enterprise"'],
+    ] as const) {
+      await runDay(k, value);
+      expect(used.purge).toBe(16);
+      expect(lastRun().queryLimit).toBe(40);
+    }
+    // (e) batch が投げ、1 つずつの読み取りのプランの文(readInstanceSettings の `"key" in (…)`)も投げる → Free の配分で動き、ログに残す
+    const failing = new Proxy(env.DB, {
       get(t, p) {
+        if (p === "batch")
+          return async () => {
+            throw new Error("injected batch failure");
+          };
         if (p === "prepare")
           return (q: string) => {
-            if (isPlanRead(q)) {
-              planReads++;
-              if (throwPlan) throw new Error("injected plan read failure");
-            }
+            if (q.includes('from "instance_settings"') && q.includes('"key" in')) throw new Error("injected plan read failure");
             return t.prepare(q);
           };
         const v = Reflect.get(t, p);
         return typeof v === "function" ? v.bind(t) : v;
       },
     }) as D1Database;
-    const spyEnv = { ...testEnv, DB: spyDb };
-    await runCron(spyEnv, t23, jobs());
-    expect(planReads).toBe(1);
-    expect(used.purge).toBe(116);
-    expect(lastRun().queryLimit).toBe(140);
-    // purge が due でない実行は、プランを読まない(Free と同じ配分)
-    planReads = 0;
-    clear(used);
-    await runCron(spyEnv, tickSlot(at("2026-11-21T12:00:00Z")), jobs());
-    expect(planReads).toBe(0);
-    expect(used.purge).toBeUndefined();
-    expect(lastRun().queryLimit).toBe(40);
-    // プランの読み取りが失敗した → Free の配分で動き、ログに残す
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    throwPlan = true;
-    clear(used);
-    await env.DB.prepare("delete from cron_job_runs where job = 'purge'").run();
-    await env.DB.prepare("update cron_job_runs set last_run_day = '2026-11-21' where job = 'daily'").run();
-    await runCron(spyEnv, t23 + DAY, jobs());
-    expect(planReads).toBe(1);
+    err.mockClear();
+    await runDay(4, '"paid"', { ...testEnv, DB: failing });
     expect(used.purge).toBe(16);
     expect(lastRun().queryLimit).toBe(40);
     expect(err.mock.calls.some((c) => String(c[0]).includes("reading the Cloudflare plan failed"))).toBe(true);
-    // 壊れた値は readInstanceSettings が既定(Free)に倒す(例外にはならない)
-    throwPlan = false;
-    await env.DB.prepare("update instance_settings set value = 'not json' where key = 'cloudflarePlan'").run();
-    clear(used);
-    await env.DB.prepare("delete from cron_job_runs where job = 'purge'").run();
-    await env.DB.prepare("update cron_job_runs set last_run_day = '2026-11-22' where job = 'daily'").run();
-    await runCron(spyEnv, t23 + 2 * DAY, jobs());
-    expect(used.purge).toBe(16);
-    expect(lastRun().queryLimit).toBe(40);
   });
 
   test("前のジョブが見込みを超えて実行の時点の残りが最低に届かないジョブは動かさず、次の動ける枠で進む", async () => {

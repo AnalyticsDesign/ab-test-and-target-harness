@@ -9,7 +9,7 @@ import type { Env } from "../src/env";
 import {
   BREAK_GLASS,
   BREAK_GLASS_PASSWORD,
-  beforeD1Batch,
+  beforeD1BatchMatching,
   call,
   countingD1,
   failingD1Insert,
@@ -516,9 +516,12 @@ describe("break_glass.sweep (batch)", () => {
     expect(await sweep()).toEqual([{ job: "break-glass-sweep", outcome: "skipped_frozen" }]);
     expect(await count(`select count(*) as n from account where "providerId" = 'credential' and "userId" = ?1`, pw.userId)).toBe(1);
     expect(await events("break_glass.sweep")).toEqual([]);
-    // 凍結の確かめの後・batch の前に凍結が入っても、記録も削除も無い(guard に NOT_FROZEN_SQL)
+    // 凍結の確かめの後・batch の前に凍結が入っても、記録も削除も無い(guard に NOT_FROZEN_SQL)。
+    // 凍結を入れるのは掃除の batch(先頭の削除の文で見分ける)の直前。B182 で runner の実行の最初の読み取りも batch になったので、最初の batch では入れない
     await env.DB.prepare("delete from instance_settings where key = 'writeFreeze'").run();
-    expect(await sweep({ ...testEnv, DB: beforeD1Batch(env.DB, freeze) })).toEqual([{ job: "break-glass-sweep", outcome: "ran" }]);
+    const hooked = beforeD1BatchMatching(env.DB, /^delete from session /i, freeze);
+    expect(await sweep({ ...testEnv, DB: hooked.db })).toEqual([{ job: "break-glass-sweep", outcome: "ran" }]);
+    expect(hooked.ran()).toBe(true);
     expect(await count(`select count(*) as n from account where "providerId" = 'credential' and "userId" = ?1`, pw.userId)).toBe(1);
     expect(await events("break_glass.sweep")).toEqual([]);
   }, TIMEOUT);

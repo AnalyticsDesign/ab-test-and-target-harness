@@ -486,6 +486,41 @@ describe("sharing migration (B139)", () => {
     expect(await env.CONFIG_KV.get(kvKeys.installMarker)).toBe(marker); // 一度きり(書き換えない)
   });
 
+  // B182 Task 2: 終わった移行は時の最初の枠だけ確かめる(15 分の枠の番号が 4 の倍数)。時刻は固定する(枠は実行のたびに変わるため)
+  const FIRST = Date.UTC(2026, 10, 5, 10, 0, 39);
+  const LATER = Date.UTC(2026, 10, 5, 10, 15, 39);
+
+  it("repairs the kv install marker only in the first slot of the hour", async () => {
+    await setupOwner();
+    await runCron(testEnv, FIRST, []); // 導入の印を D1 と KV に作る
+    const marker = await env.CONFIG_KV.get(kvKeys.installMarker);
+    expect(marker).not.toBeNull();
+    await env.CONFIG_KV.delete(kvKeys.installMarker); // KV だけ消えた(D1 には印がある)
+    await runCron(testEnv, LATER, []);
+    expect(await env.CONFIG_KV.get(kvKeys.installMarker)).toBeNull(); // 時の最初の枠でない回は直さない
+    await runCron(testEnv, FIRST, []);
+    expect(await env.CONFIG_KV.get(kvKeys.installMarker)).toBe(marker);
+  });
+
+  it("creates the install marker on the first run in any slot", async () => {
+    await setupOwner();
+    expect(await env.CONFIG_KV.get(kvKeys.installMarker)).toBeNull();
+    await runCron(testEnv, LATER, []); // D1 に印が無い回は、どの枠でも作る
+    const kvMarker = await env.CONFIG_KV.get(kvKeys.installMarker);
+    expect(kvMarker).toMatch(/^[0-9a-f-]{36}$/);
+    const d1Marker = await env.DB.prepare("select value from instance_settings where key = 'install_marker'").first<{ value: string }>();
+    expect(JSON.parse(d1Marker!.value)).toBe(kvMarker);
+  });
+
+  it("keeps migrating pending sites in every slot", async () => {
+    const { token, workspaceId } = await setupOwner();
+    await runCron(testEnv, FIRST, []); // 導入の印をそろえる
+    const c = await createSite(token, workspaceId, { id: "site_c", domain: "www.c-site.com" });
+    await asPending(token, c.id);
+    await runCron(testEnv, LATER, []);
+    expect(await siteRow(c.id)).toMatchObject({ share_subdomains: 1, share_migration_pending: 0 });
+  });
+
   it("sharing_migration_resumes_within_request_budget", async () => {
     const { token, workspaceId } = await setupOwner();
     const ids = await pendingSites(token, workspaceId, MIGRATION_PAGE + 1);

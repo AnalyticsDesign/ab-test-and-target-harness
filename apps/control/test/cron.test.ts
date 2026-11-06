@@ -1,7 +1,7 @@
 // apps/control/test/cron.test.ts
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CronFrozen, runCron, type CronContext, type CronJob } from "../src/cron/runner";
+import { countingD1, CronFrozen, runCron, type CronContext, type CronJob } from "../src/cron/runner";
 import { CRON_JOBS } from "../src/cron/jobs";
 import { resultsAccountGuard } from "../src/cron/account-guard";
 import { resultsCapacityJob, resultsCollectUntilJob, resultsDailyJob, resultsDeliveryJob, resultsPurgeJob } from "../src/cron/results-jobs";
@@ -174,6 +174,192 @@ describe("cron runner (D9 ② K5・K6)", () => {
     expect(CRON_JOBS.at(-1)).toBe(assetHousekeepingJob);
     expect(assetHousekeepingJob).toMatchObject({ name: "asset-housekeeping", cadence: { every: "tick" }, writesControl: true });
     expect(assetHousekeepingJob.queryShare).toBeUndefined();
+  });
+
+  // B182 Task 1: 実行の最初の読み取り(凍結・日次の記録・プラン・移行待ち・導入の印)を D1 の batch 1 回にまとめる。
+  // batch が失敗した回だけ、今までと同じ 1 つずつの読み取りに戻る(読み取りの失敗の扱いは前と同じ)
+  describe("run state in one batch (B182)", () => {
+    const NOW_1015 = Date.UTC(2026, 10, 5, 10, 15, 39);
+    const TODAY = "2026-11-05";
+    /** env.DB の呼び出し(prepare した文の run / all / first / raw と batch)と KV の get / put を数える env */
+    function countingEnv(): { e: Env; d1: () => number; kv: { get: number; put: number } } {
+      let d1 = 0;
+      const kv = { get: 0, put: 0 };
+      const realKv = testEnv.CONFIG_KV;
+      const kvProxy = new Proxy(realKv, {
+        get(t, p) {
+          if (p === "get" || p === "put") {
+            const f = Reflect.get(t, p) as (...a: unknown[]) => unknown;
+            return (...a: unknown[]) => {
+              kv[p]++;
+              return f.apply(t, a);
+            };
+          }
+          const v = Reflect.get(t, p);
+          return typeof v === "function" ? v.bind(t) : v;
+        },
+      }) as KVNamespace;
+      return { e: { ...testEnv, DB: countingD1(env.DB, (n) => (d1 += n)), CONFIG_KV: kvProxy }, d1: () => d1, kv };
+    }
+    /** batch だけが投げる(failSql に合う文は prepare で投げる)D1。呼び出しの数も数える */
+    function failingBatchEnv(failSql?: RegExp): { e: Env; d1: () => number } {
+      let d1 = 0;
+      const base = countingD1(env.DB, (n) => (d1 += n));
+      const db = new Proxy(base, {
+        get(t, p) {
+          if (p === "batch")
+            return async () => {
+              d1++;
+              throw new Error("injected batch failure");
+            };
+          if (p === "prepare")
+            return (q: string) => {
+              if (failSql?.test(q)) throw new Error(`injected read failure: ${q}`);
+              return t.prepare(q);
+            };
+          const v = Reflect.get(t, p);
+          return typeof v === "function" ? v.bind(t) : v;
+        },
+      }) as D1Database;
+      return { e: { ...testEnv, DB: db }, d1: () => d1 };
+    }
+    const recordToday = (...jobs: string[]) =>
+      env.DB.batch(jobs.map((j) => env.DB.prepare("insert into cron_job_runs (job, last_run_day, last_success_at) values (?, ?, 0)").bind(j, TODAY)));
+    const daily = (name: string) => fakeJob(name, { cadence: { daily: { afterUtcHour: 0 } } });
+
+    it("reads the run state with one d1 call", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      // 導入の印を D1 と KV にそろえる(移行の終わりに作る)。移行待ちのサイトは無い
+      await runCron(testEnv, NOW_1015, []);
+      const c = countingEnv();
+      await runCron(c.e, NOW_1015, []);
+      // 時の最初の枠でない回は、batch の 1 回だけ(終わった共有の移行は動かさない)
+      expect(c.d1()).toBe(1);
+      expect(c.kv).toEqual({ get: 0, put: 0 });
+      // 日次のジョブ(今日の記録あり)を 3 本足しても、最初の読み取りは 1 のまま
+      await recordToday("d1", "d2", "d3");
+      const c2 = countingEnv();
+      expect((await runCron(c2.e, NOW_1015, [daily("d1"), daily("d2"), daily("d3")])).map((r) => r.outcome)).toEqual(["not_due", "not_due", "not_due"]);
+      expect(c2.d1()).toBe(1);
+    });
+
+    it("daily jobs are judged from the batch", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      await runCron(testEnv, NOW_1015, []);
+      await recordToday("done");
+      const c = countingEnv();
+      expect(await runCron(c.e, NOW_1015, [daily("fresh"), daily("done"), fakeJob("tick")])).toEqual([
+        { job: "fresh", outcome: "ran" },
+        { job: "done", outcome: "not_due" },
+        { job: "tick", outcome: "ran" },
+      ]);
+      // 最初の batch 1 + 成功した日次のジョブの凍結の確かめ直し 1・成功の記録 1(共有の移行は動かない回)
+      expect(c.d1()).toBe(3);
+      // 日次のジョブが 4 本(どれも今日の記録あり)でも、最初の読み取りは 1(日次の本数に依らない)
+      await recordToday("a", "b", "c", "d");
+      const c2 = countingEnv();
+      await runCron(c2.e, NOW_1015, [daily("a"), daily("b"), daily("c"), daily("d")]);
+      expect(c2.d1()).toBe(1);
+    });
+
+    // B182 Task 2: 終わった共有の移行は、時の最初の枠(15 分の枠の番号が 4 の倍数)だけ確かめる。
+    // 移行待ちのサイトがあるか、導入の印が D1 に無い回は、どの枠でも動かす。凍結中は動かさない
+    const FIRST = Date.UTC(2026, 10, 5, 10, 0, 39);
+    const LATER = Date.UTC(2026, 10, 5, 10, 15, 39);
+
+    it("skips the finished sharing migration outside the first slot of the hour", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      // 導入の印を D1 と KV にそろえる。移行待ちのサイトは無い
+      await runCron(testEnv, FIRST, []);
+      const later = countingEnv();
+      await runCron(later.e, LATER, []);
+      expect(later.d1()).toBe(1);
+      expect(later.kv).toEqual({ get: 0, put: 0 });
+      // 時の最初の枠: batch 1 + 移行待ちの読み取り 1 + readProbeSettings 1
+      const first = countingEnv();
+      await runCron(first.e, FIRST, []);
+      expect(first.d1()).toBe(3);
+      expect(first.kv).toEqual({ get: 1, put: 0 });
+    });
+
+    it("does not run the migration while frozen even in the first slot", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      const { token, workspaceId } = await setupOwner();
+      const site = await createSite(token, workspaceId, { id: "site_p", domain: "www.p-site.com" });
+      await env.DB.prepare("update sites set share_migration_pending = 1 where id = ?").bind(site.id).run();
+      await freeze();
+      const c = countingEnv();
+      await runCron(c.e, FIRST, []);
+      expect(c.kv).toEqual({ get: 0, put: 0 });
+      expect(c.d1()).toBe(1);
+      expect((await siteRow(site.id)).share_migration_pending).toBe(1);
+    });
+
+    it("runs the sharing migration in the fallback", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      await runCron(testEnv, FIRST, []);
+      const kv = { get: 0 };
+      const realGet = testEnv.CONFIG_KV.get.bind(testEnv.CONFIG_KV);
+      const f = failingBatchEnv();
+      const e = {
+        ...f.e,
+        CONFIG_KV: new Proxy(testEnv.CONFIG_KV, {
+          get(t, p) {
+            if (p === "get") return (...a: unknown[]) => (kv.get++, (realGet as (...x: unknown[]) => unknown)(...a));
+            const v = Reflect.get(t, p);
+            return typeof v === "function" ? v.bind(t) : v;
+          },
+        }) as KVNamespace,
+      };
+      // batch が読めなかった回は、移行待ちの有無が分からないので、時の最初の枠でなくても今までどおり動かす
+      await runCron(e, LATER, []);
+      expect(kv.get).toBe(1);
+    });
+
+    it("falls back to separate reads when the batch fails", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      await runCron(testEnv, NOW_1015, []);
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const f = failingBatchEnv();
+      expect(await runCron(f.e, NOW_1015, [daily("fresh"), fakeJob("tick", { writesControl: true })])).toEqual([
+        { job: "fresh", outcome: "ran" },
+        { job: "tick", outcome: "ran" },
+      ]);
+      expect(error.mock.calls.some((c) => String(c[0]).includes("falling back to separate reads"))).toBe(true);
+      // 失敗した batch 1 + 凍結 1 + 日次の判定 1 + 共有の移行 2 + 日次の確かめ直し 1・成功の記録 1
+      expect(f.d1()).toBe(7);
+    });
+
+    it("a failing daily record read fails only that daily job in the fallback", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const f = failingBatchEnv(/from "cron_job_runs"/);
+      expect(await runCron(f.e, NOW_1015, [daily("fresh"), fakeJob("tick", { writesControl: true })])).toEqual([
+        { job: "fresh", outcome: "failed" },
+        { job: "tick", outcome: "ran" },
+      ]);
+    });
+
+    it("an unreadable freeze read in the fallback is treated as frozen", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const f = failingBatchEnv(/from "instance_settings" where "key" = \?/);
+      expect(await runCron(f.e, NOW_1015, [fakeJob("writes", { writesControl: true }), fakeJob("guard", { writesControl: false })])).toEqual([
+        { job: "writes", outcome: "skipped_frozen" },
+        { job: "guard", outcome: "ran" },
+      ]);
+    });
+
+    it("an unreadable freeze value is still frozen", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      await env.DB.prepare("insert into instance_settings (key, value, updated_at, updated_by) values ('writeFreeze', 'not json', 1, null)").run();
+      expect(await runCron(testEnv, NOW_1015, [fakeJob("writes", { writesControl: true }), fakeJob("guard", { writesControl: false })])).toEqual([
+        { job: "writes", outcome: "skipped_frozen" },
+        { job: "guard", outcome: "ran" },
+      ]);
+    });
   });
 
   it("registers the account guard in CRON_JOBS", () => {

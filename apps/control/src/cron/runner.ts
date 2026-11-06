@@ -5,6 +5,7 @@ import type { Env } from "../env";
 import { readCloudflarePlan, type CloudflarePlan } from "../instance-settings";
 import { migrateSharing } from "../sharing-conflict";
 import { isWriteFrozen } from "../write-freeze";
+import { readCronRunState, type CronRunState } from "./run-state";
 
 /**
  * D9 ②(plan ② の K5・K6、設計書 §9.4): control の Cron の実行の枠。Cron Trigger は 1 本(15 分ごと。wrangler.jsonc の triggers)だけで、
@@ -18,6 +19,8 @@ import { isWriteFrozen } from "../write-freeze";
  * - `daily` は UTC のその時以降の最初の実行で 1 日 1 回。成功したら cron_job_runs に記録し、失敗・凍結で止めた日は次の実行で取り直す
  * - D9 ③(plan ③ の K17): run が `{ more: true }` を返したら成功を記録せず(報告は continued)、同じ日の次の実行で続ける。
  *   1 回の実行の D1 のクエリの数は QUERY_LIMIT を配分(queryShare)を持つジョブで分け合う(ctx.queries)
+ * - B182(推す 1): 実行の最初の読み取り(凍結・daily の記録・プラン・共有の移行待ち・導入の印)は D1 の batch 1 回(run-state.ts)。
+ *   batch が失敗した回だけ、前と同じ 1 つずつの読み取り(凍結 → daily の記録 → プラン)に戻る。読み取りの失敗の扱いはどちらも同じ
  */
 
 /** 凍結中に wtt-control へ書こうとした(`assertNotFrozen` が投げる)。そのジョブはそこで止め、残りは次の回 */
@@ -36,7 +39,7 @@ export class CronFrozen extends Error {
  * - use(n) = 次の n 件を出してよいか(足りなければ false)。引くのは実際の呼び出しの数なので、use では引かない。
  *   ジョブは 1 件の処理の前に、その処理の見込みの件数で use を呼び、false なら `{ more: true }` を返して次の実行に続ける
  *   (1 件の処理は途中で止めないので、見込みを超えた分はそのジョブの残りを減らす)
- * - runner 自身(凍結・daily の記録・Paid の実行かの読み取り)と、配分を持たないジョブ(results-account-guard)の分は数えない(上限 1,000 との差に入る)
+ * - runner 自身(実行の最初の batch、戻る回の凍結・daily の記録・Paid の実行かの読み取り、daily の成功の記録)と、配分を持たないジョブ(results-account-guard)の分は数えない(上限 1,000 との差に入る)
  */
 export type QueryBudget = { left(): number; use(n: number): boolean };
 
@@ -136,7 +139,14 @@ function assertValidJobs(jobs: readonly CronJob[]): void {
   }
 }
 
-/** daily のジョブが今日まだ成功しておらず、UTC の時が afterUtcHour 以上か */
+/** daily のジョブが今日まだ成功しておらず、UTC の時が afterUtcHour 以上か。lastRunDay = 実行の最初の batch で読んだ記録(B182) */
+export function isDueFrom(job: CronJob, now: number, lastRunDay: ReadonlyMap<string, string>): boolean {
+  if (!("daily" in job.cadence)) return true;
+  if (new Date(now).getUTCHours() < job.cadence.daily.afterUtcHour) return false;
+  return lastRunDay.get(job.name) !== utcDay(now);
+}
+
+/** isDueFrom と同じ判定を、そのジョブの記録を D1 から 1 つ読んで行う(B182: batch が失敗した回の戻る読み取り) */
 async function isDue(db: Db, job: CronJob, now: number): Promise<boolean> {
   if (!("daily" in job.cadence)) return true;
   if (new Date(now).getUTCHours() < job.cadence.daily.afterUtcHour) return false;
@@ -226,12 +236,15 @@ export function allotQueries(jobs: readonly CronJob[], due: ReadonlySet<string>,
   return out;
 }
 
+/** B93: Paid の配分を足しうる実行か(paidExtraShare を持つジョブが due)。そうでなければプランに依らず Free の配分 */
+const needsPlan = (jobs: readonly CronJob[], due: ReadonlySet<string>): boolean => jobs.some((j) => j.paidExtraShare && j.queryShare !== undefined && due.has(j.name));
+
 /**
- * Paid の実行かを読む(B93)。読むのは、paidExtraShare を持つジョブが due のときだけ(ほかの実行では D1 を読まない)。
+ * Paid の実行かを読む(B93。B182 からは batch が失敗した回の戻る読み取りだけ)。読むのは、paidExtraShare を持つジョブが due のときだけ。
  * 読めなければ Free とみなす(足さない側に倒す)
  */
 async function planForRun(db: Db, jobs: readonly CronJob[], due: ReadonlySet<string>): Promise<CloudflarePlan> {
-  if (!jobs.some((j) => j.paidExtraShare && j.queryShare !== undefined && due.has(j.name))) return "free";
+  if (!needsPlan(jobs, due)) return "free";
   try {
     return await readCloudflarePlan(db);
   } catch (e) {
@@ -240,24 +253,31 @@ async function planForRun(db: Db, jobs: readonly CronJob[], due: ReadonlySet<str
   }
 }
 
-export async function runCron(env: Env, scheduledTime: number, jobs: readonly CronJob[]): Promise<CronRunReport> {
-  assertValidJobs(jobs);
-  const db = getDb(env);
-  const now = scheduledTime;
-  // 凍結は最初に 1 回だけ読む(D1 が読めないときも凍結中 = isWriteFrozen の決まり)。書く直前の確かめは assertNotFrozen が読み直す
-  const frozenAtStart = await isWriteFrozen(db);
-  // B139: 共有の自動の移行(一度きり。完了の後も毎回、移行待ちの SELECT と導入の印の SELECT で D1 2 回・KV の get 1 回、KV が D1 と違えば put 1 回)を毎回の最初に進める。wtt-control に書くので凍結中は見送る。
-  // 配分の外(runner の分)で動かす。1 回に 25 サイトまでで、D1 の呼び出しは多くて 60 件ほど(上限 1,000 との差に入る)。
-  // 失敗はログに残し、ジョブは止めない(次の実行で続きから)
-  if (!frozenAtStart) {
-    try {
-      await migrateSharing(env, env.DB, Math.floor(now / 1000));
-    } catch (e) {
-      console.error("cron: sharing migration failed", e);
-    }
-  }
-  // 今回動くジョブ(凍結で見送るものを除く)と、daily の due を先に決める(配分を決めるため。読み取りの数は前と同じ)
-  const runnable = jobs.filter((j) => !(j.writesControl && frozenAtStart));
+/** 実行の最初に決める 4 つ(B182: batch で読めた回も、戻った回も、この形にしてから後ろの配分・ジョブの実行に渡す) */
+type RunStart = { frozen: boolean; due: Map<string, boolean | Error>; plan: CloudflarePlan; runSharing: boolean };
+
+/**
+ * B182: 共有の自動の移行(終わった後は、導入の印を確かめるだけ)をこの回に動かすか。batch が読めた回だけで使う。
+ * 凍結中は動かさない。移行待ちのサイトがある回と、導入の印が D1 に無い回は、どの枠でも動かす。
+ * それ以外(終わっている回)は、15 分の枠 4 つに 1 つ(時の最初の枠)だけ確かめる。
+ * KV の印のずれの直しは 1 時間に 1 回で足りる(サイトの保存でもその場で直る)
+ */
+export function shouldRunSharingMigration(state: CronRunState, now: number): boolean {
+  return !state.frozen && (state.sharingPending || !state.installMarkerInD1 || Math.floor(now / SLOT_MS) % 4 === 0);
+}
+
+/** batch で読めた回: D1 を読まずに決める */
+function startFromState(state: CronRunState, jobs: readonly CronJob[], now: number): RunStart {
+  const runnable = jobs.filter((j) => !(j.writesControl && state.frozen));
+  const due = new Map<string, boolean | Error>(runnable.map((j) => [j.name, isDueFrom(j, now, state.lastRunDay)]));
+  const dueNames = new Set([...due].filter(([, d]) => d === true).map(([n]) => n));
+  return { frozen: state.frozen, due, plan: needsPlan(runnable, dueNames) ? state.plan : "free", runSharing: shouldRunSharingMigration(state, now) };
+}
+
+/** batch が失敗した回: 前と同じ 1 つずつの読み取り(凍結は D1 が読めなければ凍結中・daily の記録の失敗はそのジョブの Error・プランは読めなければ Free) */
+async function startFromSeparateReads(db: Db, jobs: readonly CronJob[], now: number): Promise<RunStart> {
+  const frozen = await isWriteFrozen(db);
+  const runnable = jobs.filter((j) => !(j.writesControl && frozen));
   const due = new Map<string, boolean | Error>();
   for (const job of runnable) {
     try {
@@ -267,7 +287,34 @@ export async function runCron(env: Env, scheduledTime: number, jobs: readonly Cr
     }
   }
   const dueNames = new Set([...due].filter(([, d]) => d === true).map(([n]) => n));
-  const plan = await planForRun(db, runnable, dueNames);
+  // 移行待ちの有無を読めていないので、共有の移行は前と同じく凍結でなければ動かす
+  return { frozen, due, plan: await planForRun(db, runnable, dueNames), runSharing: !frozen };
+}
+
+export async function runCron(env: Env, scheduledTime: number, jobs: readonly CronJob[]): Promise<CronRunReport> {
+  assertValidJobs(jobs);
+  const db = getDb(env);
+  const now = scheduledTime;
+  // B182: 凍結・daily の記録・プランを最初に batch 1 回で読む(書く直前の確かめは assertNotFrozen が読み直す)。
+  // batch が失敗した回だけ、前と同じ 1 つずつの読み取りに戻る
+  const state = await readCronRunState(env.DB, jobs.filter((j) => "daily" in j.cadence).map((j) => j.name));
+  const { frozen: frozenAtStart, due, plan, runSharing } = state ? startFromState(state, jobs, now) : await startFromSeparateReads(db, jobs, now);
+  // B139: 共有の自動の移行(一度きり)を実行の最初に進める。wtt-control に書くので凍結中は見送る。
+  // B182: 動かすかは shouldRunSharingMigration が決める(batch が読めた回)。移行待ちのサイトがある回と、導入の印が D1 に無い回はどの枠でも、
+  // 終わっている回は時の最初の枠だけ(動けば移行待ちの SELECT と導入の印の SELECT で D1 2 回・KV の get 1 回、KV が D1 と違えば put 1 回)。
+  // batch が失敗して 1 つずつの読み取りに戻った回は、移行待ちの有無が分からないので、凍結でなければ動かす。
+  // 配分の外(runner の分)で動かす。1 回に 25 サイトまでで、D1 の呼び出しは多くて 60 件ほど(上限 1,000 との差に入る)。
+  // 失敗はログに残し、ジョブは止めない(次の実行で続きから)
+  if (runSharing) {
+    try {
+      await migrateSharing(env, env.DB, Math.floor(now / 1000));
+    } catch (e) {
+      console.error("cron: sharing migration failed", e);
+    }
+  }
+  // 今回動くジョブ(凍結で見送るものを除く)。daily の due は上で決めた(配分を決めるため)
+  const runnable = jobs.filter((j) => !(j.writesControl && frozenAtStart));
+  const dueNames = new Set([...due].filter(([, d]) => d === true).map(([n]) => n));
   const allot = allotQueries(runnable, dueNames, now, plan);
   const limit = queryLimitFor(runnable, dueNames, plan);
   /** 動くジョブ = due で、配分が 1 件の最低に届くもの */
