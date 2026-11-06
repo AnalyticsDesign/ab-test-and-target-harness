@@ -13,13 +13,15 @@
  */
 // 2(2026-10-28、backlog B156): API キーで読んだ招待の一覧(GET /workspaces/:wid/invitations)の id・url が null になりうる(型の変更)
 // 3(2026-11-02、backlog B148): サイトの作成・保存の書き込みの欄を domains に変えた(domain・allowedOrigins・hosts は 422)。応答の hosts を edgeDomains に改名
-export const API_CONTRACT_VERSION = 3;
+// 4(backlog B68): 画像の一覧の応答の形(各件は URL を持たず urlPrefix + path)と、アップロードの experimentId の廃止(互換を外す)
+export const API_CONTRACT_VERSION = 4;
 export const API_VERSION_HEADER = "x-wtt-api-version";
 export const CLIENT_VERSION_HEADER = "x-wtt-client-version";
 
 /** 書き込みを受ける admin の最小の版。これより小さい名乗りは 426 client_too_old */
 // 3(B148): 古い管理画面は domain・allowedOrigins・hosts を送るので、書き込みは 422 になる。426 で読み込み直しを促す
-export const MIN_CLIENT_VERSION = 3;
+// 4(B68): 古い管理画面は画像のアップロードで experimentId を送るので 422 になる。426 で読み込み直しを促す
+export const MIN_CLIENT_VERSION = 4;
 /** MIN を API_CONTRACT_VERSION より低く据え置くときだけ、その理由を書く(猶予を残す根拠。決定 63 (3))。同じ版なら空 */
 export const MIN_CLIENT_VERSION_KEPT_BECAUSE = "";
 /** control が全応答に付ける「いまの最小の版」のヘッダー(admin が自分の古さを知るため) */

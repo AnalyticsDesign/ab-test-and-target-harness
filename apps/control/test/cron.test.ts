@@ -15,6 +15,7 @@ import { breakGlassSweep } from "../src/cron/break-glass-sweep";
 import { configCleanupJob } from "../src/cron/config-cleanup";
 import { staticReconcileJob } from "../src/cron/static-reconcile";
 import { auditRetentionJob } from "../src/cron/audit-retention";
+import { assetHousekeepingJob } from "../src/cron/asset-housekeeping";
 import { publishSite } from "../src/publish";
 import { siteToSettings } from "../src/site-settings";
 import { call, createExperiment, createSite, failingKv, fakeDeployer, runDirect, setupOwner, siteRow, siteWithRunning, testEnv, TEXT_CHANGE, userActor } from "./helpers";
@@ -167,9 +168,17 @@ describe("cron runner (D9 ② K5・K6)", () => {
     expect(bad.calls).toBe(0);
   });
 
+  // B68 Task 5: 画像の後始末のジョブを登録表の最後に 1 本(B129 の audit-retention の後。11 本 → 12 本)。配分を持たない 15 分ごとのジョブ
+  it("cron_registry_has_12_jobs_with_housekeeping_last", () => {
+    expect(CRON_JOBS).toHaveLength(12);
+    expect(CRON_JOBS.at(-1)).toBe(assetHousekeepingJob);
+    expect(assetHousekeepingJob).toMatchObject({ name: "asset-housekeeping", cadence: { every: "tick" }, writesControl: true });
+    expect(assetHousekeepingJob.queryShare).toBeUndefined();
+  });
+
   it("registers the account guard in CRON_JOBS", () => {
     // D9 ③(K17): 結果のジョブ 5 本を results-account-guard の後に、この順で(どれも wtt-control に書く)
-    expect(CRON_JOBS).toEqual([resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob, staticReconcileJob, auditRetentionJob]);
+    expect(CRON_JOBS).toEqual([resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob, staticReconcileJob, auditRetentionJob, assetHousekeepingJob]);
     expect(CRON_JOBS.slice(1).map((j) => [j.name, j.cadence, j.writesControl])).toEqual([
       ["results-delivery", { every: "tick" }, true],
       ["results-collect-until", { every: "tick" }, true],
@@ -181,12 +190,14 @@ describe("cron runner (D9 ② K5・K6)", () => {
       ["config-cleanup", { daily: { afterUtcHour: 1 } }, true],
       ["static-reconcile", { every: "tick" }, true],
       ["audit-retention", { daily: { afterUtcHour: 19 } }, true], // B129 Task 9
+      ["asset-housekeeping", { every: "tick" }, true],
     ]);
     // plan12 K13: 配分(queryShare)を持たない(結果のジョブの配分表を変えない)
     expect(breakGlassSweep.queryShare).toBeUndefined();
     expect(configCleanupJob.queryShare).toBeUndefined();
     expect(staticReconcileJob.queryShare).toBeUndefined(); // 7o K13
     expect(auditRetentionJob.queryShare).toBeUndefined(); // B129 Task 9
+    expect(assetHousekeepingJob.queryShare).toBeUndefined(); // B68: 配分を持たない
     expect(resultsAccountGuard).toMatchObject({ name: "results-account-guard", cadence: { every: "tick" }, writesControl: false });
   });
 });
@@ -440,11 +451,11 @@ describe("config-cleanup (plan12 K14 (b))", () => {
     return sid;
   }
 
-  it("is registered as a daily job that writes control and has no query share (static-reconcile follows it, 7o K13)", () => {
+  it("is registered as a daily job that writes control and has no query share (static-reconcile and asset-housekeeping follow it, 7o K13・B68)", () => {
     expect(new Date(T).getUTCHours()).toBeGreaterThanOrEqual(1);
     expect(configCleanupJob).toMatchObject({ name: "config-cleanup", cadence: { daily: { afterUtcHour: 1 } }, writesControl: true });
     expect(configCleanupJob.queryShare).toBeUndefined();
-    expect(CRON_JOBS.at(-3)).toBe(configCleanupJob); // 後ろに static-reconcile(7o K13)と audit-retention(B129 Task 9)
+    expect(CRON_JOBS.at(-4)).toBe(configCleanupJob); // 後ろに static-reconcile(7o K13)・audit-retention(B129 Task 9)・asset-housekeeping(B68)
   });
 
   it("deletes the retired versions on a day without a publish and keeps the served one", async () => {

@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { IMAGE_DISABLED_HINT, LIBRARY_DISABLED_HINT } from "../src/capabilities";
 import { call, choosePrimaryGoal, createExperiment, createSite, fakeDeployer, fakeResultsBudget, joinWithPassword, json, RESULTS_STORE, setupOwner } from "./helpers";
 
 /**
@@ -51,6 +52,85 @@ describe("public strings carry no private design references", () => {
     noPrivateRef("name_too_long", JSON.stringify(nameBody));
   });
 
+  it("asset_guard_failures", async () => {
+    // B68: 公開の失敗(asset_missing / asset_other_site)と、状態を変える口の開始の 409 の封筒
+    const { token, workspaceId } = await setupOwner();
+    const base = env.AB_ASSET_PUBLIC_BASE as string;
+    for (const src of [(sid: string) => `${base}/sites/${sid}/images/asset_pubstraaaa.png`, () => `${base}/sites/site_other/images/asset_pubstrbbbb.png`]) {
+      const { id: sid } = await createSite(token, workspaceId);
+      const { id: eid } = await createExperiment(token, sid);
+      const html = { id: "c1", type: "HTML", selector: ".box", payload: { html: `<img src="${src(sid)}">`, position: "append", runScripts: false } };
+      expect((await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token, body: [html] })).status).toBe(200);
+      const start = await call("POST", `/sites/${sid}/experiments/${eid}/status`, { token, body: { status: "running" } });
+      expect(start.status).toBe(409);
+      noPrivateRef("asset guard 409", JSON.stringify(await json(start)));
+      await env.DB.prepare("update experiments set status = 'running' where site_id = ?1").bind(sid).run();
+      const pub = await json<{ ok: boolean }>(await call("POST", `/sites/${sid}/publish`, { token }));
+      expect(pub.ok).toBe(false);
+      noPrivateRef("asset guard publish failure", JSON.stringify(pub));
+    }
+  });
+
+  it("asset_library_envelopes", async () => {
+    // B68: 画像のライブラリの口と、IMAGE の保存のエラーの封筒(message / hint)に非公開参照が無い。画面・エージェントが読む文をここで固定する
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    const { id: eid } = await createExperiment(token, sid);
+    const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52]);
+    const upload = async (name: string, over: Partial<typeof env> = {}) => {
+      const fd = new FormData();
+      fd.set("file", new File([PNG], name, { type: "image/png" }));
+      return call("POST", `/sites/${sid}/assets`, { token, raw: fd, envOverride: over });
+    };
+    const a = await json<{ id: string; publicUrl: string }>(await upload("a.png"));
+    const b = await json<{ id: string; publicUrl: string }>(await upload("b.png"));
+    const put = (changes: unknown[]) => call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token, body: changes });
+    const envelope = async (label: string, res: Response, status: number, error: string) => {
+      expect(res.status, label).toBe(status);
+      const body = await json<{ error: string; message: string; hint?: string }>(res);
+      expect(body.error, label).toBe(error);
+      expect(body.message, label).toBeTruthy();
+      noPrivateRef(label, JSON.stringify(body));
+      return body;
+    };
+    // 名前の重なり(409)・上限(409)
+    await envelope("asset_name_taken", await call("PATCH", `/sites/${sid}/assets/${b.id}`, { token, body: { name: "a.png" } }), 409, "asset_name_taken");
+    await envelope("asset_quota_exceeded", await upload("c.png", { AB_ASSET_SITE_MAX_COUNT: "2" }), 409, "asset_quota_exceeded");
+    // 保存の確かめ: 一覧に無い画像(422)・符号化した参照(422)・サイトの外の URL(422)
+    const gone = `${a.publicUrl.replace(a.id, "asset_goneaaaaaa")}`;
+    await envelope("asset_not_found", await put([{ id: "c1", type: "IMAGE", selector: "img.hero", payload: { src: gone } }]), 422, "asset_not_found");
+    await envelope(
+      "asset_ref_encoded",
+      await put([{ id: "c1", type: "HTML", selector: ".box", payload: { html: `<img src="${a.publicUrl.replaceAll("/", "&#47;")}">`, position: "append", runScripts: false } }]),
+      422,
+      "asset_ref_encoded",
+    );
+    // R2 の配下でない URL(image_outside_r2_domain)
+    const outside = await envelope(
+      "image_outside_r2_domain",
+      await put([{ id: "c1", type: "IMAGE", selector: "img.hero", payload: { src: "https://cdn.example.com/x.png" } }]),
+      422,
+      "image_outside_r2_domain",
+    );
+    expect(outside.hint).toContain("このサイトにアップロードした画像の URL だけ");
+    // 使用中の画像の削除(409)
+    expect((await put([{ id: "c1", type: "IMAGE", selector: "img.hero", payload: { src: a.publicUrl } }])).status).toBe(200);
+    const inUse = await envelope("asset_in_use", await call("DELETE", `/sites/${sid}/assets/${a.id}`, { token }), 409, "asset_in_use");
+    expect(inUse.hint).toBeTruthy();
+    // R2 が無い導入の IMAGE の 422 の hint(アップローダーの公開ベースだけの導入は、IMAGE の URL が外れれば image_outside_r2_domain)
+    for (const over of [{ ASSETS: undefined }, { ASSETS: undefined, AB_UPLOADER_PUBLIC_BASE: "https://up.example.com" }] as Array<Partial<typeof env>>) {
+      const res = await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, {
+        token,
+        envOverride: over,
+        body: [{ id: "c1", type: "IMAGE", selector: "img.hero", payload: { src: "https://cdn.example.com/x.png" } }],
+      });
+      expect(res.status).toBe(422);
+      const body = await json<{ error: string; hint?: string }>(res);
+      noPrivateRef(`IMAGE without R2 (${body.error})`, JSON.stringify(body));
+      if (body.error === "image_outside_r2_domain") expect(body.hint).toContain("このサイトにアップロードした画像の URL だけ");
+    }
+  }, 20_000);
+
   it("error_envelopes_with_hints", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);
@@ -83,7 +163,16 @@ describe("public strings carry no private design references", () => {
       body: [{ id: "c1", type: "IMAGE", selector: "img.hero", payload: { src: "https://cdn.example.com/x.png" } }],
     });
     expect(img.status).toBe(422);
-    noPrivateRef("image_upload_disabled", JSON.stringify(await json(img)));
+    const imgBody = await json<{ hint: string }>(img);
+    noPrivateRef("image_upload_disabled", JSON.stringify(imgBody));
+    // B68 Task 3: IMAGE の 422 とライブラリの口の 409 の hint は定数を分ける(どちらも非公開の参照が無い)
+    expect(imgBody.hint).toBe(IMAGE_DISABLED_HINT);
+    const lib = await call("POST", `/sites/${sid}/assets`, { token, raw: new FormData(), envOverride: { ASSETS: undefined } });
+    expect(lib.status).toBe(409);
+    const libBody = await json<{ hint: string }>(lib);
+    expect(libBody.hint).toBe(LIBRARY_DISABLED_HINT.noUploader);
+    noPrivateRef("image_upload_disabled (library)", JSON.stringify(libBody));
+    noPrivateRef("LIBRARY_DISABLED_HINT.withUploader", LIBRARY_DISABLED_HINT.withUploader);
     const count = await call("PUT", `/sites/${sid}/experiments/${eid}/variants`, { token, body: [{ id: "a", name: "A", weight: 100 }] });
     expect(count.status).toBe(422);
     noPrivateRef("variant_count_invalid", JSON.stringify(await json(count)));

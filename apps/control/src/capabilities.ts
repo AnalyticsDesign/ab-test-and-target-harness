@@ -25,9 +25,48 @@ export function imageStore(env: Env): { bucket: R2Bucket; publicBase: string } |
   return { bucket: env.ASSETS, publicBase: base };
 }
 
-/** 決定 43 (2): 代替は ATTRIBUTE の src。文言は公開物なので設計記録への参照を書かない */
+/**
+ * B68 spec §4.5(正はアップローダーの spec §5.1「公開ベースの形」): R2 なしの画像アップローダーの公開ベース(origin)。
+ * 前後の空白を落とした値が URL として読め、`https:`(ホスト名が `localhost`・`127.0.0.1` のときだけ `http:` も受ける)、
+ * 利用者名・パスワード・クエリ・フラグメントが無く、パスが無いか `/` だけのときだけ、末尾の `/` を落とした形を返す。外れる値・空は null。
+ * `imageStore` とは別の関数(あちらは `/dev-assets` のためにどのホストの `http:` も受け、パスも許す)。
+ * **公開ベースの判定はここ 1 か所だけ**: IMAGE の確かめる順の 1・公開と開始・再開の取り出し・確認の画面・アップローダーの `uploaderEnabled(env)` がこの値を使う
+ */
+export function uploaderPublicBase(env: Env): string | null {
+  const raw = env.AB_UPLOADER_PUBLIC_BASE?.trim() ?? "";
+  if (raw === "") return null;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  const loopback = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && loopback)) return null;
+  // `?`・`#` だけ(中身が空)でも search / hash は空になるので、元の文字列でも見る
+  if (u.username || u.password || u.search || u.hash || /[?#]/.test(raw)) return null;
+  if (u.pathname !== "/") return null;
+  return u.origin;
+}
+
+/**
+ * IMAGE の 422 image_upload_disabled(R2 もアップローダーも無い導入)の hint。代替は ATTRIBUTE の src。
+ * 文の正はアップローダーの spec §10(B68 spec §4.5 の 2)。文言は公開物なので設計記録への参照を書かない
+ */
 export const IMAGE_DISABLED_HINT =
-  "画像の差し替えは ATTRIBUTE の src で行えます。有効にするには R2 バケットの binding と公開ベース URL(AB_ASSET_PUBLIC_BASE)を設定して再デプロイします";
+  "画像の差し替えは ATTRIBUTE の src で行えます。有効にするには R2 バケットの binding と公開ベース URL(AB_ASSET_PUBLIC_BASE)を設定するか、画像のアップローダーの公開ベース URL(AB_UPLOADER_PUBLIC_BASE)を設定して再デプロイします";
+
+/**
+ * B68 spec §8: ライブラリの口(POST /sites/:sid/assets・PATCH・DELETE …/assets/:aid)の 409 image_upload_disabled の hint。
+ * IMAGE の 422 と定数を分ける(アップローダーのある導入で、設定済みの変数を「設定して」と案内しないため)
+ */
+export const LIBRARY_DISABLED_HINT = {
+  noUploader:
+    "画像の差し替えは ATTRIBUTE の src で行えます。有効にするには R2 バケットの binding と公開ベース URL(AB_ASSET_PUBLIC_BASE)を設定して再デプロイします",
+  withUploader: "この導入では、画像は左メニューの「画像」からアップロードします(API は /sites/<siteId>/uploads)",
+} as const;
+/** `uploaderOn` は `/capabilities.imageUploader` と同じ判定(アップローダーの作業が渡す。B68 では false) */
+export const libraryDisabledHint = (uploaderOn: boolean): string => (uploaderOn ? LIBRARY_DISABLED_HINT.withUploader : LIBRARY_DISABLED_HINT.noUploader);
 
 /** 決定 44 (4): edge の公開 origin。不正な値・未設定は null(既存導入では帯を出さない) */
 export function edgeOrigin(env: Env): string | null {
@@ -77,6 +116,7 @@ export const CapabilitiesSchema = z.object({
   edgeOnWorkersDev: z.boolean().describe("edge を *.workers.dev で公開しているか(ゾーンの WAF・キャッシュ・Mode B(サーバー発行 Cookie)が使えない構成)"),
   passwordLogin: z.boolean().describe("メール + パスワードのログインが開いているか(非常時だけ true。普段は Google ログインのみ)"),
   resultsStore: z.boolean().describe("結果を記録するための計測用データベースが導入されているか"),
+  imageThumbnails: z.boolean().describe("画像の一覧に出す縮小版を作れるか(Cloudflare Images の binding があるとき true。無ければ一覧は元の画像を出す)"),
   writeFreeze: z
     .object({
       reason: z.string().nullable().describe("凍結の理由。null = 凍結の設定が読めない(凍結中として扱う)"),
@@ -95,6 +135,6 @@ export function capabilities(env: Env): Omit<Capabilities, "writeFreeze"> {
   return {
     apiVersion: API_CONTRACT_VERSION, minClientVersion: MIN_CLIENT_VERSION, // plan12 K6: 管理画面の版のバナーが読む
     imageUpload: imageStore(env) !== null, edgeOrigin: edgeOrigin(env), tagOrigin: tagOrigin(env), edgeOnWorkersDev: edgeOnWorkersDev(env), passwordLogin: passwordLoginOpen(env),
-    resultsStore: resultsStore(env),
+    resultsStore: resultsStore(env), imageThumbnails: env.IMAGES !== undefined,
   };
 }

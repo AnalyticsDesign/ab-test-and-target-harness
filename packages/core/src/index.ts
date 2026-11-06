@@ -25,6 +25,8 @@ export * from "./sha256";
 export * from "./pattern-id";
 export * from "./api-contract"; // zod-free(admin の BFF と control が使う)
 export * from "./body-limits"; // 要求の本文の上限(control の入口と admin の BFF)
+export * from "./asset-name"; // 画像のライブラリの名前の規則と番号の候補(control のアップロードの口。B68)
+export * from "./asset-url"; // 画像の一覧の各件の URL の組み立て(control と管理画面。B68)
 export * from "./duplicate"; // zod-free
 export * from "./results"; // zod-free(runtime が import する)
 export * from "./new-profile-budget"; // zod-free(edge の新しい Profile の予算。runtime は使わない)

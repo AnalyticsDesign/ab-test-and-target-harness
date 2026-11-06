@@ -12,6 +12,8 @@ import type { BusyOutcome } from "./run-busy";
 
 export const REFRESH_TIMEOUT = "保存しました。画面の表示が古い可能性があります。再読み込みしてください";
 export const WRITE_UNKNOWN = "保存できたか分かりません。再読み込みして確かめてください";
+/** 削除(削除待ちにする)が 30 秒の上限で分からないとき(B68 の画像の一覧。保存ではないので文を分ける) */
+export const DELETE_UNKNOWN = "削除できたか分かりません。一覧を開き直して確かめてください";
 
 export type BusyNotice = { status: string | null; error: string | null };
 

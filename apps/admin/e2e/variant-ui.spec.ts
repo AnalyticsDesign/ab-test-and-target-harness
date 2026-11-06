@@ -92,7 +92,9 @@ test.describe.serial("pattern UI (B77)", () => {
     const a = await pickVariant("a");
     await expect(a.getByRole("radio", { name: /^オリジナル/ })).toHaveAttribute("aria-checked", "true");
     await expect(a.getByText("オリジナルのパターンは変更を持てません")).toBeVisible();
-    await expect(a.getByRole("button", { name: "変更を追加" })).toHaveCount(0);
+    await expect(a.getByRole("button", { name: "変更を追加", exact: true })).toHaveCount(0);
+    // B68: 画像の変更を足すボタンもオリジナルには出ない
+    await expect(a.getByRole("button", { name: "画像の変更を追加", exact: true })).toHaveCount(0);
     const b = await pickVariant("b");
     await expect(b.getByRole("radio", { name: /^変更あり/ })).toHaveAttribute("aria-checked", "true");
     await expect(b.getByRole("radio", { name: /^オリジナル/ })).toHaveAttribute("aria-checked", "false");
@@ -125,7 +127,7 @@ test.describe.serial("pattern UI (B77)", () => {
   test("switch_to_original_deletes_changes_on_save", async () => {
     await openExperiment(EXP_MAIN.id, "variants");
     let b = await pickVariant("b");
-    await b.getByRole("button", { name: "変更を追加" }).click();
+    await b.getByRole("button", { name: "変更を追加", exact: true }).click();
     const change = b.getByTestId("change-TEXT");
     await change.locator('input[maxlength="500"]').fill(".hero-title");
     await change.locator("textarea").fill("B77 オリジナルの確認");
@@ -289,7 +291,7 @@ test.describe.serial("pattern UI (B77)", () => {
     await waitForHydration(page);
     await page.getByRole("tab", { name: "パターン" }).click();
     const b = await pickVariant("b");
-    await b.getByRole("button", { name: "変更を追加" }).click();
+    await b.getByRole("button", { name: "変更を追加", exact: true }).click();
     await pick(b.getByTestId("change-TEXT"), "変更の種類", /^HTML/);
     const html = b.getByTestId("change-HTML");
     await html.locator('input[maxlength="500"]').fill(".hero-title");

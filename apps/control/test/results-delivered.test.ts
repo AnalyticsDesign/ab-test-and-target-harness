@@ -119,16 +119,30 @@ async function freeze() {
     .bind('{"reason":"r"}')
     .run();
 }
-/** 最初の batch(publishSite の activation の batch)が済んだ直後に hook を 1 回だけ実行する D1 ラッパ */
+/**
+ * publishSite の activation の batch(`active_version` を進める CAS で始まる batch)が済んだ直後に hook を 1 回だけ実行する D1 ラッパ。
+ * B68 で設定の記録(手順 4)も batch で流すようになったので、最初の batch ではなく SQL で見分ける(batch からは SQL を読めないので prepare で印を付ける)
+ */
+const ACTIVATION = Symbol.for("wtt.test.activationBatch");
 function afterFirstBatch(d1: D1Database, hook: () => Promise<unknown>): D1Database {
   let ran = false;
+  const marked = (stmt: D1PreparedStatement): D1PreparedStatement =>
+    new Proxy(stmt, {
+      get(s, p) {
+        if (p === ACTIVATION) return true;
+        if (p === "bind") return (...args: unknown[]) => marked(s.bind(...args));
+        const x = Reflect.get(s, p);
+        return typeof x === "function" ? x.bind(s) : x;
+      },
+    });
   return new Proxy(d1, {
     get(target, prop) {
       const v = Reflect.get(target, prop);
+      if (prop === "prepare") return (q: string) => (/^\s*update "sites" set "active_version"/i.test(q) ? marked(target.prepare(q)) : target.prepare(q));
       if (prop === "batch")
         return async (stmts: D1PreparedStatement[]) => {
           const out = await target.batch(stmts);
-          if (!ran) {
+          if (!ran && (stmts[0] as unknown as Record<symbol, unknown>)[ACTIVATION] === true) {
             ran = true;
             await hook();
           }

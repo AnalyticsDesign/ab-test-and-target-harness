@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { backLabel, SITE_NAV, activeSegment, nextRemembered, originLabel, originOfPath, resolveOrigin, screenName, settingsEntryHref, settingsGroups, settingsPageOf, sidebarContext, switchSettingsHref } from "@/lib/nav";
+import { backLabel, SITE_NAV, siteNav, activeSegment, nextRemembered, originLabel, originOfPath, resolveOrigin, screenName, settingsEntryHref, settingsGroups, settingsPageOf, sidebarContext, switchSettingsHref } from "@/lib/nav";
 import type { Role, WorkspaceSummary } from "@/lib/types";
+import { resolveCapabilities } from "@/lib/capabilities";
 
 /** ws1 に site s1 / s2 を持つ summary。role だけ変えて使う */
 const wsOf = (role: Role): WorkspaceSummary[] => [
@@ -20,8 +21,40 @@ const scopes = (gs: ReturnType<typeof settingsGroups>) => gs.map((g) => g.scope)
 describe("nav", () => {
   it("lists the site menu in the designed order with the glossary labels", () => {
     // B60: サイト設定は設定のメニューへ移し、公開履歴は上部バーの版の札から開くので、サイトのメニューには置かない
-    expect(SITE_NAV.map((n) => n.label)).toEqual(["エクスペリエンス", "目標", "オーディエンス"]);
-    expect(SITE_NAV.map((n) => n.segment)).toEqual(["", "goals", "audiences"]);
+    // B68: 「オーディエンス」の下に「画像」
+    expect(SITE_NAV.map((n) => n.label)).toEqual(["エクスペリエンス", "目標", "オーディエンス", "画像"]);
+    expect(SITE_NAV.map((n) => n.segment)).toEqual(["", "goals", "audiences", "images"]);
+    expect(SITE_NAV.at(-1)?.icon).toBe("image");
+  });
+
+  // B68(spec §9.1・K7 = Q295 案 1): 「画像」は R2(imageUpload)か R2 なしのアップローダー(imageUploader)のどちらかがあれば出す
+  const labelsOf = (caps: { imageUpload: boolean; imageUploader?: boolean }) => siteNav(caps).map((n) => n.label);
+
+  it("site_nav_hides_images_without_r2_and_uploader", () => {
+    expect(labelsOf({ imageUpload: false, imageUploader: false })).toEqual(["エクスペリエンス", "目標", "オーディエンス"]);
+    expect(labelsOf({ imageUpload: true, imageUploader: false })).toContain("画像");
+  });
+
+  it("site_nav_shows_images_with_uploader_without_r2", () => {
+    expect(labelsOf({ imageUpload: false, imageUploader: true })).toEqual(["エクスペリエンス", "目標", "オーディエンス", "画像"]);
+  });
+
+  it("site_nav_treats_missing_image_uploader_as_false", () => {
+    // アップローダーが main に入る前の control は imageUploader を返さない
+    expect(labelsOf({ imageUpload: false })).not.toContain("画像");
+    expect(labelsOf(resolveCapabilities({ status: 200, data: { imageUpload: false } }))).not.toContain("画像");
+    expect(labelsOf({ imageUpload: true })).toContain("画像");
+  });
+
+  it("site_nav_shows_images_when_capabilities_failed", () => {
+    // 取得の失敗は既定(imageUpload: true)に倒す。最終の判定は control
+    expect(labelsOf(resolveCapabilities({ status: 502, data: { error: "control_unreachable" } }))).toContain("画像");
+    expect(labelsOf(resolveCapabilities({ status: 200, data: null }))).toContain("画像");
+  });
+
+  it("names the images screen even when the menu hides it (screenName / activeSegment use the constant SITE_NAV)", () => {
+    expect(screenName("/w/ws1/sites/s1/images")).toBe("画像");
+    expect(activeSegment("/w/ws1/sites/s1/images")).toBe("images");
   });
 
   it("names the screen from the pathname", () => {

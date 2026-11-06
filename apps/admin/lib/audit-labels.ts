@@ -82,6 +82,8 @@ export const AUDIT_ACTION_JA: Readonly<Record<AuditAction, string>> = {
   "audience.update": "オーディエンスを変更",
   "audience.delete": "オーディエンスを削除",
   "asset.upload": "画像をアップロード",
+  "asset.rename": "画像の名前を変更",
+  "asset.delete": "画像を削除待ちにする",
   "publish.publish": "公開",
   "publish.static_redeploy": "配信ファイルを作り直し",
 };
@@ -360,6 +362,8 @@ export function auditDetailLine(e: Pick<AuditEventView, "action" | "detail">, ct
       return fieldsLine(d, d.fields, AUDIENCE_FIELDS);
     case "asset.upload":
       return joinParts([str(d.type), num(d.bytes) === null ? null : bytesLabel(num(d.bytes)!)]);
+    case "asset.rename":
+      return str(d.from) && str(d.to) ? `「${str(d.from)}」→「${str(d.to)}」` : "";
     case "publish.publish": {
       const v = num(d.version);
       if (v === null) return "";

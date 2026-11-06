@@ -9,7 +9,7 @@ import { ADMIN_URL, CONTROL_URL, WORKSPACE_NAME, controlHeaders, createExperimen
  * 1 画面の往復が増えたことを、deploy の前に毎回検知する。経緯: plan12 で control の呼び出しを service binding に替えたことで vinext の
  * 同じ GET のまとめが外れ、1 画面で約 20 回の往復と CPU の超過(exceededResources)になって、気づくまで 9 日かかった。
  *
- * 対象の画面(SCREENS): ホーム・ワークスペースのホーム・サイトのトップ(= エクスペリエンスの一覧)・目標・オーディエンスの一覧・
+ * 対象の画面(SCREENS): ホーム・ワークスペースのホーム・サイトのトップ(= エクスペリエンスの一覧)・目標・オーディエンスの一覧・画像の一覧(B68)・
  * エクスペリエンスの詳細・オーディエンスの詳細(設定)・サイト設定・メンバー(ワークスペースの設定)・公開・公開履歴・操作の記録(ワークスペース・導入全体。B129)。
  * B148: サイト設定のドメインの節(siteSettingsDomains)は、直接(?section=domains)・節のリンク・節の保存 1 回を SCREENS の外で数える(節の切り替えはルーターを通らない)。
  * 目標には詳細の画面が無い(一覧の中で編集する)ので、目標の一覧で代える。画面ごとに次の 2 通りを数える:
@@ -52,6 +52,7 @@ type ScreenName =
   | "siteTop"
   | "goals"
   | "audiences"
+  | "images"
   | "experiment"
   | "audience"
   | "siteSettings"
@@ -74,6 +75,9 @@ export const REQUEST_LIMITS: Record<ScreenName, { direct: number; navigation: nu
   siteTop: { direct: 7, navigation: 7 }, // 実測 6 / 6(+ publishes・experiments)
   goals: { direct: 6, navigation: 6 }, // 実測 5 / 5(+ goals)
   audiences: { direct: 7, navigation: 7 }, // 実測 6 / 6(+ goals・audiences)
+  // B68: 画像の一覧(新しい画面)。外枠の 4 + sites/:sid/assets(一覧の 1 回。画面の loadWorkspaces・loadCapabilities は外枠と同じ GET で、1 回の描画の中でまとまる)。
+  // 新しい画面の行を足しただけで、ほかの画面の上限は変えていない(experiment は 8 / 8 のまま = 選ぶ窓の一覧を描画で読まない。publish も 5 / 5 のまま)
+  images: { direct: 6, navigation: 6 }, // 実測 5 / 5(2026-11-05、3 回とも同じ)
   experiment: { direct: 9, navigation: 9 }, // 実測 8 / 8(+ audiences・goals・experiments/:eid・evaluation-plan)
   audience: { direct: 8, navigation: 8 }, // 実測 7 / 7(+ audiences/:aid・audiences・goals)
   siteSettings: { direct: 6, navigation: 6 }, // 実測 5 / 5(+ experiments)。B139 の訪問者 ID の共有のカードが入った後も同じ(カードは control を呼ばない。2026-11-01)
@@ -336,6 +340,8 @@ const SCREENS: Screen[] = [
   // 目標(詳細の画面は無いので一覧で代える): サイトのトップから左メニューで
   { name: "goals", path: (ids) => `${siteBase(ids)}/goals`, ready: (p) => expect(heading(p, "目標")).toBeVisible(), from: siteBase, link: (p) => navLink(p, "目標") },
   { name: "audiences", path: (ids) => `${siteBase(ids)}/audiences`, ready: (p) => expect(heading(p, "オーディエンス")).toBeVisible(), from: siteBase, link: (p) => navLink(p, "オーディエンス") },
+  // B68: サイトの画像の一覧: サイトのトップから左メニューで(E2E の control は R2 があるので「画像」が出る)
+  { name: "images", path: (ids) => `${siteBase(ids)}/images`, ready: (p) => expect(heading(p, "画像")).toBeVisible(), from: siteBase, link: (p) => navLink(p, "画像") },
   // エクスペリエンスの詳細: サイトのトップの一覧の行から
   { name: "experiment", path: (ids) => `${siteBase(ids)}/experiments/${EXP.id}`, ready: (p) => expect(heading(p, EXP.name)).toBeVisible(), from: siteBase, link: (p) => mainLink(p, EXP.name) },
   // オーディエンスの詳細(設定): オーディエンスの一覧の行から
@@ -396,8 +402,8 @@ type Row = { direct: number | null; navigation: number | null; prefetchOnHover: 
  * (別のテストに分けると、serial では前のテストの失敗で後が走らず、全画面の数が 1 回で出ない)。ログインも 1 回で済む(fixtures.ts の login() の予算)
  */
 test("main screens: control requests per view stay within the budget (direct HTML / client navigation RSC)", async ({ page }, testInfo) => {
-  // 13 画面 × (直接 + 遷移元 + ホバー + 押した後)の落ち着き待ち(各 2 秒以上)が要るので、既定の 60 秒では足りない
-  test.setTimeout(360_000);
+  // 14 画面 × (直接 + 遷移元 + ホバー + 押した後)の落ち着き待ち(各 2 秒以上)が要るので、既定の 60 秒では足りない
+  test.setTimeout(420_000);
   // 観測の口の span は E2E の実行全体でたまるので、読むのはここから後の分だけにする(窓が無いと trace_id の結合が重い)
   const started = Date.now();
   const ids: Ids = { wid: "" };

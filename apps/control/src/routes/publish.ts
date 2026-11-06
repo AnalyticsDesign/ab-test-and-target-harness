@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
+import { guardAssets } from "../asset-guard";
 import { auditActor, auditStatement } from "../audit";
 import { toStatement, type ExperimentRow } from "../db";
 import { notFound, validationFailed } from "../errors";
@@ -10,7 +11,7 @@ import { SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
 import { canReadRawPublishError, loadSite } from "../roles";
 import { compile, CompileError, usesCondition, type CompiledConfig } from "@wtt/core";
-import { buildCompileInput, describeCompileFailure, loadActiveConfig, publicPublishResult, publishErrorCode, publishSite } from "../publish";
+import { buildCompileInput, describeCompileFailure, type StoredCompileInput, loadActiveConfig, publicPublishResult, publishErrorCode, publishSite } from "../publish";
 import { requestStaticDeploy } from "../static-delivery";
 import { audienceUsage } from "./audiences";
 
@@ -20,6 +21,17 @@ export const publishRoutes = new Hono<AppEnv>();
  * spec §13.6: Publish の結果。失敗も HTTP 200 + `ok: false` で返す(決定 17。UI がアラートを出して再試行する)。
  * Task 7 の `POST …/status` も応答の `publish` フィールドにこの同じ schema を使う(export してそちらから import する)
  */
+/** B68: 公開する設定の中の、見つからない画像・別のサイトの画像と、それを含む変更(公開の失敗・確認の画面・状態を変える口の 409 が同じ形) */
+export const AssetProblemSchema = z.object({
+  url: z.string().describe("設定の中にそのまま書かれた画像の URL"),
+  reason: z
+    .enum(["missing", "other_site"])
+    .describe("missing = このサイトの画像の一覧に無い画像・消すと決まった画像(削除待ちの間は通る) / other_site = 同じ導入の別のサイトの画像・別のサイトの画像アップローダーの URL"),
+  experimentId: z.string(),
+  variantId: z.string(),
+  changeId: z.string(),
+});
+
 export const PublishResultSchema = z.union([
   z.object({
     ok: z.literal(true),
@@ -38,9 +50,15 @@ export const PublishResultSchema = z.union([
   z.object({
     ok: z.literal(false),
     version: z.number().int().nullable(),
-    error: z.string().describe("機械可読コード(kv_put_failed / kv_verify_failed / kv_rate_limited / legacy_targeting / unknown_audience / within_days_exceeds_retention …)"),
+    error: z.string().describe("機械可読コード(kv_put_failed / kv_verify_failed / kv_rate_limited / legacy_targeting / unknown_audience / within_days_exceeds_retention / asset_missing / asset_other_site …)"),
     message: z.string(),
     hint: z.string().optional(),
+    assetProblems: z
+      .array(AssetProblemSchema)
+      .optional()
+      .describe(
+        "error が asset_missing(このサイトの画像の一覧に無い画像・消すと決まった画像。削除待ちの間は通る)/ asset_other_site(同じ導入の別のサイトの画像・別のサイトの画像アップローダーの URL)のとき: 問題の画像の URL と、それを含む変更。同じ URL を複数の変更が含めば、それぞれ 1 件。パターンの変更から外すか、このサイトの画像に差し替えて、もう一度公開する",
+      ),
   }),
 ]);
 
@@ -98,6 +116,9 @@ const PublishPreviewSchema = z.object({
     .object({ error: z.string(), message: z.string(), hint: z.string().optional() })
     .nullable()
     .describe("いまの下書きを公開すると止まる理由(止まらなければ null)"),
+  assetProblems: z
+    .array(AssetProblemSchema)
+    .describe("いまの下書きを公開すると、画像の確かめで止まる参照(見つからない画像・別のサイトの画像)と、それを含む変更。無ければ空の配列。starting には効かない"),
   overlaps: z
     .array(z.object({ path: z.string(), message: z.string(), experimentIds: z.array(z.string()).describe("[優先の低い方, 高い方]") }))
     .describe(
@@ -301,8 +322,9 @@ publishRoutes.get(
     let next: CompiledConfig | null = null;
     let compileError: { error: string; message: string; hint?: string } | null = null;
     let overlaps: ReturnType<typeof overlapWarnings> = [];
+    let input: StoredCompileInput | null = null;
     try {
-      const input = await buildCompileInput(db, site, (site.active_version ?? 0) + 1);
+      input = await buildCompileInput(db, site, (site.active_version ?? 0) + 1);
       // compile の前の入力から出す(compile に失敗しても重なりは見せる)
       if (startingId === null) overlaps = overlapWarnings(input.experiments);
       next = compile(input);
@@ -324,6 +346,10 @@ publishRoutes.get(
         console.error("publish-preview overlaps for starting failed", e); // 警告だけなので空で返す
       }
     }
+    // B68(spec §22.5): 公開と同じ画像の確かめ。管理する画像の URL があるときだけ D1 を 1 回読む。別のサイトの URL は読まずに other_site。
+    // compile に失敗したときは出さない(公開は compile で止まる)。starting の仮の入力には当てない
+    const assetGuard = next && input ? await guardAssets(c.env, db, site, input, JSON.stringify(next), { readD1: true }) : null;
+    const assetProblems = assetGuard && !assetGuard.ok ? assetGuard.assetProblems : [];
     const active = await loadActiveConfig(db, site);
     const nextPatterns = next?.patterns;
     const droppedPageConditions =
@@ -349,6 +375,7 @@ publishRoutes.get(
       droppedPageConditions,
       viewportExperiments: viewport.map((id) => ({ id, name: viewportNames.get(id) ?? id })),
       compileError,
+      assetProblems,
       overlaps,
       lastActivatedAt: site.last_activated_at,
       siteLevelChanged: site.content_updated_at > since,

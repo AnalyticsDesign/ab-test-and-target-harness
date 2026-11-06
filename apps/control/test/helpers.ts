@@ -1211,3 +1211,34 @@ export function otherStaticInput(input: FakeStaticInput): FakeStaticInput {
   const settings = input.settings as { decisionTimeoutMs: number };
   return { ...input, settings: { ...settings, decisionTimeoutMs: settings.decisionTimeoutMs + 100 } };
 }
+
+/**
+ * B68 Task 3: D1 に画像の行を直接入れる(IMAGE の保存の確かめの種)。`url` を渡せばその公開 URL のまま入れる。
+ * name_key はサイトの中で UNIQUE なので、名前は ID にする。消す途中(`purgeMarkedAt`)は `deletedAt` も付けて渡す
+ */
+export async function seedAssetRow(
+  sid: string,
+  o: { id: string; url?: string; deletedAt?: number | null; purgeMarkedAt?: number | null },
+): Promise<string> {
+  const url = o.url ?? `${env.AB_ASSET_PUBLIC_BASE}/sites/${sid}/images/${o.id}.png`;
+  await env.DB.prepare(
+    `insert into assets (id, site_id, name, name_key, r2_key, public_url, mime, size, thumb_state, created_by, created_at, deleted_at, purge_marked_at, updated_at)
+     values (?1, ?2, ?1, ?1, ?3, ?4, 'image/png', 1, 'skipped', 'u', 1, ?5, ?6, 1)`,
+  )
+    .bind(o.id, sid, `sites/${sid}/images/${o.id}.png`, url, o.deletedAt ?? null, o.purgeMarkedAt ?? null)
+    .run();
+  return url;
+}
+
+/** B68 Task 3: `prepare` に渡った SQL を記録する D1 ラッパ(往復の数・読んだ表を見る)。batch の中の文も prepare を通るので記録される */
+export function recordingD1(db: D1Database): { DB: D1Database; sqls: string[] } {
+  const sqls: string[] = [];
+  const DB = new Proxy(db, {
+    get(target, prop) {
+      const v = Reflect.get(target, prop);
+      if (prop === "prepare") return (q: string) => (sqls.push(q), target.prepare(q));
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  }) as D1Database;
+  return { DB, sqls };
+}

@@ -5,6 +5,8 @@ const PATHS = {
   flask: (<><path d="M6 2h4M7 2v4L3.5 12.5A1 1 0 0 0 4.4 14h7.2a1 1 0 0 0 .9-1.5L9 6V2" /><path d="M5 10h6" /></>),
   target: (<><circle cx="8" cy="8" r="6" /><circle cx="8" cy="8" r="3" /><circle cx="8" cy="8" r=".6" /></>),
   venn: (<><circle cx="6" cy="8" r="4" /><circle cx="10" cy="8" r="4" /></>),
+  // 画像(B68 の左メニューの「画像」)
+  image: (<><rect x="2" y="3" width="12" height="10" rx="1.5" /><circle cx="6" cy="6.5" r="1.2" /><path d="M2.5 12l3.5-3.5 2.5 2.5 2-2 3 3" /></>),
   link: (<><path d="M6.5 9.5l3-3" /><path d="M7 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1" /><path d="M9 11.5l-1 1A2.5 2.5 0 0 1 4.5 9l1-1" /></>),
   history: (<><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9" /><path d="M2.5 2.5v2.5H5" /><path d="M8 5v3l2 1.5" /></>),
   gear: (<><circle cx="8" cy="8" r="2" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" /></>),

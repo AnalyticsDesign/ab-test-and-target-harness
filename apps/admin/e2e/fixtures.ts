@@ -112,12 +112,12 @@ export const HERO_TEXT = "E2E から書き換え";
  * admin BFF は接続元 IP を転送しないので(決定 35 (4))、この E2E のすべての無認証 POST は control からは
  * 同じ IP に見え、経路ごとに 1 枠を共有する(apps/control/src/app.ts)。
  *
- * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 41 回(`login(` の呼び出しの実数。publish-flow 10 / audience-flow 10 /
+ * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 42 回(`login(` の呼び出しの実数。publish-flow 10 / audience-flow 10 /
  * version-banner 2 / request-count 3 / experiment-kind-flow 1 / login-screen 1 / results-flow 1 / invite-flow 1 / static-delivery 1 / results-settings 1 /
- * variant-ui 1 / write-freeze 1 / refresh-race 1 / shell-reuse 1 / domains-flow 1 / experiment-save 1 / leave-guard 1 / nav-feedback 1 / busy-scopes 1 / audit-log 1、うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 /
- * 招待受諾 5 回(invite-flow 1 / static-delivery 1 / busy-scopes 1 / audit-log 2。`acceptInvite()` は受諾でセッションを得るので、招待されたメンバーの sign-in は数えない)/
+ * variant-ui 1 / write-freeze 1 / refresh-race 1 / shell-reuse 1 / domains-flow 1 / experiment-save 1 / leave-guard 1 / nav-feedback 1 / busy-scopes 1 / audit-log 1 / images-flow 1、うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 /
+ * 招待受諾 6 回(invite-flow 1 / static-delivery 1 / busy-scopes 1 / audit-log 2 / images-flow 1。`acceptInvite()` は受諾でセッションを得るので、招待されたメンバーの sign-in は数えない)/
  * `break-glass/reset-link` 2 回(publish-flow 1 / audit-log 1)/ `reset-password` 1 回。
- * 1 実行の sign-in の合計(41)は上限(30 回 / 10 秒。`apps/control/wrangler.jsonc` の AUTH_RATE_LIMITER)を超えていて、合計だけでは
+ * 1 実行の sign-in の合計(42)は上限(30 回 / 10 秒。`apps/control/wrangler.jsonc` の AUTH_RATE_LIMITER)を超えていて、合計だけでは
  * 10 秒窓に収まるとは言えない。今は `workers: 1` で直列に走り、各 `login()` の間に画面の遷移とテストの操作が入るので、1 つの 10 秒窓に
  * 入る sign-in は合計よりずっと少ない(窓ごとの実数は測っていない)。これ以上ログインを増やすなら、
  * 各テストでログインし直すのをやめて `storageState` でセッションを引き回すこと(ログインの検証は 1 本残せばよい)。
@@ -400,4 +400,64 @@ export async function pick(scope: Page | Locator, label: string, option: string 
  */
 export async function confirmRunningTestSave(page: Page): Promise<void> {
   await page.getByRole("alertdialog", { name: "実行中のテストを変更しますか?" }).getByRole("button", { name: "保存する", exact: true }).press("Enter");
+}
+
+// ---- B68: サイトの画像のライブラリ(images-flow.spec.ts) ----
+
+/**
+ * 1x1 の PNG(テスト専用の固定値)。control はアップロードで宣言の形式と先頭のバイトの両方を確かめるので、本物の PNG のバイト列を使う。
+ * 同じ中身を何度上げてもよい(画像は ID と名前で別の行になる)
+ */
+export const PNG_1X1_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+/** `setInputFiles` に渡す 1 枚 */
+export const pngFile = (name: string) => ({ name, mimeType: "image/png", buffer: Buffer.from(PNG_1X1_BASE64, "base64") });
+
+/** アップロードの 201 のうち、テストが使う分 */
+export type UploadedImage = { id: string; name: string; publicUrl: string; renamedFrom?: string };
+
+/**
+ * 画面を通さずに BFF でサイトに画像を 1 枚上げる(`POST /api/control/sites/:sid/assets`。multipart で file と name)。
+ * name を省くと control がファイル名から名前を作る(重なれば番号を付ける)
+ */
+export async function uploadImage(page: Page, siteId: string, opts: { fileName?: string; name?: string } = {}): Promise<UploadedImage> {
+  const fileName = opts.fileName ?? "image.png";
+  const multipart: Record<string, string | { name: string; mimeType: string; buffer: Buffer }> = { file: pngFile(fileName) };
+  if (opts.name !== undefined) multipart.name = opts.name;
+  const res = await page.request.post(`/api/control/sites/${siteId}/assets`, { headers: controlHeaders(), multipart });
+  expect(res.status(), `画像のアップロード(${fileName})が 201`).toBe(201);
+  return (await res.json()) as UploadedImage;
+}
+
+/**
+ * パターンの変更を IMAGE の変更だけにする fixture(srcs = 画像の公開 URL。空配列 = IMAGE の変更が 0 のパターン)。
+ * B77: 作成の既定で a はオリジナル(変更を送れない)なので、既定は b に置く。セレクタは変更ごとに別の img にする
+ */
+export async function putImageChanges(page: Page, siteId: string, experimentId: string, srcs: string[], variantId = "b"): Promise<void> {
+  const changes = srcs.map((src, i) => ({ id: `c_img${i}`, type: "IMAGE", selector: `img.e2e-img-${i}`, payload: { src } }));
+  const res = await page.request.put(`/api/control/sites/${siteId}/experiments/${experimentId}/variants/${variantId}/changes`, { headers: controlHeaders(), data: changes });
+  expect(res.status(), `IMAGE の変更 ${srcs.length} 件の保存が 200`).toBe(200);
+}
+
+/**
+ * 動いている wrangler dev と同じ sqlite(E2E の状態ディレクトリ)に SQL を流す。Cron を待たずに画像の行の状態
+ * (消す途中の印・Cron が戻した時刻・公開したときの定義の使い方)を作るために使う。markSessionsAsGoogle と同じ流し方
+ */
+export function d1Local(sql: string): void {
+  execFileSync("pnpm", ["exec", "wrangler", "d1", "execute", "wtt-control", "--local", "--persist-to", ".e2e-state", "--command", sql], { cwd: controlDir, stdio: "pipe" });
+}
+
+/**
+ * ファイルのドラッグ&ドロップ(dragenter → dragover → drop)を target に送る。DataTransfer に File を入れるので types は ["Files"] になる。
+ * target = null なら <main>(一覧の画面の DropOverlay は window で受ける)。IMAGE の欄・選ぶ窓は React の要素の handler なので、その要素に送る
+ */
+export async function dropImages(page: Page, target: Locator | null, names: string[]): Promise<void> {
+  await (target ?? page.locator("main")).evaluate(
+    (node, [b64, files]) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const dt = new DataTransfer();
+      for (const n of files) dt.items.add(new File([bytes], n, { type: "image/png" }));
+      for (const type of ["dragenter", "dragover", "drop"]) node.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
+    },
+    [PNG_1X1_BASE64, names] as const,
+  );
 }

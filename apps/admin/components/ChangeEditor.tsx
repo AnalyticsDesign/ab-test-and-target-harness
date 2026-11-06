@@ -2,12 +2,15 @@
 import type { Change } from "@/lib/types";
 import { insertIndent } from "@/lib/code-textarea";
 import { changeTypeOptions } from "@/lib/capabilities";
+import type { ImageFieldMode } from "@/lib/images";
 import type { KeyboardEvent } from "react";
 import { Picker } from "./ui/Picker";
+import { ImageField } from "./images/ImageField";
+import { useSiteAssets } from "./images/SiteAssetsProvider";
 
 const TYPES: Array<{ t: Change["type"]; label: string; code?: boolean }> = [
   { t: "TEXT", label: "TEXT(textContent を置換)" },
-  { t: "IMAGE", label: "IMAGE(img の src をアップロードした画像に)" },
+  { t: "IMAGE", label: "IMAGE(img の src を、このサイトの画像に)" },
   { t: "HIDE", label: "HIDE(非表示)" },
   { t: "ATTRIBUTE", label: "ATTRIBUTE(許可された属性を置換)" },
   { t: "HTML", label: "HTML(コードの変更: HTML を挿入・置換)", code: true },
@@ -37,7 +40,7 @@ export function ChangeEditor({
   onRemove,
   disabled,
   pageUrl,
-  imageUpload,
+  imageMode,
   error,
 }: {
   change: Change;
@@ -45,11 +48,13 @@ export function ChangeEditor({
   onRemove: () => void;
   disabled?: boolean;
   pageUrl: string | null;
-  imageUpload: boolean;
+  /** picker = 選ぶ窓の欄 / url = URL の入力(R2 なし・アップローダーあり)/ off = IMAGE を新しく選べない(既存の IMAGE は URL の入力のまま) */
+  imageMode: ImageFieldMode;
   /** HTML の欄のエラー(B8: 保存の前に空の HTML を見つけたとき、呼び出し側が「HTML を入力してください」を渡す) */
   error?: string;
 }) {
-  const allowed = changeTypeOptions(imageUpload, change.type);
+  const allowed = changeTypeOptions(imageMode !== "off", change.type);
+  const siteAssets = useSiteAssets();
   const p = change.payload as Record<string, string | boolean>;
   const setP = (patch: Record<string, unknown>) => onChange({ ...change, payload: { ...change.payload, ...patch } });
   // Tab で 2 スペース(フォーカスは移さない)。Shift+Tab は標準のフォーカス移動のまま残す — キーボードで入力欄から出る手段(r1 CX-Medium-3)。
@@ -113,7 +118,9 @@ export function ChangeEditor({
           <textarea value={String(p.text ?? "")} disabled={disabled} onChange={(e) => setP({ text: e.target.value })} />
         </label>
       ) : null}
-      {change.type === "IMAGE" ? (
+      {change.type === "IMAGE" && imageMode === "picker" ? (
+        <ImageField src={String(p.src ?? "")} assets={siteAssets?.snapshot.list?.assets ?? null} disabled={Boolean(disabled)} onChange={(src) => setP({ src })} />
+      ) : change.type === "IMAGE" ? (
         <label className="field">
           <span className="field-label">画像 URL(このサイトにアップロードした画像のみ)</span>
           <input value={String(p.src ?? "")} disabled={disabled} onChange={(e) => setP({ src: e.target.value })} />

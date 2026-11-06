@@ -12,7 +12,19 @@ export const SITE_NAV: Array<{ segment: string; label: string; icon: IconName }>
   { segment: "", label: "エクスペリエンス", icon: "flask" },
   { segment: "goals", label: "目標", icon: "target" },
   { segment: "audiences", label: "オーディエンス", icon: "venn" },
+  // B68: サイトの画像。R2 があればライブラリ、R2 なしでアップローダーがあればその画面(どちらも同じ URL。画面が出し分ける)
+  { segment: "images", label: "画像", icon: "image" },
 ];
+
+/**
+ * サイドバーに出すサイトの項目(B68。spec §9.1・K7 = Q295 案 1)。「画像」は imageUpload か imageUploader のどちらかが true のときだけ出す。
+ * imageUploader が無い(アップローダーが入る前の control)は false。capabilities の取得の失敗は既定の imageUpload: true で出す(最終の判定は control)。
+ * caps は app/w/layout.tsx がすでに読んだものを渡す(control への往復を増やさない)。
+ * パンくず(screenName)と選択中の項目(activeSegment)は定数の SITE_NAV のまま(メニューに無くても URL を直接開けば「画像」と出す)
+ */
+export function siteNav(caps: { imageUpload: boolean; imageUploader?: boolean }): typeof SITE_NAV {
+  return SITE_NAV.filter((n) => n.segment !== "images" || caps.imageUpload || caps.imageUploader === true);
+}
 
 /** 設定のメニューの「個人」「システム」の節の項目(決定 54 (7))。system はシステム管理者だけに出す。読むのは settingsGroups だけ */
 const SETTINGS_NAV: Array<{ href: string; label: string; icon: IconName; section: "personal" | "system"; prefetch?: false }> = [

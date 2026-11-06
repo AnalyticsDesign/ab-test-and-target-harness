@@ -547,8 +547,10 @@ describe("round trips", () => {
       create: { queries: 7, batches: 1 },
       duplicate: { queries: 9, batches: 1 },
       deleteDraft: { queries: 6, batches: 1 },
-      status: { queries: 28, batches: 2 },
-      archive: { queries: 33, batches: 2 },
+      // B68(2026-11-06): 開始は CAS の前に画像の確かめ(エクスペリエンス 1 + compile の入力 4。画像の URL があれば + 1。spec §22.2 の Q264)が入り +5 / 0、
+      // 続く公開の設定の記録が画像の条件付きの 1 文の batch になって -1 / +1(合計 +5)。終了は画像を確かめず、設定の記録の分だけ -1 / +1(合計は同じ)
+      status: { queries: 32, batches: 3 },
+      archive: { queries: 32, batches: 3 },
       adoption: { queries: 8, batches: 1 },
     });
   });

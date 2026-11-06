@@ -53,10 +53,10 @@ const events = async (action?: string): Promise<Event[]> =>
 const siteGenerationOf = async (sid: string) => (await env.DB.prepare(`select generation from sites where id = ?1`).bind(sid).first<{ generation: string }>())?.generation;
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52]);
-function pngForm(experimentId: string, name = "hero.png") {
+// B68: 画像はサイトに属する(experimentId を送ると 422)。名前は任意(無ければファイル名)
+function pngForm(name = "hero.png") {
   const fd = new FormData();
   fd.set("file", new File([PNG], name, { type: "image/png" }));
-  fd.set("experimentId", experimentId);
   return fd;
 }
 const goalBody = (id = "g_buy") => ({ id, name: "購入", type: "CUSTOM", config: {} });
@@ -98,7 +98,7 @@ describe("site.create / update / delete", () => {
     expect((await call("PATCH", `/sites/${sid}`, { token: owner.token, body: { timezone: "UTC" } })).status).toBe(200);
     expect((await call("POST", `/sites/${sid}/goals`, { token: owner.token, body: goalBody() })).status).toBe(201);
     expect((await call("POST", `/sites/${sid}/audiences`, { token: owner.token, body: audienceBody() })).status).toBe(201);
-    expect((await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm(eid) })).status).toBe(201);
+    expect((await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm() })).status).toBe(201);
     expect((await json(await publishRes(owner.token, sid))).ok).toBe(true);
     expect((await call("DELETE", `/sites/${sid}/experiments/${eid}`, { token: owner.token })).status).toBe(204);
     expect((await call("DELETE", `/sites/${sid}`, { token: owner.token })).status).toBe(204);
@@ -397,13 +397,12 @@ describe("goal / audience / asset", () => {
   it("asset_upload", async () => {
     const owner = await setupOwner();
     const { id: sid } = await createSite(owner.token, owner.workspaceId);
-    const { id: eid } = await createExperiment(owner.token, sid);
-    const res = await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm(eid) });
+    const res = await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm() });
     expect(res.status).toBe(201);
     const a = await json<{ id: string }>(res);
     const [e, ...rest] = await events("asset.upload");
     expect(rest).toEqual([]);
-    // 画像はエクスペリエンスの変更履歴には出さない(experiment_id を持たない)。どのエクスペリエンスの画像かは detail に持つ
+    // 画像はエクスペリエンスの変更履歴には出さない(experiment_id を持たない)。B68 で画像はサイトに属するので、detail にエクスペリエンスを持たない
     expect(e).toMatchObject({
       workspace_id: owner.workspaceId,
       site_id: sid,
@@ -411,13 +410,88 @@ describe("goal / audience / asset", () => {
       target_type: "asset",
       target_id: a.id,
       target_label: "hero.png",
-      detail: { bytes: PNG.byteLength, type: "image/png", experiment: eid },
+      detail: { bytes: PNG.byteLength, type: "image/png" },
     });
+    expect(e!.detail).not.toHaveProperty("experiment");
+    // 同じ名前は番号付きの名前で入る(記録の名前も番号付き)
+    expect((await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm() })).status).toBe(201);
+    expect((await events("asset.upload")).map((x) => x.target_label)).toEqual(["hero.png", "hero (2).png"]);
     // 記録が書けなければ画像の行も残らない(R2 の孤児は消す)
-    const failed = await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm(eid), envOverride: { DB: failingD1Insert(env.DB, "audit_events") } });
+    const failed = await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm(), envOverride: { DB: failingD1Insert(env.DB, "audit_events") } });
     expect(failed.status).toBe(500);
-    expect((await env.DB.prepare(`select count(*) as n from assets where site_id = ?1`).bind(sid).first<{ n: number }>())!.n).toBe(1);
+    expect((await env.DB.prepare(`select count(*) as n from assets where site_id = ?1`).bind(sid).first<{ n: number }>())!.n).toBe(2);
+    expect(await events("asset.upload")).toHaveLength(2);
+  });
+
+  it("asset_upload_over_quota_writes_no_record (B68: サイトの上限の 409 では書かない)", async () => {
+    const owner = await setupOwner();
+    const { id: sid } = await createSite(owner.token, owner.workspaceId);
+    const one = { AB_ASSET_SITE_MAX_COUNT: "1" };
+    expect((await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm(), envOverride: one })).status).toBe(201);
+    expect((await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm(), envOverride: one })).status).toBe(409);
     expect(await events("asset.upload")).toHaveLength(1);
+  });
+
+  it("asset_rename", async () => {
+    const owner = await setupOwner();
+    const { id: sid } = await createSite(owner.token, owner.workspaceId);
+    const a = await json<{ id: string }>(await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm() }));
+    const rename = (aid: string, name: string, envOverride?: Partial<typeof env>) => call("PATCH", `/sites/${sid}/assets/${aid}`, { token: owner.token, body: { name }, envOverride });
+    expect((await rename(a.id, "トップの画像.png")).status).toBe(200);
+    const [e, ...rest] = await events("asset.rename");
+    expect(rest).toEqual([]);
+    expect(e).toMatchObject({
+      workspace_id: owner.workspaceId,
+      site_id: sid,
+      experiment_id: null,
+      target_type: "asset",
+      target_id: a.id,
+      target_label: "トップの画像.png",
+      detail: { from: "hero.png", to: "トップの画像.png" },
+    });
+    // 無い画像(404)・同じ名前の画像がある(409)では書かない
+    expect((await rename("asset_nope", "x.png")).status).toBe(404);
+    await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm("other.png") });
+    expect((await rename(a.id, "other.png")).status).toBe(409);
+    expect(await events("asset.rename")).toHaveLength(1);
+    // 記録が書けなければ名前も変わらない
+    expect((await rename(a.id, "y.png", { DB: failingD1Insert(env.DB, "audit_events") })).status).toBe(500);
+    expect((await env.DB.prepare(`select name from assets where id = ?1`).bind(a.id).first<{ name: string }>())!.name).toBe("トップの画像.png");
+    expect(await events("asset.rename")).toHaveLength(1);
+  });
+
+  it("asset_delete", async () => {
+    const owner = await setupOwner();
+    const { id: sid } = await createSite(owner.token, owner.workspaceId);
+    const a = await json<{ id: string }>(await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm() }));
+    const del = (aid: string, envOverride?: Partial<typeof env>) => call("DELETE", `/sites/${sid}/assets/${aid}`, { token: owner.token, envOverride });
+    // 記録が書けなければ削除待ちの印も付かない
+    expect((await del(a.id, { DB: failingD1Insert(env.DB, "audit_events") })).status).toBe(500);
+    expect((await env.DB.prepare(`select deleted_at from assets where id = ?1`).bind(a.id).first<{ deleted_at: number | null }>())!.deleted_at).toBeNull();
+    expect(await events("asset.delete")).toEqual([]);
+    expect((await del(a.id)).status).toBe(200);
+    const [e, ...rest] = await events("asset.delete");
+    expect(rest).toEqual([]);
+    expect(e).toMatchObject({
+      workspace_id: owner.workspaceId,
+      site_id: sid,
+      experiment_id: null,
+      target_type: "asset",
+      target_id: a.id,
+      target_label: "hero.png",
+      detail: {},
+    });
+    // もう削除待ち(404)・使われている(409)では書かない
+    expect((await del(a.id)).status).toBe(404);
+    const { id: eid } = await createExperiment(owner.token, sid);
+    const used = await json<{ id: string; publicUrl: string }>(await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: pngForm("used.png") }));
+    const put = await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, {
+      token: owner.token,
+      body: [{ id: "c_img", type: "IMAGE", selector: "img.hero", payload: { src: used.publicUrl } }],
+    });
+    expect(put.status).toBe(200);
+    expect((await del(used.id)).status).toBe(409);
+    expect(await events("asset.delete")).toHaveLength(1);
   });
 });
 
@@ -552,7 +626,7 @@ describe("round trips", () => {
       audienceCreate: await req("POST", `/sites/${sid}/audiences`, { body: audienceBody() }, 201),
       audiencePatch: await req("PATCH", `/sites/${sid}/audiences/aud_a`, { body: { name: "N" } }),
       audienceDelete: await req("DELETE", `/sites/${sid}/audiences/aud_a`, {}, 204),
-      asset: await req("POST", `/sites/${sid}/assets`, { raw: pngForm(eid) }, 201),
+      asset: await req("POST", `/sites/${sid}/assets`, { raw: pngForm() }, 201),
       siteCreate: await req("POST", `/workspaces/${owner.workspaceId}/sites`, { body: { name: "S2", domains: ["rt.example.com"] } }, 201),
       sitePatch: await req("PATCH", `/sites/${sid}`, { body: { timezone: "UTC" } }),
       publish: await req("POST", `/sites/${sid}/publish`, {}),
@@ -560,21 +634,29 @@ describe("round trips", () => {
     };
     const s2 = (await env.DB.prepare(`select id from sites where name = 'S2'`).first<{ id: string }>())!.id;
     const siteDelete = await req("DELETE", `/sites/${s2}`, {}, 204);
+    // B68: 画像の名前の変更・削除待ち(どちらも 1 つの batch に記録の文を足すだけ)
+    const aid = (await env.DB.prepare(`select id from assets where site_id = ?1`).bind(sid).first<{ id: string }>())!.id;
+    const assetRename = await req("PATCH", `/sites/${sid}/assets/${aid}`, { body: { name: "renamed.png" } });
+    const assetDelete = await req("DELETE", `/sites/${sid}/assets/${aid}`, {});
     // 実装の前: goalCreate 10/0・goalPatch 10/0・goalDelete 11/0・audienceCreate 8/0・audiencePatch 9/0・audienceDelete 9/0・asset 7/0・
     // siteCreate 8/1・sitePatch 9/1・publish 24/1・redeploy 7/0・siteDelete 8/1
-    expect({ ...out, siteDelete }).toEqual({
+    // B68 の後(2026-11-06): 画像のアップロードは、使用量と名前の候補を読む batch と、足す文・使用量・記録の batch の 2 つ(照会 1 つが batch に替わり、
+    // 往復の合計 7 は同じ)。公開は、画像の確かめの条件付きの設定の記録が 1 文の batch になった(照会 1 つが batch に替わり、往復の合計 25 は同じ)
+    expect({ ...out, siteDelete, assetRename, assetDelete }).toEqual({
       goalCreate: { queries: 9, batches: 1 },
       goalPatch: { queries: 9, batches: 1 },
       goalDelete: { queries: 10, batches: 1 },
       audienceCreate: { queries: 7, batches: 1 },
       audiencePatch: { queries: 8, batches: 1 },
       audienceDelete: { queries: 8, batches: 1 },
-      asset: { queries: 6, batches: 1 },
+      asset: { queries: 5, batches: 2 },
       siteCreate: { queries: 8, batches: 1 },
       sitePatch: { queries: 9, batches: 1 },
-      publish: { queries: 24, batches: 1 },
+      publish: { queries: 23, batches: 2 },
       redeploy: { queries: 6, batches: 1 },
       siteDelete: { queries: 8, batches: 1 },
+      assetRename: { queries: 5, batches: 1 },
+      assetDelete: { queries: 5, batches: 1 },
     });
   });
 });

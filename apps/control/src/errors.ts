@@ -28,6 +28,14 @@ export const DEFAULT_MESSAGES: Record<string, string> = {
   request_failed: "リクエストを処理できません",
   invalid_transition: "その status には遷移できません",
   image_upload_disabled: "この導入では画像アップロードと IMAGE の変更は使えません",
+  asset_quota_exceeded: "サイトの画像の上限に達しています",
+  asset_name_taken: "同じ名前の画像がこのサイトにあります",
+  asset_in_use: "使われている画像は削除できません",
+  asset_not_found: "指定した画像がサイトの画像の一覧にありません",
+  asset_ref_encoded: "画像の URL が文字参照・エスケープ・% の形で書かれています",
+  // 状態を変える口の開始・再開で、CAS の前の画像の確かめに落ちたとき(公開の失敗の文言は publish.ts の FAILURE_MESSAGES)
+  asset_missing: "画像の確かめに通らないため、状態を変えませんでした",
+  asset_other_site: "画像の確かめに通らないため、状態を変えませんでした",
   google_not_configured: "Google ログインが設定されていません",
   invalid_handoff: "ログインの引き継ぎコードが無効か期限切れです",
   password_login_disabled: "パスワードでのログインは無効です",
@@ -73,6 +81,18 @@ export class ApiError extends Error {
 }
 
 export const notFound = () => new ApiError(404, "not_found");
+
+/**
+ * B68: 画像の確かめに落ちたときの hint(公開の失敗と、状態を変える口の 409 が共有する。どの画像かは assetProblems に載る)。
+ * 公開物なので設計記録への参照を書かない
+ */
+export const ASSET_GUARD_HINTS = {
+  asset_missing: "次の画像が見つからないため公開できません。パターンの変更から外すか、別の画像を選び直してください",
+  asset_other_site: "別のサイトの画像は使えません。このサイトに画像をアップロードして、その画像に差し替えてください",
+} as const;
+/** 状態を変える口の開始・再開の 409(CAS も公開も走らせず、何も書かない) */
+export const assetGuardRejected = (error: keyof typeof ASSET_GUARD_HINTS, assetProblems: unknown[]) =>
+  new ApiError(409, error, { hint: `${ASSET_GUARD_HINTS[error]}。状態は変わっていません。直してからもう一度操作してください`, assetProblems });
 /** 利用者向けの文言に出すロールの名前(画面の用語。英語の識別子は required / role / highest などのフィールドに残る) */
 export const ROLE_JA: Record<string, string> = { owner: "オーナー", admin: "管理者", editor: "編集者", viewer: "閲覧者" };
 export const forbidden = (required: string) => new ApiError(403, "forbidden", { required, hint: `${ROLE_JA[required] ?? required}以上のロールが必要です` });

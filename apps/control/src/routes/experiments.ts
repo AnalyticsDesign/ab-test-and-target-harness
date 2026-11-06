@@ -19,6 +19,8 @@ import {
   type VariantAnalytics,
   newRunId,
   MAX_CHANGES_PER_VARIANT,
+  compile,
+  CompileError,
 } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
 import {
@@ -34,15 +36,16 @@ import {
   type AuditFieldChange,
   type AuditStatementOpts,
 } from "../audit";
+import { assetGuardEnabled, guardAssets } from "../asset-guard";
 import { changesPutBodyLimit } from "../body-limit";
 import { resultsStore } from "../capabilities";
 import { sqlStatement, toStatement, type Db, type ExperimentRow, type SiteRow, type Tables, type VariantRow } from "../db";
 import { copyChangesQuery, copyPlanQuery, copyVariantsQuery, duplicateExperimentRow, insertExperimentQuery, retiredIds, sourceUnchanged } from "../duplicate";
-import { ApiError, notFound, validationFailed } from "../errors";
+import { ApiError, assetGuardRejected, notFound, validationFailed } from "../errors";
 import { assertStartable, capacityWarning, fixPlanStatement, loadPlan, type LoadedPlan } from "../evaluation-plan";
 import { isReservedId, reservedIdMessage, SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
-import { publicPublishResult, publishSite, type PublishResult } from "../publish";
+import { buildCompileInput, publicPublishResult, publishSite, type PublishResult } from "../publish";
 import { rewriteCollectUntil } from "../results/collect-until";
 import { adoptionNotAllowed, AdoptionInputSchema, AdoptionJsonSchema, adoptionSummary, resolveAdoptedVariant } from "../results/adoption";
 import { deliveredAt } from "../results/delivered";
@@ -75,6 +78,7 @@ import {
   normalizedPageMatch,
   normalizedTargeting,
   parseChange,
+  assertImageAssetsExist,
   targetingValidationFailed,
 } from "../validation";
 
@@ -344,6 +348,28 @@ const variantOriginal = () =>
     message: "オリジナルのパターンには変更を保存できません",
     hint: "オリジナルは元のページをそのまま表示します。変更を加えるときは、オリジナルを外すか別のパターンに保存してください",
   });
+
+/**
+ * B68(spec §22.2 の「状態を変える口」。Q264): 開始・再開の CAS の前の画像の確かめ。対象の行だけ遷移の後の状態にした仮の行で compile し
+ * (`publish-preview` の `?starting=` と同じ形。並べる順に効くので last_started_at も今にする)、公開と同じ取り出しと `assets` の読み 1 回
+ * (管理する画像の URL があるときだけ)を当てる。D1 は エクスペリエンス 1 + compile の入力 4 + (あれば)1。
+ * compile が CompileError で落ちたときは断らない(今のとおり CAS の後の公開が同じ理由で落ちる)
+ */
+async function assertStartAssets(env: AppEnv["Bindings"], db: Db, site: SiteRow, eid: string, now: number): Promise<void> {
+  const rows = (await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute()).map(
+    (r): ExperimentRow => (r.id === eid ? { ...r, status: "running", last_started_at: now } : r),
+  );
+  const input = await buildCompileInput(db, site, (site.active_version ?? 0) + 1, rows);
+  let body: string;
+  try {
+    body = JSON.stringify(compile(input));
+  } catch (e) {
+    if (e instanceof CompileError) return;
+    throw e;
+  }
+  const g = await guardAssets(env, db, site, input, body, { readD1: true });
+  if (!g.ok) throw assetGuardRejected(g.error, g.assetProblems);
+}
 
 /** spec §13.8: draft → running、running ↔ paused、running | paused → archived(復帰不可)。表外は 409 invalid_transition */
 const TRANSITIONS: Record<ExperimentRow["status"], Array<ExperimentRow["status"]>> = {
@@ -940,11 +966,13 @@ experimentRoutes.put(
       throw variantOriginal();
     }
     // 全件を検証してから書く(1 件でも不正なら何も書かない)
-    const changes: Change[] = raw.map((r) => parseChange(c.env, site.id, r));
+    const changes: Change[] = raw.map((r, i) => parseChange(c.env, site.id, r, i));
     const ids = new Set(changes.map((ch) => ch.id));
     if (ids.size !== changes.length) throw new ApiError(422, "duplicate_change_id", { message: "変更の ID が重複しています" });
     for (const ch of changes)
       if (!SLUG_RE.test(ch.id)) throw new ApiError(422, "invalid_change_id", { changeId: ch.id, message: `変更の ID(${ch.id})の形式が不正です(スラッグのみ)` });
+    // B68 spec §4.5: IMAGE は画像の一覧と照らす(IMAGE がある保存だけ D1 を 1 回)。書く前に断り、下の batch とその例外の扱いは変えない
+    await assertImageAssetsExist(db, c.env, site.id, changes);
     const now = Date.now();
     const user = c.get("user").id;
     const existing = await db
@@ -1099,7 +1127,7 @@ experimentRoutes.post(
   describeRoute({
     tags: ["experiments"],
     summary:
-      "エクスペリエンスの status を遷移する(管理者以上)。成功した遷移は必ずサイトを自動公開する。結果を記録するサイトでテストの下書きを開始するときは、判定に使う目標が無い・基準の重みが 0 なら 422 evaluation_plan_incomplete で、通れば評価計画を固定する。結果を記録しないテストを開始したときは warnings で知らせる。テストの終了(archived)には採用(adoption)を付けられ、配信を止める公開の後に結果と採用を記録する(応答の results.recorded)",
+      "エクスペリエンスの status を遷移する(管理者以上)。成功した遷移は必ずサイトを自動公開する。結果を記録するサイトでテストの下書きを開始するときは、判定に使う目標が無い・基準の重みが 0 なら 422 evaluation_plan_incomplete で、通れば評価計画を固定する。結果を記録しないテストを開始したときは warnings で知らせる。テストの終了(archived)には採用(adoption)を付けられ、配信を止める公開の後に結果と採用を記録する(応答の results.recorded)。開始・再開は、画像の確かめに通らなければ(遷移の後に配信する内容に、見つからない画像・別のサイトの画像がある)状態を変えずに 409 asset_missing / asset_other_site を返す(封筒の assetProblems に画像の URL とそれを含む変更)。一時停止・終了は画像を確かめずに状態を変えて公開する",
     security: [{ bearer: [] }],
     responses: {
       200: {
@@ -1169,6 +1197,9 @@ experimentRoutes.post(
         console.error("capacity warning failed (start continues without it)", e);
       }
     }
+    // B68(spec §22.2。Q264・Q266): 開始・再開だけ、CAS の前に公開と同じ画像の確かめを流す。落ちたら状態を変えず(CAS も公開も
+    // 走らせず、何も書かずに)409。止める操作(一時停止・終了)は確かめず、その公開も画像の確かめをしない(必ず通す)
+    if (body.status === "running" && assetGuardEnabled(c.env)) await assertStartAssets(c.env, db, site, exp.id, now);
     const runId = issue ? newRunId() : null;
     const stamps = {
       ...(body.status === "running" && exp.started_at === null ? { started_at: now } : {}),
@@ -1271,7 +1302,8 @@ experimentRoutes.post(
     let fresh: ExperimentRow;
     let freshSite: Pick<SiteRow, "last_activated_at">;
     try {
-      publish = await publishSite(c.env, db, site, auditActor(c)); // B129: 自動の公開の publish.publish の行は状態を変えた人
+      // B129: 自動の公開の publish.publish の行は状態を変えた人
+      publish = await publishSite(c.env, db, site, auditActor(c), undefined, { skipAssetGuard: body.status !== "running" });
       fresh = await loadExperiment(db, site.id, exp.id);
       freshSite = await db.selectFrom("sites").select("last_activated_at").where("id", "=", site.id).executeTakeFirstOrThrow();
     } catch (e) {

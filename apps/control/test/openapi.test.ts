@@ -95,6 +95,57 @@ describe("openapi (decision 34)", () => {
     expect(changesBody?.maxItems, "PUT …/changes: maxItems が無い").toBe(100);
   });
 
+  it("b68_site_asset_routes_are_described", async () => {
+    // B68: 画像の 4 つの口(POST / GET / PATCH / DELETE)に summary と応答の説明がある。新しい口を足して説明を忘れたら、この掃引が落ちる
+    type Op = { summary?: string; description?: string; responses?: Record<string, { description?: string; content?: Record<string, Media> }> };
+    const doc = (await (await app.request("/openapi.json", {}, env)).json()) as Doc & {
+      paths: Record<string, Record<string, Op>>;
+      components?: { schemas?: Record<string, Schema> };
+    };
+    const routes = mountedOperations().filter(([, path]) => path.startsWith("/sites/{sid}/assets"));
+    expect(routes.map(([m, p]) => `${m} ${p}`).sort()).toEqual([
+      "delete /sites/{sid}/assets/{aid}",
+      "get /sites/{sid}/assets",
+      "patch /sites/{sid}/assets/{aid}",
+      "post /sites/{sid}/assets",
+    ]);
+    for (const [method, path] of routes) {
+      const op = doc.paths[path]![method] as Op;
+      expect(op.summary?.length ?? 0, `${method} ${path}: summary`).toBeGreaterThan(20);
+    }
+    const op = (method: string, path: string) => doc.paths[path]![method] as Op;
+    expect(op("get", "/sites/{sid}/assets").summary).toContain("公開したときの内容での使用は公開の記録から数える");
+    expect(op("delete", "/sites/{sid}/assets/{aid}").summary).toContain("24 時間の後に、どこでも使われていなければ消える");
+    expect(op("delete", "/sites/{sid}/assets/{aid}").summary).toContain("パターンの変更か、公開したときの内容で使われている間は 409");
+    // 名前の変更の応答は使い方を読まない(使用中でも inUse: false)。その旨が応答の説明にある
+    expect(op("patch", "/sites/{sid}/assets/{aid}").responses!["200"]!.description).toMatch(/使い方を読まない.*usedBy・deliveredIn は空.*inUse は false/);
+    // 項目の説明: 一覧・削除・名前の変更の応答
+    const props = (schema: Schema | undefined): Record<string, { description?: string; properties?: Record<string, { description?: string }>; items?: Schema }> => {
+      const resolved = schema?.$ref ? doc.components?.schemas?.[schema.$ref.split("/").pop()!] : schema;
+      return (resolved?.properties ?? {}) as never;
+    };
+    const ok = (method: string, path: string, code: string) => op(method, path).responses![code]!.content!["application/json"]!.schema;
+    const list = props(ok("get", "/sites/{sid}/assets", "200"));
+    const item = (list.assets!.items as Schema).properties as Record<string, { description?: string }>;
+    for (const key of ["deliveredIn", "inUse", "keptAt"]) expect(item[key]?.description, `GET assets[].${key}`).toBeTruthy();
+    const usage = list.usage!.properties!;
+    for (const key of ["pendingCount", "pendingBytes"]) expect(usage[key]?.description, `usage.${key}`).toBeTruthy();
+    const renamed = props(ok("patch", "/sites/{sid}/assets/{aid}", "200")) as Record<string, { description?: string }>;
+    for (const key of ["usedBy", "deliveredIn", "inUse"]) expect(renamed[key]?.description, `PATCH ${key}`).toContain("使い方を読まない");
+    const deleted = props(ok("delete", "/sites/{sid}/assets/{aid}", "200")) as Record<string, { description?: string }>;
+    for (const key of ["status", "purgeAfter"]) expect(deleted[key]?.description, `DELETE ${key}`).toBeTruthy();
+    // 状態を変える口: 開始・再開と、止める操作の違い
+    const status = op("post", "/sites/{sid}/experiments/{eid}/status").summary;
+    expect(status).toContain("開始・再開は、画像の確かめに通らなければ");
+    expect(status).toContain("状態を変えずに 409");
+    expect(status).toContain("一時停止・終了は画像を確かめずに状態を変えて公開する");
+    // 公開の失敗(error の例)と、画像の問題の項目
+    const publish = JSON.stringify(doc.paths["/sites/{sid}/publish"]!.post);
+    expect(publish).toContain("asset_missing / asset_other_site");
+    expect(publish).toContain("assetProblems");
+    expect(JSON.stringify(doc.paths["/sites/{sid}/publish-preview"]!.get)).toContain("assetProblems");
+  });
+
   it("b77_fields_are_published", async () => {
     // B77: 目標の外部計測(analytics)・パターンのオリジナルとメモ(original / description)・パターンのメモだけを更新するルート
     const doc = (await (await app.request("/openapi.json", {}, env)).json()) as Doc & { components?: { schemas?: Record<string, Schema> } };

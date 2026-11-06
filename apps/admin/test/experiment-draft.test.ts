@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EDITOR_TABS, draftOf, tabsFor, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, reconcileServerUpdate, saveSteps, targetingBody, type Draft } from "@/lib/experiment-draft";
+import { EDITOR_TABS, draftOf, tabsFor, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, acceptSavedDraft, reconcileServerUpdate, saveSteps, targetingBody, type Draft } from "@/lib/experiment-draft";
 import type { Experiment } from "@/lib/types";
 
 const EXP = {
@@ -212,5 +212,30 @@ describe("B173 第 1 段 Task 7: 変えた欄だけを送る・評価計画を�
     const sent = { ...draftOf(EXP), name: "mine" };
     const s = { ...sent, traffic: 20 };
     expect(reconcileServerUpdate({ base: sent, draft: sent, server: s })).toEqual({ base: s, draft: s, notice: false });
+  });
+});
+
+describe("保存の途中に届いた下書きの変更(I2)", () => {
+  const withImage = (src: string): Draft => {
+    const a = draftOf(EXP);
+    return { ...a, variants: a.variants.map((v) => (v.id === "b" ? { ...v, changes: [{ id: "c_img", type: "IMAGE", selector: "img.hero", payload: { src } }] } : v)) } as Draft;
+  };
+  it("upload finished after save started: the later src stays as an unsaved change", () => {
+    const saved = withImage("https://assets.example.com/sites/s/images/asset_old.png");
+    const sent = { ...saved, name: "保存する名前" }; // 未保存の下書きで保存を始めた
+    // 保存の途中にアップロードが終わり、欄の src を新しい画像にした
+    const current = { ...sent, variants: withImage("https://assets.example.com/sites/s/images/asset_new.png").variants };
+    const after = acceptSavedDraft(sent, current);
+    expect(after.base).toBe(sent);
+    expect(after.draft).toBe(current);
+    expect(isDirty(after.base, after.draft)).toBe(true); // 保存の帯・離れる前の確認は未保存のまま
+    // 読み直しで届いた値(= 送った内容)でも、新しい src は消えず、注記も出ない
+    expect(reconcileServerUpdate({ base: after.base, draft: after.draft, server: sent })).toEqual({ base: sent, draft: current, notice: false });
+  });
+  it("no change during save: the sent draft becomes the base and nothing is unsaved", () => {
+    const sent = { ...draftOf(EXP), name: "mine" };
+    const after = acceptSavedDraft(sent, sent);
+    expect(after).toEqual({ base: sent, draft: sent });
+    expect(isDirty(after.base, after.draft)).toBe(false);
   });
 });

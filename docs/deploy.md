@@ -240,7 +240,7 @@ pnpm -C apps/control exec wrangler d1 create wtt-control </dev/null   # 2.2 と�
 **12. 画像の置き場を決める**(3.2)
 
 - **R2 を使わない**: `apps/control/wrangler.jsonc` の `r2_buckets` の行を削除し、手順 14 の `AB_ASSET_PUBLIC_BASE` を書かない。画像アップロードと IMAGE の変更が無効になるだけで、ほかは同じ(3.2 の「`none` のとき」)
-- **R2 を使う**: ダッシュボードの Storage & databases(ストレージとデータベース)→ R2 Object Storage(R2 オブジェクトストレージ)で有効化する。支払い方法の登録を求められることがあるが、無料枠内なら請求は無い。次にバケットを作り、公開用のドメインをつなぐ。公開用のドメインは、Cloudflare に追加した自分のゾーンのホストにする(例 `wtt-assets.<ゾーン名>`)。ゾーンを持たない構成では、R2 用にドメインを 1 つ追加するか、下の `dev-assets` を使う:
+- **R2 を使う**: ダッシュボードの Storage & databases(ストレージとデータベース)→ R2 Object Storage(R2 オブジェクトストレージ)で有効化する。支払い方法の登録を求められることがあるが、無料枠内なら請求は無い。次にバケットを作り、公開用のドメインをつなぐ。公開用のドメインは、Cloudflare に追加した自分のゾーンのホストにする(例 `wtt-assets.<ゾーン名>`)。ゾーンを持たない構成では、R2 用にドメインを 1 つ追加するか、下の `dev-assets` を使う。画像を本番で使うなら、`dev-assets` ではなくカスタムドメインを勧める(画像を使い始めた後に切り替えると、それまでの画像の URL が読めなくなる。3.2 の (3)):
 
 ```bash
 pnpm -C apps/control exec wrangler r2 bucket create wtt-assets </dev/null   # 2.2 と同じく、設定ファイルへの追記は非対話なので行わない
@@ -285,6 +285,7 @@ pnpm -C apps/control exec wrangler secret list | jq -r '.[].name' | sort   # 期
 | `AB_CONTROL_URL` | `<control URL>` |
 | `AB_ASSET_PUBLIC_BASE` | 手順 12 でつないだドメイン(`https://wtt-assets.<ゾーン名>`)か `<control URL>/dev-assets`。R2 を使わないなら書かない |
 | `AB_ASSET_MAX_MB` | アップロード 1 件の上限(MB)。例 `"5"` |
+| `AB_ASSET_SITE_MAX_MB` / `AB_ASSET_SITE_MAX_COUNT` | 書かなくてよい。書かなければ 1 サイトあたり合計 1024 MB・1,000 枚(3.4) |
 | `AB_GOOGLE_CLIENT_ID` | `deploy-secrets.env` の `GOOGLE_CLIENT_ID` の値 |
 | `AB_EDGE_ORIGIN` | `https://<設置ホスト>` |
 | `CF_ACCOUNT_ID` | `<Account ID>` |
@@ -1445,7 +1446,7 @@ pnpm -C apps/control exec wrangler d1 list --json | jq -r '.[] | select(.name ==
 
 **`none`(R2 を使わない)のとき**: ここから先は飛ばし、`apps/control/wrangler.jsonc` の `r2_buckets` の行を削除する。3.4 の `AB_ASSET_PUBLIC_BASE` も書かない。
 
-- R2 の有効化(支払い方法の登録)は不要になり、control は画像アップロードと IMAGE の変更を無効にして動く。画像の差し替えは ATTRIBUTE の `src` で行う。管理画面はアップロードボタンと IMAGE の選択肢を出さない
+- R2 の有効化(支払い方法の登録)は不要になり、control は画像アップロード・画像の一覧と IMAGE の変更を無効にして動く。画像の差し替えは ATTRIBUTE の `src` で行う。管理画面は左メニューの「画像」と IMAGE の選択肢を出さない
 - 後から R2 を使い始める(`none` → あり): R2 を有効化 → 下の「R2 を使うとき」のとおりバケットを作り `r2_buckets` と `AB_ASSET_PUBLIC_BASE` を戻す → 3.5 の再デプロイ。既存のエクスペリエンスには影響しない
 - あり → `none` の切り替えはサポートしない。IMAGE の変更を含むエクスペリエンスを archive してから `r2_buckets` と `AB_ASSET_PUBLIC_BASE` を外す。残った IMAGE の変更の保存は 422 になる
 - `GET /capabilities`(認証要)の `imageUpload` で、どちらの構成で動いているかを確認できる
@@ -1474,7 +1475,9 @@ pnpm -C apps/control exec wrangler r2 bucket create wtt-assets </dev/null   # 2.
 
 (3) 公開ベースを決める。`asset_public_base` の値を変えずに 3.4 の `AB_ASSET_PUBLIC_BASE` に使う。
 
-- `dev-assets` を選んだ場合: 実値は `<control URL>/dev-assets`。control URL は 3.5 の初回 deploy で分かる。control 自身が R2 を読んで画像を返すので、アップロードと IMAGE の変更は動作する。ただし配信は Worker 経由なので R2 直配信より遅く、Workers のリクエスト数を消費する。`AB_ASSET_PUBLIC_BASE` をカスタムドメインに変えると `GET /dev-assets/*` は自動的に閉じる
+- **本番ではカスタムドメインを勧める**。カスタムドメインなら、訪問者と管理画面は R2 から直接画像を読み、Worker は動かない(Cloudflare のキャッシュも使われる)。`dev-assets` は、R2 にドメインを接続できない間の暫定と、手元の開発のためのもの
+- `dev-assets` を選んだ場合: 実値は `<control URL>/dev-assets`。control URL は 3.5 の初回 deploy で分かる。control 自身が R2 を読んで画像を返すので、アップロードと IMAGE の変更は動作する。ただし、訪問者のページと管理画面の画像の一覧で画像を 1 枚表示するたびに control が 1 回動き、Workers Free の 1 日のリクエスト数(アカウント全体で 10 万)を edge・管理画面と分け合う。Cloudflare のキャッシュも使われない(ブラウザのキャッシュだけ)。訪問者の多いサイトで IMAGE の変更を配信すると、この枠を先に使い切るおそれがある。R2 直配信より遅くもなる
+- `dev-assets` からカスタムドメインに変えるなら、**画像を使い始める前に**変える。`AB_ASSET_PUBLIC_BASE` をカスタムドメインに変えると `GET /dev-assets/*` は自動的に閉じ、それまでに上げた画像の URL(`…/dev-assets/sites/…`)は読めなくなる。画像の一覧の URL・保存済みの変更・公開した設定の URL は書き換わらないので、前の画像は一覧でも表示されなくなり、その画像を使うパターンでは画像を上げ直して選び直すことになる
 - カスタムドメイン(例 `assets.<運用者ドメイン>`)を選んだ場合: 下のコマンドでバケットに接続し、`vars.AB_ASSET_PUBLIC_BASE` をその URL にして再デプロイする。DNS レコードと証明書は Cloudflare が作る。ドメインのゾーンが同じアカウントにあること。権限で拒否されたときだけ人に頼む(下の「期待と違うとき」):
 
 ```bash
@@ -1499,6 +1502,14 @@ curl -sS -o /dev/null -w '%{http_code}\n' "https://<assets.example.com>/"   # �
 pnpm -C apps/control exec wrangler r2 bucket info wtt-assets   # 期待: 終了コード 0、出力に name: wtt-assets を含む
 grep -c '"binding": "ASSETS"' apps/control/wrangler.jsonc   # 期待: 1
 ```
+
+**画像の一覧の縮小版(Cloudflare Images)**: 管理画面の画像の一覧に出す縮小画像(幅 320px の WebP)は、Cloudflare Images の変換で control が作る。`apps/control/wrangler.jsonc` には `"images": { "binding": "IMAGES" }` の行が最初から入っていて、書き換えは要らない。
+
+- Cloudflare の Free のプランでも変換を使える。無料で使えるのは月 5,000 種類の変換まで。超えた月は新しい変換が断られ、課金はされない。その月の残りは縮小版が作られず、一覧には元の画像を出す。翌月の最初の定期処理から、作り待ちの縮小版を作り始める
+- ダッシュボードで有効にする操作は要らない見込み。ダッシュボードの Images の画面にある Hosted images(ホストされた画像)は、画像を Cloudflare に保存して配る別の機能で、サブスクリプションが要るが、この製品は使わない。ゾーンの変換の設定(Transformations(変換)の画面でゾーンごとに有効にする設定)が binding からの変換に要るかは、公式の文書から確定できていない。導入の後に縮小版ができるかで確かめる(5 節の確認 4)
+- 使った数は、Images の Transformations(変換)の画面の使用量の「ユニークな変換」で見られる(この欄の英語の表示は未確認)
+- 縮小版を作らないなら、`images` の行を消して 3.5 の再デプロイをする。一覧は元の画像を縮小せずに出す(画像が多いと一覧の表示が重くなる)。後から行を戻したときは、運用ガイドの画像の節の手順で、それまでに上げた画像を縮小版の作り待ちに戻す
+- R2 を使わない導入(`none`)では、この行があっても何もしない(消さなくてよい)
 
 ### 3.3 secrets
 
@@ -1540,6 +1551,8 @@ pnpm -C apps/control exec wrangler secret list | jq -r '.[].name' | sort   # 期
 | `AB_CONTROL_URL` | ← `control_address`(`workers-dev` なら初回 deploy の出力の URL、`custom` なら `https://<control_host>`)。control 自身の公開 URL。Better Auth の `baseURL` に使われ、`trustedOrigins`(= `AB_ADMIN_URL`)との整合が要る。workers.dev のまま使う場合の値は `https://wtt-control.<アカウントのサブドメイン>.workers.dev`。サブドメインは 0.5 の API で取ったもの(または初回 `wrangler deploy` の出力)。0.5 で確定した URL と一致すること |
 | `AB_ASSET_PUBLIC_BASE` | ← `asset_public_base`(URL なら変えずに、`dev-assets` なら `<control URL>/dev-assets`)。画像の公開ベース URL。R2 のカスタムドメイン、または暫定で `<control URL>/dev-assets`(3.2)。**`asset_public_base: none` では書かない**(binding が無いので無視される。binding があるのに空だと画像は無効として扱われる) |
 | `AB_ASSET_MAX_MB` | ← `asset_max_mb`。アップロード 1 件の上限(MB)の文字列 |
+| `AB_ASSET_SITE_MAX_MB` | 任意。1 サイトの画像の合計の上限(MB)の文字列。書かなければ `"1024"`。超えるアップロードは 409 `asset_quota_exceeded` になる。削除待ちの画像も、消えるまで数える。縮小版は数えない |
+| `AB_ASSET_SITE_MAX_COUNT` | 任意。1 サイトの画像の枚数の上限の文字列。書かなければ `"1000"`。超えたときは上と同じ。約 1,200 より大きくすると、同じ名前(`hero.png`・`hero (2).png` のような番号違いを含む)の画像が約 1,200 枚を超えたサイトでは、その名前のアップロードが 409 `asset_name_taken` になる(空いている番号を探す回数に上限があるため。別の名前を付ければ上がる) |
 | `AB_GOOGLE_CLIENT_ID` | 0.5 で受け取った Google の OAuth クライアント ID(`deploy-secrets.env` の `GOOGLE_CLIENT_ID`)。秘密ではない(クライアント シークレットのほうは secret に置く)。この値か `AB_GOOGLE_CLIENT_SECRET` が欠けていると Google ログインは 503 になり、代わりにパスワードで入れるようにはならない(8 節) |
 
 edge の公開 origin(必ず書く):
@@ -1791,12 +1804,14 @@ curl -sSI "https://<設置タグのホスト>/s/<siteId>.js" | grep -iE 'cache-c
 
 確認 4(画像。`asset_public_base` が `none` 以外のときだけ): 管理画面から画像を 1 枚アップロードし、応答の URL を取得して 200 を確認する。`dev-assets` なら URL は `<control URL>/dev-assets/...`。
 
-- **【人が行う】** アップロードの入口は、エクスペリエンスの「パターン」タブで、各パターンの「変更を追加」ボタンの右にあるファイルの選択。画像を選ぶとすぐにアップロードされ、そのパターンに IMAGE の変更が 1 つ足されて、画像の URL が入る。アップロードの確認だけなら、その変更は保存しなくてよい
+- **【人が行う】** アップロードの入口は、サイトの左メニューの「画像」。右上の「画像をアップロード」でファイルを選ぶ(画面にファイルをドラッグ&ドロップしてもよい)。上がった画像を一覧で押すと右に詳細が出て、公開 URL をコピーできる
 - 人にはその URL をチャットに貼ってもらう(秘密ではない)
+- 縮小版(3.2 の「画像の一覧の縮小版」)の確かめ: アップロードの直後か、遅くとも 15 分ごとの定期処理で作られる。15 分ほど後に下の 2 つ目のコマンドで `ready` の行があれば、縮小版ができている。`pending` のまま残る・`failed` が出るときは、運用ガイド 10 節の手順で control の Workers Logs を開き、`asset-housekeeping` の行を見る。縮小版ができなくても、一覧は元の画像で動き、ほかの機能にも影響しない
 - 拡張子と中身の形式が違う画像(中身が JPEG の `.png` など)は 415 で拒否される。そのときは別の画像で試す
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' "<アップロード応答の URL>"   # 期待: 200
+pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --json --command "select thumb_state, count(*) as n from assets group by thumb_state" | jq -c '.[0].results'   # 期待: thumb_state が ready の行がある(images の行を消した導入では skipped)
 ```
 
 期待と違うとき:
@@ -2600,16 +2615,87 @@ access_list wtt-control > "$PWD/deploy-backups/access-after.tsv" && test -s "$PW
 - 直した後に、上の比べるブロックのファイル名の `access-after`・`access-diff` を `access-fixed`・`access-diff-fixed` に変えてもう一度流し(最初の比べた結果を残すため)、`>` の行が意図したものだけになったことを確かめる
 - エージェントが行う場合: 比べた結果を、誰が・どのワークスペースで・何が戻ったかの言葉にして人に見せ、外したまま(取り消したまま)にするかを 1 回だけ聞いて、答えのとおりに上の SQL を流す。管理画面で直すもの(ロール・システム管理者)は、凍結を外した直後に、人とワークスペースを名指しして **【人に依頼】** で頼む。人とアクセス権の書き込みは管理画面のログインでしかできず、エージェントの API キーではできないため(鍵も手順 5 で失効している)
 
+**未適用のマイグレーションを当てる**(凍結の中で、下の「画像の中身の確かめ」の前に必ず行う)。戻した時点が、今の control が前提にするデータベースの更新より前だと、戻したデータベースには新しい表・列が無い。手順 5 の 3 つのコマンドが `no such table` で止まらなくても(その 3 つの表は古くからある)、画像の一覧の列などが無いことがある。そのままでは下の道具と、凍結を外した後の control が動かない:
+
+```bash
+pnpm -C apps/control d1:migrate:remote   # 期待: 当てたマイグレーションの一覧か、"No migrations to apply"
+```
+
+期待と違うとき: エラーで止まる → 出力を `deploy-log.md` に残して作業を止め、人に報告する(凍結は入れたままにする)。
+
+**画像の中身の確かめ**(R2 を使う導入だけ。`asset_public_base: none` の導入では飛ばす。道具も R2 の binding が無ければ「R2 を使っていない導入です」と出して何もせずに終わる)。D1 を戻すと、戻した時点より後に削除した画像の一覧の行(と、その画像を指す変更・公開した設定)は戻るが、R2 の画像のファイルは戻らない。公開の確かめは一覧に行があれば成功するので、そのままでは、ファイルの無い画像を指す設定を公開できてしまう。道具 `tools/asset-r2-check/` で一覧の行と R2 のファイルを比べ、ファイルの無い画像に削除の途中の印を付ける。印の付いた画像を指す公開は断られ、定期処理がその行を消す。凍結の中で、リポジトリ直下で行う:
+
+(1) **トークンとアカウント ID**。道具は R2 のファイルの一覧を Cloudflare の API で読む(wrangler に一覧のコマンドが無いため)。API のトークンは環境変数 `CLOUDFLARE_API_TOKEN`、アカウント ID は `CLOUDFLARE_ACCOUNT_ID` から読む。トークンは、下の関数がサブシェルの中で `wrangler login` のトークンを入れる。値は画面にも会話にも出ず、関数の外のシェルにも残らない。`CLOUDFLARE_ACCOUNT_ID` は、0.4 で固定してあればその値を使い、無ければ道具が `apps/control/wrangler.jsonc` の `vars.CF_ACCOUNT_ID`(3.4)を読む:
+
+```bash
+r2check() ( [ -n "$CLOUDFLARE_API_TOKEN" ] || export CLOUDFLARE_API_TOKEN="$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)"; node tools/asset-r2-check/check.mjs "$@" )
+[ -n "$CLOUDFLARE_ACCOUNT_ID" ] && echo account_id=present || grep -cE '"CF_ACCOUNT_ID": "[0-9a-f]{32}"' apps/control/wrangler.jsonc   # 期待: account_id=present か 1
+```
+
+`0` が出たら、アカウント ID がどちらにも無い。0.4 のとおり `CLOUDFLARE_ACCOUNT_ID` を設定してから先へ進む。
+
+関数 `r2check` はシェルの中にだけある。別のシェルで続けるとき(エージェントの Bash のように、コマンドごとにシェルの状態を持ち越さないときも)は、下の (2)・(4) のコマンドの前に、この (1) のブロックを流し直す(同じ 1 回の実行の中に並べてもよい)。
+
+(2) **見るだけで流す**(D1 に書かない)。出力は手順 8 で使うので `deploy-backups/` に控える。`r2check` が無いシェルでは、先に (1) を流す:
+
+```bash
+r2check --db wtt-control | tee "$PWD/deploy-backups/asset-r2-check.txt"
+```
+
+期待: 1 行目に確かめた画像の数と D1・バケットの名前、続いて「R2 から読んだキー: N 件(M ページ)」と「R2 に中身の無い画像: K 件」。K が 1 以上なら、画像ごとにサイトの ID・画像の ID・削除待ちか・配信中の設定でその画像を使っているサイトが出て、最後に「配信中の設定でこれらの画像を使っているサイト」が出る。道具は、一覧に無かった画像を 1 枚ずつ確かめ直し、在ったものは対象から外す(「確かめ直すと在った画像」の行)。
+
+期待と違うとき:
+
+- 「R2 の一覧を読めませんでした(HTTP 403 …)」(か 401)→ `wrangler login` のトークンでは R2 の一覧を読めない。下の「別のトークンを使うとき」
+- 「CLOUDFLARE_API_TOKEN が設定されていません」→ `wrangler login` が切れている。0.4 のログインをやり直す
+- 「D1 の assets に、画像の削除の印の列(deleted_at・purge_marked_at)がありません」→ 上の「未適用のマイグレーションを当てる」が済んでいない。当ててから (2) を流し直す
+
+(3) **人が件数を照らす**。**【人に依頼】** 最初に流したときは、`--apply` の前に、出力の「R2 から読んだキー: N 件」が、R2 のダッシュボード(Storage & databases(ストレージとデータベース)→ R2 Object Storage(R2 オブジェクトストレージ)→ `wtt-assets`)に出るオブジェクトの数と合うかを人に見てもらう(オブジェクトの数の欄の表示の名前は未確認)。道具が API の応答を最後まで読めているかを確かめるため。道具が読むのは `sites/` で始まるキーだけなので、バケットにこの製品のほかのファイルを置いていなければ一致する。合わなければ `--apply` に進まず、出力を `deploy-log.md` に残して作業を止め、人に報告する
+
+(4) **K が 1 以上なら、人に見せてから印を付ける**。エージェントは、出た画像と「配信中の設定でこれらの画像を使っているサイト」を人に見せてから流す。`r2check` が無いシェルでは、先に (1) を流す:
+
+```bash
+r2check --db wtt-control --apply   # 期待: 「印を付けた画像: K 件(対象 K 件)」。凍結が入っていなければ何も書かずに止まる
+```
+
+K が 0 なら、この段はここで終わる。
+
+**別のトークンを使うとき**(`wrangler login` のトークンで 403 になったときだけ。0.5 の `deploy-secrets.env` と同じ流儀で、値を会話・コマンドに出さない):
+
+- エージェントが `deploy-secrets.env` に `CLOUDFLARE_API_TOKEN=` の行を値は空で用意し、エディタで開く(開き方は 0.5 の「`deploy-secrets.env` の作り方」)。ファイルが無ければこの 1 行だけで作り、0.5 のファイルが残っていれば、中の値を消さずに行を末尾に足す:
+
+```bash
+[ -e deploy-secrets.env ] || (umask 077 && : > deploy-secrets.env); chmod 600 deploy-secrets.env
+[ -z "$(tail -c1 deploy-secrets.env)" ] || echo >> deploy-secrets.env   # 末尾に改行が無ければ足す(足す行が前の値につながらないように)
+grep -q '^CLOUDFLARE_API_TOKEN=' deploy-secrets.env || printf 'CLOUDFLARE_API_TOKEN=\n' >> deploy-secrets.env
+```
+
+- **【人に依頼】** API トークンを作り、値を `CLOUDFLARE_API_TOKEN=` の右に貼って保存してもらう。画面: My Profile(マイ プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)→ Custom token(カスタム トークン)の Get started(始める)。Token name(トークン名)= `wtt-restore-<識別子>`(識別子は 0.5 の「Cloudflare の API トークンの名前」と同じ)。Permissions(権限)= Account(アカウント)→ Workers R2 Storage → Read(読み取り)と、Account(アカウント)→ D1 → Edit(編集)(Workers R2 Storage の日本語の表示は未確認)。D1 の編集も要るのは、道具の中で動く wrangler も、`CLOUDFLARE_API_TOKEN` があれば `wrangler login` より優先してそのトークンを使い、D1 を読み書きするため。Account Resources(アカウント リソース)= 導入先のアカウントだけ。期限 = 翌日(TTL の Select time range(時間範囲を選択)の終了日)
+- 読み込んで、値を表示せずに確かめ、上の (2) から流し直す:
+
+```bash
+set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
+[ -n "$CLOUDFLARE_API_TOKEN" ] && echo cloudflare_api_token=present || echo cloudflare_api_token=missing   # 期待: present(missing なら人に記入を頼み直す)
+```
+
+- 終わったら、環境変数を消し、ファイルからは足した `CLOUDFLARE_API_TOKEN=` の行だけを消す(0.5 の値が残っていれば、それは消さない。ほかの行が無ければファイルごと消す)。環境変数を残したままにすると、この後の wrangler のコマンドもこのトークンを使い、D1 以外の操作(10.3 の `wrangler deploy` など)が権限のエラーになるため:
+
+```bash
+unset CLOUDFLARE_API_TOKEN
+sed -i.bak '/^CLOUDFLARE_API_TOKEN=/d' deploy-secrets.env && rm -f deploy-secrets.env.bak   # .bak にもトークンが入るので、すぐ消す
+[ -s deploy-secrets.env ] || rm deploy-secrets.env
+```
+
 7. **凍結を外し、すぐに管理画面で直す**。確認と直しが済んでから、6.6 の「外す」で凍結を外す。外した後の最初の作業として、手順 6 の表で「凍結を外した直後」の行(ロールを直す・システム管理者から外し直す)を管理画面で行う。続けて、「`<` の行だけ」のうち要るもの(招待・昇格し直す)を行う。全員がログインし直し、API キーを使う人とエージェントは鍵を発行し直す
 
 8. **戻したあとの整合**(凍結を外した後):
 
 - 公開し直す作業は凍結を外してから行う(凍結中は公開できない)
 - **KV の公開済み config は D1 と一緒には戻らない**。戻した時点より後に公開していたサイトは、管理画面でそのサイトを開き公開し直す(config が D1 の内容から作り直される)。逆に「戻した時点より後に公開した内容を配り続けたい」場合は公開しない
-- **設置タグの配信ファイルの記録も D1 と一緒には戻らない**。配信を管理する Worker は、D1 より新しい世代を配ったことを覚えているので、世代を進めずに公開し直すと依頼が「古い世代」として捨てられ、**訪問者には戻す前のタグが配られ続ける**(公開の結果の `staticDeploy` は `pending` になる)。凍結を外したら、公開し直す前に、管理画面の左メニューの下の「設定」→「配信ファイル」(「システム」の見出しの下)で「公開中の全サイトの配信ファイルを作り直す」を押す(システム管理者が管理画面から行う。エージェントは、サイトごとの `POST /sites/<siteId>/static/redeploy` を公開中のサイトの数だけ呼ぶ)。この操作は、各サイトの世代を、配信を管理する Worker が覚えている世代より先に進めてから、今の公開内容で作り直す。凍結中は作り直せない(凍結を外してから行う)。データベースでは未公開か、データベースに無いのに配信ファイルが残っているサイト(初めての公開より前や、サイトを作る前の時点に戻した場合)も、この操作でファイルが消える(データベースでは未公開のサイトは、サイトごとの作り直しでも消える。データベースに無いサイトは、サイトごとの作り直しでは消せず、この操作でだけ消える)。配信ファイルの画面の「記録が食い違っているサイト」が「なし」になり、`curl -sS "https://<設置タグのホスト>/s/<siteId>.js" | head -c 200`(`<設置タグのホスト>` は 2.9 の (4))に今の公開内容が出ることを確かめる。
+- **設置タグの配信ファイルの記録も D1 と一緒には戻らない**。配信を管理する Worker は、D1 より新しい世代を配ったことを覚えているので、世代を進めずに公開し直すと依頼が「古い世代」として捨てられ、**訪問者には戻す前のタグが配られ続ける**(公開の結果の `staticDeploy` は `pending` になる)。**例外: 手順 6 の画像の中身の確かめで「配信中の設定でこれらの画像を使っているサイト」が出たときは、そのサイトを先に直す。** 凍結を外したら、下の全サイトの作り直しの前に、そのサイトだけ、ファイルの無い画像を指す変更の画像を選び直して(か、その変更を外して)公開し直す。作り直しは保存してある公開内容をそのまま配り直すので、先に作り直すと、ファイルの無い画像を指す内容がまた配られるため。この公開は、印の付いた画像を指す変更が残っていると断られる(失敗の理由 `asset_missing`。公開の確認の画面に、残っている画像とその変更の場所が一覧で出る)。原因の変更が配信中のエクスペリエンスにあってすぐに直せないときは、そのエクスペリエンスを一時停止してもよい(一時停止・終了は画像を確かめずに成功し、そのエクスペリエンスは配信から外れる。ただし、ほかの配信中のエクスペリエンスにファイルの無い画像を指す変更が残っていれば、それは配られる)。この公開の結果の `staticDeploy` は `pending` のままのことがあるが、続く全サイトの作り直しで配られる。それまで、そのサイトの「配信ファイルを作り直す」(サイトごとの作り直し)は押さない。直し終える(公開が成功する)まで、そのサイトのサイト設定も保存しない(サイト設定の保存も配信ファイルの更新を依頼するので、ファイルの無い画像を指す内容が配られることがある)。そのサイトを直し終えてから、次の全サイトの作り直しを行う。凍結を外したら、公開し直す前に(例外のサイトは上の公開の後に)、管理画面の左メニューの下の「設定」→「配信ファイル」(「システム」の見出しの下)で「公開中の全サイトの配信ファイルを作り直す」を押す(システム管理者が管理画面から行う。エージェントは、サイトごとの `POST /sites/<siteId>/static/redeploy` を公開中のサイトの数だけ呼ぶ)。この操作は、各サイトの世代を、配信を管理する Worker が覚えている世代より先に進めてから、今の公開内容で作り直す。凍結中は作り直せない(凍結を外してから行う)。データベースでは未公開か、データベースに無いのに配信ファイルが残っているサイト(初めての公開より前や、サイトを作る前の時点に戻した場合)も、この操作でファイルが消える(データベースでは未公開のサイトは、サイトごとの作り直しでも消える。データベースに無いサイトは、サイトごとの作り直しでは消せず、この操作でだけ消える)。配信ファイルの画面の「記録が食い違っているサイト」が「なし」になり、`curl -sS "https://<設置タグのホスト>/s/<siteId>.js" | head -c 200`(`<設置タグのホスト>` は 2.9 の (4))に今の公開内容が出ることを確かめる。
 
   control の定期処理は、この向きの食い違いを自動では直さない(戻した内容で上書きしてよいかは人が決めるため)。食い違いがあるかは、配信ファイルの画面の「記録が食い違っているサイト」か、`GET /static/status` の `mismatchSites` で確かめる。配信ファイルの画面は開いたときの状態を出す。システム管理者の画面の上部の帯は、画面を開き直したとき・タブを前に戻したときか、5 分ごとの取り直しのときに出る。サイトの画面の警告「このサイトの配信ファイルの記録が食い違っています」(と `GET /sites/<siteId>` の `staticMismatch`)は、定期処理がそのサイトに印を付けた後に出る。ただし定期処理が印を付けるのは、公開中のサイトで、配信を管理する Worker の記録が通常の更新の世代で先に進んでいるときだけ。それ以外の形の食い違い(データベースでは未公開のサイト・データベースに無いサイトなど)では、サイトの警告も `staticMismatch` も出ないことがある。また、同じ世代で中身が食い違うかの比較は、ID の順に先頭の 25 サイトまで(公開中の設定の合計が大きいときはそれより少ない)しか行わないので、その形の食い違いが多いと、画面の一覧と `mismatchSites` に出ないサイトが残りうる。D1 を戻した後は、一覧が「なし」でも上の「公開中の全サイトの配信ファイルを作り直す」を行う
-- **R2 の画像は消えない**。戻した時点より後にアップロードした画像は R2 に残るが D1 の一覧からは消える(実害は無い。気になれば R2 のダッシュボードで消す)
+- **R2 の画像のファイルは D1 と一緒には戻らない**。戻した時点より後にアップロードした画像は R2 に残るが、D1 の画像の一覧からは消える(実害は無い。気になれば R2 のダッシュボードで消す)。戻した時点より後に削除した画像は、D1 の一覧には戻るが、R2 のファイルは戻らない。手順 6 の「画像の中身の確かめ」で見つけて削除の途中の印を付け、配信中の設定がその画像を指すサイトは、上の配信ファイルの箇条の例外のとおり、画像を選び直して公開し直す
 - **計測用のデータベース(`wtt-results`)の個票は、戻した時点より後に開始したテストの分が消される**。そのテストのエクスペリエンスの行は戻した `wtt-control` に無いので、個票は「対応するテストの無い記録」とみなされ、毎日 UTC 23 時台に動く Cron が、戻した後の最初の UTC 23 時台から順に消す(1 日に調べる件数に上限があるので、消し終わるまで数日かかることがある)。個票が要るときは、戻す前に `wtt-results` の export を取る(10.1 の `wtt-control` を `wtt-results` に読み替える)。消えたあとは、`wtt-results` の Time Travel の保持期間(10.1 のとおり)のうちなら 10.2 の手順で戻せるが、それを過ぎると取り戻せない。また、`wtt-results` を Time Travel で戻しても、`wtt-control` に対応する行が無ければ、また対応するテストの無い記録として消される。戻したら、次の UTC 23 時台より前に export を取る
 - 確認: `curl -sS -o /dev/null -w '%{http_code}\n' "<control URL>/llms.txt"` が 200、管理画面にログインしてサイト一覧が期待どおり
 
@@ -2641,9 +2727,9 @@ pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --com
   && pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --command "insert or ignore into apikey_revocations (key_id, revoked_at, revoked_by) select id, CAST(strftime('%s','now') AS INTEGER) * 1000, null from apikey; update apikey set enabled = 0"
 ```
 
-4. 10.2 の手順 6 の「人とアクセス権の一覧を比べる」と、表のうち「凍結中」の行を、`wtt-control-restore` に対して行う(`access_list wtt-control-restore` で `access-after.tsv` を取り、外す・取り消す SQL の `wtt-control` も `wtt-control-restore` に読み替える)。`ACCESS_SQL` と `access_list` が無いシェルでは、10.2 の手順 4 の 2 行を先に流す。書き込みが入っていないかの確認は要らない(control がまだ向いていないため)
+4. 10.2 の手順 6 の「人とアクセス権の一覧を比べる」と、表のうち「凍結中」の行を、`wtt-control-restore` に対して行う(`access_list wtt-control-restore` で `access-after.tsv` を取り、外す・取り消す SQL の `wtt-control` も `wtt-control-restore` に読み替える)。`ACCESS_SQL` と `access_list` が無いシェルでは、10.2 の手順 4 の 2 行を先に流す。書き込みが入っていないかの確認は要らない(control がまだ向いていないため)。続けて、10.2 の手順 6 の「画像の中身の確かめ」を、コマンドの `--db wtt-control` を `--db wtt-control-restore` に読み替えて行う(手順 3 で凍結を入れてあり、control はまだ向いていないので、凍結の後に待つ時間は要らない。関数 `r2check` が無いシェルでは、10.2 の手順 6 の (1) のブロックを先に流す)
 5. `pnpm -C apps/control exec wrangler deploy`
-6. 切り替えた後、確認が済んでから 6.6 の「外す」で外す(コマンドの `wtt-control` を `wtt-control-restore` に読み替える)。以後は 10.2 の手順 7(管理画面での直し・ログインと鍵の発行し直し)と手順 8(全サイトの配信ファイルの作り直し・公開し直し)。export を取った時点より後に開始したテストの個票は、10.2 の手順 8 のとおり `wtt-results` から消される(`wtt-results` は読み戻さないので、必要なら先に `wtt-results` の export を取る。`wtt-results` を Time Travel で戻しても、`wtt-control` に対応する行が無ければ、また対応するテストの無い記録として消される。戻したら、次の UTC 23 時台より前に export を取る)
+6. 切り替えた後、確認が済んでから 6.6 の「外す」で外す(コマンドの `wtt-control` を `wtt-control-restore` に読み替える)。以後は 10.2 の手順 7(管理画面での直し・ログインと鍵の発行し直し)と手順 8(全サイトの配信ファイルの作り直し・公開し直し。手順 4 の後の画像の中身の確かめでサイトが出たときは、手順 8 の例外の順で、そのサイトの公開し直しを全サイトの作り直しより先に行う)。export を取った時点より後に開始したテストの個票は、10.2 の手順 8 のとおり `wtt-results` から消される(`wtt-results` は読み戻さないので、必要なら先に `wtt-results` の export を取る。`wtt-results` を Time Travel で戻しても、`wtt-control` に対応する行が無ければ、また対応するテストの無い記録として消される。戻したら、次の UTC 23 時台より前に export を取る)
 7. 元の DB は問題が無いと分かってから `wrangler d1 delete wtt-control` で消す
 
 ### 10.4 撤去(導入全体を消す)

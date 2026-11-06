@@ -23,8 +23,17 @@ const ISSUED_KEY = {
   emphasizeCancel: true,
 } as const;
 
+/** 画像のアップロードの待ち行列が動いている間に離れる(B68。待ち行列は自分で 1 枚ずつ送るので、まだ送っていない分は上がらない) */
+const UPLOADING = {
+  title: "アップロードの途中です",
+  body: "移動すると、まだ送っていない画像はアップロードされません。送っている途中の画像は、上がったかをこの画面では確かめられません",
+  confirmLabel: "移動する",
+  cancelLabel: "とどまる",
+  tone: "primary",
+} as const;
+
 /** 確認の種類ごとの文言(B173 第 2 段) */
-const PROMPTS: Record<NonNullable<ReturnType<typeof leavePromptKind>>, ConfirmOptions> = { saving: SAVING, issuedKey: ISSUED_KEY, unsaved: UNSAVED };
+const PROMPTS: Record<NonNullable<ReturnType<typeof leavePromptKind>>, ConfirmOptions> = { saving: SAVING, issuedKey: ISSUED_KEY, uploading: UPLOADING, unsaved: UNSAVED };
 
 /** event の時点の store で、まだ確認が要るか */
 function isGuardedNow(): boolean {

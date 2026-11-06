@@ -3,6 +3,7 @@ import { expandAudiences, staticInputDigest, type StaticDeployHistoryEntry, type
 import { DEFAULT_PLAN, type EvaluationPlan } from "@wtt/stats";
 import type { Db, ExperimentDeliveredDefinitionRow, ExperimentRow, SiteRow, StaticDeployRequestRow } from "../db";
 import type { StoredChangeInput, StoredCompileInput } from "../publish";
+import { extractAssetIds } from "../asset-refs";
 import { siteToSettings } from "../site-settings";
 import type { WriteGuard } from "./guard";
 
@@ -138,6 +139,25 @@ export function deliveredDefinitionInsert(db: Db, siteId: string, version: numbe
 }
 
 /**
+ * B68(spec §3.1): 届く定義が使う画像を `asset_delivered_refs` に足す 1 文(`deliveredDefinitionInsert` の隣に同じ batch で並べる)。
+ * 画像の ID は定義の JSON にそのまま現れるものだけ(`extractAssetIds`。Cron の `instr` と同じ規則。戻しはしない)。0 個なら文を作らない(null)。
+ * 条件は `deliveredDefinitionInsert` にそろえる: エクスペリエンスが残っている(`INSERT OR IGNORE` は外部キーの違反を無視しないので、
+ * compile の後・activation の前に消えていたら batch ごと落ちる。それを防ぐ)と、fenceActive のときの active_version。
+ * 定義の hash が前と同じで定義の行を足さない公開でも書く(重なりは主キーで無視する)。画像の行は外部キーで持たない
+ */
+export function assetDeliveredRefsInsert(db: Db, siteId: string, version: number, d: PreparedDelivery, fenceActive: boolean) {
+  const ids = extractAssetIds(d.json);
+  if (ids.length === 0) return null;
+  const fence = fenceActive ? sql`and exists (select 1 from sites where id = ${siteId} and active_version = ${version})` : sql``;
+  const q = sql`
+    insert or ignore into asset_delivered_refs (site_id, asset_id, experiment_id)
+    select ${siteId}, value, ${d.experimentId} from json_each(${JSON.stringify(ids)})
+    where exists (select 1 from experiments where site_id = ${siteId} and id = ${d.experimentId})
+      ${fence}`;
+  return { compile: () => q.compile(db) };
+}
+
+/**
  * 届く定義を直接記録する(activation の fence なし。テストと、activation の外から足す将来の補完用)。
  * publishSite は使わない(activation の batch に deliveredDefinitionInsert を入れる)
  */
@@ -152,6 +172,9 @@ export async function recordDeliveredDefinitions(
   for (const d of await prepareDeliveredDefinitions(defs, rows)) {
     const c = deliveredDefinitionInsert(db, siteId, version, generation, d, false).compile();
     await db.executeQuery(c);
+    // B68: テストで作る定義でも画像の表が埋まるように、publishSite と同じ 1 文を足す
+    const refs = assetDeliveredRefsInsert(db, siteId, version, d, false);
+    if (refs) await db.executeQuery(refs.compile());
   }
 }
 

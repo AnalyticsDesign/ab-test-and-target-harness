@@ -12,6 +12,10 @@ import type { StopMessage } from "@/lib/stop-dialog";
 import type { Experiment, Goal, PublishPreview, Status, StatusResult } from "@/lib/types";
 import { StopDialog, StopNotices } from "./experiment/StopDialog";
 import { BusyScope, useBusyAction } from "./ui/BusyScope";
+import { AssetProblemList } from "./images/AssetProblemList";
+import { assetGuardRejection, assetProblemRows, inPlaceTarget, publishFailureProblems, type AssetProblemRow } from "@/lib/asset-problems";
+import { replaceParam } from "@/lib/url-state";
+import type { AssetProblem } from "@/lib/types";
 
 const NEXT: Record<Status, Array<{ to: Status; label: string; danger?: boolean }>> = {
   draft: [{ to: "running", label: "開始(公開して配信を始める)" }],
@@ -119,7 +123,25 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
   const { run, busy } = useBusyAction();
   // 未保存の変更があれば、状態の変更の確認・終了のモーダルの前に止める(B173 第 1 段)
   const statusGuard = useStatusChangeGuard();
-  const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
+  // problems = 公開できない画像の一覧(B68。開始・再開の 409 と、状態を変えた後の公開の失敗)
+  const [msg, setMsg] = useState<{ text: string; error: boolean; problems?: AssetProblemRow[] } | null>(null);
+  // リンクの名前は、開いているエクスペリエンスとそのパターンだけ手元にある(ほかは ID。読みは足さない)
+  const rowsOf = (problems: AssetProblem[]) =>
+    assetProblemRows(problems, {
+      wid,
+      siteId,
+      experimentName: (id) => (id === experiment.id ? experiment.name : undefined),
+      variantName: (eid, vid) => (eid === experiment.id ? experiment.variants?.find((v) => v.id === vid)?.name : undefined),
+    });
+  // 開いているエクスペリエンスの行は遷移せず、URL の tab・variant を書き換える(ExperimentEditor が URL_PARAM_EVENT で読み直す。往復 0)
+  const inPlace = (row: AssetProblemRow) => {
+    const t = inPlaceTarget(row, experiment.id);
+    if (!t) return null;
+    return () => {
+      replaceParam("tab", t.tab);
+      replaceParam("variant", t.variant);
+    };
+  };
   /** 状態は変わったが読み直しが上限を超えた(結果の行の下に再読み込みの案内) */
   const [stale, setStale] = useState(false);
   // 開始の応答の warnings(結果を記録しない開始・容量の見込み)。次の操作で消す
@@ -232,8 +254,11 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
       });
 
     let outcome: BusyOutcome<StatusResult> = await attempt();
+    // B68: 開始・再開が画像の確かめで断られた(409 asset_missing / asset_other_site。状態は変わっていない)。もう一度確定しても同じ理由で落ちるので、
+    // 確認を閉じて、ボタンの近くに理由と画像の一覧を出す(一時停止・終了はこの分岐に入らない)
+    const rejected = () => (outcome.kind === "failed" ? assetGuardRejection(outcome.error, n.to) : null);
     // 失敗・30 秒は確認の中に出し、もう一度の確定で同じ形の run を送り直す(取り消しで閉じたら何もしない。状態は変わっていない)
-    while ((outcome.kind === "failed" || outcome.kind === "unknown") && hold) {
+    while ((outcome.kind === "failed" || outcome.kind === "unknown") && hold && !rejected()) {
       const again = await (hold as ConfirmHold).fail(outcome.kind === "failed" ? describeError(outcome.error) : WRITE_UNKNOWN);
       if (!again) return;
       outcome = await attempt();
@@ -245,10 +270,17 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
       setMsg(
         r.publish.ok
           ? { text: `公開 v${r.publish.version} を反映しました(訪問者のブラウザには 1 分ほどで届きます)`, error: false }
-          : { text: `状態は ${STATUS_JA[n.to]} に変わりましたが、公開に失敗しました(${r.publish.error}: ${r.publish.message})。上部の「公開」から再試行してください`, error: true },
+          : {
+              text: `状態は ${STATUS_JA[n.to]} に変わりましたが、公開に失敗しました(${r.publish.error}: ${r.publish.message})。上部の「公開」から再試行してください`,
+              error: true,
+              problems: rowsOf(publishFailureProblems(r.publish)),
+            },
       );
       setWarnings(startWarnings(r.warnings));
       setStale(outcome.refresh === "timeout");
+    } else if (outcome.kind === "failed" && rejected()) {
+      const r = rejected()!;
+      setMsg({ text: r.text, error: true, problems: rowsOf(r.problems) });
     } else if (outcome.kind === "failed") {
       // 確認の無い経路の失敗。409 invalid_transition(評価計画・パターンの設定が変わった競合など)は control の hint をそのまま出す
       setMsg({ text: describeError(outcome.error), error: true });
@@ -281,7 +313,12 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
         </button>
       ))}
       {msg ? (
-        msg.error ? (
+        msg.error && msg.problems && msg.problems.length > 0 ? (
+          <div className="error-box" role="alert" data-testid="status-result">
+            {msg.text}
+            <AssetProblemList rows={msg.problems} testId="status-asset-problems" inPlace={inPlace} />
+          </div>
+        ) : msg.error ? (
           <span className="error-box" role="alert" data-testid="status-result">
             {msg.text}
           </span>

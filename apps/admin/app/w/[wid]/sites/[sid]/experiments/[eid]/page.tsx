@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { controlFetch, requireUser } from "@/lib/control";
 import { allInOrder, loadCapabilities, loadSite, loadWorkspaces } from "@/lib/loaders";
 import { tabsFor } from "@/lib/experiment-draft";
+import { imageFieldMode } from "@/lib/images";
 import type { PlanView } from "@/lib/evaluation-plan";
 import { STATUS_JA, STATUS_TONE } from "@/lib/experiment-filter";
 import { KIND_JA } from "@/lib/experiment-kind";
@@ -76,7 +77,7 @@ export default async function ExperimentPage({ params, searchParams }: { params:
       <p data-testid="status-banner" className="muted" data-status={exp.data.status} data-published-status={exp.data.publishedStatus ?? "none"}>
         状態: {STATUS_JA[exp.data.status]} / 本番: {exp.data.publishedStatus ? STATUS_JA[exp.data.publishedStatus] : "未反映"}。編集内容は「保存」で下書きに入ります。本番に出すには、画面の上部の「公開」を押します(管理者以上)。開始・一時停止・終了でも公開されますが、そのときはこのサイトのほかのエクスペリエンスの保存済みの下書きも一緒に本番に出ます
       </p>
-      <ExperimentEditor site={site} experiment={exp.data} goals={goals} audiences={audiences} role={ws.role} imageUpload={caps.imageUpload} initialTab={initialTab} initialVariant={initialVariant} wid={wid} initialPlan={initialPlan} recording={recording} resultsStore={caps.resultsStore} />
+      <ExperimentEditor site={site} experiment={exp.data} goals={goals} audiences={audiences} role={ws.role} imageMode={imageFieldMode(caps)} initialTab={initialTab} initialVariant={initialVariant} wid={wid} initialPlan={initialPlan} recording={recording} resultsStore={caps.resultsStore} />
     </div>
   );
 }

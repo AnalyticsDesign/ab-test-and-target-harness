@@ -1,15 +1,16 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { api, ApiClientError, fieldErrors } from "@/lib/client";
 import { toChangeWire } from "@/lib/change-wire";
 import { historyStaleAfterSave, saveErrorMessage } from "@/lib/experiment-save";
-import { draftOf, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, reconcileServerUpdate, saveSteps, type Draft, type EditorTab } from "@/lib/experiment-draft";
+import { tabsFor, draftOf, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, acceptSavedDraft, reconcileServerUpdate, saveSteps, type Draft, type EditorTab } from "@/lib/experiment-draft";
 import { extensionErrors, planDirty, planFormErrors, planFormState, planMode, planPutBody, syncPlanState, type PlanForm, type PlanView } from "@/lib/evaluation-plan";
 import { archivedTestBanner, lockedFieldChanges, needsRunningTestConfirm, preSaveLockProblem, RUNNING_TEST_CONFIRM } from "@/lib/test-locks";
 import { emptyHtmlIndex, firstEmptyHtml } from "@/lib/change-issues";
 import { analyticsCardOpenInitially } from "@/lib/analytics-badges";
-import { replaceParam } from "@/lib/url-state";
+import { URL_PARAM_EVENT, editorParamsFromSearch, replaceParam } from "@/lib/url-state";
 import { previewPageUrl } from "@/lib/page-match";
+import { shouldPreloadAssets, type ImageFieldMode } from "@/lib/images";
 import type { Audience, Experiment, Goal, Site } from "@/lib/types";
 import { useConfirm } from "./ConfirmProvider";
 import { ErrorBox } from "./ErrorBox";
@@ -23,6 +24,7 @@ import { EvaluationPlanTab } from "./experiment/EvaluationPlanTab";
 import { ResultsTab } from "./experiment/ResultsTab";
 import { HistoryTab } from "./experiment/HistoryTab";
 import { StopDialog, StopNotices } from "./experiment/StopDialog";
+import { SiteAssetsProvider } from "./images/SiteAssetsProvider";
 import type { ResultsResponse } from "@/lib/results-view";
 import type { StopMessage } from "@/lib/stop-dialog";
 import { useStatusChangeGuard } from "@/lib/status-guard";
@@ -40,7 +42,7 @@ const PLAN_NOTE = "評価計画は保存した時点で反映されます(公開
  * recording = このサイトが結果を記録するか(Site の設定が有効で、導入に計測用のデータベースがある)。resultsStore = 導入に計測用のデータベースがあるか
  */
 type Props = {
-  site: Site; experiment: Experiment; goals: Goal[]; audiences: Audience[]; role: string; imageUpload: boolean; initialTab: EditorTab; initialVariant: string | null;
+  site: Site; experiment: Experiment; goals: Goal[]; audiences: Audience[]; role: string; imageMode: ImageFieldMode; initialTab: EditorTab; initialVariant: string | null;
   wid: string; initialPlan: PlanView | null; recording: boolean; resultsStore: boolean;
 };
 /** 本体が使うのは initialTab / initialVariant を除いた分(開いているタブと Variant は外枠が持つ) */
@@ -109,15 +111,37 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
     setPlan((p) => ({ view: p.view, form: p.view ? planFormState(p.view) : null }));
     setPlanReason("");
   };
-  /** 自分の保存が成功した直後(読み直しの前): 基準を送った値にし、評価計画は PUT の応答で置き換える */
+  /**
+   * 自分の保存が成功した直後(読み直しの前): 基準を送った値にし、評価計画は PUT の応答で置き換える。
+   * 下書きは上書きしない(保存を始めた後の変更 = 例えば IMAGE の欄のアップロードの完了は、未保存として残す。acceptSavedDraft)
+   */
   const acceptSaved = (sent: Draft, fresh: PlanView | null) => {
     setBase(sent);
-    setDraft(sent);
+    setDraft((current) => acceptSavedDraft(sent, current).draft);
     setNotice(false);
     setPlanReason("");
     if (fresh) setPlan({ view: fresh, form: planFormState(fresh) });
     setSavedCount((n) => n + 1);
   };
+
+  // B68: 同じ画面の中のリンク(状態を変えるボタンの「公開できない画像」の一覧の、このエクスペリエンスの行)は遷移せず、
+  // replaceParam で ?tab= / ?variant= を書く。その知らせ(URL_PARAM_EVENT)で URL を読み、開いているタブとパターンをそろえる(往復 0。key で作り直さない)。
+  // 自分の onTab・onVariant の replaceParam でも届くが、読んだ値は今の値と同じなので何も変わらない
+  const current = useRef({ tab, variant });
+  current.current = { tab, variant };
+  const kind = body.experiment.kind;
+  useEffect(() => {
+    const align = () => {
+      const next = editorParamsFromSearch(window.location.search, tabsFor(kind));
+      const now = current.current;
+      if (next.tab === now.tab && next.variant === now.variant) return;
+      setSwitched(true);
+      setTab(next.tab);
+      setVariant(next.variant);
+    };
+    window.addEventListener(URL_PARAM_EVENT, align);
+    return () => window.removeEventListener(URL_PARAM_EVENT, align);
+  }, [kind]);
 
   // 離れる前の確認(本体と評価計画の未保存・保存の途中)は、下の BusyScope の dirty を見る PageLeaveGuard(app/w/layout.tsx)が出す
   // 状態の変更の前の確かめ: 未保存の変更があれば終了のモーダルを開かない(B173 第 1 段)
@@ -153,6 +177,8 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
     ) : null}
     {/* 範囲は本体全体(下の保存の帯も含む)。保存中は覆って入力と帯のボタンを止める */}
     <BusyScope id="experiment-editor" dirty={bodyDirty || planIsDirty}>
+      {/* B68: サイトの画像の一覧(IMAGE の変更がある下書きだけマウントの後に 1 回読む)と「画像を選ぶ」の窓。パターンを切り替えても消えないよう本体の外に置く */}
+      <SiteAssetsProvider siteId={body.site.id} mode={body.imageMode} preload={shouldPreloadAssets(body.imageMode, body.experiment.variants ?? [])}>
       <ExperimentEditorBody
         {...body}
         tab={tab}
@@ -188,13 +214,14 @@ export function ExperimentEditor({ initialTab, initialVariant, ...body }: Props)
           setStop({ variantId, report });
         } : undefined}
       />
+      </SiteAssetsProvider>
     </BusyScope>
     </>
   );
 }
 
 function ExperimentEditorBody({
-  site, experiment, goals, audiences, role, imageUpload, tab, onTab, variant, onVariant, animate, historyKey, cardOpen, onCardOpen, wid, recording, resultsStore,
+  site, experiment, goals, audiences, role, imageMode, tab, onTab, variant, onVariant, animate, historyKey, cardOpen, onCardOpen, wid, recording, resultsStore,
   base, draft, setDraft, notice, onResetToServer, onSaved, onHistoryStale, plan, onPlan, planReason, onPlanReason, onStop,
 }: BodyProps & {
   tab: EditorTab; onTab: (t: EditorTab) => void; variant: string | null; onVariant: (id: string | null) => void; animate: boolean; cardOpen: Record<string, boolean>; onCardOpen: (key: string, open: boolean) => void;
@@ -589,11 +616,10 @@ function ExperimentEditorBody({
           <VariantsTab
             {...tabProps}
             memoRo={memoRo}
-            siteId={site.id}
             experimentId={experiment.id}
             variantsLocked={variantsLocked}
             pageUrl={pageUrl}
-            imageUpload={imageUpload}
+            imageMode={imageMode}
             single={experiment.kind === "single"}
             selected={variant}
             onSelect={onVariant}

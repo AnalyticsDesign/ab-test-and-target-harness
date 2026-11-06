@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
-import { alignToWindow, AUTH_RATE_LIMIT, BREAK_GLASS, beforeD1Batch, call, createExperiment, createSite, expectEnvelope, inviteAndJoin, json, setupOwner } from "./helpers";
+import { alignToWindow, AUTH_RATE_LIMIT, BREAK_GLASS, beforeD1Batch, call, createSite, expectEnvelope, inviteAndJoin, json, setupOwner } from "./helpers";
 
 /**
  * 決定 34: 代表的な status ごとに `{ error, message }` の封筒を持つことを 1 箇所で固定する。
@@ -8,10 +8,9 @@ import { alignToWindow, AUTH_RATE_LIMIT, BREAK_GLASS, beforeD1Batch, call, creat
  */
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52]);
-function imageForm(bytes: Uint8Array, type: string, experimentId: string): FormData {
+function imageForm(bytes: Uint8Array, type: string): FormData {
   const fd = new FormData();
   fd.set("file", new File([bytes], "a.png", { type }));
-  fd.set("experimentId", experimentId);
   return fd;
 }
 
@@ -20,7 +19,6 @@ describe("error envelope contract", () => {
     const owner = await setupOwner();
     const viewer = await inviteAndJoin(owner.token, owner.workspaceId, "viewer");
     const { id: sid } = await createSite(owner.token, owner.workspaceId);
-    const { id: eid } = await createExperiment(owner.token, sid);
     const big = new Uint8Array(1024 * 1024 + 1);
     big.set(PNG);
 
@@ -42,8 +40,8 @@ describe("error envelope contract", () => {
         return call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id: "site_retired_env", name: "x", domains: ["retired-env.example.com"] } });
       }, "retired_elsewhere"],
       [413, "asset_too_large", () =>
-        call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: imageForm(big, "image/png", eid), envOverride: { AB_ASSET_MAX_MB: "1" } })],
-      [415, "unsupported_media_type", () => call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: imageForm(PNG, "text/html", eid) })],
+        call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: imageForm(big, "image/png"), envOverride: { AB_ASSET_MAX_MB: "1" } })],
+      [415, "unsupported_media_type", () => call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: imageForm(PNG, "text/html") })],
       [422, "validation_failed", () =>
         call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { id: "Bad ID", name: "x", domains: ["x.example.com"] } })],
       // content-type 無しの壊れた body は validator が読まずに素通しするので、空 object として 422 になる(400 ではない)

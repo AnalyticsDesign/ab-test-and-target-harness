@@ -16,7 +16,17 @@ export type Env = {
   AB_BREAK_GLASS_TOKEN?: string;
   /** R2 公開ベース URL(spec §13.7)。IMAGE の src はこの配下のみ許可。R2 なし構成では不要・無視(決定 43 (4)) */
   AB_ASSET_PUBLIC_BASE?: string;
+  /**
+   * R2 なしの画像アップローダーの公開ベース URL(B68 spec §4.5。名前の正はアップローダーの spec)。正しい形のときだけ
+   * IMAGE に `<この値>/u/<siteId>/…` を書ける。判定は capabilities.ts の uploaderPublicBase の 1 か所だけ
+   */
+  AB_UPLOADER_PUBLIC_BASE?: string;
   AB_ASSET_MAX_MB?: string;
+  /** 1 サイトの画像の合計の上限(MB。既定 1024)と枚数の上限(既定 1000)。B68。読めない値は既定(core の assetSiteMaxBytes / assetSiteMaxCount) */
+  AB_ASSET_SITE_MAX_MB?: string;
+  AB_ASSET_SITE_MAX_COUNT?: string;
+  /** Cloudflare Images(B68 の縮小版)。無ければ縮小版を作らない(アップロードの thumb_state は skipped)。binding の設定と変換は別の作業 */
+  IMAGES?: ImagesBinding;
   /** edge の公開 origin(決定 44 (4)。導入時に必ず書く。bootstrap に焼く API の宛先にも使う)。ホストが .workers.dev ならドメインなし構成 */
   AB_EDGE_ORIGIN?: string;
   /**

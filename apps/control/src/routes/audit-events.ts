@@ -46,7 +46,7 @@ const AuditEventSchema = z.object({
   action: z
     .enum(AUDIT_ACTIONS)
     .describe(
-      "操作。invitation.*(招待の発行・取り消し・受諾)・member.*(ロールの変更・メンバーから外す・パスワード再設定リンクの発行)・instance_admin.*(システム管理者にする・外す)・api_key.*(API キーの発行・自分の鍵の失効・メンバーの鍵の失効)・workspace.*(作成・削除)・setup.complete(初期設定)・usage.settings_change(使用状況の設定)・static.rebuild(すべてのサイトの配信ファイルの作り直し)・break_glass.*(非常用トークンでの再設定リンクの発行・パスワードのログインを閉じた後の掃除)・auth.password_login(パスワードのログイン)・site.*・experiment.*・goal.*・audience.*・asset.upload・publish.*(公開・配信ファイルの作り直し)",
+      "操作。invitation.*(招待の発行・取り消し・受諾)・member.*(ロールの変更・メンバーから外す・パスワード再設定リンクの発行)・instance_admin.*(システム管理者にする・外す)・api_key.*(API キーの発行・自分の鍵の失効・メンバーの鍵の失効)・workspace.*(作成・削除)・setup.complete(初期設定)・usage.settings_change(使用状況の設定)・static.rebuild(すべてのサイトの配信ファイルの作り直し)・break_glass.*(非常用トークンでの再設定リンクの発行・パスワードのログインを閉じた後の掃除)・auth.password_login(パスワードのログイン)・site.*・experiment.*・goal.*・audience.*・asset.*(画像のアップロード・名前の変更・削除待ちにする)・publish.*(公開・配信ファイルの作り直し)",
     ),
   workspaceId: z.string().nullable().describe("操作のワークスペース。導入全体の操作(システム管理者・使用状況の設定・非常用トークン・パスワードのログイン)は null"),
   siteId: z.string().nullable().describe("操作のサイト(サイト・エクスペリエンス・目標・オーディエンス・画像・公開の操作)。人とアクセス権・ワークスペース・導入全体の操作は null"),

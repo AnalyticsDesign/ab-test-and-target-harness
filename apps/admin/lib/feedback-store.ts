@@ -44,12 +44,12 @@ export type FeedbackSnapshot = {
   dirty: boolean;
   /** どこかの節が保存などの処理中 */
   busy: boolean;
-  /** どこかの節が持つ、未保存とは別の離れる前の確認の種類(B173 第 2 段。今は発行したキーを控えていない = issuedKey だけ) */
+  /** どこかの節が持つ、未保存とは別の離れる前の確認の種類(B173 第 2 段。発行したキーを控えていない = issuedKey、画像のアップロードの途中 = uploading) */
   prompt: LeavePrompt | null;
 };
 
-/** 範囲が登録に載せる、未保存とは別の離れる前の確認の種類 */
-export type LeavePrompt = "issuedKey";
+/** 範囲が登録に載せる、未保存とは別の離れる前の確認の種類。uploading = 画像のアップロードの待ち行列が動いている(B68) */
+export type LeavePrompt = "issuedKey" | "uploading";
 /** 範囲の登録の 1 件 */
 export type GuardState = { dirty: boolean; busy: boolean; prompt?: LeavePrompt };
 

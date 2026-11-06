@@ -27,6 +27,18 @@ describe("leavePromptKind", () => {
     expect(kind()).toBeNull();
   });
 
+  // B68(K2 = Q294 案 A): アップロードの待ち行列が動いている間の確認。保存の途中より後、未保存より先
+  it("saving wins over uploading, uploading wins over unsaved", () => {
+    setGuard("form", { dirty: true, busy: false });
+    setGuard("uploads", { dirty: false, busy: false, prompt: "uploading" });
+    expect(kind()).toBe("uploading");
+    setGuard("detail", { dirty: false, busy: true });
+    expect(kind()).toBe("saving");
+    setGuard("detail", null);
+    setGuard("uploads", { dirty: false, busy: false });
+    expect(kind()).toBe("unsaved");
+  });
+
   it("a scope with only prompt issuedKey arms the guard", () => {
     setGuard("key", { dirty: false, busy: false, prompt: "issuedKey" });
     expect(getSnapshot()).toMatchObject({ dirty: false, busy: false, prompt: "issuedKey" });

@@ -2,8 +2,8 @@
 import type { MouseEvent } from "react";
 import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
-import type { SessionUser } from "@/lib/types";
-import { SITE_NAV, activeSegment, originOfPath, resolveOrigin, settingsEntryHref, sidebarContext, type SettingsOrigin } from "@/lib/nav";
+import type { Capabilities, SessionUser } from "@/lib/types";
+import { activeSegment, siteNav, originOfPath, resolveOrigin, settingsEntryHref, sidebarContext, type SettingsOrigin } from "@/lib/nav";
 import { isPlainLeftClick } from "@/lib/leave-guard";
 import { roleLabel } from "@/lib/roles";
 import { setSettingsSection } from "@/lib/settings-section";
@@ -19,9 +19,11 @@ import styles from "./Sidebar.module.css";
  * ホーム = ロゴ + 「ホーム」/ ワークスペース = ロゴ + 切替 + サイト一覧 / サイト = ロゴ + 切替 + サイトの画面(節の見出しは出さない)/
  * 設定の画面(サイト設定・メンバー・メンバーの API キー・`/w/me/*`)= 設定のメニュー(SettingsSidebar)。
  * どの文脈でも最下部に「設定」(設定系の入口はここ 1 つ)と名前のメニューを置く。
- * 切替の一覧(summary)と設定を開いた場所の記憶は、外枠の SettingsOriginProvider から読む(外枠は app/w/layout.tsx の 1 か所)
+ * 切替の一覧(summary)と設定を開いた場所の記憶は、外枠の SettingsOriginProvider から読む(外枠は app/w/layout.tsx の 1 か所)。
+ * caps は外枠が読んだ capabilities のうち「画像」の出し分けに使う 2 つ(B68。lib/nav.ts の siteNav)。外枠はクライアント遷移で描き直されないので
+ * 最初の読みの値のまま(R2 とアップローダーの有無は deploy の時にしか変わらず、再読み込みで直る)
  */
-export function Sidebar({ user }: { user: SessionUser }) {
+export function Sidebar({ user, caps }: { user: SessionUser; caps: Pick<Capabilities, "imageUpload" | "imageUploader"> }) {
   const pathname = usePathname();
   const { remembered, workspaces } = useSettingsOrigin();
   const ctx = sidebarContext(pathname);
@@ -58,7 +60,7 @@ export function Sidebar({ user }: { user: SessionUser }) {
           {ctx.kind === "home" ? <NavItem href="/w" icon="home" label="ホーム" current /> : null}
           {ws && ctx.kind === "workspace" ? <NavItem href={`/w/${ws.id}`} icon="grid" label="サイト一覧" current={pathname === `/w/${ws.id}`} /> : null}
           {ws && ctx.kind === "site"
-            ? SITE_NAV.map((n) => <NavItem key={n.segment} href={`/w/${ws.id}/sites/${ctx.sid}${n.segment ? `/${n.segment}` : ""}`} icon={n.icon} label={n.label} current={active === n.segment} />)
+            ? siteNav(caps).map((n) => <NavItem key={n.segment} href={`/w/${ws.id}/sites/${ctx.sid}${n.segment ? `/${n.segment}` : ""}`} icon={n.icon} label={n.label} current={active === n.segment} />)
             : null}
         </>
       )}

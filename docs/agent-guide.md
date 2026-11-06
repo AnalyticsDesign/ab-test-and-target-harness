@@ -120,11 +120,54 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/status" \
 - 結果を記録しないサイトでの開始は成功し、応答の `warnings` に `path: "results"` が出ます(結果はツールに残らず、後から記録を有効にしても、このテストは記録されません)。`path: "resultsCapacity"` は計測用のデータベースの空きが少なくなる見込みの警告です(開始は止めない)
 - 評価計画の保存は公開の対象になりません(「未公開の編集あり」になりません)
 
+**開始・再開と画像**: 開始・再開(`status: "running"`)は、状態を変える前に、変えた後に配信する内容(ほかの配信中のエクスペリエンスを含む)を公開と同じ画像の確かめにかけます。通らなければ、状態を変えずに 409 `asset_missing` か `asset_other_site` を返します(封筒の `assetProblems` に URL と変更の場所が入ります。その変更を直してからやり直してください)。一時停止・終了は配信を止める操作なので、画像を確かめずに必ず状態を変えて公開します。
+
 対象 URL(`urlMatch`)は `{ "part": "url" | "path" | "host", "op": …, "value": … }` の形で書きます(`part` を省略すると URL 全体)。目標(`goal`)の `PAGEVIEW` も同じ形で、`config` は `{ "page": { "part": "path", "op": "equals", "value": "/thanks/" } }` です。目標の古い形 `{ "urlOp", "urlValue" }` は受け付けず 422 です。対象 URL の `part` を省略した `{ "op", "value" }` は URL 全体への一致として今までどおり使えますが、URL 全体の正規表現は使えません(下の「踏みやすい制約」)。
 
 変更の型(`type`)は `TEXT` / `IMAGE` / `HIDE` / `ATTRIBUTE` / `HTML` / `CSS` / `CUSTOM_JS` の 7 種で、正確な形は `/openapi.json` にあります。
 
 画像アップロードと IMAGE の変更が無効な導入があります(R2 を使わない構成)。IMAGE を使う前に `GET /capabilities` の `imageUpload` を見てください。`false` のときはアップロードが 409、IMAGE の変更の保存が 422(`image_upload_disabled`)になるので、画像の差し替えは ATTRIBUTE の `src` で行います。
+
+**画像(IMAGE の変更に使う画像)**: 画像はエクスペリエンスではなくサイトに属し、サイトの画像の一覧で管理します(既定で 1 サイトあたり合計 1GB・1,000 枚まで)。IMAGE の変更に画像を使う手順は次の 4 つです。
+
+1. `GET /capabilities` の `imageUpload` を見ます。`false` なら、この導入には画像の一覧がありません(上の段落)
+2. `POST /sites/:sid/assets` に `file`(と任意の `name`)を multipart で送ります(編集者以上)。応答の `publicUrl` を IMAGE の `src` に書きます
+3. 同じ画像を別のパターンで使うときは、上げ直さずに `GET /sites/:sid/assets`(閲覧者以上)の `name` で探します。一覧の各件は公開 URL を持たず、応答の上の段の `urlPrefix` と各件の `path` をつないだもの(`urlPrefix` + `path`)が公開 URL です(1,000 枚の一覧でも応答を小さくするため)。公開ベースを変える前に上げた画像だけは、`path` の代わりに `publicUrl` が入るので、それをそのまま使います
+4. 消すときは `DELETE /sites/:sid/assets/:aid`(編集者以上)です。200 なら削除待ちで、24 時間の後に、どこでも使われていないことを確かめてから消えます(使われていれば一覧に戻り、`keptAt` が付きます)。409 `asset_in_use` なら、`usedBy` のパターンの変更から外してからやり直します。`deliveredIn`(公開したときの内容で使っているエクスペリエンス)があるときは、そのエクスペリエンスを削除するまで消せません
+
+```bash
+# 画像を上げる(name は管理用の名前。省くとファイル名)
+curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/assets" -H "Authorization: Bearer $AB_API_KEY" \
+  -F "file=@hero_q1.png;type=image/png" -F "name=hero_q1.png"
+# → 201 {"id":"asset_…","name":"hero_q1.png","publicUrl":"https://…/sites/<siteId>/images/asset_….png","thumbnail":"pending","usedBy":[],"inUse":false,"usage":{…}, …}
+
+# 応答の publicUrl を IMAGE の変更の src に書く(PUT は変更の全置換)
+curl -sS -X PUT "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/variants/b/changes" \
+  -H "Authorization: Bearer $AB_API_KEY" -H 'content-type: application/json' \
+  -d '[{"id":"c_img","type":"IMAGE","selector":"img.hero","payload":{"src":"<応答の publicUrl>"}}]'
+
+# 一覧(使っているパターンは usedBy、公開したときの内容で使っているエクスペリエンスは deliveredIn。名前は experiments の表に 1 回だけ)
+curl -sS "$AB_CONTROL_URL/sites/$SID/assets" -H "Authorization: Bearer $AB_API_KEY"
+# → 200 {"urlPrefix":"https://…/sites/<siteId>/","assets":[{"id":"asset_…","name":"hero_q1.png","path":"images/asset_….png","thumbnail":"ready","creator":0, …}],"creators":[{"id":"<作った人の id>","name":"…"}], …}
+# 作った人の ID と名前は各件に繰り返さず、上の段の配列 creators に 1 回だけ置く(各件の creator がその添字。creators[creator] で引く)
+# 1 件の応答(アップロード・名前の変更)は、これまでどおり createdBy に ID と名前を持つ
+# 一覧の画像の公開 URL(IMAGE の src に書く値)= urlPrefix + path
+curl -sS "$AB_CONTROL_URL/sites/$SID/assets" -H "Authorization: Bearer $AB_API_KEY" \
+  | jq -r '.urlPrefix as $p | .assets[] | select(.name == "hero_q1.png") | (.publicUrl // ($p + .path))'
+
+# 管理用の名前を変える(公開 URL は変わらない)/ 削除待ちにする
+curl -sS -X PATCH "$AB_CONTROL_URL/sites/$SID/assets/<画像の id>" -H "Authorization: Bearer $AB_API_KEY" \
+  -H 'content-type: application/json' -d '{"name":"hero_q1_v2.png"}'
+curl -sS -X DELETE "$AB_CONTROL_URL/sites/$SID/assets/<画像の id>" -H "Authorization: Bearer $AB_API_KEY"
+```
+
+- **名前**は管理用で、公開 URL には入りません(URL に入るのはサイトの ID とランダムな画像の ID だけ)。100 字まで。サイトの中で重なると、アップロードでは `hero_q1 (2).png` のように番号を付け、応答の `renamedFrom` に元の名前が入ります。アップロードでも、同じ名前の画像が同時に上がり続けたときと、同じ名前(番号違いを含む)の画像が多すぎて番号を付けられないときは 409 `asset_name_taken` で、画像は置かれません(別の名前を `name` に付けて送り直してください)。名前の変更で重なると 409 `asset_name_taken` です(削除待ちの画像の名前も、消えるまで数えます)
+- アップロードに `experimentId` などほかの項目を付けると 422 です。サイトの上限(枚数・合計)を超えると 409 `asset_quota_exceeded`(`usage` を添えます。削除待ちの画像も消えるまで数えます)、1 枚の上限を超えると 413 `asset_too_large` です。アップロード・名前の変更・削除の応答の `usage` に、サイトの使用量が入ります
+- **IMAGE の `src` に書けるのは**、そのサイトの画像の一覧にある画像の公開 URL(アップロード・名前の変更の応答の `publicUrl`、一覧では `urlPrefix` + `path`。と、R2 なしの画像アップローダーで上げたそのサイトの画像の URL)だけです。一覧に無い・削除待ちの画像の URL と、縮小版(`thumbnailUrl`)の URL は 422 `asset_not_found` で、その保存では何も書かれません
+- サイトの画像の URL を、文字参照(`&#…;`)・CSS のエスケープ(`\…`)・`%` の形で書いた変更は、種類を問わず 422 `asset_ref_encoded` です。HTML・CSS・ATTRIBUTE の変更に画像の URL を書くときも、そのままの形で書いてください
+- 一覧の `usedBy`(と `inUse`)は、下書きの IMAGE と ATTRIBUTE の `src` だけを見ます。HTML・CSS の変更の中だけで使っている画像は「使っていない」と出て削除待ちにできますが、24 時間の後の確かめで使われていると分かれば消えずに戻ります
+- **公開の確かめ**: 公開する内容(HTML・CSS・属性の値を含む)に、削除した画像・削除の途中の画像・同じ導入の別のサイトの画像の URL があると、公開は失敗します(`ok: false`、`error` が `asset_missing` か `asset_other_site`。`assetProblems` に URL・理由・`experimentId`・`variantId`・`changeId` が入ります)。公開の確認(`GET /sites/:sid/publish-preview`)の `assetProblems` で、公開の前に同じ一覧を見られます
+- 縮小版(`thumbnailUrl`・`thumbnail`)は管理画面の一覧のためのもので、アップロード・名前の変更の応答の `thumbnailUrl` は `thumbnail` が `ready` のときだけ入り、それ以外(`pending`・`failed`・`skipped`)は `null` です。一覧では、ふつうは各件に `thumbnailUrl` が無く、`thumbnail` が `ready` の画像の縮小版は `urlPrefix` + `thumbs/<画像の id>.webp` です。縮小版の URL がこの形にならない件(`ready` でも縮小版がまだ記録されていない件など)だけ、各件に `thumbnailUrl`(文字列か `null`)が入り、そのときはその値を使います。`GET /capabilities` の `imageThumbnails` が `false` の導入では作りません(`thumbnail: "skipped"`)
 
 公開の失敗は **HTTP 200 + `{"ok": false, "error": …}`** で返るので、`ok` を必ず見てください。
 

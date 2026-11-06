@@ -30,13 +30,32 @@ export const CHANGES_PUT_BODY_MAX_BYTES = MAX_CHANGES_PER_VARIANT * (2 * LIMITS.
 /** 画像のアップロードの上限の既定(MB。control の env `AB_ASSET_MAX_MB` が無い・読めないとき) */
 export const DEFAULT_ASSET_MAX_MB = 5;
 
-/** multipart の区切り・ヘッダー・`experimentId` の欄のための余白(画像 1 枚の上限に足す) */
+/** multipart の区切り・ヘッダー・`name` の欄のための余白(画像 1 枚の上限に足す) */
 export const MULTIPART_OVERHEAD_BYTES = 1 * MiB;
 
 /** `AB_ASSET_MAX_MB` の文字列 → MB。正の有限の数でなければ既定 */
 export function assetMaxMb(raw: string | undefined): number {
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_ASSET_MAX_MB;
+}
+
+/** 1 サイトの画像の合計サイズの上限の既定(MB。control の env `AB_ASSET_SITE_MAX_MB` が無い・読めないとき) */
+export const DEFAULT_ASSET_SITE_MAX_MB = 1024;
+
+/** 1 サイトの画像の枚数の上限の既定(control の env `AB_ASSET_SITE_MAX_COUNT` が無い・読めないとき) */
+export const DEFAULT_ASSET_SITE_MAX_COUNT = 1000;
+
+/** `AB_ASSET_SITE_MAX_MB` の文字列 → バイト数。正の有限の数でなければ既定(バイトに切り捨てて 0 になるものも既定) */
+export function assetSiteMaxBytes(raw: string | undefined): number {
+  const n = Number(raw);
+  const bytes = Number.isFinite(n) && n > 0 ? Math.floor(n * MiB) : 0;
+  return bytes > 0 ? bytes : DEFAULT_ASSET_SITE_MAX_MB * MiB;
+}
+
+/** `AB_ASSET_SITE_MAX_COUNT` の文字列 → 枚数。正の有限の数でなければ既定(小数は切り捨て。切り捨てて 0 になるものも既定) */
+export function assetSiteMaxCount(raw: string | undefined): number {
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_ASSET_SITE_MAX_COUNT;
 }
 
 /** 画像のアップロードの要求の本文の上限(画像 1 枚の上限 + multipart の余白) */

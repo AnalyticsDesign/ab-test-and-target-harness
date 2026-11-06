@@ -78,7 +78,19 @@ export type VariantRow = {
 export type ChangeRow = { site_id: string; experiment_id: string; variant_id: string; id: string; type: string; selector: string | null; payload_json: string; position: number; created_by: string; updated_by: string; created_at: number; updated_at: number };
 /** analytics_json = 目標の外部計測 `{ overrides: { goalName } }`(0015、B77)。無ければ null */
 export type GoalRow = { site_id: string; id: string; name: string; type: string; config_json: string; analytics_json: string | null; created_at: number; updated_at: number };
-export type AssetRow = { id: string; site_id: string; experiment_id: string; r2_key: string; public_url: string; mime: string; size: number; created_by: string; created_at: number };
+/**
+ * 画像のライブラリ(B68。migrations/00NN_asset_library.sql)。サイトの持ち物で、エクスペリエンスには属さない。
+ * name = 管理用の名前(公開 URL・R2 には出ない)・name_key = 重なりの判定用(英字だけの小文字。UNIQUE (site_id, name_key))。
+ * thumb_state = pending | ready | failed | skipped。deleted_at = 削除待ちにした時刻・kept_at = Cron が戻した時刻・
+ * purge_marked_at = 消す途中の印(R2 を消せるまで行を残す墓標を兼ねる)
+ */
+export type AssetRow = {
+  id: string; site_id: string; name: string; name_key: string; r2_key: string; public_url: string; mime: string; size: number;
+  width: number | null; height: number | null; thumb_key: string | null; thumb_state: "pending" | "ready" | "failed" | "skipped"; thumb_attempts: number;
+  created_by: string; created_at: number; deleted_at: number | null; deleted_by: string | null; kept_at: number | null; purge_marked_at: number | null; updated_at: number;
+};
+/** 公開したときの定義が使っている画像(B68。同じマイグレーション)。エクスペリエンスの削除で外部キーにより消える */
+export type AssetDeliveredRefRow = { site_id: string; asset_id: string; experiment_id: string };
 export type PublishRow = { id: string; site_id: string; version: number; status: "reserved" | "failed" | "active" | "superseded"; config_hash: string | null; config_json: string | null; needs_profile: number | null; error: string | null; kv_deleted: number; published_by: string; created_at: number; activated_at: number | null };
 
 /** Better Auth apiKey プラグインの表(B33: metadata の roleCap と、管理者向け一覧のための列を読む。書くのはプラグインと失効の 2 列だけ)。date 列は ISO 文字列 */
@@ -192,6 +204,7 @@ export interface Tables {
   changes: ChangeRow;
   goals: GoalRow;
   assets: AssetRow;
+  asset_delivered_refs: AssetDeliveredRefRow;
   publishes: PublishRow;
   retired_experiment_ids: RetiredExperimentIdRow;
   retired_site_ids: RetiredSiteIdRow;

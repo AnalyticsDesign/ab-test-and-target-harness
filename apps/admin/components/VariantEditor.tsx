@@ -1,11 +1,12 @@
 "use client";
 import type { AnalyticsSettings, Change, Variant } from "@/lib/types";
+import type { ImageFieldMode } from "@/lib/images";
 import { analyticsValueErrors, shownValueErrors } from "@/lib/analytics-values";
 import { outputKeyCount, variantAnalyticsBadge } from "@/lib/analytics-badges";
 import { exposurePreview } from "@/lib/datalayer-preview";
 import { ChangeEditor, defaultPayload } from "./ChangeEditor";
 import { ExtraEditor } from "./ExtraEditor";
-import { AssetUpload } from "./AssetUpload";
+import { useSiteAssets } from "./images/SiteAssetsProvider";
 import { MemoField } from "./MemoField";
 import { AnalyticsBadges, AnalyticsCard, AnalyticsSection, EXPOSED_NOTE, KeyCount } from "./experiment/AnalyticsCard";
 import { DataLayerPreview } from "./experiment/DataLayerPreview";
@@ -19,7 +20,6 @@ const EXTRA_MAX = 20;
  * 重みは一覧(VariantsTab)の行で入れる
  */
 export function VariantEditor({
-  siteId,
   experimentId,
   variant,
   saved,
@@ -30,7 +30,7 @@ export function VariantEditor({
   memoDisabled,
   pageUrl,
   removable,
-  imageUpload,
+  imageMode,
   single,
   names,
   experimentName,
@@ -40,7 +40,6 @@ export function VariantEditor({
   emptyHtmlIndex,
   saveTried = false,
 }: {
-  siteId: string;
   experimentId: string;
   variant: Variant;
   /** 保存済みのこのパターン(新しいパターンは undefined)。値の検査で、変えていない値を見ないために使う(K12) */
@@ -58,8 +57,8 @@ export function VariantEditor({
   memoDisabled: boolean;
   pageUrl: string | null;
   removable: boolean;
-  /** 決定 43 (6): false ならアップロードボタンと IMAGE の種類を出さず、代替の一文を出す */
-  imageUpload: boolean;
+  /** 決定 43 (6)・B68: picker = 「画像の変更を追加」で選ぶ窓 / url = 空の IMAGE を足す(URL を貼る)/ off = IMAGE の種類を出さず、代替の一文を出す */
+  imageMode: ImageFieldMode;
   /** パーソナライズ(kind = single)。オリジナルを使えないので「オリジナル / 変更あり」を出さない */
   single: boolean;
   /** サイトの外部計測の設定(プレビューのキー名) */
@@ -90,6 +89,17 @@ export function VariantEditor({
     onChange({ ...variant, analytics: next.overrides || next.extra ? { ...(next.overrides ? { overrides: next.overrides } : {}), ...(next.extra ? { extra: next.extra } : {}) } : null });
   const addChange = (change: Change) => onChange({ ...variant, changes: [...variant.changes, change] });
   const newChangeId = () => `c_${Math.random().toString(36).slice(2, 8)}`;
+  const siteAssets = useSiteAssets();
+  // 「画像の変更を追加」: 選ぶ窓なら、選んだ画像で IMAGE の変更を 1 つ足す(セレクタは空)。URL の入力の導入では空の IMAGE を足す。
+  // どちらも下書きを変えるだけ(保存は帯)
+  const addImageChange = async () => {
+    if (imageMode === "picker") {
+      const picked = siteAssets ? await siteAssets.pick("") : null;
+      if (picked) addChange({ id: newChangeId(), type: "IMAGE", selector: "", payload: { src: picked.publicUrl } });
+      return;
+    }
+    addChange({ id: newChangeId(), type: "IMAGE", selector: "", payload: defaultPayload("IMAGE") });
+  };
   return (
     // data-testid: E2E(apps/admin/e2e)が Variant の枠を一意に掴むための目印
     <div data-testid={`variant-${variant.id}`} className={styles.stack}>
@@ -144,7 +154,7 @@ export function VariantEditor({
                 change={c}
                 disabled={disabled}
                 pageUrl={pageUrl}
-                imageUpload={imageUpload}
+                imageMode={imageMode}
                 error={i === emptyHtmlIndex ? "HTML を入力してください" : undefined}
                 onChange={(next) => onChange({ ...variant, changes: variant.changes.map((x, j) => (j === i ? next : x)) })}
                 onRemove={() => onChange({ ...variant, changes: variant.changes.filter((_, j) => j !== i) })}
@@ -154,8 +164,10 @@ export function VariantEditor({
               <button type="button" className="btn" disabled={disabled} onClick={() => addChange({ id: newChangeId(), type: "TEXT", selector: "", payload: defaultPayload("TEXT") } as Change)}>
                 変更を追加
               </button>
-              {imageUpload ? (
-                <AssetUpload siteId={siteId} experimentId={experimentId} disabled={disabled} onUploaded={(url) => addChange({ id: newChangeId(), type: "IMAGE", selector: "", payload: { src: url } })} />
+              {imageMode !== "off" ? (
+                <button type="button" className="btn" disabled={disabled} onClick={() => void addImageChange()}>
+                  画像の変更を追加
+                </button>
               ) : (
                 <span className="muted" data-testid="image-upload-disabled">
                   この導入では画像アップロードと IMAGE の変更は使えません。画像の差し替えは ATTRIBUTE(src)で行ってください

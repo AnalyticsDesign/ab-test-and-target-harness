@@ -1,5 +1,6 @@
 // apps/control/src/cron/jobs.ts
 import { resultsAccountGuard } from "./account-guard";
+import { assetHousekeepingJob } from "./asset-housekeeping";
 import { breakGlassSweep } from "./break-glass-sweep";
 import { auditRetentionJob } from "./audit-retention";
 import { configCleanupJob } from "./config-cleanup";
@@ -21,5 +22,7 @@ import type { CronJob } from "./runner";
  * 7o K13: static-reconcile(15 分ごと)を最後に足す。配分を持たず、使う D1 のクエリを自分で確かめる
  * B129 Task 9: audit-retention(日次。操作の記録の 366 日より前の行を 1 日 5,000 行まで消す)を最後に足す。配分(queryShare)を持たないのは、
  * 結果のジョブの配分表を変えないため(1 日 1 回で使う D1 のクエリは 4〜5 件。全体の残りに収まるかを自分で確かめる)
+ * B68(spec §5.3・§6.1): asset-housekeeping(15 分ごと。画像の削除の段 → 縮小版の段)を最後に足す。配分を持たず、使う D1 のクエリと
+ * subrequest を自分で数える(11 本 → 12 本)
  */
-export const CRON_JOBS: readonly CronJob[] = [resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob, staticReconcileJob, auditRetentionJob];
+export const CRON_JOBS: readonly CronJob[] = [resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob, staticReconcileJob, auditRetentionJob, assetHousekeepingJob];

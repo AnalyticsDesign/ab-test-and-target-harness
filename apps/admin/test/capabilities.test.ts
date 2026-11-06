@@ -33,6 +33,13 @@ describe("resolveCapabilities", () => {
     // tagOrigin が「存在するが型不正」なら応答全体を既定に倒す
     expect(resolveCapabilities({ status: 200, data: { imageUpload: true, tagOrigin: 1 } })).toEqual(DEFAULT_CAPABILITIES);
   });
+  it("image_uploader_is_kept_only_when_the_body_has_a_boolean", () => {
+    // B68: R2 なしの画像アップローダーの有無。古い control(フィールドなし)は undefined のまま(画面は false として扱う)
+    expect(resolveCapabilities({ status: 200, data: { imageUpload: false, imageUploader: true } }).imageUploader).toBe(true);
+    expect(resolveCapabilities({ status: 200, data: { imageUpload: false, imageUploader: false } }).imageUploader).toBe(false);
+    expect(resolveCapabilities({ status: 200, data: { imageUpload: false } }).imageUploader).toBeUndefined();
+    expect(resolveCapabilities({ status: 200, data: { imageUpload: false, imageUploader: "yes" } })).toEqual(DEFAULT_CAPABILITIES);
+  });
   it("resultsStore_is_true_only_for_a_true_boolean_and_defaults_to_false", () => {
     expect(resolveCapabilities({ status: 200, data: { imageUpload: true, resultsStore: true } }).resultsStore).toBe(true);
     expect(resolveCapabilities({ status: 200, data: { imageUpload: true, resultsStore: false } }).resultsStore).toBe(false);

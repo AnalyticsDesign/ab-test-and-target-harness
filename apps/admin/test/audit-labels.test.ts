@@ -139,7 +139,12 @@ describe("audit detail line", () => {
     expect(auditDetailLine(ev("goal.update", { fields: ["name", "config"] }))).toBe("名前、達成の条件");
     expect(auditDetailLine(ev("audience.update", { fields: ["definition"] }))).toBe("条件");
     expect(auditDetailLine(ev("audience.update", { fields: [] }))).toBe("項目の変更なしの保存");
+    // B68 の前の記録は experiment を持つ(読まない)。B68 の後は bytes・type だけ
     expect(auditDetailLine(ev("asset.upload", { bytes: 2048, type: "image/png", experiment: "e" }))).toBe("image/png・2.0 KB");
+    expect(auditDetailLine(ev("asset.upload", { bytes: 2048, type: "image/png" }))).toBe("image/png・2.0 KB");
+    expect(auditDetailLine(ev("asset.rename", { from: "hero.png", to: "トップ.png" }))).toBe("「hero.png」→「トップ.png」");
+    expect(auditDetailLine(ev("asset.rename", { from: null, to: "トップ.png" }))).toBe("");
+    expect(auditDetailLine(ev("asset.delete"))).toBe("");
     expect(auditDetailLine(ev("publish.publish", { version: 14, superseded: false }))).toBe("版 14");
     expect(auditDetailLine(ev("publish.publish", { version: 15, superseded: true }))).toBe("版 15(後の公開に追い越されたため、配信中にしていません)");
     expect(auditDetailLine(ev("publish.publish", { version: 15, reason: "reverted" }))).toBe("版 15");

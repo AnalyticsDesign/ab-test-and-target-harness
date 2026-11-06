@@ -34,7 +34,7 @@ export function useLeaveGuard(
     const onClick = (e: MouseEvent) => {
       if (pass()) return;
       const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
-      const href = guardedHref(e, a ? { href: a.href, target: a.target, hasDownload: a.hasAttribute("download") } : null, window.location.origin);
+      const href = guardedHref(e, a ? { href: a.href, target: a.target, hasDownload: a.hasAttribute("download"), inPlace: a.hasAttribute("data-in-place") } : null, window.location.origin);
       if (href === null) return;
       e.preventDefault();
       e.stopPropagation();

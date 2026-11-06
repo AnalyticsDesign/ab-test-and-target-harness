@@ -29,11 +29,15 @@ function readJsonc(file: string): Record<string, unknown> {
  * wrangler.jsonc の `services`(デプロイ専用の Worker の Service Binding)を除いた写しを作る。
  * vitest の workerd には wtt-deployer が無く、binding が解決できないと起動そのものが落ちるため。
  * テストの DEPLOYER は既定で無し(test/helpers.ts の testEnv)で、必要なテストだけ偽物を入れる。
+ * Cloudflare Images の binding(`images`)も除く(関数の中のコメント)。
  * 同じ理由で、別の script(wtt-edge)の Durable Object を指す binding(`script_name` 付き。D9 ② の Task 12)も除く。
  * 写しは .wrangler/ に置くので、相対パス(main / migrations_dir)は絶対パスにする
  */
 function wranglerConfigForTests(cfg: Record<string, unknown>): string {
   delete cfg.services;
+  // B68: Cloudflare Images の binding(縮小版)も外す。ローカルの実体は sharp(ネイティブの依存)で、CI の OS で動くか確かめていないため、
+  // テストの workerd では立ち上げない。縮小版のテストは偽の binding(test/housekeeping-helpers.ts の fakeImages)を envOverride で入れる
+  delete cfg.images;
   const dos = cfg.durable_objects as { bindings?: Array<Record<string, string>> } | undefined;
   if (dos?.bindings) dos.bindings = dos.bindings.filter((b) => b.script_name === undefined);
   cfg.main = path.join(import.meta.dirname, cfg.main as string);

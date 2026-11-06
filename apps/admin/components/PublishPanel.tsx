@@ -11,6 +11,8 @@ import { PageHeader } from "./ui/PageHeader";
 import { StatusPill } from "./ui/StatusPill";
 import { Icon } from "./ui/Icon";
 import { BusyScope, useBusyAction } from "./ui/BusyScope";
+import { AssetProblemList } from "./images/AssetProblemList";
+import { ASSET_PROBLEMS_TITLE, assetProblemRows, parseAssetProblems, publishFailureProblems, type AssetProblemRow } from "@/lib/asset-problems";
 
 const pill = (s: Status | null) => (s ? <StatusPill tone={STATUS_TONE[s]}>{STATUS_JA[s]}</StatusPill> : <StatusPill tone="gray">未反映</StatusPill>);
 
@@ -24,6 +26,11 @@ export function PublishPanel({ wid, site, preview, canPublish }: { wid: string; 
   /** 公開は済んだが読み直しが上限を超えた(結果の帯の下に再読み込みの案内。版が進むので送り直さない) */
   const [note, setNote] = useState<string | null>(null);
   const base = `/w/${wid}/sites/${site.id}`;
+  // B68: 画像の一覧のリンクの名前は、確認の画面が既に持っているエクスペリエンスの一覧から引く(無ければ ID。読みは足さない)
+  const names = new Map(preview.experiments.map((e) => [e.id, e.name]));
+  const rowsOf = (problems: Parameters<typeof assetProblemRows>[0]) => assetProblemRows(problems, { wid, siteId: site.id, experimentName: (id) => names.get(id) });
+  const previewProblems = rowsOf(parseAssetProblems(preview.assetProblems));
+  const failedProblems = rowsOf(publishFailureProblems(result));
   return (
     <div>
       <PageHeader title="公開" meta={<>前回の公開({preview.lastActivatedAt ? <LocalTime at={preview.lastActivatedAt} /> : "未実行"})以降の変更</>} />
@@ -104,6 +111,7 @@ export function PublishPanel({ wid, site, preview, canPublish }: { wid: string; 
               base={base}
               site={site}
               preview={preview}
+              assetProblems={previewProblems}
               canPublish={canPublish}
               onStart={() => {
                 setError(null);
@@ -133,6 +141,12 @@ export function PublishPanel({ wid, site, preview, canPublish }: { wid: string; 
             : `公開に失敗しました(v${result.version ?? "-"}: ${result.error}): ${result.message}。前の版が配信されたままです。原因を直して再試行してください`}
         </p>
       ) : null}
+      {failedProblems.length > 0 ? (
+        <div className="error-box" data-testid="publish-result-asset-problems">
+          {result && !result.ok && result.hint ? result.hint : ASSET_PROBLEMS_TITLE}
+          <AssetProblemList rows={failedProblems} />
+        </div>
+      ) : null}
       {result?.ok && result.warnings.length > 0 ? <p className="banner-warn">警告: {result.warnings.map((w) => `${w.path}: ${w.message}`).join(" / ")}</p> : null}
       {result?.ok ? (
         <p>
@@ -159,6 +173,7 @@ function PublishAside({
   base,
   site,
   preview,
+  assetProblems,
   canPublish,
   onStart,
   onResult,
@@ -168,6 +183,8 @@ function PublishAside({
   base: string;
   site: Pick<Site, "id" | "name" | "activeVersion">;
   preview: PublishPreview;
+  /** B68: いまの下書きを公開すると画像の確かめで止まる参照(公開のボタンは止めない。押せば control が同じ理由で断る) */
+  assetProblems: AssetProblemRow[];
   canPublish: boolean;
   onStart: () => void;
   onResult: (r: PublishResult) => void;
@@ -211,6 +228,12 @@ function PublishAside({
           いまの下書きは公開で止まります: {preview.compileError.message}
           {preview.compileError.hint ? `(${preview.compileError.hint})` : ""}
         </p>
+      ) : null}
+      {assetProblems.length > 0 ? (
+        <div className="banner-warn" style={{ display: "block" }} data-testid="publish-asset-problems">
+          {ASSET_PROBLEMS_TITLE}(パターンの変更から外すか、このサイトの画像を選び直してから公開します)
+          <AssetProblemList rows={assetProblems} />
+        </div>
       ) : null}
       {preview.viewportExperiments.length > 0 ? (
         <p className="banner-warn" style={{ display: "block" }} data-testid="publish-viewport">

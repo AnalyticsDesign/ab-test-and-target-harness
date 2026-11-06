@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { guardedHref, isLogoutSubmit, isPlainLeftClick } from "@/lib/leave-guard";
 
 const click = (over: Partial<Parameters<typeof guardedHref>[0]> = {}) => ({ button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false, ...over });
-const a = (href: string, over: { target?: string; hasDownload?: boolean } = {}) => ({ href, target: "", hasDownload: false, ...over });
+const a = (href: string, over: { target?: string; hasDownload?: boolean; inPlace?: boolean } = {}) => ({ href, target: "", hasDownload: false, ...over });
 const ORIGIN = "https://admin.example.com";
 
 describe("guardedHref (B35 / 決定 54 (11))", () => {
@@ -19,6 +19,12 @@ describe("guardedHref (B35 / 決定 54 (11))", () => {
     expect(guardedHref(click(), a(`${ORIGIN}/file`, { hasDownload: true }), ORIGIN)).toBeNull();
     expect(guardedHref(click(), null, ORIGIN)).toBeNull();
     expect(guardedHref(click({ defaultPrevented: true }), a(`${ORIGIN}/w`), ORIGIN)).toBeNull();
+  });
+  it("does_not_guard_in_place_anchors_but_still_guards_others", () => {
+    // B68: 画面の中で開く行(data-in-place)は遷移しないので止めない(止めると行の onClick が呼ばれず、移動の確認と router の遷移になる)
+    expect(guardedHref(click(), a(`${ORIGIN}/w/w1/sites/s1/experiments/e1?tab=variants&variant=b`, { inPlace: true }), ORIGIN)).toBeNull();
+    expect(guardedHref(click(), a(`${ORIGIN}/w/w1/sites/s1/experiments/e9?tab=variants&variant=a`, { inPlace: false }), ORIGIN)).toBe("/w/w1/sites/s1/experiments/e9?tab=variants&variant=a");
+    expect(guardedHref(click(), a(`${ORIGIN}/w/w1/sites/s1/experiments/e9`), ORIGIN)).toBe("/w/w1/sites/s1/experiments/e9");
   });
 });
 

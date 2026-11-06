@@ -53,8 +53,8 @@ describe("every page renders a PageMark", () => {
       return !src.includes(`path={\`${expectedPath(p)}\`}`) || !src.includes("search={") || !/<PageMark\b/.test(src);
     });
     expect(offenders).toEqual([]);
-    // 一覧の取りこぼしで空振りしない(サーバーのページは 24 個。B129 で操作の記録の 2 つを足した)
-    expect(serverPages).toHaveLength(24);
+    // 一覧の取りこぼしで空振りしない(サーバーのページは 25 個。B129 で操作の記録の 2 つ、B68 で画像の一覧を足した)
+    expect(serverPages).toHaveLength(25);
   });
 
   it("client pages render PageMark without a path", () => {

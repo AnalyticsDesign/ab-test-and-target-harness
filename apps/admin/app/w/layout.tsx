@@ -35,7 +35,7 @@ export default async function AuthedLayout({ children }: { children: ReactNode }
       {/* 離れる前の確認(未保存の変更・保存の途中)。リンク・ログアウト・再読み込み・戻る・進むを止める。外枠と同じくクライアント遷移で作り直されない所に 1 つだけ置く */}
       <PageLeaveGuard />
       <SettingsOriginProvider summary={summary.status === 200 ? summary.data : []}>
-        <AppShell sidebar={<Sidebar user={user} />}>{children}</AppShell>
+        <AppShell sidebar={<Sidebar user={user} caps={{ imageUpload: caps.imageUpload, imageUploader: caps.imageUploader }} />}>{children}</AppShell>
       </SettingsOriginProvider>
     </div>
   );

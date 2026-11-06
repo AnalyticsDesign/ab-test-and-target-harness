@@ -113,7 +113,7 @@ export type ListAdoption = {
 /** 計測用のデータベースの使用量(D9 ③。`GET /sites/:sid` が返す。まだ測っていない導入では無い) */
 export type ResultsCapacity = { sizeBytes: number; measuredAt: number; level: "ok" | "warning" | "stopped" };
 export type AnalyticsWarning = { path: string; message: string };
-export type PublishResult = { ok: true; version: number; needsProfile: boolean; superseded: boolean; staticDeploy: "deployed" | "pending" | "skipped"; warnings: AnalyticsWarning[] } | { ok: false; version: number | null; error: string; message: string; hint?: string };
+export type PublishResult = { ok: true; version: number; needsProfile: boolean; superseded: boolean; staticDeploy: "deployed" | "pending" | "skipped"; warnings: AnalyticsWarning[] } | { ok: false; version: number | null; error: string; message: string; hint?: string; /** B68: asset_missing / asset_other_site のときの画像と、それを含む変更 */ assetProblems?: AssetProblem[] };
 /** `POST …/experiments/:eid/status` の応答。warnings = 遷移は成功したが知らせたいこと(結果を記録しない開始・容量の見込み。D9 ②③) */
 export type StatusResult = {
   experiment: Experiment;
@@ -137,7 +137,11 @@ export type PublishPreview = {
   compileError: { error: string; message: string; hint?: string } | null;
   /** 同じ対象 URL で同じ要素を変える配信中のエクスペリエンスの組(experimentIds = [優先の低い方, 高い方]) */
   overlaps: Array<{ path: string; message: string; experimentIds: string[] }>;
+  /** B68: いまの下書きを公開すると画像の確かめで止まる参照(古い control の応答では欠ける = 無し) */
+  assetProblems?: AssetProblem[];
 };
+/** B68: 公開できない画像(missing = このサイトの画像の一覧に無い・消すと決まった画像 / other_site = 別のサイトの画像)と、それを含む変更 */
+export type AssetProblem = { url: string; reason: "missing" | "other_site"; experimentId: string; variantId: string; changeId: string };
 /** analytics = 目標の外部計測(B77。goalName を指定しなければ ab_goal_name は目標 ID。無ければ null) */
 /**
  * runningTests = この目標を配信条件(使っているオーディエンスを含む)か評価計画(判定に使う目標)で参照している、実行中・一時停止中のテスト
@@ -151,7 +155,53 @@ export type Goal = {
 /** backlog D13: 書き込みの凍結の状態。reason = null は「凍結の設定が読めない」(凍結中として扱う) */
 export type WriteFreezeState = { reason: string | null; until: string | null; since: number | null };
 /** `GET /capabilities`。この導入で使える機能(control の env から決まる) */
-export type Capabilities = { imageUpload: boolean; edgeOrigin: string | null; tagOrigin: string | null; edgeOnWorkersDev: boolean; passwordLogin: boolean; resultsStore: boolean; writeFreeze: WriteFreezeState | null; apiVersion: number | null; minClientVersion: number | null };
+export type Capabilities = { imageUpload: boolean; edgeOrigin: string | null; tagOrigin: string | null; edgeOnWorkersDev: boolean; passwordLogin: boolean; resultsStore: boolean; writeFreeze: WriteFreezeState | null; apiVersion: number | null; minClientVersion: number | null;
+  /** B68: R2 なしの画像アップローダーがあるか。アップローダーが入る前の control は返さない(undefined = false として扱う) */
+  imageUploader?: boolean;
+};
+/** B68: `GET /sites/:sid/assets` の usage。count・bytes は削除待ちを含み、pendingCount・pendingBytes がその内数 */
+export type AssetUsage = { count: number; bytes: number; pendingCount: number; pendingBytes: number; maxCount: number; maxBytes: number; maxFileBytes: number };
+/** B68: サイトの画像の 1 件(一覧・アップロード・名前の変更の応答の共通の形) */
+export type SiteAsset = {
+  id: string;
+  name: string;
+  publicUrl: string;
+  /** 縮小版(幅 320px の WebP)。まだ無ければ null */
+  thumbnailUrl: string | null;
+  thumbnail: "pending" | "ready" | "failed" | "skipped";
+  mime: string;
+  size: number;
+  width: number | null;
+  height: number | null;
+  createdAt: number;
+  createdBy: { id: string; name: string | null };
+  /** 下書きの IMAGE・ATTRIBUTE の src で使っているパターン */
+  usedBy: Array<{ experimentId: string; variantId: string }>;
+  /** 公開したときの内容で使っているエクスペリエンスの ID */
+  deliveredIn: string[];
+  inUse: boolean;
+  /** 削除待ちから自動で戻された時刻(7 日の間は札を出す) */
+  keptAt: number | null;
+};
+/** B68: 画面の中の画像の一覧(`GET /sites/:sid/assets` の応答を `expandAssetList` で各件の URL に戻したもの)。experiments は usedBy・deliveredIn に出るエクスペリエンスの名前・状態・パターン名 */
+export type AssetList = { assets: SiteAsset[]; experiments: Record<string, { name: string; status: string; variants: Record<string, string> }>; usage: AssetUsage };
+/**
+ * B68: `GET /sites/:sid/assets` の応答そのもの。各件は URL を持たず、上の段の urlPrefix と各件の path で表す
+ * (公開ベースを変える前の画像は publicUrl、縮小版の URL が決まった形でない件は thumbnailUrl が入る)。画面では `expandAssetList` で `AssetList` に戻して使う
+ */
+export type AssetListItemResponse = Omit<SiteAsset, "publicUrl" | "thumbnailUrl" | "createdBy"> & {
+  path?: string; publicUrl?: string; thumbnailUrl?: string | null;
+  /** 作った人。上の段の creators の添字(ID と名前はそこで引く) */
+  creator: number;
+};
+export type AssetListResponse = Omit<AssetList, "assets"> & {
+  urlPrefix: string | null;
+  assets: AssetListItemResponse[];
+  /** 一覧に出る画像を作った人(一覧に最初に出た順。各件の creator が添字) */
+  creators: Array<{ id: string; name: string | null }>;
+};
+/** B68: `POST /sites/:sid/assets` の 201。renamedFrom は名前が重なって番号を付けたときだけ */
+export type UploadedAsset = SiteAsset & { renamedFrom?: string; usage: AssetUsage };
 /** `GET /me/api-keys` の各要素。`revokedAt` は失効した時刻(有効な鍵は null。失効から 30 日で一覧から消える) */
 /** B42: scope = 鍵の範囲(null = 範囲を持たない古い鍵で使えない)。workspace.name = null はワークスペースが削除済み */
 export type ApiKey = {

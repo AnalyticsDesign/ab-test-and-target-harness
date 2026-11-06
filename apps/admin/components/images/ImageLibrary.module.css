@@ -1,0 +1,113 @@
+/* B68 サイトの画像の一覧(spec §9.2。見た目の正は docs/dev/mocks/b68_image_library_mock_v1.html の案 A と b68_upload_progress_mock_v1.html の案 A) */
+
+.meter { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bar { width: 160px; max-width: 100%; height: 6px; border-radius: 3px; background: var(--gray-soft); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); }
+.meterWarn { color: var(--warn); }
+.meterWarn .bar > i { background: var(--warn); }
+
+.dropzone { border: 1.5px dashed var(--border-strong); border-radius: var(--radius-card); padding: 14px; text-align: center; color: var(--muted); background: var(--sunken); margin-bottom: 16px; }
+
+.overlay { position: fixed; inset: 0; z-index: 80; background: color-mix(in srgb, var(--accent) 14%, transparent); display: grid; place-items: center; pointer-events: none; }
+.overlayBox { background: var(--surface); border: 2px dashed var(--accent); border-radius: 12px; padding: 28px 40px; font-size: 16px; font-weight: 600; color: var(--accent); }
+
+/* アップロードの結果のカード */
+.queueCard { display: flex; flex-direction: column; gap: 10px; }
+.queueHead { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; }
+.queueHead > h2 { margin: 0 auto 0 0; }
+.queue { display: flex; flex-direction: column; }
+.qrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; font-size: 12.5px; padding: 5px 0; border-bottom: 1px solid var(--border); align-items: center; }
+.qrow:last-child { border-bottom: 0; }
+.qname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qstate { display: inline-flex; gap: 6px; align-items: center; justify-content: flex-end; text-align: right; }
+.qwait { color: var(--muted); }
+.qrun { color: var(--accent); }
+.qok { color: var(--ok); }
+.qerr { color: var(--danger); }
+.spinner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: imgSpin 0.8s linear infinite; }
+@keyframes imgSpin { to { transform: rotate(360deg); } }
+
+/* 道具の帯 */
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.toolbar input[type="search"] { width: 240px; max-width: 100%; }
+.seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius); overflow: hidden; }
+.seg > button { font: inherit; font-size: 12.5px; border: 0; background: var(--surface); color: var(--muted); padding: 0 10px; height: 30px; cursor: pointer; }
+.seg > button + button { border-left: 1px solid var(--border); }
+.seg > button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.perGroup { display: inline-flex; gap: 6px; align-items: center; }
+
+/* 格子 + 右の詳細(案 A)。列は固定: 詳細を閉じて 6・開いて 4・1100px 以下で 3・600px 以下で 2(どれも 24 を割り切る) */
+.lib { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+.libNoDetail { grid-template-columns: minmax(0, 1fr); }
+.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.libNoDetail .grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .grid, .libNoDetail .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .grid, .libNoDetail .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 900px) { .lib { grid-template-columns: minmax(0, 1fr); } .detailCol { position: static; } }
+
+.loadNote { color: var(--muted); margin: 0 0 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.empty { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 16px 18px; color: var(--muted); }
+
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; text-align: left; padding: 0; font: inherit; color: var(--text); min-width: 0; }
+.tile:hover { border-color: var(--border-strong); }
+.tile[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.thumb { aspect-ratio: 4 / 3; background: repeating-conic-gradient(var(--gray-soft) 0 25%, var(--surface) 0 50%) 0 0 / 16px 16px; display: grid; place-items: center; overflow: hidden; position: relative; }
+.thumb > img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.pending { position: absolute; inset: auto 6px 6px auto; font-size: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; color: var(--muted); }
+.meta { padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.tileName { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub { font-size: 11.5px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+/* 格子の札は折り返せるようにする(StatusPill は 1 行・高さ 22px を style 属性で持つので !important で上書きする)。
+   6 列(1280px で 1 枚の中身 約 130px)・2 列でも、長い札(「公開した内容で使用」約 137px)を文字の途中で切らずに 2 行にする */
+.badges > span { white-space: normal !important; height: auto !important; min-height: 22px; max-width: 100%; line-height: 1.4; padding-top: 2px !important; padding-bottom: 2px !important; }
+
+/* ページ番号 */
+.pager { display: flex; gap: 6px; align-items: center; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+.pager > button[aria-current="page"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+/* 詳細 */
+.detailCol { position: sticky; top: 16px; min-width: 0; }
+.detail { display: flex; flex-direction: column; gap: 12px; margin-bottom: 0; min-width: 0; }
+.detailThumb { aspect-ratio: 16 / 10; border-radius: var(--radius); }
+.detailName { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.kv { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 4px 10px; font-size: 12.5px; margin: 0; }
+.kv > dt { color: var(--muted); }
+.kv > dd { margin: 0; min-width: 0; overflow-wrap: anywhere; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.uses { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.uses > li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.uses a { overflow-wrap: anywhere; }
+.h3 { font-size: 11.5px; font-weight: 600; letter-spacing: 0.06em; color: var(--muted); margin: 0; }
+.actions { display: flex; justify-content: flex-end; gap: 8px; align-items: center; flex-wrap: wrap; }
+.why { color: var(--muted); font-size: 12px; margin-right: auto; flex: 1 1 160px; }
+.detail :global(.field) { margin-bottom: 0; }
+.detail input { width: 100%; }
+
+/* 「画像を選ぶ」の窓(spec §9.4)。格子は一覧と同じ部品で、列は 6 / 3 / 2 に固定(どれも 24 を割り切る) */
+.pickerDialog:global(.dialog) { width: min(1040px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; display: flex; flex-direction: column; }
+.pickerDialog:global(.dialog):not([open]) { display: none; }
+.pickerHead { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 16px 20px 0; }
+.pickerHead > h2 { margin: 0; }
+.pickerHead input[type="search"] { width: 220px; max-width: 100%; }
+.pickerBody { padding: 12px 20px; overflow: auto; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.pickerBody .dropzone { margin-bottom: 0; display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; }
+.pickerDrop { border-color: var(--accent); color: var(--accent); }
+.pickerFoot { border-top: 1px solid var(--border); padding: 12px 20px; }
+.grid.pickGrid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .grid.pickGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .grid.pickGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* パターンの画面の IMAGE の欄(spec §9.3) */
+.field { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; border: 1px solid var(--border); border-radius: var(--radius-card); padding: 10px; background: var(--surface); }
+.fieldDrop { border-color: var(--accent); border-style: dashed; background: var(--accent-soft); }
+.fieldThumb { width: 96px; flex: 0 0 96px; border-radius: var(--radius); }
+.fieldInfo { display: flex; flex-direction: column; gap: 2px; flex: 1 1 200px; min-width: 0; font-size: 12.5px; }
+.fieldName { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fieldUrl { display: flex; gap: 6px; align-items: center; margin-top: 6px; font-size: 11.5px; min-width: 0; }
+.fieldUrl > code { overflow-wrap: anywhere; color: var(--muted); }
+.fieldStatus { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; margin-top: 6px; }
+
+/* 公開できない画像の一覧 */
+.problems { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.problems > li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; min-width: 0; }
+.problems code { overflow-wrap: anywhere; }

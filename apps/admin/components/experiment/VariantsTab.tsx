@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import type { AnalyticsSettings, Variant } from "@/lib/types";
+import type { ImageFieldMode } from "@/lib/images";
 import type { TabProps } from "@/lib/experiment-draft";
 import { nextVariantId } from "@/lib/variant-id";
 import { evenWeights, weightsAfterAdd, weightsAfterRemove } from "@/lib/weights";
@@ -19,15 +20,14 @@ const withWeights = (variants: Variant[], weights: number[]): Variant[] => varia
  * 外部計測のカードの開閉(cardOpen)は ExperimentEditor の外枠が持つ(保存の後の作り直し・タブの往復をまたいで残す)
  */
 export function VariantsTab({
-  draft, set, ro, siteId, experimentId, variantsLocked, memoRo, pageUrl, imageUpload, single, selected, onSelect, animate, names, savedVariants, cardOpen, onCardOpen, emptyHtml, saveTried = false,
+  draft, set, ro, experimentId, variantsLocked, memoRo, pageUrl, imageMode, single, selected, onSelect, animate, names, savedVariants, cardOpen, onCardOpen, emptyHtml, saveTried = false,
 }: TabProps & {
-  siteId: string;
   experimentId: string;
   variantsLocked: boolean;
   /** メモの欄を閉じるか(省いたら ro と同じ) */
   memoRo?: boolean;
   pageUrl: string | null;
-  imageUpload: boolean;
+  imageMode: ImageFieldMode;
   single: boolean;
   selected: string | null;
   onSelect: (id: string | null) => void;
@@ -156,7 +156,6 @@ export function VariantsTab({
           <div key={current.id} className={animate ? "enter" : undefined}>
             <VariantEditor
               key={current.id}
-              siteId={siteId}
               experimentId={experimentId}
               variant={current}
               saved={savedVariants.find((v) => v.id === current.id)}
@@ -164,7 +163,7 @@ export function VariantsTab({
               variantsLocked={variantsLocked}
               memoDisabled={memoRo ?? ro}
               pageUrl={pageUrl}
-              imageUpload={imageUpload}
+              imageMode={imageMode}
               single={single}
               removable={!single && variants.length > 2}
               names={names}

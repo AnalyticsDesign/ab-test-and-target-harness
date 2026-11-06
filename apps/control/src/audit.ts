@@ -429,6 +429,8 @@ export const AUDITED_ROUTES: Readonly<Record<string, readonly AuditRouteCheck[]>
   "PATCH /sites/:sid/audiences/:aid": [{ action: "audience.update", test: "goal_audience_crud" }],
   "DELETE /sites/:sid/audiences/:aid": [{ action: "audience.delete", test: "goal_audience_crud" }],
   "POST /sites/:sid/assets": [{ action: "asset.upload", test: "asset_upload" }],
+  "PATCH /sites/:sid/assets/:aid": [{ action: "asset.rename", test: "asset_rename" }],
+  "DELETE /sites/:sid/assets/:aid": [{ action: "asset.delete", test: "asset_delete" }],
   "POST /sites/:sid/publish": [
     { action: "publish.publish", test: "publish_records_version" },
     { action: "publish.publish", test: "publish_revert_records_reverted" },

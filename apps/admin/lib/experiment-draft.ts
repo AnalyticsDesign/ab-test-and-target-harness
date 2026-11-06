@@ -149,6 +149,16 @@ export function reconcileServerUpdate(input: { base: Draft; draft: Draft; server
   return { base, draft, notice: !same(base, server) };
 }
 
+/**
+ * 自分の保存の書き込みが成功した直後(読み直しの前)の、基準(base)と下書き(draft)。基準は送った内容(sent)にし、
+ * 下書きは今の値(current)のまま残す。保存を始めた後に届いた変更(IMAGE の欄のアップロードが終わって src を変えた、など)は
+ * 送った内容との差として未保存に残り、保存の帯・離れる前の確認にそのまま出る(I2: 送った内容で上書きすると、その変更が黙って消える)。
+ * 保存の途中に何も変わっていなければ current は sent と同じなので、未保存は無くなる
+ */
+export function acceptSavedDraft(sent: Draft, current: Draft): { base: Draft; draft: Draft } {
+  return { base: sent, draft: current };
+}
+
 /** エクスペリエンスの外部計測を値の検査の形にする(名前の空欄は「指定なし」で、analyticsValueErrors が見ない) */
 const experimentAnalyticsOf = (d: Draft) => ({ overrides: { experimentName: d.expName }, extra: d.extra });
 

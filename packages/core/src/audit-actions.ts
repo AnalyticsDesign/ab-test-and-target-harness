@@ -56,6 +56,8 @@ export const AUDIT_ACTIONS = [
   "audience.update",
   "audience.delete",
   "asset.upload",
+  "asset.rename",
+  "asset.delete",
   "publish.publish",
   "publish.static_redeploy",
 ] as const;
@@ -103,6 +105,8 @@ export const AUDIT_ACTION_CATEGORY: Readonly<Record<AuditAction, AuditCategory>>
   "audience.update": "content",
   "audience.delete": "content",
   "asset.upload": "content",
+  "asset.rename": "content",
+  "asset.delete": "content",
   "publish.publish": "content",
   "publish.static_redeploy": "content",
 };

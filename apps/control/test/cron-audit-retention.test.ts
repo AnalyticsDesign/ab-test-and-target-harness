@@ -263,9 +263,9 @@ describe("audit-retention (B129 Task 9)", () => {
 
   it("daily_cadence", async () => {
     expect(auditRetentionJob).toMatchObject({ name: "audit-retention", cadence: { daily: { afterUtcHour: 19 } }, writesControl: true });
-    // 配分(queryShare)を持たない(結果のジョブの配分表を変えない)。登録表の最後
+    // 配分(queryShare)を持たない(結果のジョブの配分表を変えない)。登録表の最後から 2 番目(最後は B68 の asset-housekeeping)
     expect(auditRetentionJob.queryShare).toBeUndefined();
-    expect(CRON_JOBS.at(-1)).toBe(auditRetentionJob);
+    expect(CRON_JOBS.at(-2)).toBe(auditRetentionJob);
     await fill(3, OLD());
     expect(await runCron(testEnv, runAt(0) - 2 * HOUR, [auditRetentionJob])).toEqual([{ job: "audit-retention", outcome: "not_due" }]);
     expect(await count()).toBe(3);

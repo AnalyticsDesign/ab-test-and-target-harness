@@ -126,3 +126,94 @@ describe("migration 0020: share subdomains columns (B139)", () => {
     expect((await env.DB.prepare(`select count(*) as n from sharing_claims`).first<{ n: number }>())!.n).toBe(0);
   });
 });
+
+describe("migration 00NN_asset_library (B68)", () => {
+  const t = 1_700_000_000_000;
+  /** このマイグレーションの前までを当て、古い形の assets(experiment_id あり)に種を入れてから残りを当てる */
+  async function seedOldShape(extra: D1PreparedStatement[] = []): Promise<void> {
+    const mine = env.TEST_MIGRATIONS.find((m) => m.name.endsWith("_asset_library.sql"))!.name;
+    await reset();
+    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS.filter((m) => m.name < mine));
+    const insertSite = `insert into sites (id, workspace_id, name, domain, site_salt, content_updated_at, created_at, updated_at) values (?1, 'w1', 'S', ?2, 'salt', ?3, ?3, ?3)`;
+    const insertExp = `insert into experiments (site_id, id, name, url_match_json, created_by, updated_by, created_at, updated_at) values (?1, ?2, ?2, '{}', 'u', 'u', ?3, ?3)`;
+    const insertAsset = `insert into assets (id, site_id, experiment_id, r2_key, public_url, mime, size, created_by, created_at) values (?1, ?2, ?3, ?4, ?5, 'image/png', ?6, 'u', ?7)`;
+    const key = (sid: string, eid: string, id: string) => `sites/${sid}/experiments/${eid}/${id}.png`;
+    await env.DB.batch([
+      env.DB.prepare(`insert into organization (id, name, slug, "createdAt") values ('w1', 'W', 'ws-1', '2026-09-01T00:00:00.000Z')`),
+      env.DB.prepare(insertSite).bind("s1", "example.com", t),
+      env.DB.prepare(insertSite).bind("s2", "example.org", t),
+      env.DB.prepare(insertExp).bind("s1", "e1", t),
+      env.DB.prepare(insertExp).bind("s2", "e2", t),
+      // 末尾 8 字が重なる同じサイトの 2 行(仮の名前に ID の一部だけを使うと UNIQUE で落ちる)
+      env.DB.prepare(insertAsset).bind("asset_aa12345678", "s1", "e1", key("s1", "e1", "asset_aa12345678"), `https://a.example/${key("s1", "e1", "asset_aa12345678")}`, 10, t),
+      env.DB.prepare(insertAsset).bind("asset_bb12345678", "s1", "e1", key("s1", "e1", "asset_bb12345678"), `https://a.example/${key("s1", "e1", "asset_bb12345678")}`, 20, t + 1),
+      env.DB.prepare(insertAsset).bind("asset_CC00000000", "s2", "e2", key("s2", "e2", "asset_CC00000000"), `https://a.example/${key("s2", "e2", "asset_CC00000000")}`, 30, t + 2),
+      ...extra,
+    ]);
+    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+  }
+  const insertDef = `insert into experiment_delivered_definitions (site_id, experiment_id, run_id, publish_version, definition_json, definition_hash) values (?1, ?2, 'r', 1, ?3, 'h')`;
+
+  it("migration_rebuilds_assets_with_full_id_names", async () => {
+    await seedOldShape();
+    const rows = (
+      await env.DB.prepare(`select id, site_id, name, name_key, thumb_state, updated_at, created_at, deleted_at, purge_marked_at, size from assets order by id`).all<Record<string, unknown>>()
+    ).results;
+    expect(rows).toHaveLength(3);
+    const cc = rows.find((r) => r.id === "asset_CC00000000")!;
+    // name_key は英字だけを小文字にしたもの
+    expect(cc).toMatchObject({ name: "画像(asset_CC00000000)", name_key: "画像(asset_cc00000000)", thumb_state: "pending", deleted_at: null, purge_marked_at: null, size: 30 });
+    for (const r of rows) expect(r.updated_at).toBe(r.created_at);
+    // experiment_id の列は無くなった
+    const cols = (await env.DB.prepare(`select name from pragma_table_info('assets')`).all<{ name: string }>()).results.map((c) => c.name);
+    expect(cols).not.toContain("experiment_id");
+    expect(cols).toEqual(expect.arrayContaining(["deleted_at", "deleted_by", "kept_at", "purge_marked_at", "thumb_key", "thumb_attempts", "width", "height"]));
+  });
+
+  it("migration_passes_when_suffixes_collide", async () => {
+    await seedOldShape();
+    const names = (await env.DB.prepare(`select name from assets where site_id = 's1' order by id`).all<{ name: string }>()).results.map((r) => r.name);
+    expect(names).toEqual(["画像(asset_aa12345678)", "画像(asset_bb12345678)"]);
+  });
+
+  it("unique_name_per_site", async () => {
+    await seedOldShape();
+    const ins = `insert into assets (id, site_id, name, name_key, r2_key, public_url, mime, size, created_by, created_at, updated_at) values (?1, ?2, ?3, ?4, 'k', 'u', 'image/png', 1, 'u', 1, 1)`;
+    await env.DB.prepare(ins).bind("asset_x1", "s1", "Banner.png", "banner.png").run();
+    await expect(env.DB.prepare(ins).bind("asset_x2", "s1", "BANNER.png", "banner.png").run()).rejects.toThrow(/UNIQUE constraint failed: assets\.site_id, assets\.name_key/);
+    // 別のサイトなら同じ名前を持てる
+    await env.DB.prepare(ins).bind("asset_x3", "s2", "Banner.png", "banner.png").run();
+  });
+
+  it("migration_backfills_delivered_refs", async () => {
+    await seedOldShape([
+      // s1 の定義に s1 の画像の URL と、s2 の画像の ID(別のサイトなので入らない)
+      env.DB.prepare(insertDef).bind("s1", "e1", JSON.stringify({ changes: [{ src: "https://a.example/sites/s1/experiments/e1/asset_aa12345678.png" }, { html: "asset_CC00000000" }] })),
+      env.DB.prepare(insertDef).bind("s2", "e2", JSON.stringify({ changes: [] })),
+    ]);
+    const refs = (await env.DB.prepare(`select site_id, asset_id, experiment_id from asset_delivered_refs order by asset_id`).all()).results;
+    expect(refs).toEqual([{ site_id: "s1", asset_id: "asset_aa12345678", experiment_id: "e1" }]);
+  });
+
+  it("delivered_refs_cascade_on_experiment_delete", async () => {
+    await seedOldShape([env.DB.prepare(insertDef).bind("s1", "e1", JSON.stringify({ x: "asset_bb12345678" }))]);
+    expect((await env.DB.prepare(`select count(*) as n from asset_delivered_refs`).first<{ n: number }>())!.n).toBe(1);
+    await env.DB.prepare(`delete from experiments where site_id = 's1' and id = 'e1'`).run();
+    expect((await env.DB.prepare(`select count(*) as n from asset_delivered_refs`).first<{ n: number }>())!.n).toBe(0);
+  });
+
+  it("migration_creates_no_triggers", async () => {
+    await seedOldShape();
+    const triggers = (await env.DB.prepare(`select name from sqlite_master where type = 'trigger' and tbl_name in ('assets', 'asset_delivered_refs')`).all()).results;
+    expect(triggers).toEqual([]);
+  });
+
+  it("migration_creates_four_asset_indexes", async () => {
+    await seedOldShape();
+    // 印(purge_marked_at)の部分索引は置かない
+    const indexes = (
+      await env.DB.prepare(`select name from sqlite_master where type = 'index' and tbl_name = 'assets' and name not like 'sqlite_autoindex_%' order by name`).all<{ name: string }>()
+    ).results.map((r) => r.name);
+    expect(indexes).toEqual(["assets_pending_delete", "assets_site_created", "assets_site_name", "assets_thumb_pending"]);
+  });
+});

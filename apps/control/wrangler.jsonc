@@ -16,6 +16,9 @@
   "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "wtt-assets" }],
   // 無認証の入口(Google の start / callback / 使い捨てコードの交換 / break-glass / setup / 招待受諾 / 非常時のパスワード 4 経路)の総当たり防止
   "ratelimits": [{ "name": "AUTH_RATE_LIMITER", "namespace_id": "1002", "simple": { "limit": 30, "period": 10 } }],
+  // Cloudflare Images(管理画面の画像の一覧の縮小版を作る)。binding の有無がスイッチで、無ければ縮小版を作らず元の画像を出す。
+  // 変換は Images の Free の枠(月 5,000 種類)を使い、超えた月は作らない。R2 を使わない導入では何もしない(docs/deploy.md 3.2)
+  "images": { "binding": "IMAGES" },
   // 設置タグの配信ファイルを出し直すデプロイ専用の Worker(RPC)。先に wtt-deployer をデプロイしておく(docs/deploy.md)
   "services": [{ "binding": "DEPLOYER", "service": "wtt-deployer", "entrypoint": "Deployer" }],
   // Cron Trigger は control に 1 本だけ。ジョブは src/cron/jobs.ts の登録表に足す(Trigger を増やさない)

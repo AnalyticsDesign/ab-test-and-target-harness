@@ -49,10 +49,9 @@ function trackedStream(bytes: Uint8Array): { stream: ReadableStream<Uint8Array>;
   return { stream, state };
 }
 
-async function multipart(bytes: Uint8Array, experimentId: string): Promise<{ body: Uint8Array; contentType: string }> {
+async function multipart(bytes: Uint8Array): Promise<{ body: Uint8Array; contentType: string }> {
   const fd = new FormData();
   fd.set("file", new File([bytes], "a.png", { type: "image/png" }));
-  fd.set("experimentId", experimentId);
   const r = new Response(fd);
   return { body: new Uint8Array(await r.arrayBuffer()), contentType: r.headers.get("content-type")! };
 }
@@ -223,9 +222,8 @@ describe("asset upload checks access before reading the body (G19 (a))", () => {
   it("a viewer gets 403 and the body is never read", async () => {
     const owner = await setupOwner();
     const { id: sid } = await createSite(owner.token, owner.workspaceId);
-    const { id: eid } = await createExperiment(owner.token, sid);
     const viewer = await inviteAndJoin(owner.token, owner.workspaceId, "viewer");
-    const { body, contentType } = await multipart(PNG, eid);
+    const { body, contentType } = await multipart(PNG);
     const { stream, state } = trackedStream(body);
     const res = await send(
       new Request(`http://control.test/sites/${sid}/assets`, {
@@ -260,8 +258,7 @@ describe("asset upload checks access before reading the body (G19 (a))", () => {
   it("uploads disabled (no R2) is 409 for an editor, without reading the body", async () => {
     const owner = await setupOwner();
     const { id: sid } = await createSite(owner.token, owner.workspaceId);
-    const { id: eid } = await createExperiment(owner.token, sid);
-    const { body, contentType } = await multipart(PNG, eid);
+    const { body, contentType } = await multipart(PNG);
     const { stream, state } = trackedStream(body);
     const res = await send(
       new Request(`http://control.test/sites/${sid}/assets`, {
@@ -280,20 +277,18 @@ describe("asset upload checks access before reading the body (G19 (a))", () => {
   it("an upload above the default JSON limit but within the asset limit is accepted", async () => {
     const owner = await setupOwner();
     const { id: sid } = await createSite(owner.token, owner.workspaceId);
-    const { id: eid } = await createExperiment(owner.token, sid);
     const img = new Uint8Array(2 * MiB);
     img.set(PNG);
-    const { body, contentType } = await multipart(img, eid);
+    const { body, contentType } = await multipart(img);
     const res = await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: body, headers: { "content-type": contentType } });
     expect(res.status).toBe(201);
-    await env.ASSETS!.delete((await json<{ key: string }>(res)).key);
+    await env.ASSETS!.delete(new URL((await json<{ publicUrl: string }>(res)).publicUrl).pathname.replace(/^\/dev-assets\//, ""));
   });
 
   it("an upload far beyond the asset limit is 413 by content-length", async () => {
     const owner = await setupOwner();
     const { id: sid } = await createSite(owner.token, owner.workspaceId);
-    const { id: eid } = await createExperiment(owner.token, sid);
-    const { body, contentType } = await multipart(PNG, eid);
+    const { body, contentType } = await multipart(PNG);
     const { stream, state } = trackedStream(body);
     const res = await send(
       new Request(`http://control.test/sites/${sid}/assets`, {
@@ -314,10 +309,9 @@ describe("asset upload checks access before reading the body (G19 (a))", () => {
   it("a chunked upload beyond the asset limit is asset_too_large too", async () => {
     const owner = await setupOwner();
     const { id: sid } = await createSite(owner.token, owner.workspaceId);
-    const { id: eid } = await createExperiment(owner.token, sid);
     const img = new Uint8Array(3 * MiB);
     img.set(PNG);
-    const { body, contentType } = await multipart(img, eid);
+    const { body, contentType } = await multipart(img);
     const res = await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: body, headers: { "content-type": contentType }, envOverride: { AB_ASSET_MAX_MB: "1" } });
     expect(res.status).toBe(413);
     expect(await expectEnvelope(res)).toMatchObject({ error: "asset_too_large", maxMb: 1 });

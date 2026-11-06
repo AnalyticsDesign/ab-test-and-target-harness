@@ -525,7 +525,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await openVariant(page, "b"); // 削除後は先頭の a が開くので b を開き直す
 
     // Variant B に TEXT Change を 1 件足して保存する
-    await variantB.getByRole("button", { name: "変更を追加" }).click();
+    await variantB.getByRole("button", { name: "変更を追加", exact: true }).click();
     const change = variantB.getByTestId("change-TEXT");
     await change.locator('input[maxlength="500"]').fill(HERO_SELECTOR);
     await change.locator("textarea").fill(HERO_TEXT);
@@ -706,7 +706,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     // B77: a はオリジナル(変更を持てない)なので、変更のある b で確かめる。b には保存済みの TEXT が 1 件あるので、足した方(最後)を変える
     await openVariant(page, "b");
     const variantB = page.getByTestId("variant-b");
-    await variantB.getByRole("button", { name: "変更を追加" }).click();
+    await variantB.getByRole("button", { name: "変更を追加", exact: true }).click();
     await pick(variantB.getByTestId("change-TEXT").last(), "変更の種類", /^ATTRIBUTE/);
     const attribute = variantB.getByTestId("change-ATTRIBUTE");
     await attribute.locator('input[maxlength="500"]').fill("a.cta");

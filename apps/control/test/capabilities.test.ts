@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
-import { capabilities, edgeOnWorkersDev, edgeOrigin, imageStore, resultsStore, tagOrigin } from "../src/capabilities";
+import { capabilities, edgeOnWorkersDev, edgeOrigin, IMAGE_DISABLED_HINT, imageStore, LIBRARY_DISABLED_HINT, libraryDisabledHint, resultsStore, tagOrigin } from "../src/capabilities";
 import type { Env } from "../src/env";
-import { call, RESULTS_STORE, setupOwner } from "./helpers";
+import { call, createSite, expectEnvelope, RESULTS_STORE, seedAssetRow, setupOwner } from "./helpers";
 
 const withEnv = (o: Partial<Env>): Env => ({ ...(env as unknown as Env), ...o }) as Env;
 
@@ -61,9 +61,9 @@ describe("capabilities", () => {
     const { token } = await setupOwner();
     const on = await call("GET", "/capabilities", { token, envOverride: { ...RESULTS_STORE, AB_EDGE_ORIGIN: "https://wtt-edge.my-sub.workers.dev" } });
     expect(on.status).toBe(200);
-    expect(await on.json()).toEqual({ imageUpload: true, edgeOrigin: "https://wtt-edge.my-sub.workers.dev", tagOrigin: "https://wtt-edge.my-sub.workers.dev", edgeOnWorkersDev: true, passwordLogin: false, resultsStore: true, writeFreeze: null, apiVersion: 3, minClientVersion: 3 });
+    expect(await on.json()).toEqual({ imageUpload: true, edgeOrigin: "https://wtt-edge.my-sub.workers.dev", tagOrigin: "https://wtt-edge.my-sub.workers.dev", edgeOnWorkersDev: true, passwordLogin: false, resultsStore: true, imageThumbnails: false, writeFreeze: null, apiVersion: 4, minClientVersion: 4 });
     const off = await call("GET", "/capabilities", { token, envOverride: { ASSETS: undefined, AB_EDGE_ORIGIN: undefined } });
-    expect(await off.json()).toEqual({ imageUpload: false, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null, apiVersion: 3, minClientVersion: 3 });
+    expect(await off.json()).toEqual({ imageUpload: false, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, imageThumbnails: false, writeFreeze: null, apiVersion: 4, minClientVersion: 4 });
     expect(capabilities(withEnv({ AB_ASSET_PUBLIC_BASE: "" })).imageUpload).toBe(false);
   });
 
@@ -74,5 +74,34 @@ describe("capabilities", () => {
     expect((await (await call("GET", "/capabilities", { token })).json() as { writeFreeze: unknown }).writeFreeze).toEqual({ reason: "v1.1 への更新", until: "2026-10-10T12:00:00+09:00", since: 42 });
     await env.DB.prepare("update instance_settings set value = 'x' where key = 'writeFreeze'").run();
     expect((await (await call("GET", "/capabilities", { token })).json() as { writeFreeze: unknown }).writeFreeze).toEqual({ reason: null, until: null, since: 42 });
+  });
+
+  // B68 plan Task 3(spec §4.5 の 2・§8): IMAGE の 422 とライブラリの口の 409 の hint は定数を分ける
+  const LIBRARY_NO_UPLOADER =
+    "画像の差し替えは ATTRIBUTE の src で行えます。有効にするには R2 バケットの binding と公開ベース URL(AB_ASSET_PUBLIC_BASE)を設定して再デプロイします";
+  it("library_disabled_hint_without_uploader_is_current_text", async () => {
+    expect(LIBRARY_DISABLED_HINT.noUploader).toBe(LIBRARY_NO_UPLOADER);
+    expect(libraryDisabledHint(false)).toBe(LIBRARY_NO_UPLOADER);
+    const owner = await setupOwner();
+    const { id: sid } = await createSite(owner.token, owner.workspaceId);
+    await seedAssetRow(sid, { id: "asset_libhint001" });
+    const envOverride = { ASSETS: undefined };
+    const fd = new FormData();
+    fd.set("file", new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], "a.png", { type: "image/png" }));
+    const responses = [
+      await call("POST", `/sites/${sid}/assets`, { token: owner.token, raw: fd, envOverride }),
+      await call("PATCH", `/sites/${sid}/assets/asset_libhint001`, { token: owner.token, body: { name: "z.png" }, envOverride }),
+      await call("DELETE", `/sites/${sid}/assets/asset_libhint001`, { token: owner.token, envOverride }),
+    ];
+    for (const res of responses) {
+      expect(res.status).toBe(409);
+      expect(await expectEnvelope(res)).toMatchObject({ error: "image_upload_disabled", hint: LIBRARY_NO_UPLOADER });
+    }
+  });
+
+  it("library_disabled_hint_with_uploader", () => {
+    expect(LIBRARY_DISABLED_HINT.withUploader).toBe("この導入では、画像は左メニューの「画像」からアップロードします(API は /sites/<siteId>/uploads)");
+    expect(libraryDisabledHint(true)).toBe(LIBRARY_DISABLED_HINT.withUploader);
+    expect(IMAGE_DISABLED_HINT).not.toBe(LIBRARY_NO_UPLOADER); // IMAGE の 422 は別の文
   });
 });

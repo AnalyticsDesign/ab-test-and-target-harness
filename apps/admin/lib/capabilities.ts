@@ -23,6 +23,8 @@ export function parseCapabilities(data: unknown): Capabilities | null {
   // plan12 K6: 版の 2 つの数。欠けている(古い control)なら null = 版のバナーを出さない。あるのに数でなければ応答全体を信用しない
   if (bad("apiVersion", isVersionNumber)) return null;
   if (bad("minClientVersion", isVersionNumber)) return null;
+  // B68: R2 なしの画像アップローダー。欠けている(アップローダーが入る前の control)なら入れない = 画面は false として扱う
+  if (bad("imageUploader", (v) => typeof v === "boolean")) return null;
   return {
     imageUpload: typeof d.imageUpload === "boolean" ? d.imageUpload : DEFAULT_CAPABILITIES.imageUpload,
     edgeOrigin: typeof d.edgeOrigin === "string" ? d.edgeOrigin : null,
@@ -34,6 +36,7 @@ export function parseCapabilities(data: unknown): Capabilities | null {
     writeFreeze: isWriteFreezeState(d.writeFreeze) ? d.writeFreeze : null,
     apiVersion: isVersionNumber(d.apiVersion) ? d.apiVersion : null,
     minClientVersion: isVersionNumber(d.minClientVersion) ? d.minClientVersion : null,
+    ...(typeof d.imageUploader === "boolean" ? { imageUploader: d.imageUploader } : {}),
   };
 }
 

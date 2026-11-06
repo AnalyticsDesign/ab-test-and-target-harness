@@ -15,15 +15,17 @@ import {
   type StaticGeneration,
 } from "@wtt/core";
 import { RUNTIME_HASH, RUNTIME_SOURCE } from "@wtt/runtime/source";
+import { configRecordUpdate, guardAssets, type AssetProblem } from "./asset-guard";
 import { auditStatement, type AuditDetail, type AuditStatementOpts, type UserActor } from "./audit";
 import { edgeOrigin } from "./capabilities";
+import { ASSET_GUARD_HINTS } from "./errors";
 import { toStatement, type Db, type ExperimentRow, type SiteRow, type Tables } from "./db";
 import type { Env } from "./env";
 import { orderForCompile, overlapWarnings } from "./experiment-order";
 import { newId } from "./ids";
 import { siteToSettings } from "./site-settings";
 import { NOT_FROZEN_SQL } from "./write-freeze";
-import { confirmDeliveries, deliveredDefinitionInsert, deliveredDefinitionsFor, plansForDelivery, prepareDeliveredDefinitions, setDeliveredGeneration, type PreparedDelivery } from "./results/delivered";
+import { assetDeliveredRefsInsert, confirmDeliveries, deliveredDefinitionInsert, deliveredDefinitionsFor, plansForDelivery, prepareDeliveredDefinitions, setDeliveredGeneration, type PreparedDelivery } from "./results/delivered";
 import { apiGuard } from "./results/guard";
 import { requestStaticDeploy, type StaticDeployOutcome, type StaticDeployState } from "./static-delivery";
 
@@ -33,7 +35,7 @@ const MARK_CHUNK = 50; // kv_deleted の印を 1 文で付ける版の数の上�
 // 失敗形のフィールド名は §13.5 の封筒に揃える(error = 機械可読コード、message = 文)
 export type PublishResult =
   | { ok: true; version: number; needsProfile: boolean; superseded: boolean; staticDeploy: StaticDeployState; staticGeneration?: StaticGeneration | null; warnings: AnalyticsWarning[] }
-  | { ok: false; version: number | null; error: string; message: string; hint?: string };
+  | { ok: false; version: number | null; error: string; message: string; hint?: string; assetProblems?: AssetProblem[] };
 
 export async function sha256Hex(s: string): Promise<string> {
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
@@ -236,6 +238,9 @@ const FAILURE_MESSAGES: Record<string, { message: string; hint?: string }> = {
   regex_too_large: { message: "大きすぎる正規表現があります" },
   regex_budget_exceeded: { message: "正規表現の合計が大きすぎます(サイト全体で 500 命令まで)" },
   audience_expansion_too_large: { message: "オーディエンスの参照が多すぎます(展開した条件の数はサイト全体で 20,000 まで)" },
+  // B68: 公開する設定の画像の確かめ。どの画像かは応答の assetProblems に載る
+  asset_missing: { message: "公開する内容に、見つからない画像があります", hint: ASSET_GUARD_HINTS.asset_missing },
+  asset_other_site: { message: "公開する内容に、別のサイトの画像があります", hint: ASSET_GUARD_HINTS.asset_other_site },
 };
 /** compile の CompileError の message が利用者向けの日本語の説明(場所と直し方)になっているコード。hint にそのまま出す */
 export const COMPILE_HINT_CODES: ReadonlySet<string> = new Set([
@@ -250,10 +255,10 @@ export function describeCompileFailure(code: string, raw: string): { message: st
   return { message: text.message, hint: code === "legacy_targeting" ? `${raw}。${LEGACY_TARGETING_HINT}` : raw };
 }
 
-function failure(code: string, version: number | null, raw: string): PublishResult {
+function failure(code: string, version: number | null, raw: string, assetProblems?: AssetProblem[]): PublishResult {
   console.error(`publish failed (${code})`, raw);
   const { message, hint } = describeCompileFailure(code, raw);
-  return { ok: false, version, error: code, message, ...(hint ? { hint } : {}) };
+  return { ok: false, version, error: code, message, ...(hint ? { hint } : {}), ...(assetProblems ? { assetProblems } : {}) };
 }
 
 /**
@@ -270,10 +275,13 @@ function publishAudit(env: Env, actor: UserActor, site: SiteRow, detail: AuditDe
 
 /**
  * spec §13.6 の Publish。手順 1〜6 を 1 関数で行い、activation 前の失敗は旧 version を active のまま残す。
- * nowMs は cleanup の時刻判定(テストで注入)。KV / D1 の呼び出しはここに閉じる(compile は core の純関数)
- * actor = 公開した人(B129: published_by は actor.userId。公開の記録 publish.publish の操作した人)
+ * nowMs は cleanup の時刻判定(テストで注入)。KV / D1 の呼び出しはここに閉じる(compile は core の純関数)。
+ * actor = 公開した人(B129: published_by は actor.userId。公開の記録 publish.publish の操作した人)。
+ * B68(spec §22.2): compile の後に画像の参照を取り出し(D1・DO を読まない)、設定の記録(手順 4)を KV の put の前に出して、
+ * 「取り出した画像がすべて印の無い行としてある」を条件にした 1 文にする。`opts.skipAssetGuard` は状態を変える口の止める操作
+ * (一時停止・終了)だけが渡す(Q266): 取り出しを飛ばし、同じ文に空の ID の並びを渡す(条件は常に真)
  */
-export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserActor, nowMs = Date.now()): Promise<PublishResult> {
+export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserActor, nowMs = Date.now(), opts: { skipAssetGuard?: boolean } = {}): Promise<PublishResult> {
   const userId = actor.userId;
   await reconcileActive(env, db, site.id);
   // 手順 2: version を予約(UNIQUE(site_id, version) で競合を検出して取り直す)
@@ -303,11 +311,12 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserAc
   let statusSnapshot: Array<Pick<ExperimentRow, "id" | "status">>;
   // D9 ③(K14): 届く定義は compile に渡したのと同じ入力・同じ行から作り、activation の CAS と同じ batch で記録する
   let deliveries: PreparedDelivery[];
+  let input: StoredCompileInput;
   try {
     // 写しと compile 入力は**同じ 1 回の SELECT** から取る(別々に読むと間に割り込んだ status 変更で食い違う。rulings §4 CX-High-3)
     const experiments = await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute();
     statusSnapshot = experiments.map((e) => ({ id: e.id, status: e.status }));
-    const input = await buildCompileInput(db, site, version, experiments);
+    input = await buildCompileInput(db, site, version, experiments);
     // D9 ②(K15): results は Publish の経路だけで足す(写しと同じ SELECT の行から作る)。③ K6: 削除待ちの個票があれば forget を出し続ける
     const results = resultsForCompile(site, experiments, await hasPendingPurge(db, site.id));
     config = compile(results ? { ...input, results } : input);
@@ -333,18 +342,39 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserAc
     return failure(code, version, message);
   }
 
-  // 手順 3: 予約した N に 1 回だけ put(immutable)
   const key = kvKeys.config(site.id, version);
   const body = JSON.stringify(config);
   const hash = await sha256Hex(body);
+  // B68 手順 3(spec §22.2): 画像の参照の取り出し。別のサイトの URL は D1 を読まずに失敗にする(KV にはまだ何も置いていない)
+  let assetIds: string[] = [];
+  if (!opts.skipAssetGuard) {
+    const g = await guardAssets(env, db, site, input, body, { readD1: false });
+    if (!g.ok) {
+      await markFailed(db, rowId, g.error, g.assetProblems.map((p) => p.url).join(" "));
+      return failure(g.error, version, g.assetProblems.map((p) => p.url).join(" "), g.assetProblems);
+    }
+    assetIds = g.ids;
+  }
+  // 手順 4: 公開履歴(本体 + hash)を予約行に記録。KV の put の前に、画像が消す途中・消し終えていないことを条件にした 1 文で書く。
+  // Cron の印の文は「届きうる版(kv_deleted = 0 かつ config_hash あり)の config_json に ID が無い」を条件に持つので、D1 が書き込みを
+  // 1 本ずつ通す順で、こちらが先なら印は付かず、印が先ならこちらが 0 行になる。往復は前の UPDATE と同じ 1 回
+  const [recorded] = await env.DB.batch([toStatement(env, configRecordUpdate(db, rowId, site.id, hash, body, config.needsProfile, assetIds))]);
+  if ((recorded?.meta.changes ?? 0) === 0) {
+    // 失敗のときだけ D1 をもう 1 回読んで、無い画像を決める(KV に何も置いていないので後始末は無い)
+    const g = await guardAssets(env, db, site, input, body, { readD1: true });
+    const problems = g.ok ? [] : g.assetProblems;
+    const raw = problems.length > 0 ? problems.map((p) => p.url).join(" ") : `asset ids missing: ${assetIds.join(" ")}`;
+    await markFailed(db, rowId, "asset_missing", raw);
+    return failure("asset_missing", version, raw, problems);
+  }
+  // 手順 3(KV): 予約した N に 1 回だけ put(immutable)。失敗した版の行には config_hash があるので、cleanupOldVersions が後でキーを
+  // 消して kv_deleted = 1 にする(無いキーの delete も成功する)。それまでは Cron の「訪問者に届きうる版」に入り、その画像は消えない
   try {
     await env.CONFIG_KV.put(key, body);
   } catch (e) {
     await markFailed(db, rowId, "kv_put_failed", String(e));
     return failure("kv_put_failed", version, String(e));
   }
-  // 手順 4: 公開履歴(本体 + hash)を予約行に記録
-  await db.updateTable("publishes").set({ config_hash: hash, config_json: body, needs_profile: config.needsProfile ? 1 : 0 }).where("id", "=", rowId).execute();
 
   // 手順 5: 読み戻して hash 一致を確認してから activation
   let back: string | null = null;
@@ -386,10 +416,14 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserAc
     // D9 ③(K14): 届く定義の行は CAS と同じ batch(1 トランザクション)で、「この版が active」を条件に足す。
     // 行がある ⇔ この版を activation した(記録の取りこぼし・並行する Publish との順の入れ替わり・出し直しの待ちの間の確認で前の行に当たる、が起きない)。
     // 世代は出し直しの後に入れる(それまでは NULL)
+    // B68(spec §3.1): 届く定義が使う画像の表も同じ batch・同じ条件で足す(画像の ID が無い定義は文を作らない)
     // B129: 公開の記録は CAS の後に、この要求の印(自分の版が active)を guard にして置く(CAS に負けた試みでは 0 行)
     const [upd] = await env.DB.batch([
       toStatement(env, cas),
-      ...deliveries.map((d) => toStatement(env, deliveredDefinitionInsert(db, site.id, version, null, d, true))),
+      ...deliveries.flatMap((d) => {
+        const refs = assetDeliveredRefsInsert(db, site.id, version, d, true);
+        return [toStatement(env, deliveredDefinitionInsert(db, site.id, version, null, d, true)), ...(refs ? [toStatement(env, refs)] : [])];
+      }),
       publishAudit(env, actor, site, { version, superseded: false }, { guard: sql<SqlBool>`(select active_version from sites where id = ${site.id}) = ${version}`, now: nowMs }),
     ]);
     activated = (upd?.meta.changes ?? 0) > 0;

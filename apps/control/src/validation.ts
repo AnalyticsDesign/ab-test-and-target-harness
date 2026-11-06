@@ -23,7 +23,9 @@ import {
   type ExperimentAnalytics,
   type VariantAnalytics,
 } from "@wtt/core";
-import { imageStore, IMAGE_DISABLED_HINT } from "./capabilities";
+import { sql } from "kysely";
+import { canonical, findEncodedAssetUrls } from "./asset-refs";
+import { imageStore, IMAGE_DISABLED_HINT, uploaderPublicBase } from "./capabilities";
 import type { Db, SiteRow } from "./db";
 import type { Env } from "./env";
 import { ApiError, validationFailed } from "./errors";
@@ -83,10 +85,32 @@ export async function touchSite(db: Db, siteId: string, nowMs: number): Promise<
 }
 
 /**
- * spec §11: Change の保存時検証。core の ChangeSchema(64KB / ATTRIBUTE allowlist / URL scheme)を通し、
- * 失敗理由を機械可読コードに変換する。IMAGE は Site の R2 公開ドメイン配下のみ(§11 / §6.4)
+ * B68 spec §4.5 の 1: IMAGE の `src` が、このサイトのアップローダーの URL(`<AB_UPLOADER_PUBLIC_BASE>/u/<sid>/` で始まる。正規化した形で比べる)か。
+ * 当たれば D1 の `assets` を見ずに受ける(アップローダーの画像は `assets` に入らないため)。R2 の有無によらない
  */
-export function parseChange(env: Env, siteId: string, raw: unknown): Change {
+export function isUploaderImageSrc(env: Env, siteId: string, src: unknown): boolean {
+  const up = uploaderPublicBase(env);
+  if (up === null || typeof src !== "string") return false;
+  const href = canonical(src);
+  const prefix = canonical(`${up}/u/${siteId}/`);
+  return href !== null && prefix !== null && href.startsWith(prefix);
+}
+
+/** B68 spec §22.4: payload のすべての文字列の値(深さを問わない)。符号化した参照の検査が使う */
+function stringValues(v: unknown, out: string[] = []): string[] {
+  if (typeof v === "string") out.push(v);
+  else if (Array.isArray(v)) for (const x of v) stringValues(x, out);
+  else if (typeof v === "object" && v !== null) for (const x of Object.values(v)) stringValues(x, out);
+  return out;
+}
+
+/**
+ * spec §11: Change の保存時検証。core の ChangeSchema(64KB / ATTRIBUTE allowlist / URL scheme)を通し、
+ * 失敗理由を機械可読コードに変換する。IMAGE はこのサイトのアップローダーの URL か、Site の R2 公開ドメイン配下のみ(§11 / §6.4 / B68 §4.5)。
+ * 一覧(D1)との照らしは非同期なので、ここではせず assertImageAssetsExist が 1 回でまとめて行う。
+ * `index` は変更の位置(422 の `path` = `["changes", index]`)
+ */
+export function parseChange(env: Env, siteId: string, raw: unknown, index = 0): Change {
   // allowlist は schema より先に自前で判定してコード付きの 422 にする(schema の message 依存を避ける)
   if (typeof raw === "object" && raw !== null && (raw as { type?: string }).type === "ATTRIBUTE") {
     const p = (raw as { payload?: { name?: unknown; value?: unknown } }).payload;
@@ -104,31 +128,33 @@ export function parseChange(env: Env, siteId: string, raw: unknown): Change {
       }
     }
   }
-  // IMAGE は schema(絶対 URL)より先に R2 配下かを見る。相対 URL も「配下でない」として同じ 422 に落とす(§6.4 / §11)
+  const store = imageStore(env);
+  // IMAGE は schema(絶対 URL)より先に、確かめる順(B68 spec §4.5。アップローダーの spec §10 の表)で見る。
+  // 相対 URL も「配下でない」として同じ 422 に落とす(§6.4 / §11)
   if (typeof raw === "object" && raw !== null && (raw as { type?: string }).type === "IMAGE") {
     const src = (raw as { payload?: { src?: unknown } }).payload?.src;
-    // 決定 43 (5): R2 なしでは配下検査より先に 422 image_upload_disabled
-    const store = imageStore(env);
-    if (!store) throw new ApiError(422, "image_upload_disabled", { hint: IMAGE_DISABLED_HINT });
-    const prefix = `${store.publicBase}/sites/${siteId}/`;
-    // 素の startsWith だと `…/sites/<sid>/../other/x.png` が通ってしまう。URL として正規化してから比べ、
-    // ドットセグメントを取り除いた姿で判定する(公開ドメインなのでテナント漏洩ではないが、
-    // fail-closed の検査は名前どおりの意味であるべき)。WHATWG URL のパーサは `%2e` / `.%2e` / `%2e%2e`(大文字小文字を問わず)
-    // もドットセグメントとして解決するので、`%2e` を別途拒否する必要はない(判定は正規化後の配下判定の 1 本。rulings §4 CX-Low-1)
-    const canonical = (u: string): string | null => {
-      try {
-        return new URL(u).href;
-      } catch {
-        return null; // 相対 URL・URL でない文字列
+    // 1. このサイトのアップローダーの URL なら受け、以降を見ない(Q243)
+    if (!isUploaderImageSrc(env, siteId, src)) {
+      const up = uploaderPublicBase(env);
+      // 2. R2 もアップローダーの公開ベースも無ければ 422 image_upload_disabled(決定 43 (5))
+      if (!store && up === null) throw new ApiError(422, "image_upload_disabled", { hint: IMAGE_DISABLED_HINT });
+      // 3. R2 の配下か。素の startsWith だと `…/sites/<sid>/../other/x.png` が通ってしまう。URL として正規化してから比べ、
+      // ドットセグメントを取り除いた姿で判定する(公開ドメインなのでテナント漏洩ではないが、
+      // fail-closed の検査は名前どおりの意味であるべき)。WHATWG URL のパーサは `%2e` / `.%2e` / `%2e%2e`(大文字小文字を問わず)
+      // もドットセグメントとして解決するので、`%2e` を別途拒否する必要はない(判定は正規化後の配下判定の 1 本。rulings §4 CX-Low-1)。
+      // R2 が無くアップローダーだけの導入で 1 に当たらなかったときも同じ 422(P = [アップローダー])
+      const r2Prefix = store ? `${store.publicBase}/sites/${siteId}/` : null;
+      const href = typeof src === "string" ? canonical(src) : null;
+      if (r2Prefix === null || href === null || !href.startsWith(canonical(r2Prefix) ?? r2Prefix)) {
+        const allowedPrefixes = [...(r2Prefix ? [r2Prefix] : []), ...(up !== null ? [`${up}/u/${siteId}/`] : [])];
+        throw new ApiError(422, "image_outside_r2_domain", {
+          allowedPrefix: allowedPrefixes[0],
+          allowedPrefixes,
+          message: "画像 URL がこのサイトにアップロードした画像の URL ではありません",
+          hint: "IMAGE には、このサイトにアップロードした画像の URL だけを指定できます(左メニューの「画像」からコピーできます)。サイト内の既存画像は ATTRIBUTE(src)で差し替えてください",
+        });
       }
-    };
-    const href = typeof src === "string" ? canonical(src) : null;
-    if (href === null || !href.startsWith(canonical(prefix) ?? prefix)) {
-      throw new ApiError(422, "image_outside_r2_domain", {
-        allowedPrefix: prefix,
-        message: "画像 URL がこのサイトにアップロードした画像の URL ではありません",
-        hint: "IMAGE はこのサイトにアップロードした画像の URL だけを指定できます。サイト内の既存画像は ATTRIBUTE(src)で差し替えてください",
-      });
+      // 4. 一覧との照らしは assertImageAssetsExist(保存 1 回で D1 を 1 回)
     }
   }
   const parsed = ChangeSchema.safeParse(raw);
@@ -139,7 +165,56 @@ export function parseChange(env: Env, siteId: string, raw: unknown): Change {
     // first?.message は zod の英語メッセージ。UI に日本語の message を渡し、詳細は `detail` に残す
     throw new ApiError(422, "invalid_change", { path: first?.path.map(String), message: "変更の内容が不正です", detail: first?.message });
   }
+  // B68 spec §22.4: 画像の URL を符号化した参照は種類を問わず断る(公開の確かめは URL がそのまま現れる形だけを拾うため)。
+  // D1 は読まない。R2 が無い導入では何もしない。`&`・`\`・`%` を含む文字列だけ戻す(findEncodedAssetUrls の中)
+  if (store) {
+    for (const value of stringValues(parsed.data.payload)) {
+      if (findEncodedAssetUrls(value, store.publicBase).length > 0)
+        throw new ApiError(422, "asset_ref_encoded", { path: ["changes", index], hint: "画像の URL は、文字参照・エスケープ・% の形にせず、そのまま書いてください" });
+    }
+  }
   return parsed.data;
+}
+
+/**
+ * B68 spec §4.5: 一覧(このサイト・削除待ちでない)に無い公開 URL の集合。`srcs` が空なら D1 を読まない。
+ * あれば 1 回(バインド 2 個。100 件でも D1 の 1 文のバインドの上限 100 に当たらない)。比べるのは送られた文字列そのもの(public_url と同じ形)
+ */
+export async function findMissingImageAssets(db: Db, siteId: string, srcs: string[]): Promise<Set<string>> {
+  const want = [...new Set(srcs)];
+  if (want.length === 0) return new Set();
+  const rows = await db
+    .selectFrom("assets")
+    .select("public_url")
+    .where("site_id", "=", siteId)
+    .where("deleted_at", "is", null)
+    .where("public_url", "in", sql<string>`(select value from json_each(${JSON.stringify(want)}))`)
+    .execute();
+  const found = new Set(rows.map((r) => r.public_url));
+  return new Set(want.filter((s) => !found.has(s)));
+}
+
+/**
+ * B68 spec §4.5 の 4: IMAGE の `src`(アップローダーの URL として受けたものを除く)が一覧にあり、削除待ち・消す途中でないか。
+ * 無い最初の 1 つで 422 asset_not_found(`path` = `["changes", i, "src"]`)。保存の batch より前に呼び、断るときは何も書かない。
+ * IMAGE が無い保存は D1 を読まない
+ */
+export async function assertImageAssetsExist(db: Db, env: Env, siteId: string, changes: Change[]): Promise<void> {
+  const targets: Array<{ i: number; src: string }> = [];
+  changes.forEach((ch, i) => {
+    if (ch.type === "IMAGE" && !isUploaderImageSrc(env, siteId, ch.payload.src)) targets.push({ i, src: ch.payload.src });
+  });
+  const missing = await findMissingImageAssets(
+    db,
+    siteId,
+    targets.map((t) => t.src),
+  );
+  const first = targets.find((t) => missing.has(t.src));
+  if (first)
+    throw new ApiError(422, "asset_not_found", {
+      path: ["changes", first.i, "src"],
+      hint: "この画像はサイトの画像の一覧にありません。削除された可能性があります。画像を選び直してください",
+    });
 }
 
 /** spec §10.9: Experiment × Variant を解決した姿に対して検証する(compile と同じ関数) */

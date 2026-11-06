@@ -46,3 +46,13 @@ export function replaceSearch(search: string): void {
   window.history.replaceState(window.history.state, "", `${window.location.pathname}${search}${window.location.hash}`);
   window.dispatchEvent(new Event(URL_PARAM_EVENT));
 }
+
+/**
+ * エクスペリエンスの画面の tab・variant を今の URL の search から読む(B68: 同じ画面の中のリンクが replaceParam で書いた値に、画面をそろえる)。
+ * 知らないタブは既定の基本設定。パターンは URL の値のまま返す(足したばかりの下書きのパターンは、URL を書いた時点ではまだ一覧に無いので、ここで捨てない。
+ * 一覧に無い ID はパターンのタブが先頭のパターンを開く)
+ */
+export function editorParamsFromSearch<T extends string>(search: string, tabs: readonly T[]): { tab: T | "overview"; variant: string | null } {
+  const p = new URLSearchParams(search);
+  return { tab: pickParam(p.get("tab") ?? undefined, tabs, "overview" as T), variant: p.get("variant") };
+}
