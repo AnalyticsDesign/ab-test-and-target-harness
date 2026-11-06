@@ -10,7 +10,9 @@ const MESSAGES: Record<string, string> = {
   not_invited: NOT_INVITED,
   unable_to_create_user: NOT_INVITED,
   email_not_verified: "この Google アカウントはメールアドレスが確認されていないため、ログインに使えません",
-  account_not_linked: "この Google アカウントはメールアドレスが確認されていないため、既存のアカウントに結びつけられません",
+  // Google 側でメールが未確認の場合も同じ code で来るので、先に Google 側の確認を促し、確認済みなら招待し直しを頼む
+  account_not_linked:
+    "この Google アカウントを、同じメールアドレスの既存のアカウントに結びつけられませんでした。Google アカウントのメールアドレスが確認済みであることを確かめてください。確認済みなら、非常用のパスワードで作られたアカウントのため、自動では結びつきません。管理者に、あなたを同じメールアドレスで招待し直すよう依頼してください",
   access_denied: "Google ログインがキャンセルされました",
 };
 

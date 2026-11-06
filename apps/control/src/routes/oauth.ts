@@ -16,10 +16,15 @@ export const oauthRoutes = new Hono<AppEnv>();
 
 /**
  * state を「このブラウザが始めたログイン」に結びつけるための Cookie。
- * Better Auth 1.4.21 は state を暗号化 Cookie に持たせる構成(R15)だと、戻ってきた `state` クエリを何とも突き合わせない
+ * Better Auth 1.4.21 は state を暗号化 Cookie に持たせる構成(R15)だと、戻ってきた `state` クエリを何とも突き合わせなかった
  * (`state.mjs` の parseGenericState の cookie 分岐は Cookie を復号して期限を見るだけ)。
- * そのため「攻撃者の code + 被害者の state Cookie」で callback を踏ませる login CSRF は Google 側の PKCE だけが止めている。
- * ここで start が出した state のハッシュを別の Cookie に置き、callback で一致を必須にして二重にする。
+ * そのため「攻撃者の code + 被害者の state Cookie」で callback を踏ませる login CSRF は Google 側の PKCE だけが止めていた。
+ * B179: 1.7.15 は照合する(parseGenericState の cookie 分岐が、用途ごとの鍵 `oauth-state-cookie` で復号した Cookie の中の `oauthState` と
+ * `state` クエリが違えば `state_security_mismatch` で断る)ので、今は Better Auth 自身も止める。それでもこの Cookie は残す = 独立の二重の守り
+ * (Better Auth の設定・版が変わっても、control の入口で state を start が出したものに結びつけ続ける)。
+ * 確かめ: test/oauth.test.ts の「start binds the state to this browser, and the callback refuses a state that is not the one it issued」(1.7.15 で緑。
+ * Better Auth の Cookie が揃っていて結びつけ Cookie だけ無い要求は control だけが断る)。
+ * ここで start が出した state のハッシュを別の Cookie に置き、callback で一致を必須にする。
  * セッションではないので「control のオリジンにセッション Cookie を残さない」制約には触れない。
  * callback のパスにだけ送られ、10 分で切れ、応答では必ず失効させる
  */
@@ -35,16 +40,48 @@ const stateCookie = (value: string, maxAge: number, https: boolean) =>
 
 const isHttps = (url: string) => new URL(url).protocol === "https:";
 
+/** 封筒の理由のうち、ログイン画面に出す code(auth.ts の databaseHooks が投げる APIError の message)。それ以外は oauth_failed */
+const DENIED_CODES = new Set(["not_invited", "email_not_verified"]);
+
 /**
  * Better Auth が 302 ではなく封筒を返したときの理由(`/login?error=…` に載せる値)。
- * 新規 user の作成が断られた場合は redirect に化けて戻るが、**セッション作成**が断られた場合
- * (既に user 行がある人が Member でも被招待者でもなくなった = auth.ts の session フック)は
- * endpoint の外まで APIError が上がり、403 の封筒になる。その 1 種類だけを見分けて画面に理由を出す
+ * 1.4.21 では、**セッション作成**が断られた場合(既に user 行がある人が Member でも被招待者でもなくなった = auth.ts の session フック)だけが
+ * endpoint の外まで APIError が上がって 403 の封筒になり、新しい user の作成が断られた場合は `?error=<message>` の 302 で戻っていた。
+ * B179(D14): 1.7.15 の callback(`api/routes/callback.mjs`)は、APIError の `body.code` があるときだけ 302 に直し、無ければ投げ直す。
+ * auth.ts のフックの APIError は message だけなので、user の作成(not_invited・email_not_verified)もセッションの作成(not_invited)も
+ * 403 の封筒になる。ここで message を見て、管理画面に渡る code を 1.4.21 と同じにする(知らない理由は oauth_failed)
  */
 async function deniedCode(res: Response): Promise<string> {
   if (res.status !== 403) return "oauth_failed";
-  const body = (await res.json().catch(() => null)) as { message?: string; code?: string } | null;
-  return body?.message === "not_invited" || body?.code === "NOT_INVITED" ? "not_invited" : "oauth_failed";
+  const body = (await res.json().catch(() => null)) as { message?: unknown; code?: unknown } | null;
+  for (const v of [body?.message, body?.code]) {
+    const code = typeof v === "string" ? v.toLowerCase() : "";
+    if (DENIED_CODES.has(code)) return code;
+  }
+  return "oauth_failed";
+}
+
+/**
+ * B179(D14): Better Auth の失敗の戻り先(`${AB_ADMIN_URL}/login?error=…`)の code を、管理画面が知っている形にそろえる。
+ * 1.7 は `body.code` を持つ APIError を `error=<code>`(`NOT_INVITED` のような大文字のことがある)、`message` を `error_description` に載せて戻す
+ * (1.4.21 は `message` を `error=` に載せていた)。今の control のフックは code を持たない APIError を投げるので封筒で来る(上の deniedCode)が、
+ * code を持つ形に変わっても管理画面に渡る値が変わらないよう、ここで小文字にそろえる。
+ * 小文字にするだけで今の code(`not_invited`・`email_not_verified`・`account_not_linked`・`access_denied`)と同じになるので、対応表は持たない。
+ * `error_description` は画面で使わず、Better Auth の内部の文言を管理画面の URL に出さないため落とす。ログイン画面以外の戻り先は触らない
+ */
+export function normalizeLoginError(location: string, adminUrl: string): string {
+  let target: URL;
+  try {
+    target = new URL(location);
+  } catch {
+    return location;
+  }
+  const login = new URL("/login", adminUrl);
+  if (target.origin !== login.origin || target.pathname !== login.pathname) return location;
+  const error = target.searchParams.get("error");
+  if (error !== null) target.searchParams.set("error", error.toLowerCase());
+  target.searchParams.delete("error_description");
+  return target.toString();
 }
 
 /** 送られてきた Cookie ヘッダから 1 つ取り出す(Hono の getCookie を使わず、この 1 つだけを見る) */
@@ -108,7 +145,7 @@ oauthRoutes.get(
 /**
  * Google からの戻り。Better Auth の handler に処理させ、成功(`set-auth-token` 付きの 302)なら
  * セッション Cookie を捨てて使い捨てコードを発行し、admin の BFF へ渡す。control のオリジンにセッション Cookie を残さない。
- * 失敗の 302(`${AB_ADMIN_URL}/login?error=…`)はそのまま返す
+ * 失敗の 302(`${AB_ADMIN_URL}/login?error=…`)は code を小文字にそろえて返す(normalizeLoginError)
  */
 oauthRoutes.get(
   "/auth/callback/google",
@@ -132,10 +169,11 @@ oauthRoutes.get(
       out.set("location", location);
       return new Response(null, { status: 302, headers: out });
     };
-    // Better Auth は state が無いとき `?state=state_not_found`(error= ではない)で戻すので、画面が無言になる。先に捕まえる
+    // state が無いとき、1.4.21 の Better Auth は `?state=state_not_found`(error= ではない)で戻すので画面が無言になった。1.7.15 は
+    // `?error=state_not_found`(api/routes/callback.mjs)で戻すが、管理画面が知らない code なので、どちらにしても先に捕まえて oauth_failed にそろえる
     const state = c.req.query("state");
     if (!state) return redirect(loginError("oauth_failed"));
-    // start が出した state と同じか(Better Auth はこの構成では照合しない。上の STATE_COOKIE のコメント)。
+    // start が出した state と同じか(1.4.21 の Better Auth はこの構成では照合しなかった。1.7.15 は照合するが二重にしておく。上の STATE_COOKIE のコメント)。
     // Better Auth に渡す前に断つので、攻撃者の code が交換されることもない
     const bound = readStateCookie(c.req.header("cookie"));
     if (!bound || bound !== (await sha256Hex(state))) return redirect(loginError("oauth_failed"));
@@ -154,7 +192,7 @@ oauthRoutes.get(
         console.error("oauth callback: success redirect without set-auth-token");
         return redirect(loginError("oauth_failed"));
       }
-      return redirect(location); // Better Auth が組んだ失敗の戻り先(errorCallbackURL か onAPIError.errorURL)
+      return redirect(normalizeLoginError(location, c.env.AB_ADMIN_URL)); // Better Auth が組んだ失敗の戻り先(errorCallbackURL か onAPIError.errorURL)
     }
     if (!isSuccessTarget) return redirect(loginError("oauth_failed"));
     // 発行に失敗しても control のオリジンに JSON の封筒を出さない(利用者はログイン画面に戻す)

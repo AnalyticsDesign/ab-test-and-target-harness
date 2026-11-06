@@ -14,6 +14,7 @@ import { sqlStatement, toStatement } from "../db";
 import { enqueuePurgeQuery, kickOffPurgeForSites } from "../results/purge";
 import { errorResponses } from "../openapi";
 import { invalidateResetLinks, issueResetUrl } from "../reset-link";
+import { removeUnprovenUserStatements } from "../unproven-user";
 import { assertCanResetMember, assertCanTouchInstanceAdmin, assertCanTouchOwner, atLeast, capRole, isRole, requireInstanceAdmin, requireWorkspaceRole, scopeIncludes } from "../roles";
 import { deleteSiteAssets, deleteSiteRecords } from "../site-settings";
 import { requestStaticRemoval, staticRemoveConflict, staticRemoveFailed } from "../static-delivery";
@@ -474,18 +475,33 @@ workspaceRoutes.post(
     const body = c.req.valid("json");
     const db = c.get("db");
     const email = body.email.toLowerCase();
-    // 同じ Workspace・同じメール宛ての pending を先に見る。Better Auth 1.4.21 の createInvitation(resend: true)は、
-    // **未失効の pending があると新しい招待を作らず expiresAt だけを延ばし、Role は更新しない** —
+    // 同じ Workspace・同じメール宛ての pending を先に見る。Better Auth の createInvitation(resend: true)は、
+    // **未失効の pending があると新しい招待を作らず expiresAt だけを延ばし、Role は更新しない**(1.4.21 も 1.7.15 も同じ。
+    // 1.7.15 は plugins/organization/routes/crud-invites.mjs の `alreadyInvited.length && ctx.body.resend` の枝。test/workspaces.test.ts の
+    // 「re-inviting the same address with a different role is refused and changes nothing (B28)」と「… extends the existing invitation …」が緑)—
     // 2 回目に選んだ Role が黙って捨てられるので、Role が違うときはここで断る。
     // 「未失効」の判定は Better Auth 側(adapter の findPendingInvitation が expiresAt > now で絞る)と同じ式にする。
     // 判定と発行の間に別の ADMIN が同じメールを違う Role で招待した場合は、Better Auth 側が先勝ちで期限延長に倒すだけなので受容する
-    const pending = await db
-      .selectFrom("invitation")
-      .select(["id", "role", "expiresAt"])
-      .where("organizationId", "=", wid)
-      .where(sql<boolean>`lower(email) = ${email}`)
-      .where("status", "=", "pending")
-      .execute();
+    // B179 Task 2: 同じ batch の先頭で、このメールの「確かめられていないパスワードの人」の記録を消す(条件は unproven-user.ts。
+    // batch は 1 往復なので往復は増えない)。招待は Better Auth の createInvitation が作るので同じトランザクションにはできないが、
+    // 消した後で 409 や発行の失敗になっても、消えた人は元から入れない人で、招待し直せば済む。応答には出さない
+    const unproven = removeUnprovenUserStatements(c.env.DB, { email, reassignTo: c.get("user").id });
+    const results = await c.env.DB.batch([
+      ...unproven,
+      toStatement(
+        c.env,
+        db
+          .selectFrom("invitation")
+          .select(["id", "role", "expiresAt"])
+          .where("organizationId", "=", wid)
+          .where(sql<boolean>`lower(email) = ${email}`)
+          .where("status", "=", "pending"),
+      ),
+    ]);
+    const removed = results[unproven.length - 1]?.results.length ?? 0;
+    // 件数だけを出す(メールアドレス・user の ID は出さない)
+    if (removed > 0) console.log(`invitation: removed ${removed} unverified password user record(s) with no access before inviting the same address`);
+    const pending = (results[unproven.length]?.results ?? []) as Array<{ id: string; role: string | null; expiresAt: string }>;
     const live = pending.filter((r) => epochMs(r.expiresAt) > Date.now());
     // role は Better Auth 側で null になり得る。null を「違う Role」と見なすと取り消すまで何もできなくなるので、
     // 衝突なし(= Better Auth に任せて期限を延ばす)として扱う
@@ -507,8 +523,10 @@ workspaceRoutes.post(
       });
     } catch (e) {
       // 招待先のメールが既にこのワークスペースのメンバー。システム管理者はすべてのワークスペースのメンバーなので日常的に起こる。
-      // 実測(Better Auth 1.4.21): APIError { status: "BAD_REQUEST", body: { code: "USER_IS_ALREADY_A_MEMBER_OF_THIS_ORGANIZATION" } }。
-      // 他の BAD_REQUEST(ROLE_NOT_FOUND など)を 409 に丸めないよう code まで見る
+      // 1.7.15 で確かめた: createInvitation は `APIError.from("BAD_REQUEST", ORGANIZATION_ERROR_CODES.USER_IS_ALREADY_A_MEMBER_OF_THIS_ORGANIZATION)` を
+      // 投げ、{ status: "BAD_REQUEST", body: { code: "USER_IS_ALREADY_A_MEMBER_OF_THIS_ORGANIZATION" } } になる
+      // (crud-invites.mjs。test/instance-admins.test.ts の「inviting an existing member (a system administrator included) answers 409 already_member …」が緑)。
+      // 他の BAD_REQUEST は code が違う、または code が無い(ROLE_NOT_FOUND は `new APIError("BAD_REQUEST", { message })` で code なし)ので、409 に丸めないよう code まで見る
       const { status, body: errBody } = e as { status?: string; body?: { code?: string } };
       if (status === "BAD_REQUEST" && errBody?.code === "USER_IS_ALREADY_A_MEMBER_OF_THIS_ORGANIZATION") {
         throw new ApiError(409, "already_member", { hint: "このメールアドレスのユーザーは既にこのワークスペースのメンバーです(システム管理者はすべてのワークスペースのメンバーです)" });
@@ -701,8 +719,10 @@ workspaceRoutes.post(
       } catch (e) {
         // 原因を見分ける。D1 障害などを 409 に丸めると、本物の障害が「よくある衝突」に化けて監視に出なくなる
         const { status, body: errBody } = e as { status?: string; body?: { code?: string } };
-        // 既に同じメールのアカウントがある。better-call の APIError は message から code を導出するので、
-        // UNPROCESSABLE_ENTITY を投げる別の理由(FAILED_TO_CREATE_USER)と取り違えない
+        // 既に同じメールのアカウントがある。sign-up は `APIError.from("UNPROCESSABLE_ENTITY", BASE_ERROR_CODES.USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL)` で
+        // code を明示して投げる(1.7.15 の api/routes/sign-up.mjs)。better-call 1.4.4 の APIError は body を渡されたまま持ち、message から code を
+        // 導出しない(code を持つのは `APIError.from()` で明示した投げ方だけ)。同じ UNPROCESSABLE_ENTITY を投げる別の理由(FAILED_TO_CREATE_USER)も
+        // from() で別の code を持つので、code まで見て取り違えない(「a sign-up fault while accepting is a 5xx, not a 409 account_exists」が緑)
         if (status === "UNPROCESSABLE_ENTITY" && errBody?.code === "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL") {
           throw new ApiError(409, "account_exists", { hint: "先にログインしてからこの招待を受けてください" });
         }
@@ -728,9 +748,11 @@ workspaceRoutes.post(
       await auth.api.acceptInvitation({ body: { invitationId: id }, headers: bearerHeaders(token) });
     } catch (e) {
       // K16 / r2 CX-High-3: 上の事前チェックの後に昇格が入ると、Better Auth の Member の INSERT が UNIQUE 索引で失敗する。
-      // 500 にせず 409 にする。招待は Better Auth が先に accepted にしており、その人は実際にメンバーなのでそのまま残す。
-      // 実測: Better Auth は D1 の例外を包まず、素の Error("D1_ERROR: UNIQUE constraint failed: member.organizationId, member.userId: …")
-      // (cause に同じ内容の Error)が上がってくる。message と cause の連鎖を見て、member 表の UNIQUE 違反だけを拾う(それ以外は下で今までどおり上げる)
+      // 500 にせず 409 にする。Better Auth 1.7 は Member の作成が落ちると招待を pending に戻す(1.4.21 は accepted のまま残した。B179)。
+      // その人は実際にメンバーなので、受け直しても同じ 409 になる。
+      // 実測(1.4.21。1.7.15 でも test/instance-admins.test.ts の「an acceptance that slips past the membership check still answers 409 and keeps one owner row」が緑 = 同じ形):
+      // Better Auth は D1 の例外を包まず、素の Error("D1_ERROR: UNIQUE constraint failed: member.organizationId, member.userId: …")
+      // (cause に同じ内容の Error)が上がってくる。1.7.15 の acceptInvitation は catch で招待を pending に戻した後、その例外をそのまま投げ直す。message と cause の連鎖を見て、member 表の UNIQUE 違反だけを拾う(それ以外は下で今までどおり上げる)
       if (isMemberUniqueViolation(e)) {
         throw new ApiError(409, "already_member", { hint: "このワークスペースには既に参加しています。招待は使わずにそのままログインしてください" });
       }

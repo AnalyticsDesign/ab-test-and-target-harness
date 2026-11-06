@@ -2,9 +2,23 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { app } from "../src/index";
 import { getAuth } from "../src/auth";
-import { FLOW_RE, NEXT_RE } from "../src/routes/oauth";
+import { FLOW_RE, NEXT_RE, normalizeLoginError } from "../src/routes/oauth";
 import type { Env } from "../src/env";
-import { TEST_FLOW, call, expectEnvelope, failingD1Insert, googleCallback, googleSignIn, googleStart, json, setupOwner, setupReq, uniqueEmail } from "./helpers";
+import {
+  TEST_FLOW,
+  call,
+  expectEnvelope,
+  failingD1Insert,
+  googleCallback,
+  googleSignIn,
+  googleStart,
+  inviteAndJoin,
+  joinWithPassword,
+  json,
+  setupOwner,
+  setupReq,
+  uniqueEmail,
+} from "./helpers";
 
 const ADMIN = "http://localhost:3000"; // vitest.config.ts の AB_ADMIN_URL
 const db = () => (env as unknown as Env).DB;
@@ -122,7 +136,8 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
     expect(token).toBeNull();
     const back = new URL(location);
     expect(back.origin + back.pathname).toBe(`${ADMIN}/login`);
-    // auth.ts のフックが投げる APIError の message が、そのまま error= に載る(Better Auth の link-account の catch)
+    // auth.ts のフックが投げる APIError の message が error= に載る(1.4.21 は Better Auth の link-account の catch が 302 に、
+    // 1.7 は 403 の封筒で上がり、callback の deniedCode が同じ code にする。B179 D14)
     expect(back.searchParams.get("error")).toBe("not_invited");
     expect(await count(`select count(*) as n from "user" where email = ?`, email)).toBe(0);
   });
@@ -168,7 +183,8 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
     const email = uniqueEmail("no-context");
     const ctx = await getAuth(env as unknown as Env).$context;
     // 文脈が無い呼び出しは「招待が無い」で弾かれる。どんな throw でも通ってしまわないよう理由まで固定する
-    await expect(ctx.internalAdapter.createUser({ email, name: "x", emailVerified: true })).rejects.toThrow(/not_invited/);
+    // B179: 1.7 の createUser は作成の経路(source)を 2 つ目の引数に取る。経路は hook の判定に使わない(hook が見るのは endpoint の文脈)
+    await expect(ctx.internalAdapter.createUser({ email, name: "x", emailVerified: true }, { method: "oauth" })).rejects.toThrow(/not_invited/);
     expect(await count(`select count(*) as n from "user" where email = ?`, email)).toBe(0);
   });
 
@@ -185,8 +201,9 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
   });
 
   it("start binds the state to this browser, and the callback refuses a state that is not the one it issued", async () => {
-    // Better Auth 1.4.21 は state を Cookie に持たせる構成だと `state` クエリを照合しない(dist/state.mjs の cookie 分岐)。
-    // control 自身が start の state のハッシュを Cookie に置き、callback で一致を必須にする(PKCE と二重)
+    // Better Auth 1.4.21 は state を Cookie に持たせる構成だと `state` クエリを照合しなかった(dist/state.mjs の cookie 分岐)。1.7.15 は照合する
+    // (parseGenericState が oauthState と state クエリの不一致を state_security_mismatch で断る)が、control 自身も start の state のハッシュを
+    // Cookie に置き、callback で一致を必須にする(PKCE・Better Auth の照合と二重)。「結びつけ Cookie が無い」の行は control だけが断る
     const before = await count(`select count(*) as n from verification where identifier like 'handoff:%'`);
     const { state, cookie } = await googleStart();
     const bound = cookie.split("; ").find((v) => v.startsWith("wtt_oauth_state="))!;
@@ -264,5 +281,46 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
     const res = await call("GET", `/auth/google/start?flow=${TEST_FLOW}`, { envOverride: { AB_GOOGLE_CLIENT_ID: "" } });
     expect(res.status).toBe(503);
     expect((await expectEnvelope(res)).error).toBe("google_not_configured");
+  });
+});
+
+describe("Google sign-in failure codes on better-auth 1.7 (B179 D14)", () => {
+  /** callback の 302 の先が `${ADMIN}/login?error=<code>` だけ(error_description・code が付かない)であることを見て、code を返す */
+  const loginErrorOf = async (email: string, opts: { emailVerified?: boolean } = {}): Promise<string | null> => {
+    const cb = await googleCallback(email, opts);
+    expect(cb.headers.get("set-auth-token")).toBeNull();
+    const back = new URL(cb.headers.get("location")!);
+    expect(back.origin + back.pathname).toBe(`${ADMIN}/login`);
+    expect([...back.searchParams.keys()]).toEqual(["error"]);
+    return back.searchParams.get("error");
+  };
+
+  it("oauth_error_codes_stay_lowercase_b179", async () => {
+    // 管理画面に渡る code が 1.4.21 と同じで、error_description(Better Auth の内部の文言)が付かないこと。1.7.15 では、
+    // フックの APIError(code なし)は 403 の封筒で上がって deniedCode が、Better Auth 自身の失敗(account_not_linked)は 302 で来て
+    // normalizeLoginError がそろえる。どちらの形でも先の URL は同じ
+    const owner = await setupOwner();
+    // 1. 招待の無い新しい人(user.create.before)
+    expect(await loginErrorOf(uniqueEmail("stranger"))).toBe("not_invited");
+    // 2. Member から外された既存の人(session.create.before)
+    const removed = await inviteAndJoin(owner.token, owner.workspaceId, "viewer");
+    expect((await call("DELETE", `/workspaces/${owner.workspaceId}/members/${removed.memberId}`, { token: owner.token })).status).toBe(204);
+    expect(await loginErrorOf(removed.email)).toBe("not_invited");
+    // 3. 招待はあるが Google 側でメールが未確認の新しい人(user.create.before)
+    const unverified = uniqueEmail("unverified");
+    expect((await call("POST", `/workspaces/${owner.workspaceId}/invitations`, { token: owner.token, body: { email: unverified, role: "viewer" } })).status).toBe(201);
+    expect(await loginErrorOf(unverified, { emailVerified: false })).toBe("email_not_verified");
+    // 4. 非常口のパスワードで作った人(未確認。1.7 の accountLinking.requireLocalEmailVerified)
+    const pw = await joinWithPassword(owner);
+    expect(await loginErrorOf(pw.email)).toBe("account_not_linked");
+  }, 30_000);
+
+  it("normalizeLoginError only rewrites the admin login page", () => {
+    expect(normalizeLoginError(`${ADMIN}/login?error=NOT_INVITED&error_description=not_invited`, ADMIN)).toBe(`${ADMIN}/login?error=not_invited`);
+    expect(normalizeLoginError(`${ADMIN}/login?error=account_not_linked`, ADMIN)).toBe(`${ADMIN}/login?error=account_not_linked`);
+    // ログイン画面以外(成功の戻り先・別のオリジン)と URL でない値は触らない
+    expect(normalizeLoginError(`${ADMIN}/api/session/oauth?error=X&error_description=y`, ADMIN)).toBe(`${ADMIN}/api/session/oauth?error=X&error_description=y`);
+    expect(normalizeLoginError("https://evil.example/login?error=X", ADMIN)).toBe("https://evil.example/login?error=X");
+    expect(normalizeLoginError("not a url", ADMIN)).toBe("not a url");
   });
 });

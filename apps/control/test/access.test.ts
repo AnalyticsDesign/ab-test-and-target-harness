@@ -63,6 +63,8 @@ describe("who may hold a session (B20)", () => {
     // 非常用のパスワード経路も断たれる(管理画面のフォームはこの応答をエラーとして出す)
     const signin = await call("POST", "/auth/sign-in/email", { body: { email: ed.email, password: "password123" }, envOverride: BREAK_GLASS });
     expect(signin.status).toBe(403);
+    // 管理画面(app/api/session/login/route.ts)は 403 と message = "not_invited" で理由を出す。message まで固定する
+    expect((await signin.clone().json<{ message?: string }>()).message).toBe("not_invited");
     expect(signin.headers.get("set-auth-token")).toBeNull();
   });
 

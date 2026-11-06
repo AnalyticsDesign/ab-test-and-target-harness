@@ -9,11 +9,12 @@
     "typecheck": "tsc --noEmit",
     "contract:update": "tsx scripts/contract-update.ts",
     "dev": "wrangler dev -c wrangler.jsonc -c ../admin/e2e/deployer.wrangler.jsonc",
-    "auth:schema": "better-auth generate --config src/auth.cli.ts --output migrations/0001_better_auth.sql --yes",
+    "auth:schema": "auth generate --config src/auth.cli.ts --output \"${TMPDIR:-/tmp}/better-auth-schema.sql\" --yes",
     "d1:migrate:local": "wrangler d1 migrations apply wtt-control --local",
     "d1:migrate:remote": "wrangler d1 migrations apply wtt-control --remote"
   },
   "dependencies": {
+    "@better-auth/api-key": "1.7.15",
     "@hono/standard-validator": "^0.2.0",
     "@standard-community/standard-json": "^0.3.5",
     "@standard-community/standard-openapi": "^0.2.9",
@@ -21,7 +22,7 @@
     "@wtt/core": "workspace:*",
     "@wtt/runtime": "workspace:*",
     "@wtt/stats": "workspace:*",
-    "better-auth": "1.4.21",
+    "better-auth": "1.7.15",
     "hono": "^4.13.5",
     "hono-openapi": "^1",
     "kysely": "^0.29.5",
@@ -31,7 +32,7 @@
     "zod": "^4.6.6"
   },
   "devDependencies": {
-    "@better-auth/cli": "1.4.21",
+    "auth": "1.7.15",
     "@cloudflare/vitest-plugin": "^1.1.11",
     "@cloudflare/workers-types": "^5.20260916.1",
     "@types/better-sqlite3": "^7.6.13",

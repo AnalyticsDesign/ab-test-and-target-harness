@@ -110,6 +110,7 @@ const scopeView = (scope: KeyScope | null, names: Map<string, string>) => ({
  *   鍵を断る正は control の表の apikey_revocations(brief K15)なので、入口の 401 は保たれる
  * - apikey_revocations.revoked_at は control の表で epoch ミリ秒。だから応答の revokedAt は epochMs を通さずそのまま返す
  * 見張り: Better Auth の版を上げるときは、apikey の行を 1 件 select して、日付が ISO 文字列・enabled が 0 / 1 のままかを確かめる
+ * (1.7.15 で確かめた: test/better-auth-storage.test.ts の apikey_storage_format_b128)
  */
 const epochMs = (v: string | number | Date | null | undefined): number | null => (v == null ? null : new Date(v).getTime());
 
@@ -247,8 +248,10 @@ apiKeyRoutes.post(
       detail: { scope: scope.kind, workspaceId: scope.kind === "workspace" ? scope.workspaceId : null, roleCap, expiresAt },
     };
     await writeAuditBefore(c.env.DB, auditActor(c), event);
-    // B112: 判定の後にセッションが消えた(ログアウト・非常口の掃除とのすれ違い)とき、Better Auth 1.4.21 の createApiKey は
-    // APIError(statusCode 401、UNAUTHORIZED_OR_INVALID_SESSION)を投げる(test/api-keys.test.ts の session_gone_after_verdict_is_401 で確認)。
+    // B112: 判定の後にセッションが消えた(ログアウト・非常口の掃除とのすれ違い)とき、Better Auth の createApiKey は
+    // APIError(statusCode 401、メッセージ "Unauthorized or invalid session")を投げる(1.7.15 の @better-auth/api-key は
+    // `APIError.from("UNAUTHORIZED", API_KEY_ERROR_CODES.UNAUTHORIZED_SESSION)`。1.4.21 の code 名は UNAUTHORIZED_OR_INVALID_SESSION。
+    // test/api-keys.test.ts の session_gone_after_verdict_is_401 が 1.7.15 で緑)。
     // 500 に落とさず 401 にそろえる。それ以外は今までどおり上げる
     const k = await c
       .get("auth")
@@ -277,7 +280,8 @@ apiKeyRoutes.delete(
   async (c) => {
     const kid = c.req.param("kid");
     const userId = c.get("user").id;
-    // brief K15: 失効の正は apikey_revocations(Better Auth の鍵の検証は行を丸ごと書き戻すので、enabled だけでは失効が消えうる)。
+    // brief K15: 失効の正は apikey_revocations(1.4.21 の鍵の検証は行を丸ごと書き戻し、enabled だけでは失効が消ええた。1.7.15 は丸ごとは
+    // 書き戻さないが、読んだ後に失効された要求は Better Auth を通りうるので、断る正は今も control の表。app.ts の requireSession のコメント)。
     // 所有者の確認と「まだ失効していない」は INSERT の条件で行う(他人の鍵・失効済みの鍵は存在を漏らさない 404)。enabled = 0 も書く
     // (boolean = 整数の保存形式が前提。epochMs の上のコメント = B23 ⑨)。
     // B129: 失効の文の前に api_key.revoke を記録する(条件は失効の文と同じ断片 revocable。鍵の名前と範囲のワークスペースを同じ文で読む)

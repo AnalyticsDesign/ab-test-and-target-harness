@@ -107,6 +107,8 @@ export type ApiKeyRow = {
   updatedAt: string;
   expiresAt: string | null;
   lastRequest: string | null;
+  /** migrations/0025(B179)。Better Auth 1.7 の鍵の設定の名前。既存の鍵・この製品の鍵はすべて 'default' */
+  configId: string;
 };
 /** migrations/0011_instance_settings.sql(backlog D10 / brief K3)。導入全体の設定。value は JSON、updated_at は epoch ミリ秒、updated_by は書いた人の user ID(初回セットアップは null) */
 export type InstanceSettingRow = { key: string; value: string; updated_at: number; updated_by: string | null };

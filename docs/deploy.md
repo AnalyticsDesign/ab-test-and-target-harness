@@ -2061,6 +2061,37 @@ runtime を作り直したら control と deployer も必ず再デプロイす�
 - 前の版へ戻すとき(6.5)に、データベースを戻す必要は無い。前の版の control は記録の表と世代の列を使わない。戻しているあいだの操作は記録されず、そのあいだに作ったサイト・エクスペリエンスにはトリガーが世代を入れるので、新しい版に戻した後の操作は変更履歴に出る
 - edge・deployer・runtime・計測用のデータベース(`wtt-results`)は変わらない(この変更のための deploy は要らない)
 
+**ログインのライブラリを上げるリリースの更新**(CHANGELOG の目印「非常口で作った人は Google に自動で結びつかない」):
+
+- マイグレーション(D1 の `0025_apikey_config_id.sql`。上の 2 つ目のブロックの手順 2)を control の deploy(手順 3)より前に当てる。2 つ目のブロックの順のままでよい。control を先にデプロイすると、API キーの発行が列の不足で失敗する。この列は足すだけなので、前の版へ戻すとき(6.5)にデータベースを戻す必要は無い(前の版の control はこの列を書かず、既定の値が入る)
+- 凍結を入れる前(手順 0 の前)に、次の 2 つを数える:
+
+  ```bash
+  pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select (select count(*) from \"user\" u where u.\"emailVerified\" = 0 and not exists (select 1 from account a where a.\"userId\" = u.id and a.\"providerId\" != 'credential')) as unlinked, (select count(*) from (select \"providerId\", \"accountId\" from account group by 1, 2 having count(*) > 1)) as duplicated"
+  ```
+
+  - `unlinked` は、更新の後に Google でログインできなくなる人の数(非常用のパスワードで作られ、まだ Google でログインしたことのない人)。0 でなければ、更新の後に運用ガイド 6 節「ログインできなくなったとき」の手順で招待し直す。誰が当たるかは、同じ条件で `u.email` を select して確かめる(エージェントの会話や端末の出力に残してよいかは人が決める)
+  - `duplicated` が 0 でなければ更新しない(新しい版のライブラリは、同じ組の account を 2 行以上持つ人のログインを断るため)。人に相談する
+  - `unlinked` にシステム管理者が含まれるかも数える(上の `unlinked` の条件に `and exists (select 1 from instance_admins i where i.user_id = u.id)` を足す)。含まれ、ほかに Google でログインできるシステム管理者がいなければ、その人は更新の後に管理画面に入れず、システム管理者から外すこともできない。**人が本人であることを確かめたうえで**、更新の前に次の 2 つの SQL でその人を確認済みにする。書き換わるのはパスワードの記録が無い人だけである。パスワードの記録が残っていれば、先に非常口を閉じ、15 分ごとの定期処理で消えるのを待つ(8 節)。パスワードの記録が無ければ、確認済みにしても、他人がその人として先に入っている状態にはならないため
+
+    1. 読むだけの SQL で、そのメールアドレスの人を一覧にする。大文字と小文字だけが違うメールアドレスの人が別にいれば、ここに複数の行が出る(メールアドレスをエージェントの会話や端末の出力に残してよいかは人が決める):
+
+       ```bash
+       pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select u.id, u.email, u.\"emailVerified\", exists (select 1 from account a where a.\"userId\" = u.id and a.\"providerId\" = 'credential') as has_password from \"user\" u where lower(u.email) = lower('<メールアドレス>')"
+       ```
+
+       人が、出た行のうちどれが本人かを確かめ、その行の `id` を控える。`has_password` が 1 なら、パスワードの記録が残っている(上のとおり、先に消えるのを待つ)
+    2. 確かめた `id` の 1 行だけを書き換える:
+
+       ```bash
+       pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "update \"user\" set \"emailVerified\" = 1 where id = '<確かめた id>' and not exists (select 1 from account a where a.\"userId\" = \"user\".id and a.\"providerId\" = 'credential') returning id, \"emailVerified\""
+       ```
+
+       出力に 1 行だけが出て、その `id` が確かめた `id` と同じで、`emailVerified` が 1 なら書き換わった。行が出なければ、パスワードの記録が残っているか、`id` が違う。更新の後に流しても効果は同じで、条件も同じ
+
+- API キーはそのまま使える。更新の後、エージェントの鍵で `GET /me` が 200 を返すことを確かめる
+- API の契約の版は変わらない(開いたままの管理画面のタブが、この更新で 426 になることは無い)
+
 ```bash
 pnpm -C apps/admin build && pnpm -C apps/admin deploy:cf   # 4. admin
 ```
@@ -2402,6 +2433,7 @@ Zero Trust(Free で 50 ユーザーまで)の Access アプリケーション(Se
    閉じた後の注意:
 
    - **閉じてから通常 15 分以内に、パスワードの記録と、パスワードの記録を持つ人のログイン状態(Google でログインしたものを含む)がすべて消える**(control の 15 分ごとの定期処理。その回の処理の量が多いと次の回に回る。書き込みの凍結中は、凍結を外した後の最初の処理で消える)。非常口でパスワードを使った人は、閉じた後に 1 回 Google でログインし直す。パスワードは残らないので、次の非常時もトークンを置いて再設定リンクから入り直す
+   - **非常口で作られた人(開いているあいだに招待をパスワードで受けて入った人)は、閉じた後に Google でログインしても、同じアカウントに自動では結びつかない**。ログイン画面に案内が出る。[運用ガイド 6 節「ログインできなくなったとき」](operations.md#ログインできなくなったとき)の手順で、同じメールアドレスで招待し直す
    - 消えたことは次のコマンドで確かめられる。`passwords` が 0 なら消えている
 
      ```bash

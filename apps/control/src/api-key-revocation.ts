@@ -8,8 +8,9 @@ import { sqlStatement } from "./db";
  *
  * 失効の形は決定 55 (8) どおり: 正の表 apikey_revocations への挿入(既に失効済みの鍵は重ねない)+ apikey.enabled = 0。
  *
- * metadata の読み方は roles.ts の parseKeyMetadata と同じにする: 保存はふつう JSON のオブジェクト(Better Auth 1.4.21 が書く形。
- * テストで確かめた)だが、古い形の二重に JSON 化された文字列(JSON の文字列の中にオブジェクトの JSON)も 1 段ほどいて読む。
+ * metadata の読み方は roles.ts の parseKeyMetadata と同じにする: 保存はふつう JSON のオブジェクト(Better Auth が書く形。1.7.15 でも
+ * apikey_storage_format_b128 が緑)だが、古い形の二重に JSON 化された文字列(JSON の文字列の中にオブジェクトの JSON)も 1 段ほどいて読む。
+ * 1.7.15 の @better-auth/api-key も一覧・取得のときに同じ二重の形を読み直す(migrateDoubleStringifiedMetadata)ので、解釈は Better Auth と揃っている。
  * **読めない metadata の鍵(壊れた JSON・ほどいても JSON でない文字列)は失効の対象にしない**: どのワークスペースの鍵かが分からず、
  * 決定 55 (5) により範囲の読めない鍵は元から 401(使えない)なので、外す・戻すで使えるようにはならない。
  * SQLite の json_* は壊れた JSON でエラーを投げ、batch ごと(= メンバーを外す文ごと)失敗させるので、json_valid を CASE で先に見る

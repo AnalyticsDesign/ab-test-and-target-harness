@@ -1,6 +1,9 @@
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
-import { apiKey, bearer, organization } from "better-auth/plugins";
+// B179: 1.5 から API キーのプラグインは別のパッケージ(1.7 の better-auth/plugins は apiKey を export しない)
+import { apiKey } from "@better-auth/api-key";
+import { bearer } from "better-auth/plugins/bearer";
+import { organization } from "better-auth/plugins/organization";
 import { createAccessControl } from "better-auth/plugins/access";
 import { adminAc, defaultStatements, memberAc, ownerAc } from "better-auth/plugins/organization/access";
 import { sql } from "kysely";
@@ -8,7 +11,6 @@ import type { Env } from "./env";
 import { hasAccess, hasLiveInvitation } from "./access";
 import { actorFromUser, writeAuditAfterDb } from "./audit";
 import { getDb } from "./db";
-import { authD1Dialect } from "./auth-d1-dialect";
 import { timingSafeEqualString } from "./ids";
 
 /** spec §13.2 の Role 4 種。Better Auth の member.role にこの文字列を入れる */
@@ -89,21 +91,15 @@ function buildAuth(env: Env) {
       ? { data: { ...account, accessToken: null, refreshToken: null, idToken: null, accessTokenExpiresAt: null, refreshTokenExpiresAt: null } }
       : undefined;
   /**
-   * レビュー r2 CX-High-1 (b): `/reset-password` は token を読んだ後に hash してから account を更新し、更新の直前に token を再照合しない
-   * (Better Auth 1.4.21 `api/routes/password.mjs`)。所属の変化で token を消しても、読み取り済みの要求はパスワードを変えてしまうので、
-   * account の create / update の直前(databaseHooks)で token がまだ在ることを確かめ、無ければ INVALID_TOKEN で止める(パスワードは変わらない)。
-   * ctx は endpoint の文脈(path と body)。他の経路(sign-up・Google の link)は path が違うので素通し
+   * レビュー r2 CX-High-1 (b): 所属の変化で再設定の token を消した後に、読み取り済みの `/reset-password` がパスワードを変えないこと。
+   * 1.4.21 は token を読んだ後に hash してから account を更新し、更新の直前に token を再照合しなかったので、ここ(account の create / update の
+   * 直前)で token がまだ在ることを確かめていた。B179: 1.7.15 の `/reset-password`(`api/routes/password.mjs` が resetCredentialPassword に
+   * consumeResetToken を渡す。`utils/password.mjs` の resetCredentialPassword)は、account の書き込みより**前に**(セッションの取り消しよりも前に)
+   * token を 1 行の削除(`internalAdapter.consumeVerificationValue` = `delete … returning`。消せなければ INVALID_TOKEN)で使い切るので、
+   * 同じことを Better Auth 自身が守る。ここで token を探すと、自分が使い切った token が無いので毎回断ってしまう。そのため確かめは外した
+   * (守りは test/workspaces.test.ts の「reset: a token invalidated after it was read does not change the password」が見張る。1.7.15 で緑)
    */
-  const requireLiveResetToken = async (ctx: { path?: string; body?: { token?: unknown } } | null | undefined) => {
-    if (ctx?.path !== "/reset-password") return;
-    const token = typeof ctx.body?.token === "string" ? ctx.body.token : null;
-    const row = token ? await db.selectFrom("verification").select("id").where("identifier", "=", `reset-password:${token}`).executeTakeFirst() : undefined;
-    if (!row) throw new APIError("BAD_REQUEST", { message: "INVALID_TOKEN" });
-  };
-  const accountBefore = async <T extends Record<string, unknown>>(account: T, ctx: unknown) => {
-    await requireLiveResetToken(ctx as Parameters<typeof requireLiveResetToken>[0]);
-    return dropOAuthTokens(account);
-  };
+  const accountBefore = async <T extends Record<string, unknown>>(account: T) => dropOAuthTokens(account);
   const setupOpen = async () => {
     const r = await sql<{ n: number; c: number }>`select count(*) as n, coalesce(max(completed), 0) as c from setup_lock`.execute(db);
     const row = r.rows[0];
@@ -117,7 +113,14 @@ function buildAuth(env: Env) {
     baseURL: env.AB_CONTROL_URL,
     basePath: "/auth",
     secret: env.BETTER_AUTH_SECRET,
-    database: { dialect: authD1Dialect(env.DB), type: "sqlite" },
+    // B179(D6): Better Auth 1.7 の組み込みの D1(@better-auth/kysely-adapter の D1SqliteDialect)に D1 をそのまま渡す。
+    // 組み込みの driver は結果に `numUpdatedOrDeletedRows` を付けないので、B162 の kysely の警告の包み(auth-d1-dialect.ts)は要らない。
+    // 型は sqlite(日時は ISO の文字列・真偽は 0/1 のまま)、対話型のトランザクションは使わない(包みのときと同じ)
+    database: env.DB,
+    // B179(D13): Better Auth 1.7 の実行時の表の形の検査(既定でオン)を切る。表の形の正は D1 のマイグレーションで、合っているかはテストが見張る。
+    // オンだと列が 1 本足りないだけで(マイグレーションの前に control を deploy した場合など)ログイン・鍵の検証の全経路が例外になり、
+    // isolate を起こすたびに全表の introspection が D1 に走る
+    advanced: { database: { validateSchema: false } },
     trustedOrigins: [env.AB_ADMIN_URL],
     // OAuth の途中で Better Auth が自前のエラーページ(/auth/error。公開していない)へ飛ばそうとする場合の行き先
     onAPIError: { errorURL: `${env.AB_ADMIN_URL}/login` },
@@ -180,8 +183,10 @@ function buildAuth(env: Env) {
            * B129(spec §3.1・Q13): 確かめが通ったら、/sign-in/email のときだけ auth.password_login を「後」の書き方で記録する
            * (/sign-up/email = 初期設定・招待の Bearer 無しの受諾は、setup.complete・invitation.accept の行がある)。断ったログインは記録しない。
            * 書けなくてもログインは成功のまま(ログだけ)。操作した人の控え(メール・名前)は確かめの 1 文で一緒に読む(往復は記録の +1 だけ)。
-           * ctx は better-auth 1.4.21 の getCurrentAuthContext() が返す endpoint の文脈で、path は toAuthEndpoints が endpoint.path から入れる
-           * (B179 の版上げで path の入り方が変わると、loginMethod の印と同じくここも記録しなくなる。password_login_is_recorded が落ちて気づける)
+           * ctx は endpoint の文脈。1.7.15 では databaseHooks が AsyncLocalStorage の `tryGetCurrentAuthEndpointContext()`(@better-auth/core の
+           * context/endpoint-context.mjs。db/with-hooks.mjs が呼ぶ)から取り、path は dispatchAuthEndpoint(api/dispatch.mjs)が `endpoint.path` から入れる
+           * (1.4.21 は getCurrentAuthContext() で、path は toAuthEndpoints が入れた)。path の入り方が変わると、loginMethod の印と同じくここも
+           * 記録しなくなる。hooks_see_endpoint_path_on_1_7_b179(test/better-auth-storage.test.ts)と password_login_is_recorded(test/audit-after.test.ts)が落ちて気づける
            */
           after: async (session, ctx) => {
             if (!session || (ctx?.path !== "/sign-in/email" && ctx?.path !== "/sign-up/email")) return;
@@ -237,6 +242,9 @@ function buildAuth(env: Env) {
         rateLimit: { enabled: false },
         // backlog B33 / 決定 48: 鍵ごとの権限の上限(roleCap)を metadata に持つ(列は 0001 の時点からある。マイグレーション不要)
         enableMetadata: true,
+        // B179(D2): 1.5 から持ち主の列は referenceId。今の "userId" の列(user への外部キー・on delete cascade・索引)をそのまま使うため列名を読み替える。
+        // control の SQL も apikey."userId" を直接読む。configId の列は migrations/0025 が足す(既存の鍵は 'default')
+        schema: { apikey: { fields: { referenceId: "userId" } } },
       }),
     ],
     hooks: {

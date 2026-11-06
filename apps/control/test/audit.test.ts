@@ -155,7 +155,7 @@ describe("audit actor (B129 Task 2)", () => {
     const full = await issueKey(owner.token, null);
     const KEY_INFO = /from "apikey" left join "apikey_revocations"/;
     const MEMBER_ROLE = /^select "role" from "member"/;
-    /** better-auth 1.4.21 の adapter が出す形(`select "primary".* from (…)`・`update "apikey" set …`・`delete from "apikey"`) */
+    /** better-auth の adapter が出す形(1.4.21・1.7.15 とも `select "primary".* from (…)`・`update "apikey" set …`・`delete from "apikey"`。B179 Task 6 で 1.7.15 でも当たることを確かめた) */
     const BETTER_AUTH = /^select "primary"\.\* from|^update "apikey" set|^delete from "apikey"/;
     for (const [label, token, keyInfo, memberRole, maxTotal] of [
       ["session", owner.token, 0, 0, 3],

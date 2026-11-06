@@ -136,6 +136,14 @@ describe("session login method (B112)", () => {
     const pw = await joinWithPassword(owner);
     expect(await methodOf(pw.token)).toBe("password"); // 登録(/sign-up/email)のセッション
     expect(await methodOf(await signInWithPassword(pw.email))).toBe("password"); // /sign-in/email
-    expect(await methodOf((await googleSignIn(pw.email)).token!)).toBe("google"); // /callback/google
+    // B179: Google の印は、Google で招待を受けた人で見る(/callback/google)。1.4.21 は上のパスワードの人(未確認)をそのまま Google に
+    // 結びつけていたが、1.7 は結びつけずに /login?error=account_not_linked に戻す(セッションは作らない)
+    const viaGoogle = await inviteAndJoin(owner.token, owner.workspaceId, "viewer");
+    expect(await methodOf(viaGoogle.token)).toBe("google");
+    const sessionsBefore = await env.DB.prepare(`select count(*) as n from session where "userId" = ?`).bind(pw.userId).first<{ n: number }>();
+    const refused = await googleSignIn(pw.email);
+    expect(refused.token).toBeNull();
+    expect(new URL(refused.location).searchParams.get("error")).toBe("account_not_linked");
+    expect(await env.DB.prepare(`select count(*) as n from session where "userId" = ?`).bind(pw.userId).first<{ n: number }>()).toEqual(sessionsBefore);
   }, 20_000);
 });

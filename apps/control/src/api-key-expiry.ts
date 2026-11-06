@@ -1,7 +1,10 @@
 // apps/control/src/api-key-expiry.ts — API キーの有効期限(backlog B43)。期限は Better Auth に渡さず metadata の expiresAt に持ち、control の入口で判定する。
-// Better Auth 1.4.21 は期限切れの鍵を持ち主・失効に関係なく物理削除し(一括削除と、使われたときの個別削除)、失効の記録も CASCADE で消えるため。
+// Better Auth は期限切れの鍵を持ち主・失効に関係なく物理削除し(一括削除と、使われたときの個別削除)、失効の記録も CASCADE で消えるため。
+// 1.7.15 で確かめた(B179): @better-auth/api-key の deleteAllExpiredApiKeys(`expiresAt < now and expiresAt is not null` の一括削除。鍵の要求のたびに
+// 10 秒に 1 回まで)と、validateApiKey の期限切れの鍵の個別削除(dist/index.mjs の deleteAllExpiredApiKeys・validateApiKey)が 1.4.21 と同じようにある。
+// なので期限は Better Auth の列に渡さず metadata に持つ作りは今も要る。
 // 見張り: Better Auth の版を上げるときは、発行時に Better Auth の expiresAt 列が null のまま(既定の期限が付かない)かを確かめる
-// (test/api-key-expiry.test.ts の "never into Better Auth's column" が落ちる)。
+// (test/api-key-expiry.test.ts の "never into Better Auth's column" が落ちる。1.7.15 で緑)。
 // 検討記録 = docs/dev/api_key_expiry_study_v1.md
 import { UNREADABLE, parseKeyMetadata } from "./roles";
 

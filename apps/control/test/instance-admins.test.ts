@@ -2,7 +2,7 @@ import { applyD1Migrations, reset } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { grantInstanceAdmin } from "../src/instance-admins";
-import { BREAK_GLASS, call, createExperiment, createSite, expectEnvelope, failingD1Insert, inviteAndJoin, json, setupOwner } from "./helpers";
+import { BREAK_GLASS, beforeD1Query, call, createExperiment, createSite, expectEnvelope, failingD1Insert, inviteAndJoin, json, setupOwner } from "./helpers";
 
 /** backlog B36 / 決定 53: システム管理者(instance admin) */
 
@@ -610,15 +610,19 @@ describe("instance admin (B36)", () => {
     await promote(owner.token, ed.email);
     await env.DB.prepare(`update invitation set status = 'pending' where id = ?1`).bind(inv.id).run();
     const blank = blankFirstSelects(env.DB, /^select "id" from "member" where "organizationId"/i);
+    // Better Auth の受諾が実際に Member の INSERT まで走ったか(= 409 は UNIQUE 索引の経路から来た)を、INSERT の文が出たことで見る
+    const memberInsert = beforeD1Query(blank.db, /^insert into "member"/i, async () => {});
     const res = await call("POST", `/invitations/${inv.id}/accept`, {
       token: ed.token,
-      envOverride: { DB: blank.db },
+      envOverride: { DB: memberInsert.db },
     });
     expect(res.status).toBe(409);
     expect(await expectEnvelope(res)).toMatchObject({ error: "already_member" });
     expect(blank.fired()).toBe(1); // 事前チェックを実際に外せた
-    // Better Auth の受諾が実際に走った(= 409 は UNIQUE 索引の経路から来た)ときだけ、招待は accepted になる
-    expect((await env.DB.prepare(`select status from invitation where id = ?1`).bind(inv.id).first<{ status: string }>())?.status).toBe("accepted");
+    expect(memberInsert.ran()).toBe(true);
+    // B179: 1.4.21 は INSERT が落ちても招待を accepted のまま残した(それを「受諾が走った」印に見ていた)。1.7 は Member の作成が落ちると
+    // 招待を pending に戻す(crud-invites の acceptInvitation の catch)。受け直しても同じ 409 already_member になる
+    expect((await env.DB.prepare(`select status from invitation where id = ?1`).bind(inv.id).first<{ status: string }>())?.status).toBe("pending");
     expect(await memberRows(second, ed.userId)).toBe(1);
     expect(await memberRole(second, ed.userId)).toBe("owner");
   });

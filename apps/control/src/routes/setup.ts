@@ -167,21 +167,24 @@ setupRoutes.post(
           { guard: completedByMe },
         ),
       );
+      // B179: オーナーを確認済みにし、パスワードの記録(乱数で誰も知らない)を消す。どちらも完了と同じ batch に入れる
+      // (確認済みだけ・パスワードだけが残る途中の状態を作らない)。better-auth 1.7 は確認されていない user に Google を
+      // 自動で結びつけない(1.7.15 の oauth2/link-account.mjs。auth.ts は requireLocalEmailVerified を既定の true のままにしている。
+      // 確かめ: test/better-auth-storage.test.ts の unverified_password_user_google_link)。
+      // オーナーのパスワードは control の乱数で、同じ batch で消すので、確認済みにしても
+      // 穴の条件(他人がパスワードで先に入っている)は成り立たない。どちらも「自分の完了が書けたとき」だけ効く(設定の insert と同じ形)
+      stmts.push(
+        c.env.DB.prepare(`update "user" set "emailVerified" = 1 where id = ?1 and exists (select 1 from setup_lock where id = 1 and completed = 1 and created_at = ?2)`).bind(userId, now),
+        c.env.DB.prepare(`delete from account where "userId" = ?1 and "providerId" = 'credential' and exists (select 1 from setup_lock where id = 1 and completed = 1 and created_at = ?2)`).bind(userId, now),
+      );
       const [completion] = await c.env.DB.batch(stmts);
       if (completion?.meta.changes !== 1) throw new Error("setup_lock was taken over by another setup request before completion");
       // sign-up が作ったセッションは返さずに消す(setup token の持ち主にパスワードなしのセッションを渡さない)。
       // 消し損ねても 201 のまま返す: トークンは応答に載らないので行は誰にも渡らず 7 日で失効する(plan R3)
-      // plan12 K13: 同じ所で、sign-up が作ったオーナーのパスワードの記録(乱数のパスワードで誰も知らない)も消す。残すと、非常口が
-      // 閉じている間の掃除(cron/break-glass-sweep.ts)が「パスワードの記録を持つ人」として、導入の直後に Google でログインした
-      // オーナーのセッションを 15 分以内に消してしまう。消し損ねた場合も 201 のまま(次の掃除が記録を消し、オーナーは 1 回ログインし直す)
-      await c.env.DB.batch([
-        c.env.DB.prepare(`delete from session where "userId" = ?1`).bind(userId),
-        c.env.DB.prepare(`delete from account where "userId" = ?1 and "providerId" = 'credential'`).bind(userId),
-      ]).then(
-        // 件数だけを出す(メールアドレスは出さない)
-        ([, accounts]) => console.log(`setup: removed ${accounts?.meta.changes ?? 0} password record(s) of the owner`),
-        (e) => console.error("setup: session and password cleanup failed", e),
-      );
+      // plan12 K13: オーナーのパスワードの記録(乱数のパスワードで誰も知らない)は、上の完了の batch で消している(B179)。
+      // 残すと、非常口が閉じている間の掃除(cron/break-glass-sweep.ts)が「パスワードの記録を持つ人」として、導入の直後に
+      // Google でログインしたオーナーのセッションを 15 分以内に消してしまう
+      await c.env.DB.prepare(`delete from session where "userId" = ?1`).bind(userId).run().catch((e) => console.error("setup: session cleanup failed", e));
       return c.json({ workspaceId, userId }, 201);
     } catch (e) {
       // この試行で作ったワークスペースを消す(残すと auth.ts の『organization が 0 件』のゲートで再試行できず、owner の行を持たない組織が残る)。

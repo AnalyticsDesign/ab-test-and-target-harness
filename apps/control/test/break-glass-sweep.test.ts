@@ -3,7 +3,20 @@ import { describe, expect, it } from "vitest";
 import { breakGlassSweep } from "../src/cron/break-glass-sweep";
 import { runCron } from "../src/cron/runner";
 import type { Env } from "../src/env";
-import { BREAK_GLASS, BREAK_GLASS_PASSWORD as PASSWORD, call, googleSignIn, inviteAndJoin, joinWithPassword, json, pausingD1Insert, setupOwner, signInWithPassword, testEnv } from "./helpers";
+import {
+  BREAK_GLASS,
+  BREAK_GLASS_PASSWORD as PASSWORD,
+  call,
+  googleSignIn,
+  inviteAndJoin,
+  joinWithGoogleAndPassword,
+  joinWithPassword,
+  json,
+  pausingD1Insert,
+  setupOwner,
+  signInWithPassword,
+  testEnv,
+} from "./helpers";
 
 // plan12 K13(決定 63 (9)・(13)(h)): 非常口が閉じている間、パスワードの記録とその持ち主のセッションを 15 分ごとに消す
 
@@ -24,12 +37,14 @@ const meStatus = async (token: string) => (await call("GET", "/me", { token })).
 describe("break-glass sweep (plan12 K13)", () => {
   it("break_glass_sweep_removes_passwords_and_password_sessions_when_closed", async () => {
     const owner = await setupOwner();
-    const pw = await joinWithPassword(owner);
+    // B179: パスワードの記録を持ち、Google でもログインできる人。1.7 は未確認のパスワードの人(joinWithPassword)を Google に結びつけないので、
+    // Google で入った人に非常口の再設定でパスワードを足して作る(再設定でそれまでのセッションは切れる)
+    const pw = await joinWithGoogleAndPassword(owner);
     const pwPassword = await signInWithPassword(pw.email);
     const pwGoogle = (await googleSignIn(pw.email)).token!;
     // パスワードの記録を持たない人(Google だけ)
     const other = await inviteAndJoin(owner.token, owner.workspaceId, "viewer");
-    expect(await sessionsOf(pw.userId)).toBe(3); // 登録・パスワードのログイン・Google のログイン
+    expect(await sessionsOf(pw.userId)).toBe(2); // パスワードのログイン・Google のログイン
     expect(await credentials()).toBe(1);
 
     // トークンを外して動かす
@@ -59,7 +74,9 @@ describe("break-glass sweep (plan12 K13)", () => {
 
   it("password_session_created_during_upgrade_is_removed_after_close", async () => {
     const owner = await setupOwner();
-    const pw = await joinWithPassword(owner);
+    // B179: 最後に Google でログインし直すので、Google でも入れるパスワードの人(上と同じ理由)。写すためのパスワードのセッションを 1 つ作る
+    const pw = await joinWithGoogleAndPassword(owner);
+    await signInWithPassword(pw.email);
     // この版より前の control が作った形: 記録の表も印も無い、パスワードの記録を持つ人のセッション(登録のセッションを写して作る)
     const legacy = `legacy-session-token-${Date.now()}`;
     await env.DB.prepare(

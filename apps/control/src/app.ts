@@ -117,14 +117,18 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
       const status = (e as { statusCode?: number }).statusCode;
       if (status === 400 || status === 401 || status === 403) return null;
       // B42(brief K19): 鍵の metadata が読めない JSON だと Better Auth の変換が SyntaxError を投げる。読めない鍵は使えない = 401。
+      // 1.7.15 でも同じ(この枝が今も実際の 401 の経路): @better-auth/api-key の apikey.metadata は `type: "string"` で
+      // `transform.output = parseJSON(value)`(dist/index.mjs)。parseJSON は strict で投げ、@better-auth/core の adapter factory は
+      // `field.transform.output` を先に呼ぶ(safeJSONParse が効くのは `type: "json"` の列だけ)ので、SyntaxError が鍵の検証から出て、
+      // 非 APIError なので hooks も投げ直す。この枝を外すと 500 になる(test/api-key-scope.test.ts の unreadable_metadata_is_401_with_reissue_hint_b179 が落ちる)。
       // D1 の障害などそれ以外は上げる(401 に丸めると本物の障害が監視に出ない)
       if (e instanceof SyntaxError) throw new ApiError(401, "unauthorized", { hint: KEY_REISSUE_HINT });
       throw e;
     });
   if (!session) throw new ApiError(401, "unauthorized");
   c.set("user", { id: session.user.id, email: session.user.email, name: session.user.name });
-  // B33: 鍵経由の要求では apiKey プラグインが session.id に apikey 行の id を入れる(mock session。better-auth 1.4.21 の
-  // plugins/api-key で確認。版を上げるときはここを再確認する)ので、そこから上限を引く。行が無い(認証は通ったのに消えている =
+  // B33: 鍵経由の要求では apiKey プラグインが session.id に apikey 行の id を入れる(mock session。1.7.15 の @better-auth/api-key
+  // dist/index.mjs の before hook `session: { id: apiKey.id, … }` で確かめた。test/better-auth-storage.test.ts の api_key_session_id_is_key_row_id_b33 が見張る)ので、そこから上限を引く。行が無い(認証は通ったのに消えている =
   // 想定外)ときは「上限なし」に倒さず 401 で断る。metadata が NULL の既存の鍵だけが「上限なし」。
   // 見張り: 版上げ後に「すべての API キーが 401 になる」なら、まずここ(session.id の意味が変わった)を疑う
   const isApiKeyRequest = Boolean(apiKeyFromHeaders(c.req.raw.headers));
@@ -149,7 +153,9 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
       .where("apikey.id", "=", session.session.id)
       .executeTakeFirst();
     if (!row) throw new ApiError(401, "unauthorized");
-    // Better Auth の鍵の検証は行を丸ごと書き戻すので、失効とすれ違うと enabled が 1 に戻りうる。失効の表で断る
+    // 失効の正は apikey_revocations(enabled だけには頼らない)。1.4.21 の鍵の検証は読んだ行を丸ごと書き戻し、失効とすれ違うと enabled が 1 に戻りえた。
+    // 1.7.15 は丸ごとは書き戻さず、lastRequest・requestCount・remaining・updatedAt だけを条件付きで更新する(@better-auth/api-key の claimUsageInDatabase)ので
+    // enabled は戻らないが、読んだ後に失効された要求は Better Auth を通りうる。その要求をここで断るために失効の表を引く作りは残す
     if (row.revokedAt != null) throw new ApiError(401, "unauthorized");
     roleCap = roleCapFromMetadata(row.metadata);
     // B42: 範囲の読めない鍵・持ち主がいま範囲を使えない鍵(降格・メンバーから外す・ワークスペースの削除)は鍵ごと 401
@@ -167,8 +173,8 @@ export const requireSession = createMiddleware<AppEnv>(async (c, next) => {
   // B112: 鍵の要求では session.id が apikey の行の id(上の B33 のコメント)なので、セッションの id としては入れない
   c.set("sessionId", isApiKeyRequest ? null : session.session.id);
   // B129: セッションを作った経路は、getSession が返すセッションの追加の列(auth.ts の session.additionalFields)から読む(照会は増やさない)。
-  // better-auth 1.4.21 の getSession は session の行を select * で読み、additionalFields の列も session.session に入れて返す
-  // (型も additionalFields から推論される)。
+  // better-auth の getSession は session の行を読み、additionalFields の列も session.session に入れて返す(型も additionalFields から推論される)。
+  // 1.7.15 で確かめた: api/routes/session.mjs が internalAdapter.findSession の結果を parseSessionOutput(db/schema.mjs)に通して返し、additionalFields(returned が false でない限り出力)の列が残る。
   // 鍵の要求の session は apiKey プラグインの作る mock(列を持たない)なので、鍵の要求では読まない。
   // 見張り(B179 の版上げ): getSession が追加の列を返さなくなると、すべてのセッションの記録の経路が unknown になる
   // (test/audit.test.ts の actor_from_google_session・actor_from_password_session が落ちる)

@@ -620,10 +620,61 @@ export function pausingD1Insert(db: D1Database, table: string, at: "before" | "a
  * (`require_session_adds_no_d1_query`・B129 の各 Task の `*_round_trips_unchanged` など)が使う。
  * getAuth は env.DB ごとに組み立てるので、envOverride の DB にこれを渡すと Better Auth の照会も数えられる。
  * `reset()` で数を 0 に戻す(準備の往復を数えから外す)
+ *
+ * B179 Task 5: 往復ごとの記録(`trips`)も持つ。各往復が出た時点で他の往復が終わっていなかったか(`parallel`)、
+ * 書き込みか(SQL が insert / update / delete / replace で始まる。batch は文ごとに数える)、終わった後の `meta.rows_read` /
+ * `meta.rows_written`(`first` / `raw` は meta を返さないので null。batch は文の合計)。`idle()` は出ている往復が
+ * すべて終わるまで待つ(await されない処理の往復を次の要求の数に混ぜないため)
  */
-export type D1Counts = { queries: number; batches: number; sql: string[]; batchSql: string[][] };
-export function countingD1(db: D1Database): { db: D1Database; counts(): D1Counts; reset(): void } {
-  let state: D1Counts = { queries: 0, batches: 0, sql: [], batchSql: [] };
+export type D1Trip = {
+  kind: "query" | "batch";
+  sql: string[];
+  /** 書き込みの文の数(batch の中を含む) */
+  writes: number;
+  /** 出た時点で、ほかの往復が終わっていなかった(Promise.all などで同時に出た・await されない処理と重なった) */
+  parallel: boolean;
+  /** null = meta が無い(first / raw)か、まだ終わっていない */
+  rowsRead: number | null;
+  rowsWritten: number | null;
+  done: boolean;
+};
+export type D1Counts = { queries: number; batches: number; sql: string[]; batchSql: string[][]; trips: D1Trip[] };
+const WRITE_SQL = /^\s*(insert|update|delete|replace)\b/i;
+export function countingD1(db: D1Database): { db: D1Database; counts(): D1Counts; reset(): void; idle(): Promise<void> } {
+  let state: D1Counts = { queries: 0, batches: 0, sql: [], batchSql: [], trips: [] };
+  const inFlight = new Set<Promise<unknown>>();
+  type Meta = { rows_read?: number; rows_written?: number } | undefined;
+  /** 往復を記録し、終わったら meta を写す。元の promise をそのまま返す(失敗も元のまま呼び出し元へ。控えの側は両方の枝で受けて未処理の reject を作らない) */
+  const track = <T>(trip: D1Trip, p: Promise<T>, metasOf: (r: T) => Meta[]): Promise<T> => {
+    trip.parallel = inFlight.size > 0;
+    state.trips.push(trip);
+    inFlight.add(p);
+    const settle = () => {
+      trip.done = true;
+      inFlight.delete(p);
+    };
+    p.then(
+      (r) => {
+        const metas = metasOf(r);
+        if (metas.length > 0 && metas.every((m) => m !== undefined)) {
+          trip.rowsRead = metas.reduce((a, m) => a + Number(m?.rows_read ?? 0), 0);
+          trip.rowsWritten = metas.reduce((a, m) => a + Number(m?.rows_written ?? 0), 0);
+        }
+        settle();
+      },
+      settle,
+    );
+    return p;
+  };
+  const newTrip = (kind: D1Trip["kind"], sql: string[]): D1Trip => ({
+    kind,
+    sql,
+    writes: sql.filter((q) => WRITE_SQL.test(q)).length,
+    parallel: false,
+    rowsRead: null,
+    rowsWritten: null,
+    done: false,
+  });
   /** 包んだ文 → 本物の文(batch には本物を渡す。batch は文の中身を直接読むため) */
   const real = new WeakMap<object, D1PreparedStatement>();
   const sqlOf = new WeakMap<object, string>();
@@ -635,7 +686,8 @@ export function countingD1(db: D1Database): { db: D1Database; counts(): D1Counts
           return (...args: unknown[]) => {
             state.queries++;
             state.sql.push(sqlText);
-            return f.apply(s, args);
+            const withMeta = p === "run" || p === "all";
+            return track(newTrip("query", [sqlText]), f.apply(s, args), (r) => (withMeta ? [(r as { meta?: Meta })?.meta] : []));
           };
         }
         if (p === "bind") return (...args: unknown[]) => counted(s.bind(...args), sqlText);
@@ -654,8 +706,9 @@ export function countingD1(db: D1Database): { db: D1Database; counts(): D1Counts
       if (prop === "batch") {
         return (stmts: D1PreparedStatement[]) => {
           state.batches++;
-          state.batchSql.push(stmts.map((s) => sqlOf.get(s) ?? "?"));
-          return target.batch(stmts.map((s) => real.get(s) ?? s));
+          const sqls = stmts.map((s) => sqlOf.get(s) ?? "?");
+          state.batchSql.push(sqls);
+          return track(newTrip("batch", sqls), target.batch(stmts.map((s) => real.get(s) ?? s)), (rs) => rs.map((r) => r?.meta as Meta));
         };
       }
       return typeof v === "function" ? v.bind(target) : v;
@@ -663,9 +716,19 @@ export function countingD1(db: D1Database): { db: D1Database; counts(): D1Counts
   }) as D1Database;
   return {
     db: wrapped,
-    counts: () => ({ queries: state.queries, batches: state.batches, sql: [...state.sql], batchSql: state.batchSql.map((b) => [...b]) }),
+    counts: () => ({
+      queries: state.queries,
+      batches: state.batches,
+      sql: [...state.sql],
+      batchSql: state.batchSql.map((b) => [...b]),
+      trips: state.trips.map((t) => ({ ...t, sql: [...t.sql] })),
+    }),
     reset: () => {
-      state = { queries: 0, batches: 0, sql: [], batchSql: [] };
+      state = { queries: 0, batches: 0, sql: [], batchSql: [], trips: [] };
+    },
+    idle: async () => {
+      // 終わった往復の後始末が次の往復を出すことがあるので、空になるまで繰り返す
+      while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
     },
   };
 }
@@ -921,6 +984,24 @@ export async function joinWithPassword(owner: { token: string; workspaceId: stri
   expect(acc.status).toBe(200);
   const { userId, token } = await json<{ userId: string; token: string }>(acc);
   return { email, userId, token };
+}
+
+/**
+ * B179: Google で招待を受けた人(Google が確かめたメール)に、非常口の再設定リンクでパスワードの記録を足す。
+ * 「パスワードの記録を持ち、Google でもログインできる人」を 1.7 で作れる道(1.7 は未確認のパスワードの人を Google に結びつけないので、
+ * joinWithPassword の人は Google でログインできない)。再設定はそれまでのセッションを切るので、返すのは名前とメールと ID だけ
+ */
+export async function joinWithGoogleAndPassword(
+  owner: { token: string; workspaceId: string },
+  role: "editor" | "viewer" = "editor",
+): Promise<{ email: string; userId: string; memberId: string }> {
+  const m = await inviteAndJoin(owner.token, owner.workspaceId, role);
+  const link = await call("POST", `/workspaces/${owner.workspaceId}/members/${m.memberId}/reset-link`, { token: owner.token, envOverride: BREAK_GLASS });
+  expect(link.status).toBe(200);
+  const token = new URL((await json<{ url: string }>(link)).url).searchParams.get("token");
+  const reset = await call("POST", "/auth/reset-password", { body: { newPassword: BREAK_GLASS_PASSWORD, token }, envOverride: BREAK_GLASS });
+  expect(reset.status).toBe(200);
+  return { email: m.email, userId: m.userId, memberId: m.memberId };
 }
 
 /** 非常口を開いてパスワードでログインする(`/sign-in/email`)。セッションの Bearer を返す */

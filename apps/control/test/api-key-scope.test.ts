@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { KEY_REISSUE_HINT } from "../src/roles";
 import { call, createSite, expectEnvelope, inviteAndJoin, json, setupOwner } from "./helpers";
 
 /**
@@ -127,11 +128,24 @@ describe("api key scope (backlog B42)", () => {
       JSON.stringify({ scope: "workspace", workspaceId: 5 }),
       JSON.stringify({ scope: "workspace", workspaceId: "" }),
       "[]",
-      // 読めない JSON は Better Auth が鍵の検証の段階で扱う(自前の判定まで来ない)ので、ここでは並べない
+      // 読めない JSON は Better Auth が鍵の検証の段階で SyntaxError にし、app.ts の枝が 401 にする(自前の判定まで来ない)ので、ここでは並べず
+      // 下の unreadable_metadata_is_401_with_reissue_hint_b179 で別に見る(案内の hint まで確かめるため)
     ]) {
       await setMeta(k.id, meta);
       expect(await status(), String(meta)).toBe(401);
     }
+  });
+
+  it("unreadable_metadata_is_401_with_reissue_hint_b179", async () => {
+    // 読めない JSON の metadata の鍵。Better Auth の変換(apikey.metadata の transform.output = 厳格な parseJSON)が SyntaxError を投げ、
+    // app.ts の requireSession の SyntaxError の枝が「発行し直す」案内付きの 401 にする(1.4.21・1.7.15 とも)。
+    // 枝を外すと 500 になることを 1.7.15 で確かめた(B179 Task 9 fix round 1)。版を上げて 500 や 200 に変わったらここで落ちる
+    const owner = await setupOwner();
+    const k = await makeKey(owner.token, owner.workspaceId);
+    await setMeta(k.id, "{not json");
+    const res = await call("GET", "/me", { token: k.key });
+    expect(res.status).toBe(401);
+    expect(await json(res)).toMatchObject({ error: "unauthorized", hint: KEY_REISSUE_HINT });
   });
 
   it("a workspace key is refused with 401 once its owner leaves the workspace or the workspace is deleted", async () => {
@@ -196,7 +210,8 @@ function beforeBatch(db: D1Database, fn: () => Promise<unknown>): D1Database {
 
 describe("api key revocation and refusals (B42 review r1)", () => {
   it("a revoked key stays revoked even when Better Auth writes the stale row back", async () => {
-    // Better Auth は鍵の検証で読み込んだ行を丸ごと書き戻す。失効とすれ違うと enabled = 1 に戻る(brief K15)
+    // 1.4.21 の Better Auth は鍵の検証で読み込んだ行を丸ごと書き戻し、失効とすれ違うと enabled = 1 に戻った(brief K15)。
+    // 1.7.15 は丸ごとは書き戻さない(enabled は戻らない)が、この「enabled = 1 に戻った行」を直接作って、失効の表だけで断れることを今も見る
     const owner = await setupOwner();
     const ed = await inviteAndJoin(owner.token, owner.workspaceId, "editor");
     const mine = await makeKey(ed.token, owner.workspaceId);

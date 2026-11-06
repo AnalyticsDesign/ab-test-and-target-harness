@@ -50,6 +50,52 @@ describe("setup and sign-up gate", () => {
     expect(await runCron(testEnv, Date.now(), [breakGlassSweep])).toEqual([{ job: "break-glass-sweep", outcome: "ran" }]);
     expect((await call("GET", "/me", { token: token! })).status).toBe(200);
   });
+  it("setup_owner_is_email_verified_without_password_record_b179", async () => {
+    // setupOwner() は使わない。helpers.ts の setupOwner() は /setup の後に googleSignIn まで行い、
+    // 1.4.21 はその結びつけで emailVerified を 1 にするので、直す前でも通ってしまう。
+    // → /setup を直接呼び、Google でログインする前に見る
+    const email = uniqueEmail("owner");
+    const res = await call("POST", "/setup", { headers: { "x-setup-token": SETUP_TOKEN }, body: { email, workspaceName: "W" } });
+    expect(res.status).toBe(201);
+    const { userId } = await json<{ userId: string }>(res);
+    expect(await env.DB.prepare(`select "emailVerified" as v from "user" where id = ?`).bind(userId).first()).toEqual({ v: 1 });
+    expect(await env.DB.prepare(`select count(*) as n from account where "userId" = ? and "providerId" = 'credential'`).bind(userId).first()).toEqual({ n: 0 });
+    expect(await env.DB.prepare("select completed from setup_lock where id = 1").first()).toEqual({ completed: 1 });
+  });
+  it("setup_completion_batch_failure_leaves_no_verified_owner_b179", async () => {
+    // 完了の batch に足した 2 文(user の update・account の delete)のどちらかが実行時に失敗したら、完了の update ごと巻き戻る。
+    // 文を「実行時にだけ失敗する文」(lock の主キーの衝突)に差し替えて、本物の D1 の batch を通す(失敗の注入で batch ごと
+    // 実行しない方式だと、巻き戻りを確かめられない)。補償(ワークスペース・user の削除)は止めて、巻き戻ったあとの行を見る
+    const failStatementInBatch = (db: D1Database, sqlPattern: RegExp): D1Database =>
+      new Proxy(db, {
+        get(target, prop) {
+          const v = Reflect.get(target, prop);
+          if (prop === "prepare") {
+            return (sqlText: string) =>
+              sqlPattern.test(sqlText)
+                ? target.prepare("insert into setup_lock (id, created_at, completed) values (1, ?2, ?1)")
+                : target.prepare(sqlText);
+          }
+          return typeof v === "function" ? v.bind(target) : v;
+        },
+      }) as D1Database;
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const pattern of [/^update "user" set "emailVerified"/i, /^delete from account where "userId" = \?1 and "providerId" = 'credential' and exists/i]) {
+        await env.DB.batch([env.DB.prepare("delete from setup_lock"), env.DB.prepare("delete from organization"), env.DB.prepare('delete from "user"')]);
+        const email = uniqueEmail("owner");
+        const broken = failStatementInBatch(failingD1Query(env.DB, /delete from organization where id/i), pattern);
+        const res = await call("POST", "/setup", { headers: { "x-setup-token": SETUP_TOKEN }, body: { email, workspaceName: "W" }, envOverride: { DB: broken } });
+        expect(res.status, String(pattern)).toBe(503);
+        // 完了は書かれていない・確認済みの印も残らない・パスワードの記録は(消されずに)そのまま
+        expect(await env.DB.prepare("select completed from setup_lock where id = 1").first(), String(pattern)).toEqual({ completed: 0 });
+        const row = await env.DB.prepare(`select u."emailVerified" as v, (select count(*) from account a where a."userId" = u.id and a."providerId" = 'credential') as n from "user" u where u.email = ?`).bind(email).first();
+        expect(row, String(pattern)).toEqual({ v: 0, n: 1 });
+      }
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
   it("setup rejects a password field", async () => {
     const res = await call("POST", "/setup", { headers: { "x-setup-token": SETUP_TOKEN }, body: { email: uniqueEmail(), workspaceName: "W", password: "password123" } });
     expect(res.status).toBe(422);

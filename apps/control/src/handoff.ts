@@ -12,7 +12,8 @@ const hashCode = async (code: string) => toHex(await crypto.subtle.digest("SHA-2
 /**
  * セッショントークンを 1 分だけ預かり、引き換えのコードを返す。DB に置くのはコードのハッシュだけ(D1 を読めてもコードは分からない)。
  * 行は Better Auth の `verification` 表に同居させるが、掃除は当てにしない(state を Cookie に持たせる構成では、
- * Better Auth がこの表を触るのはパスワード再設定のときだけ = 普段は開いていない)。
+ * Better Auth がこの表を触るのはパスワード再設定のときだけ = 普段は開いていない。1.7.15 でも、control が有効にする bearer・organization・
+ * apiKey と公開する経路の中で verification を書くのは api/routes/password.mjs の再設定だけ。state は storeStateStrategy が cookie のとき表を使わない)。
  * 引き換えられなかった行が溜まらないよう、発行のたびに **この module が作った行**(`handoff:` で始まる identifier)の
  * 期限切れを消す。他の用途の行には触れない
  */

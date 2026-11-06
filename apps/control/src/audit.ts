@@ -443,6 +443,9 @@ export const AUDITED_ROUTES: Readonly<Record<string, readonly AuditRouteCheck[]>
 export const UNAUDITED_ROUTES: Readonly<Record<string, string>> = {
   "POST /sites/:sid/evaluate": "配信条件の評価の結果を返すだけで、D1 にも KV にも書かない",
   "POST /auth/handoff/exchange": "Google のログインの引き継ぎのコードを、Google の戻りで作ったセッションのトークンに替えるだけ(Google のログインは記録しない)",
+  // B179: Better Auth 1.7 の get-session は POST も経路に持つ(1.4.21 は GET だけ)が、session.deferSessionRefresh を設定しないと
+  // Cookie・セッションを読む前に 405 で断る(api/routes/session.mjs)。control は設定しないので書き込みは無い。管理画面は GET を使う
+  "POST /auth/get-session": "セッションの延長を遅らせる設定(deferSessionRefresh)が無いので、Better Auth がセッションを読む前に 405 で断る。何も書かない",
   "POST /auth/sign-out": "ログアウト。ログイン・ログアウトは記録しない(パスワードのログインだけは、非常口の後の確かめのために記録する)",
   "POST /auth/sign-up/email": "アカウントの作成は、招待の受諾(invitation.accept の detail.signUp)と初期設定(setup.complete)の記録に含める",
   "POST /auth/request-password-reset": "メールを送らないので、直接呼んでも再設定のリンクは誰にも届かない。リンクを配るのは自前の経路で、その発行を member.reset_link・break_glass.reset_link で記録する",

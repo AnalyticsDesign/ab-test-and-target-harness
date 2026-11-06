@@ -6,6 +6,7 @@ import {
   expectEnvelope,
   googleSignIn,
   inviteAndJoin,
+  joinWithGoogleAndPassword,
   joinWithPassword,
   json,
   sessionTokenOf,
@@ -173,6 +174,8 @@ describe("api keys (decision 34, spec §13.3)", () => {
 describe("password session cannot issue api keys (B112)", () => {
   const issue = (token: string, workspaceId: string, envOverride?: { DB: D1Database }) =>
     call("POST", "/me/api-keys", { token, body: { name: "b112", workspaceId }, ...(envOverride ? { envOverride } : {}) });
+  const credentialOf = async (userId: string): Promise<number> =>
+    Number((await env.DB.prepare(`select count(*) as n from account where "providerId" = 'credential' and "userId" = ?`).bind(userId).first<{ n: number }>())?.n ?? -1);
   const keyCount = async (userId: string): Promise<number> =>
     Number((await env.DB.prepare(`select count(*) as n from apikey where "userId" = ?`).bind(userId).first<{ n: number }>())?.n ?? -1);
   const expectPasswordSession = async (res: Response) => {
@@ -192,7 +195,9 @@ describe("password session cannot issue api keys (B112)", () => {
 
   it("google_session_of_password_holder_can_issue_api_key", async () => {
     const owner = await setupOwner();
-    const pw = await joinWithPassword(owner);
+    // B179: 1.7 は未確認のパスワードの人(joinWithPassword)を Google に結びつけないので、Google で入った人にパスワードの記録を足して作る
+    const pw = await joinWithGoogleAndPassword(owner);
+    expect(await credentialOf(pw.userId)).toBe(1);
     const { token } = await googleSignIn(pw.email);
     expect((await issue(token!, owner.workspaceId)).status).toBe(201);
   }, 20_000);
@@ -241,7 +246,7 @@ describe("password session cannot issue api keys (B112)", () => {
 
   it("password_session_can_list_and_revoke_own_keys", async () => {
     const owner = await setupOwner();
-    const pw = await joinWithPassword(owner);
+    const pw = await joinWithGoogleAndPassword(owner); // B179: 上と同じ理由で、Google でも入れるパスワードの人
     const { token: google } = await googleSignIn(pw.email);
     const made = await json<{ id: string }>(await issue(google!, owner.workspaceId));
     const password = await signInWithPassword(pw.email);
