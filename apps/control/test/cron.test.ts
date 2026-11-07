@@ -478,6 +478,29 @@ describe("results account guard (D9 ② K12)", () => {
     expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), NOW, [resultsAccountGuard])).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
     expect(budget.stop).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalled();
+    // B193: 失敗の中身(ApiError の detail)をログに出す(呼び出しの経路だけでは原因が読めないため)
+    expect(warn.mock.calls.flat().join(" ")).toContain("http 502");
+  });
+
+  // B193: UTC 0 時の直後の回(00:00。判定の幅は 0 時から 5 分未満)は見送る。日が替わった直後は使用状況の GraphQL が 10 秒の上限を超えて
+  // 毎日失敗していた。この時間帯は当日の使用量がほぼ 0 で、8 割の判定に掛からない(次の 00:15 の回で見る)
+  it("account guard skips the slot right after UTC midnight", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const budget = fakeBudget();
+    const fetchSpy = mockGraphql(workers(90_000));
+    // 本番の now は予定の時刻(00:00:00.000 ちょうど)。境目の 1 ms 前も見送る
+    for (const t of ["2026-10-18T00:00:00.000Z", "2026-10-18T00:00:39Z", "2026-10-18T00:04:59.999Z"]) {
+      expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), Date.parse(t), [resultsAccountGuard])).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(budget.stop).not.toHaveBeenCalled();
+    expect(log.mock.calls.flat().join(" ")).toContain("right after UTC midnight");
+
+    // 次の回(00:15)からは見る(取り直して判定する)
+    const next = Date.parse("2026-10-18T00:15:00Z");
+    expect(await runCron(envWith({ ...CONFIGURED, RESULTS_BUDGET: budget.ns }), next, [resultsAccountGuard])).toEqual([{ job: "results-account-guard", outcome: "ran" }]);
+    expect(fetchSpy.mock.calls.filter(([u]) => String(u instanceof Request ? u.url : u).includes("/graphql"))).toHaveLength(1);
+    expect(budget.stop).toHaveBeenCalledExactlyOnceWith("account_usage", Date.parse("2026-10-19T00:00:00Z"), next);
   });
 
   it("account guard fails when the budget DO rejects the stop", async () => {
