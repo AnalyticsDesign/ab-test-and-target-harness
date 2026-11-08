@@ -11,11 +11,11 @@ import type { Env } from "../src/env";
 const ORIGIN = "https://site.example";
 const HOST = "dlite.example";
 const exp: Experiment = {
-  id: "exp_001", name: "hero", urlMatch: { op: "contains", value: "/lp" }, trafficPercentage: 100, persistAssignment: false,
+  id: "exp_001", urlMatch: { include: [{ page: { op: "contains", value: "/lp" } }] }, trafficPercentage: 100, persistAssignment: false,
   targeting: { hist: "converted", goal: "g_lead" },
-  variants: [{ id: "vA", name: "A", weight: 50, changes: [] }, { id: "vB", name: "B", weight: 50, changes: [] }],
+  variants: [{ id: "vA", weight: 50, changes: [] }, { id: "vB", weight: 50, changes: [] }],
 };
-const base = { schemaVersion: 2, version: 1, siteSalt: "salt", prehide: {}, exposureSelectors: {}, patterns: {}, goals: [{ id: "g_lead", name: "Lead", type: "CUSTOM", config: {} }] };
+const base = { schemaVersion: 3, version: 1, siteSalt: "salt", prehide: {}, exposureSelectors: {}, patterns: {}, goals: [{ id: "g_lead", type: "CUSTOM", config: {} }] };
 
 async function send(path: string, body: unknown, opts: { origin?: string | null; cookie?: string; envOverride?: Partial<Env>; host?: string; method?: string } = {}): Promise<Response> {
   const headers = new Headers({ "Content-Type": "application/json" });

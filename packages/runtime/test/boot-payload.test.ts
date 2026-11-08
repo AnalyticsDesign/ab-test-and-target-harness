@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
-import type { CompiledConfig, RuntimeSettings } from "@wtt/core";
-import { bakeBootstrap, parseSiteSettings, withoutLegacyNames } from "@wtt/core";
+import type { CompiledConfig, CompiledConfigV2, RuntimeSettings } from "@wtt/core";
+import { bakeBootstrap, parseCompiledConfig, parseSiteSettings, withoutLegacyNames } from "@wtt/core";
 import { parseBootPayload } from "../src/runtime";
 import { isConversionPayloads, isExposurePayloads } from "../src/analytics";
 import { baseConfig } from "./fixtures";
 
 // 実 shape(@wtt/core)から組み立てる。ここが core の schema とズレたら検知できるようにする(review finding)
 const validConfig: CompiledConfig = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   version: 3,
   siteId: "site_b",
   siteSalt: "salt_test",
@@ -75,7 +75,9 @@ describe("parseBootPayload (plan 3 task 2 — final implementation, no zod)", ()
   });
 
   it("rejects unknown schemaVersion (spec §6.4: 未知 schemaVersion は何も適用しない)", () => {
-    expect(parseBootPayload({ config: { ...validConfig, schemaVersion: 3 }, settings: validSettings })).toBeNull();
+    // B69: 版 2 は deployer・control が版 3 に変換してから焼くので、runtime が受けるのは版 3 だけ
+    expect(parseBootPayload({ config: { ...validConfig, schemaVersion: 2 }, settings: validSettings })).toBeNull();
+    expect(parseBootPayload({ config: { ...validConfig, schemaVersion: 4 }, settings: validSettings })).toBeNull();
     expect(parseBootPayload({ config: { ...validConfig, schemaVersion: undefined }, settings: validSettings })).toBeNull();
   });
 
@@ -170,16 +172,24 @@ describe("parseBootPayload (plan 3 task 2 — final implementation, no zod)", ()
   });
 
   it("baked_legacy_payloads_pass_runtime_checks", () => {
-    // 名前入り・conversionPayloads 無しの古い config を core が変換した出力を、runtime の起動前検査が通す
+    // 名前入り・conversionPayloads 無しの古い config(版 2)を core が変換した出力を、runtime の起動前検査が通す
     // (core が埋める payload の形と runtime の検査がずれたら、全サイトの計測が止まる)
-    expect(baseConfig.goals[0]!.name).toBe("CTA click");
-    expect(baseConfig.conversionPayloads).toBeUndefined();
-    const out = withoutLegacyNames(baseConfig);
+    const exp = baseConfig.experiments[0]!;
+    const legacy: CompiledConfigV2 = {
+      ...baseConfig,
+      schemaVersion: 2,
+      goals: [{ id: "g_cta", name: "CTA click", type: "CUSTOM", config: {} }],
+      experiments: [{ ...exp, name: "Hero", urlMatch: exp.urlMatch.include[0]!.page, variants: exp.variants.map((v) => ({ ...v, name: v.id })) }],
+    };
+    expect(legacy.conversionPayloads).toBeUndefined();
+    const out = withoutLegacyNames(legacy);
     expect(isExposurePayloads(out.exposurePayloads)).toBe(true);
     expect(isConversionPayloads(out.conversionPayloads)).toBe(true);
-    // bake 経由(JSON 化した後)でも同じ。名前のキーは残らない
+    // 版 3 に読み替えて bake した後(JSON 化した後)でも同じ。名前のキーは残らない
+    const upgraded = parseCompiledConfig(legacy);
+    expect(upgraded?.schemaVersion).toBe(3);
     const site = parseSiteSettings({ settingsVersion: 1, siteId: "site_unit", hosts: ["a.example"], allowedOrigins: ["https://a.example"] })!;
-    const baked = bakeBootstrap(baseConfig, site, "/*RUNTIME*/");
+    const baked = bakeBootstrap(upgraded!, site, "/*RUNTIME*/");
     const m = /self\.__WTT_BOOT__=(.*);\n/.exec(baked);
     expect(m, "bootstrap に boot JSON がある").not.toBeNull();
     const boot = JSON.parse(m![1]!) as { config: { exposurePayloads: unknown; conversionPayloads: unknown } };

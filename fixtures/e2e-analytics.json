@@ -20,7 +20,7 @@
   "experiments": [
     {
       "id": "exp_pricing", "name": "Pricing hero",
-      "urlMatch": { "op": "contains", "value": "/" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/" } }] },
       "trafficPercentage": 100, "persistAssignment": false,
       "analytics": {
         "overrides": { "experimentName": "Pricing Q3" },
@@ -36,7 +36,7 @@
     },
     {
       "id": "exp_promo", "name": "Promo",
-      "urlMatch": { "op": "contains", "value": "/" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/" } }] },
       "trafficPercentage": 100, "persistAssignment": false,
       "analytics": { "extra": { "campaign": "autumn" } },
       "variants": [

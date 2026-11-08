@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:workers";
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { generateVisitorId, kvKeys } from "@wtt/core";
+import { COMPILED_V2 } from "../../../packages/core/test/fixtures/compiled-v2";
 import app from "../src/index";
 import { __resetEdgeCaches, loadConfig } from "../src/store";
 import type { Env } from "../src/env";
@@ -71,5 +72,49 @@ describe("版 1 の設定は未知の版(backlog B52。版 2 が公開の最初�
       expect(await res.json()).toEqual({ v: 7, experiments: [] });
     }
     expect(touched).toBe(0);
+  });
+});
+
+/**
+ * B69 spec §5: 版 2 の設定(KV に残った公開版)は parseCompiledConfig が upgradeV2 で版 3 に読み替えて配る。
+ * 配信条件にページの条件(url / host / path / query)を持つエクスペリエンス(e_query)は外れ、ほかは今までどおり配る
+ */
+describe("版 2 の設定は版 3 に読み替えて配る(B69)", () => {
+  const V2_ORIGIN = "https://www.example.com";
+  const v2Decision = (v: number, envOverride: Partial<Env> = {}) =>
+    request("/v1/sites/site_v2/decision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: V2_ORIGIN },
+      // e_path_re(パスの正規表現)と e_host_re(ホストの正規表現 + 端末)に一致し、e_query も版 2 の規則なら一致する URL
+      body: JSON.stringify({ v, url: `${V2_ORIGIN}/products/12?utm=mail`, referrer: "", device: "mobile", visitorId: generateVisitorId() }),
+    }, envOverride);
+  const ids = async (res: Response) => ((await res.json()) as { experiments: Array<{ id: string }> }).experiments.map((e) => e.id);
+
+  beforeEach(async () => {
+    await env.CONFIG_KV.put(kvKeys.settings("site_v2"), JSON.stringify({ settingsVersion: 1, siteId: "site_v2", allowedOrigins: [V2_ORIGIN] }));
+    await env.CONFIG_KV.put(kvKeys.config("site_v2", 7), JSON.stringify(COMPILED_V2));
+  });
+
+  it("previous_schema_version_config_is_served: 持たない方を配り、持つ方を配らない", async () => {
+    await env.CONFIG_KV.put(kvKeys.active("site_v2"), "7");
+    const loaded = await loadConfig(env, "site_v2", 7);
+    expect(loaded?.schemaVersion).toBe(3);
+    expect(loaded?.experiments.map((e) => e.id)).toEqual(["e_path_re", "e_host_re", "e_plain"]);
+    let touched = 0;
+    const res = await v2Decision(7, { VISITOR_PROFILE: doSpy(() => touched++) });
+    expect(res.status).toBe(200);
+    expect(await ids(res)).toEqual(["e_path_re", "e_host_re"]);
+    expect(touched).toBe(0); // e_query(唯一の persistAssignment)が外れて needsProfile が false になる = ローカル評価
+  });
+
+  it("old_bootstrap_with_new_edge: 版 2 の公開版を body.v で指名した要求でも、外れたエクスペリエンスは配らない", async () => {
+    // 公開済みの最新は版 3(版 8)。キャッシュに残った古い bootstrap が版 2 の 7 を指名する
+    await env.CONFIG_KV.put(kvKeys.config("site_v2", 8), JSON.stringify({ ...COMPILED_V2, schemaVersion: 3, version: 8, needsProfile: false, prehide: {}, exposureSelectors: {}, experiments: [], exposurePayloads: {}, results: undefined }));
+    await env.CONFIG_KV.put(kvKeys.active("site_v2"), "8");
+    const res = await v2Decision(7);
+    expect(res.status).toBe(200);
+    const got = await ids(res);
+    expect(got).not.toContain("e_query");
+    expect(got).toEqual(["e_path_re", "e_host_re"]);
   });
 });

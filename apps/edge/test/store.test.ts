@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { kvKeys } from "@wtt/core";
 import { loadSettings, loadActiveVersion, loadConfig, loadSiteIdByHost, __resetEdgeCaches } from "../src/store";
 
-const cfg = { schemaVersion: 2, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [] };
+const cfg = { schemaVersion: 3, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [] };
 
 beforeEach(() => __resetEdgeCaches());
 
@@ -73,7 +73,7 @@ describe("store", () => {
     expect(gets).toBe(3); // negative も 60 秒キャッシュ
   });
   it("unknown schemaVersion config is rejected (unsupported_compiled_config_version の edge 半分)", async () => {
-    await env.CONFIG_KV.put(kvKeys.config("s1", 2), JSON.stringify({ ...cfg, schemaVersion: 3, version: 2 }));
+    await env.CONFIG_KV.put(kvKeys.config("s1", 2), JSON.stringify({ ...cfg, schemaVersion: 4, version: 2 }));
     expect(await loadConfig(env, "s1", 2)).toBeNull();
   });
   it("schemaVersion 1 config is unknown too (版 1 の読み取りは backlog B52 で削除。版 2 が公開の最初の版)", async () => {

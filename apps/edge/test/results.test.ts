@@ -38,15 +38,15 @@ const RUN_X = "x".repeat(22); // どの config にも無い run
 const day = (n: number): number => Date.UTC(2026, 10, n, 12);
 
 const variants = (wA: number) => [
-  { id: "vA", name: "A", weight: wA, changes: [] },
-  { id: "vB", name: "B", weight: 100 - wA, changes: [] },
+  { id: "vA", weight: wA, changes: [] },
+  { id: "vB", weight: 100 - wA, changes: [] },
 ];
-const expA: Experiment = { id: "exp_a", name: "a", urlMatch: { op: "contains", value: "/" }, trafficPercentage: 100, persistAssignment: false, variants: variants(50) };
-const expB: Experiment = { ...expA, id: "exp_b", name: "b" };
-const expS: Experiment = { ...expA, id: "exp_s", name: "single" }; // パーソナライズ(results.runs に載らない)
+const expA: Experiment = { id: "exp_a", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, trafficPercentage: 100, persistAssignment: false, variants: variants(50) };
+const expB: Experiment = { ...expA, id: "exp_b" };
+const expS: Experiment = { ...expA, id: "exp_s" }; // パーソナライズ(results.runs に載らない)
 const config = (version: number, experiments: Experiment[] = [expA, expB, expS]) => ({
-  schemaVersion: 2, version, siteId: SITE, siteSalt: "salt", needsProfile: true, prehide: {}, exposureSelectors: {}, patterns: {},
-  goals: [{ id: "g_buy", name: "Buy", type: "CUSTOM", config: {} }],
+  schemaVersion: 3, version, siteId: SITE, siteSalt: "salt", needsProfile: true, prehide: {}, exposureSelectors: {}, patterns: {},
+  goals: [{ id: "g_buy", type: "CUSTOM", config: {} }],
   experiments,
   results: { forget: true, runs: { exp_a: RUN_A, exp_b: RUN_B, exp_p: RUN_P } },
 });
@@ -460,11 +460,11 @@ describe("results forget (D9 ② Task 7)", () => {
 // B139 §5(Q14・Q22・Q30): 目標だけの CV。run は D1 の参加の記録から引く。/__ab/decision と type:"goal" に便乗させる
 describe("goal-only conversions (B139 §5)", () => {
   const HOST = "site.example"; // ORIGIN のホスト。Mode B の Cloudflare 経由のドメイン
-  const pvGoal = (id: string, value: string) => ({ id, name: id, type: "PAGEVIEW", config: { page: { op: "contains", value } } });
+  const pvGoal = (id: string, value: string) => ({ id, type: "PAGEVIEW", config: { page: { op: "contains", value } } });
   /** CUSTOM の g_buy に、ページの表示の目標を 2 つ足した config(needsProfile = true) */
   const goalConfig = (version: number, runs: Record<string, string> = { exp_a: RUN_A, exp_b: RUN_B, exp_p: RUN_P }) => ({
     ...config(version),
-    goals: [{ id: "g_buy", name: "Buy", type: "CUSTOM", config: {} }, pvGoal("g_thanks", "/thanks"), pvGoal("g_done", "/thanks/done")],
+    goals: [{ id: "g_buy", type: "CUSTOM", config: {} }, pvGoal("g_thanks", "/thanks"), pvGoal("g_done", "/thanks/done")],
     results: { forget: true, runs },
   });
   /** route 経由の書き込みは今の時刻で予算を使うので、受け取る枠を小さくして同じ日の予算を使い切らない */

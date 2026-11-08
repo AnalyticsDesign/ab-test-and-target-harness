@@ -10,24 +10,24 @@ describe("api contract version header (D13 / decision 56 (1))", () => {
     expect(res.headers.get(MIN_CLIENT_VERSION_HEADER), `${label} (min client version)`).toBe(String(MIN_CLIENT_VERSION));
   };
 
-  it("is 4 with the minimum raised to 4 (B68: image library list shape and no experimentId on upload)", () => {
-    expect(API_CONTRACT_VERSION).toBe(4);
+  it("is 5 with the minimum raised to 5 (B69: target URL rows and page conditions moved out of targeting)", () => {
+    expect(API_CONTRACT_VERSION).toBe(5);
     expect(API_VERSION_HEADER).toBe("x-wtt-api-version");
     expect(MIN_CLIENT_VERSION_HEADER).toBe("x-wtt-min-client-version");
-    expect(MIN_CLIENT_VERSION).toBe(4);
+    expect(MIN_CLIENT_VERSION).toBe(5);
   });
 
-  // B68(spec §4.0): 版 3 の管理画面(experimentId を送る)からの書き込みは 426 で読み込み直しを促す
-  it("client_version_3_write_is_426", async () => {
+  // B69(spec §9.1): 版 4 の管理画面(古い形の urlMatch を送る)からの書き込みは 426 で読み込み直しを促す
+  it("client_version_4_write_is_426", async () => {
     const owner = await setupOwner();
-    const res = await call("POST", "/workspaces", { token: owner.token, headers: { "x-wtt-client-version": "3" }, body: { name: "W3" } });
+    const res = await call("POST", "/workspaces", { token: owner.token, headers: { "x-wtt-client-version": "4" }, body: { name: "W4" } });
     expect(res.status).toBe(426);
     expect((await json(res)).error).toBe("client_too_old");
   });
 
-  it("client_version_4_write_passes", async () => {
+  it("client_version_5_write_passes", async () => {
     const owner = await setupOwner();
-    const res = await call("POST", "/workspaces", { token: owner.token, headers: { "x-wtt-client-version": "4" }, body: { name: "W4" } });
+    const res = await call("POST", "/workspaces", { token: owner.token, headers: { "x-wtt-client-version": "5" }, body: { name: "W5" } });
     expect(res.status).toBe(201);
   });
 

@@ -27,11 +27,11 @@ async function expectReserved(res: Response, path: Array<string | number>): Prom
 describe("ID constructor is reserved for experiments, variants and goals (B136)", () => {
   it("エクスペリエンスの作成と複製の ID に constructor を使うと 422(path は id)", async () => {
     for (const [label, token, sid] of await tokens()) {
-      await expectReserved(await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "constructor", name: "x", urlMatch: { op: "contains", value: "/" } } }), ["id"]);
+      await expectReserved(await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "constructor", name: "x", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } }), ["id"]);
       const { id: src } = await createExperiment(token, sid);
       await expectReserved(await call("POST", `/sites/${sid}/experiments/${src}/duplicate`, { token, body: { mode: "same", id: "constructor" } }), ["id"]);
       // 形の違う名前(__proto__)は形の誤りの 1 件だけ(予約の検査は重ねない)
-      const shape = await json<{ issues: unknown[] }>(await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "__proto__", name: "x", urlMatch: { op: "contains", value: "/" } } }));
+      const shape = await json<{ issues: unknown[] }>(await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "__proto__", name: "x", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } }));
       expect(shape.issues).toHaveLength(1);
       // constructor を含むだけの ID は使える
       expect((await call("POST", `/sites/${sid}/experiments/${src}/duplicate`, { token, body: { mode: "same", id: `constructor-copy-${label.replace(" ", "-")}` } })).status).toBe(201);

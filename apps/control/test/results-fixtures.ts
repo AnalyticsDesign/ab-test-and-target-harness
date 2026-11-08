@@ -104,7 +104,7 @@ export const def = (text: string | null): DeliveredDefinition => ({
     { id: "a", changes: [] },
     { id: "b", changes: text === null ? [] : [{ id: "c_text", type: "TEXT", selector: ".hero-title", payload: { text } }] },
   ],
-  urlMatch: { op: "contains", value: "/" },
+  urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
   targeting: null,
   primaryGoal: { id: "g_buy", config: {} },
 });

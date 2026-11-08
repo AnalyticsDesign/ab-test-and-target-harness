@@ -3,21 +3,22 @@
  * (決定 49、設計書 §4.1.1・§12)。React に依存しない(単体テストで往復を確かめる)。値の検査は control が行い、ここは形の変換と表示の準備だけ。
  * ただし保存値は unknown として受け、変換の前に core の形と意味の検査を通す(通らない値・変換できない値は読み取り専用。plan ② P16)
  */
-import { audienceDefinitionIssue, experimentTargetingIssue, hasNegatedForm, TargetingInputSchema, type TargetingLeaf } from "@wtt/core";
+import { audienceDefinitionIssue, experimentTargetingIssue, findRemovedPageCondition, REMOVED_PAGE_CTX, TargetingReadSchema, type Targeting } from "@wtt/core";
 import type { PageMatchValue } from "./page-match";
 
 export type Weekday = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
 export type Dsl = Record<string, unknown>;
-export type CondType = "url" | "path" | "host" | "query" | "device" | "browser" | "os" | "viewport" | "referrer" | "time" | "visited" | "goal" | "elapsed" | "audience";
+/** 画面で選べる条件の種類(B69: ページの URL・ホスト・パス・クエリパラメータは対象 URL に移した) */
+export type CondType = "device" | "browser" | "os" | "viewport" | "referrer" | "time" | "visited" | "goal" | "elapsed" | "audience";
 type Base = { id: string; kind: "cond" };
 /**
- * 画面の条件の行。否定は op の先頭の not(URL / パス / ホスト・クエリ・リファラー)か neg(端末など・閲覧・目標・オーディエンス)で持つ。
- * 閲覧・目標の within は null = 期間の指定なし(明示的に選んだときだけ)、数値 = 日数の欄の値のまま(空欄は NaN。保存の前の確認で止める)
+ * 画面の条件の行。否定は op の先頭の not(リファラー)か neg(端末など・閲覧・目標・オーディエンス)で持つ。
+ * 閲覧・目標の within は null = 期間の指定なし(明示的に選んだときだけ)、数値 = 日数の欄の値のまま(空欄は NaN。保存の前の確認で止める)。
+ * legacy = 外したページの条件(ctx: url / host / path / query。否定の not を含む)が保存値に残った行。dsl をそのまま持ち、DSL に戻すと
+ * そのまま残る(落とさない)。保存の前の確認(condProblem)が止める(B69 spec §7.5)
  */
 export type Cond = Base &
   (
-    | { type: "url" | "path" | "host"; op: string; value: string }
-    | { type: "query"; name: string; op: "equals" | "contains" | "notEquals" | "exists" | "notExists"; value: string }
     | { type: "device" | "browser" | "os"; neg: boolean; values: string[] }
     | { type: "viewport"; op: "gte" | "lt" | "between"; min: number; max: number }
     | { type: "referrer"; op: "contains" | "equals" | "notContains" | "isEmpty" | "notEmpty"; value: string }
@@ -26,19 +27,11 @@ export type Cond = Base &
     | { type: "goal"; neg: boolean; goal: string; within: number | null }
     | { type: "elapsed"; op: "gte" | "lt"; n: number; unit: "hours" | "days" }
     | { type: "audience"; neg: boolean; audience: string }
+    | { type: "legacy"; dsl: Dsl }
   );
 export type Group = { id: string; kind: "group"; logic: "and" | "or"; exclude: boolean; collapsed: boolean; copiedFrom?: string; children: TreeNode[] };
 export type TreeNode = Cond | Group;
 
-/** 肯定の形で使える一致の仕方(設計書 §4.1.1 の表) */
-const POSITIVE: Record<"url" | "path" | "host", readonly string[]> = { url: ["contains", "equals", "startsWith"], path: ["contains", "equals", "startsWith", "regex"], host: ["equals", "endsWith", "contains", "regex"] };
-/**
- * 否定の形を持つ一致の仕方か。表を写さず core の hasNegatedForm に聞く(設計書 §4.1.1 の対応表の正は core 1 か所。
- * url: contains / equals、path: contains / equals / regex、host: equals / regex)
- */
-const hasNegated = (ctx: "url" | "path" | "host", op: string): boolean => hasNegatedForm({ ctx, op, value: "" } as unknown as TargetingLeaf);
-
-const lc = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 /** 時刻(0〜24)の表記。曜日と時間帯の条件の保存形(`HH:00`)と画面の表示で共通 */
 export const hh = (h: number) => `${String(h).padStart(2, "0")}:00`;
 const hourOf = (s: unknown): number | null => (typeof s === "string" && /^\d{2}:00$/.test(s) ? Number(s.slice(0, 2)) : null);
@@ -50,17 +43,8 @@ export const newId = (): string => `n${Date.now().toString(36)}${(++seq).toStrin
 
 export function condToDsl(c: Cond): Dsl {
   switch (c.type) {
-    case "url":
-    case "path":
-    case "host": {
-      const neg = c.op.startsWith("not");
-      return wrapNot(neg, { ctx: c.type, op: neg ? lc(c.op.slice(3)) : c.op, value: c.value });
-    }
-    case "query":
-      if (c.op === "exists") return { ctx: "query", name: c.name, op: "exists" };
-      if (c.op === "notExists") return { not: { ctx: "query", name: c.name, op: "exists" } };
-      if (c.op === "notEquals") return { not: { ctx: "query", name: c.name, op: "equals", value: c.value } };
-      return { ctx: "query", name: c.name, op: c.op, value: c.value };
+    case "legacy":
+      return structuredClone(c.dsl); // 使えない条件はそのまま戻す(保存は condProblem が止める)
     case "device":
     case "browser":
     case "os":
@@ -95,6 +79,7 @@ export function condFromDsl(raw: unknown, id: string = newId()): Cond | null {
   const neg = "not" in d;
   const x = (neg ? d.not : d) as Dsl;
   if (typeof x !== "object" || x === null || Array.isArray(x)) return null;
+  if ((REMOVED_PAGE_CTX as readonly unknown[]).includes(x.ctx)) return { id, kind: "cond", type: "legacy", dsl: d };
   if (typeof x.audience === "string") return { id, kind: "cond", type: "audience", neg, audience: x.audience };
   if (x.hist === "converted" && typeof x.goal === "string") return { id, kind: "cond", type: "goal", neg, goal: x.goal, within: typeof x.withinDays === "number" ? x.withinDays : null };
   if (x.hist === "visited" && typeof x.page === "object" && x.page !== null) {
@@ -102,20 +87,6 @@ export function condFromDsl(raw: unknown, id: string = newId()): Cond | null {
     return { id, kind: "cond", type: "visited", neg, page: { ...(x.page as PageMatchValue) }, min: typeof x.min === "number" ? x.min : 1, within: typeof x.withinDays === "number" ? x.withinDays : null };
   }
   switch (x.ctx) {
-    case "url":
-    case "path":
-    case "host": {
-      const op = String(x.op);
-      if (!(neg ? hasNegated(x.ctx, op) : POSITIVE[x.ctx].includes(op)) || typeof x.value !== "string") return null;
-      return { id, kind: "cond", type: x.ctx, op: neg ? `not${op.charAt(0).toUpperCase()}${op.slice(1)}` : op, value: x.value };
-    }
-    case "query": {
-      if (typeof x.name !== "string") return null;
-      if (x.op === "exists") return { id, kind: "cond", type: "query", name: x.name, op: neg ? "notExists" : "exists", value: "" };
-      if (typeof x.value !== "string") return null;
-      if (x.op === "equals") return { id, kind: "cond", type: "query", name: x.name, op: neg ? "notEquals" : "equals", value: x.value };
-      return x.op === "contains" && !neg ? { id, kind: "cond", type: "query", name: x.name, op: "contains", value: x.value } : null;
-    }
     case "device":
     case "browser":
     case "os":
@@ -161,13 +132,29 @@ export function toDsl(node: TreeNode): Dsl | null {
 const isGroupDsl = (d: Dsl): boolean => Array.isArray(d.and) || Array.isArray(d.or);
 
 /**
- * 保存値が core の保存する形の検査(形 = TargetingInputSchema、意味 = experimentTargetingIssue / audienceDefinitionIssue)を通れば Dsl、
- * 通らなければ null(スカラー・入れ子の null・未知のフィールド・不完全なページの一致・古い書式・上限を超える入れ子など。plan ② P16)
+ * 意味の検査に渡す木: 外したページの条件の葉を、否定の形を持つ中立の葉に置き換える(B69 spec §7.5)。
+ * 使えない条件は「使えない条件」の行として開く(保存は condProblem が止める)ので、入れ子・グループの制限だけをほかの条件と同じに数える
+ */
+function maskRemoved(n: unknown): unknown {
+  if (typeof n !== "object" || n === null || Array.isArray(n)) return n;
+  const d = n as Dsl;
+  if ((REMOVED_PAGE_CTX as readonly unknown[]).includes(d.ctx)) return { ctx: "referrer", op: "isEmpty" };
+  if (Array.isArray(d.and)) return { and: d.and.map(maskRemoved) };
+  if (Array.isArray(d.or)) return { or: d.or.map(maskRemoved) };
+  if ("not" in d) return { not: maskRemoved(d.not) };
+  return d;
+}
+
+/**
+ * 保存値が core の読み取りの形の検査(形 = TargetingReadSchema。D1 に残った外したページの条件も受ける、意味 = experimentTargetingIssue /
+ * audienceDefinitionIssue)を通れば Dsl、通らなければ null(スカラー・入れ子の null・未知のフィールド・不完全なページの一致・古い書式・
+ * 上限を超える入れ子など。plan ② P16)
  */
 function storedDsl(raw: unknown, kind: "experiment" | "audience"): Dsl | null {
-  const p = TargetingInputSchema.safeParse(raw);
+  const p = TargetingReadSchema.safeParse(raw);
   if (!p.success) return null;
-  const issue = kind === "experiment" ? experimentTargetingIssue(p.data) : audienceDefinitionIssue(p.data);
+  const checked = (findRemovedPageCondition(p.data) ? maskRemoved(p.data) : p.data) as Targeting;
+  const issue = kind === "experiment" ? experimentTargetingIssue(checked) : audienceDefinitionIssue(checked);
   return issue ? null : (p.data as unknown as Dsl);
 }
 

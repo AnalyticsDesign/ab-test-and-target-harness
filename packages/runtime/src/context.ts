@@ -22,14 +22,8 @@ export type ContextSource = {
  * viewport は decision の body で送る値(meta が無ければ送らない = edge でも不明)
  */
 export function collectContext(src: ContextSource): { ctx: PageContext; viewport: { w: number; h: number } | null } {
-  let query: Record<string, string> = {};
-  try {
-    query = Object.fromEntries(new URL(src.url).searchParams);
-  } catch {
-    // URL として解釈できない場合はクエリなし(ホスト・パスの条件は判定できない側に倒れる)
-  }
   const ua = src.userAgent;
-  const ctx: PageContext = { url: src.url, query, device: detectDevice(ua), browser: detectBrowser(ua), os: detectOs(ua), referrer: src.referrer, now: src.now };
+  const ctx: PageContext = { url: src.url, device: detectDevice(ua), browser: detectBrowser(ua), os: detectOs(ua), referrer: src.referrer, now: src.now };
   if (src.hasViewportMeta) ctx.viewportWidth = src.width;
   if (src.firstVisitAt !== undefined) ctx.firstVisitAt = src.firstVisitAt;
   return { ctx, viewport: src.hasViewportMeta ? { w: src.width, h: src.height } : null };

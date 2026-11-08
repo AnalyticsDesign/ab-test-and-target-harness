@@ -5,14 +5,10 @@
 import type { Browser, Device, Os } from "@wtt/core";
 import { checkRegex } from "./regex-assist";
 import { PAGE_OP_OPTIONS, PAGE_PART_LABELS, partOf } from "./page-match";
-import { audienceTreeFromDsl, hh, newId, type Cond, type CondType, type Group, type TreeNode, type Weekday } from "./targeting-tree";
+import { audienceTreeFromDsl, hh, newId, type Cond, type CondType, type Dsl, type Group, type TreeNode, type Weekday } from "./targeting-tree";
 import type { Audience, Goal } from "./types";
 
-export const COND_META: Record<CondType, { label: string; cat: "page" | "visitor" | "audience"; glyph: string }> = {
-  url: { label: "ページの URL", cat: "page", glyph: "⌁" },
-  host: { label: "ページのホスト", cat: "page", glyph: "⌂" },
-  path: { label: "ページのパス", cat: "page", glyph: "/" },
-  query: { label: "クエリパラメータ", cat: "page", glyph: "?" },
+export const COND_META: Record<Cond["type"], { label: string; cat: "page" | "visitor" | "audience"; glyph: string }> = {
   device: { label: "端末", cat: "page", glyph: "▭" },
   viewport: { label: "画面の幅", cat: "page", glyph: "↔" },
   browser: { label: "ブラウザ", cat: "page", glyph: "◎" },
@@ -23,16 +19,15 @@ export const COND_META: Record<CondType, { label: string; cat: "page" | "visitor
   goal: { label: "目標・コンバージョン", cat: "visitor", glyph: "◉" },
   elapsed: { label: "初回の訪問からの経過", cat: "visitor", glyph: "↻" },
   audience: { label: "オーディエンス", cat: "audience", glyph: "◍" },
+  // 保存値に残った、外したページの条件(選択肢には出さない。B69 spec §7.5)
+  legacy: { label: "使えなくなった条件", cat: "page", glyph: "⚠" },
 };
-export const PAGE_TYPES: CondType[] = ["url", "host", "path", "query", "device", "viewport", "browser", "os", "referrer", "time"];
+/** 「+ 条件」の選択肢(B69: ページの URL・ホスト・パス・クエリパラメータは対象 URL に移したので出さない) */
+export const PAGE_TYPES: CondType[] = ["device", "viewport", "browser", "os", "referrer", "time"];
 export const VISITOR_TYPES: CondType[] = ["visited", "goal", "elapsed"];
 
 export type Option = { value: string; label: string };
 const o = (value: string, label: string): Option => ({ value, label });
-export const URL_OPS: Option[] = [o("contains", "を含む"), o("equals", "と完全一致"), o("startsWith", "で始まる"), o("notContains", "を含まない"), o("notEquals", "と一致しない")];
-export const PATH_OPS: Option[] = [o("contains", "を含む"), o("equals", "と完全一致"), o("startsWith", "で始まる"), o("regex", "に一致(正規表現)"), o("notContains", "を含まない"), o("notEquals", "と一致しない"), o("notRegex", "に一致しない(正規表現)")];
-export const HOST_OPS: Option[] = [o("equals", "と完全一致"), o("endsWith", "で終わる(サブドメインを含む)"), o("contains", "を含む"), o("regex", "に一致(正規表現)"), o("notEquals", "と一致しない"), o("notRegex", "に一致しない(正規表現)")];
-export const QUERY_OPS: Option[] = [o("equals", "が次の値"), o("contains", "が次の値を含む"), o("notEquals", "が次の値ではない"), o("exists", "が存在する"), o("notExists", "が存在しない")];
 export const REF_OPS: Option[] = [o("contains", "を含む"), o("equals", "と完全一致"), o("notContains", "を含まない"), o("isEmpty", "が空(直接の流入)"), o("notEmpty", "が空ではない")];
 export const DEVICE_LABELS: Record<Device, string> = { mobile: "モバイル", tablet: "タブレット", desktop: "デスクトップ" };
 export const BROWSER_LABELS: Record<Browser, string> = { chrome: "Chrome", safari: "Safari", edge: "Edge", firefox: "Firefox", samsung: "Samsung Internet", other: "その他" };
@@ -53,14 +48,6 @@ export function typeOptions(allowAudience: boolean) {
 /** 種類を選んだときの初期値。目標とオーディエンスは先頭の候補(無ければ空 = 保存の前の確認で止める) */
 export function defaultCond(type: CondType, ctx: { goal?: string; audience?: string } = {}, id: string = newId()): Cond {
   switch (type) {
-    case "url":
-      return { id, kind: "cond", type, op: "contains", value: "" };
-    case "path":
-      return { id, kind: "cond", type, op: "startsWith", value: "" };
-    case "host":
-      return { id, kind: "cond", type, op: "equals", value: "" };
-    case "query":
-      return { id, kind: "cond", type, name: "", op: "equals", value: "" };
     case "device":
       return { id, kind: "cond", type, neg: false, values: ["mobile"] };
     case "browser":
@@ -101,16 +88,33 @@ export function dayText(days: Weekday[]): string {
   return contiguous ? `${name(s[0]!)}〜${name(s[s.length - 1]!)}` : s.map(name).join("・") || "(曜日なし)";
 }
 
+/** 外したページの条件の名前(使えない条件の行の文) */
+const LEGACY_CTX_LABELS: Record<string, string> = { url: "ページの URL", host: "ページのホスト", path: "ページのパス", query: "クエリパラメータ" };
+
+/**
+ * 使えない条件の行の文(例: 「ページのパス が「/lp/」で始まる」「… ではない」)。保存値は検査を通った形だが、
+ * 知らない一致の仕方は op のまま、形が読めなければ JSON にする(例外を出さない)
+ */
+export function legacyCondText(dsl: Dsl): string {
+  const neg = "not" in dsl;
+  const x = (neg ? dsl.not : dsl) as Dsl;
+  const name = LEGACY_CTX_LABELS[String(x?.ctx)] ?? "ページの条件";
+  let body: string | null = null;
+  if (x?.ctx === "query" && typeof x.name === "string") {
+    if (x.op === "exists") body = `${x.name} がある`;
+    else if (typeof x.value === "string" && (x.op === "equals" || x.op === "contains")) body = `${x.name} が${q(x.value)}${x.op === "contains" ? "を含む" : ""}`;
+  } else if ((x?.ctx === "url" || x?.ctx === "path" || x?.ctx === "host") && typeof x.value === "string" && typeof x.op === "string") {
+    const how = PAGE_OP_OPTIONS[x.ctx].find((p) => p.op === x.op)?.label ?? (x.op === "endsWith" ? "で終わる" : x.op === "regex" ? "に一致(正規表現)" : null);
+    if (how) body = `が${q(x.value)}${how}`;
+  }
+  if (body === null) return `${name} ${JSON.stringify(dsl)}`;
+  return `${name} ${body}${neg ? " ではない" : ""}`;
+}
+
 export function condText(c: Cond, names: Names): string {
   switch (c.type) {
-    case "url":
-      return `URL が${q(c.value)}${label(URL_OPS, c.op)}`;
-    case "path":
-      return `パスが${q(c.value)}${label(PATH_OPS, c.op)}`;
-    case "host":
-      return `ホストが${q(c.value)}${label(HOST_OPS, c.op).replace("(サブドメインを含む)", "")}`;
-    case "query":
-      return `クエリ ${c.name} ${c.op === "exists" || c.op === "notExists" ? label(QUERY_OPS, c.op) : label(QUERY_OPS, c.op).replace("次の値", q(c.value))}`;
+    case "legacy":
+      return legacyCondText(c.dsl);
     case "device":
     case "browser":
     case "os": {
@@ -180,17 +184,14 @@ export function periodProblem(within: number | null, retentionDays: number): str
 const empty = (v: string) => v.trim() === "";
 const regexBroken = (op: string, value: string) => (op === "regex" || op === "notRegex") && value !== "" && checkRegex(value) !== null;
 
+/** 使えない条件の行の保存の前の確認(配信条件・オーディエンスで共通の文) */
+export const LEGACY_COND_PROBLEM = "ページの URL・ホスト・パス・パラメータの条件は使えなくなりました。エクスペリエンスの対象 URL で指定し、この条件を消してください";
+
 /** 保存の前の確認(入力漏れ・範囲・期間の上限・正規表現)。問題が無ければ null */
 export function condProblem(c: Cond, retentionDays: number): string | null {
   switch (c.type) {
-    case "url":
-    case "path":
-    case "host":
-      if (empty(c.value)) return "値を入力してください";
-      return regexBroken(c.op, c.value) ? "正規表現を直してください" : null;
-    case "query":
-      if (empty(c.name)) return "パラメータ名を入力してください";
-      return c.op === "contains" && empty(c.value) ? "値を入力してください" : null;
+    case "legacy":
+      return LEGACY_COND_PROBLEM;
     case "device":
     case "browser":
     case "os":
@@ -223,7 +224,7 @@ export function condProblem(c: Cond, retentionDays: number): string | null {
 export function treeProblem(nodes: TreeNode[], retentionDays: number): string | null {
   for (const n of nodes) {
     const p = n.kind === "group" ? treeProblem(n.children, retentionDays) : condProblem(n, retentionDays);
-    if (p) return n.kind === "group" ? p : `「${COND_META[n.type].label}」の条件: ${p}`;
+    if (p) return n.kind === "group" || n.type === "legacy" ? p : `「${COND_META[n.type].label}」の条件: ${p}`;
   }
   return null;
 }

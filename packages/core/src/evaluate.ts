@@ -1,6 +1,6 @@
 import { bucketOf, inTraffic } from "./hash";
 import { own } from "./own";
-import { matchPage, pageOf, type PageView } from "./page";
+import { matchPage, matchTargetUrl, pageOf, type PageView } from "./page";
 import { isValidProgram } from "./regex-run";
 import { inTimeWindow } from "./time";
 import type { Browser, Device, Os } from "./ua";
@@ -13,8 +13,8 @@ export { matchesUrl } from "./page";
  * (fail-closed)。`firstVisitAt` は undefined = 欠落、null = 発行時刻が不明(v4 の ID。§7.3 の扱い)
  */
 export type PageContext = {
+  /** ページの URL。対象 URL の照合(パラメータの条件も)はこの文字列だけから読む(B69 でクエリの object は持たなくなった) */
   url: string;
-  query: Record<string, string>;
   /**
    * 端末。省略可(control の evaluate で device も userAgent も無いとき = 端末の条件は判定できない)。
    * runtime と edge は常に入れる(古い runtime の body にも device はある)
@@ -55,12 +55,12 @@ function histMatch(e: { count: number; lastAt?: number } | undefined, min: numbe
  * **and / or は短絡しない**: どの子の入力が欠けても null にする(評価の前に静的に対象外にするのと同じ結果。edge とブラウザで同じ判定にするため。§11.1)。
  * 認識できない node も null(not の下で配信対象を広げない)
  */
-export function evaluateDsl(node: DslNode, ctx: PageContext, profile: ProfileSnapshot | null, timezone?: string, page: PageView = pageOf(ctx.url)): boolean | null {
+export function evaluateDsl(node: DslNode, ctx: PageContext, profile: ProfileSnapshot | null, timezone?: string): boolean | null {
   const all = (xs: DslNode[], every: boolean): boolean | null => {
     let missing = false;
     let hit = every;
     for (const x of xs) {
-      const r = evaluateDsl(x, ctx, profile, timezone, page);
+      const r = evaluateDsl(x, ctx, profile, timezone);
       if (r === null) missing = true;
       else if (r !== every) hit = !every;
     }
@@ -69,7 +69,7 @@ export function evaluateDsl(node: DslNode, ctx: PageContext, profile: ProfileSna
   if ("and" in node) return Array.isArray(node.and) ? all(node.and, true) : null;
   if ("or" in node) return Array.isArray(node.or) ? all(node.or, false) : null;
   if ("not" in node) {
-    const r = evaluateDsl(node.not, ctx, profile, timezone, page);
+    const r = evaluateDsl(node.not, ctx, profile, timezone);
     return r === null ? null : !r;
   }
   if ("hist" in node) {
@@ -78,21 +78,8 @@ export function evaluateDsl(node: DslNode, ctx: PageContext, profile: ProfileSna
     if (node.hist === "converted") return histMatch(own(profile.goals, node.goal), 1, node.withinDays, ctx.now);
     return null;
   }
+  // ページの条件(url / host / path / query)は B69 で対象 URL に移した。版 3 には無く、来たら下の null(認識できない node)になる
   switch (node.ctx) {
-    case "url":
-      return matchPage({ op: node.op, value: node.value }, page);
-    case "host":
-    case "path":
-      // ctx キーを PageMatch に持ち込まないよう、フィールドを明示して組み立てる
-      return matchPage({ part: node.ctx, op: node.op, value: node.value, ...(node.prog !== undefined ? { prog: node.prog } : {}) }, page);
-    case "query": {
-      // 名前は編集者が自由に付ける。`constructor` などで prototype のものを拾わない(B135)
-      const v = own(ctx.query, node.name);
-      if (node.op === "exists") return v !== undefined;
-      // node.value の型の確認は schema を迂回した不正 node への fail-closed(decide_malformed_targeting_never_qualifies)
-      if (typeof node.value !== "string") return null;
-      return node.op === "equals" ? v === node.value : v !== undefined && v.includes(node.value);
-    }
     case "device":
     case "browser":
     case "os": {
@@ -155,9 +142,9 @@ export function decide(
   const page = pageOf(ctx.url);
   const out: Array<{ experimentId: string; variantId: string }> = [];
   for (const exp of config.experiments) {
-    if (matchPage(exp.urlMatch, page) !== true) continue;
+    if (!matchTargetUrl(exp.urlMatch, page)) continue;
     // 判定できない(null)・偽は配信しない。profile 取得不能時の履歴条件も null になる(fail-closed)
-    if (exp.targeting && evaluateDsl(exp.targeting, ctx, profile, config.timezone, page) !== true) continue;
+    if (exp.targeting && evaluateDsl(exp.targeting, ctx, profile, config.timezone) !== true) continue;
     const persistedVariant = exp.persistAssignment && persisted ? own(persisted, exp.id) : undefined;
     const validPersisted =
       persistedVariant !== undefined && exp.variants.some((v) => v.id === persistedVariant)
@@ -198,7 +185,7 @@ export function experimentUsesInvalidPattern(exp: Experiment, patterns: Compiled
  */
 export function experimentsForUrl(config: Pick<CompiledConfig, "experiments" | "patterns">, url: string): Experiment[] {
   const page = pageOf(url);
-  return config.experiments.filter((e) => matchPage(e.urlMatch, page) === true && !experimentUsesInvalidPattern(e, config.patterns, page));
+  return config.experiments.filter((e) => matchTargetUrl(e.urlMatch, page) && !experimentUsesInvalidPattern(e, config.patterns, page));
 }
 
 /** spec §7.4 ③ / §6.3: URL に一致するパターン ID。Profile はこの ID だけをカウントする(判定できないパターンは数えない) */

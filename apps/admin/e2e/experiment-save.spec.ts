@@ -82,7 +82,7 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
     await page.goto(`${siteUrl}/experiments/${id}${tab ? `?tab=${tab}` : ""}`);
     await waitForHydration(page);
   };
-  const nameInput = () => page.getByRole("region", { name: "基本設定" }).getByLabel("名前(100 字以内)");
+  const nameInput = () => page.getByRole("region", { name: "基本", exact: true }).getByLabel("名前(100 字以内)");
   const saveButton = () => page.getByRole("button", { name: "保存(下書き)" });
   const saveState = () => page.getByTestId("save-state");
   const overlay = () => page.getByRole("status").filter({ hasText: "保存中…" });
@@ -138,7 +138,7 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
 
   test("a double click during the running-test confirm opens one confirm and sends one PATCH", async () => {
     await openExperiment(EXP_RUN.id);
-    await page.getByRole("region", { name: "基本設定" }).getByRole("textbox", { name: "値", exact: true }).first().fill("/running-changed");
+    await page.getByRole("region", { name: "配信条件" }).getByRole("textbox", { name: "値", exact: true }).first().fill("/running-changed");
     const patches = patchCount(EXP_RUN.id);
     try {
       // 同じ処理の中で 2 回押す(dblclick だと、1 回目で開いた確認の背面を 2 回目が押して、確認がキャンセルで閉じる。
@@ -282,7 +282,7 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
     await openExperiment(EXP.id);
     const patchPath = `/api/control${apiPath(EXP.id)}`;
     const isPatch = (r: Request) => r.method() === "PATCH" && new URL(r.url()).pathname === patchPath;
-    const memoInput = () => page.getByRole("region", { name: "基本設定" }).getByLabel("メモ(社内用。外部には出力されません)");
+    const memoInput = () => page.getByRole("region", { name: "基本", exact: true }).getByLabel("メモ(社内用。外部には出力されません)");
     // 読み直しは 2 回目の PATCH を確かめ終わるまで止める(届くと props が B になり、直す前のコードでも通ってしまう)
     const held = await holdRefresh(page, expPath(EXP.id), null);
     const memo = `disc memo ${Date.now()}`;

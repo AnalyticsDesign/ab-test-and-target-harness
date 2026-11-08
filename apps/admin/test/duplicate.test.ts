@@ -9,7 +9,7 @@ import type { Experiment } from "@/lib/types";
 
 const TEXT = { id: "c1", type: "TEXT", selector: "#cta", payload: { text: "B" } };
 const EXP = {
-  id: "exp_buy", siteId: "s", name: "購入ボタンの文言テスト", kind: "test", status: "running", publishedStatus: "running", urlMatch: { op: "equals", value: "/" }, targeting: null,
+  id: "exp_buy", siteId: "s", name: "購入ボタンの文言テスト", kind: "test", status: "running", publishedStatus: "running", urlMatch: { include: [{ page: { op: "equals", value: "/" } }] }, targeting: null,
   trafficPercentage: 50, persistAssignment: false, analytics: null, createdBy: "u", updatedBy: "u", createdAt: 1, updatedAt: 2, unpublished: false,
   variants: [
     { id: "a", name: "A", weight: 50, original: true, description: "", analytics: null, changes: [] },

@@ -101,7 +101,7 @@ test.describe.serial("busy scopes and confirms (B173 stage 2)", () => {
   test("double-clicking a save that asks for confirmation keeps the confirm open", async () => {
     await page.goto(`${siteUrl}/experiments/${EXP_RUN.id}`);
     await waitForHydration(page);
-    await page.getByRole("region", { name: "基本設定" }).getByRole("textbox", { name: "値", exact: true }).first().fill("/busy-changed");
+    await page.getByRole("region", { name: "配信条件" }).getByRole("textbox", { name: "値", exact: true }).first().fill("/busy-changed");
     const patches = countRequests(page, (r) => r.method() === "PATCH" && new URL(r.url()).pathname === `/api/control/sites/${SITE.id}/experiments/${EXP_RUN.id}`);
     try {
       await page.getByRole("button", { name: "保存(下書き)" }).dblclick();
@@ -586,7 +586,7 @@ test.describe.serial("busy scopes and confirms (B173 stage 2)", () => {
 
   /** BFF でエクスペリエンスを作る(状態を進めるときは status も送る) */
   async function seedExperiment(id: string, kind: "test" | "single", statuses: Array<"running" | "paused"> = []) {
-    const created = await p.request.post(`${ADMIN_URL}/api/control/sites/${SITE7.id}/experiments`, { headers: controlHeaders(), data: { id, name: id, kind, urlMatch: { op: "contains", value: "/" } } });
+    const created = await p.request.post(`${ADMIN_URL}/api/control/sites/${SITE7.id}/experiments`, { headers: controlHeaders(), data: { id, name: id, kind, urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     expect(created.status(), `create ${id}`).toBe(201);
     for (const status of statuses) {
       const r = await p.request.post(`${ADMIN_URL}/api/control${statusApi(id)}`, { headers: controlHeaders(), data: { status } });

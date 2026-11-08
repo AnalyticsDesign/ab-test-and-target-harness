@@ -6,20 +6,30 @@ import {
   experimentTargetingIssue,
   exposurePayloadIssue,
   findLegacyTargeting,
+  findRemovedPageCondition,
+  isOldUrlMatch,
   LEGACY_TARGETING_HINT,
   LEGACY_TARGETING_MESSAGE,
   LIMITS,
   maxWithinDays,
   normalizePageMatch,
   normalizeTargeting,
+  normalizeUrlMatch,
   pageMatchIssue,
+  PAGE_CONDITION_MOVED_AUDIENCE_HINT,
+  PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE,
+  PAGE_CONDITION_MOVED_HINT,
+  PAGE_CONDITION_MOVED_MESSAGE,
+  urlMatchIssue,
   regexIssueIn,
   resolveExposurePayload,
   targetingReferences,
   type Change,
   type PageMatchInput,
+  type Path,
   type RegexIssue,
   type Targeting,
+  type UrlMatchInput,
   type ExperimentAnalytics,
   type VariantAnalytics,
 } from "@wtt/core";
@@ -255,13 +265,72 @@ export function normalizedPageMatch(m: PageMatchInput, path: Array<string | numb
 }
 
 /**
- * 古い書式(URL パターンの ID を参照する閲覧の条件)を、zod の形の検査より先に見つけて 422 legacy_targeting にする。
- * validator の hook から呼ぶ(失敗時の data は生の入力)。古い書式でなければ今までどおり validation_failed
+ * B69(spec §2.1): 対象 URL の正規化と検査。各行の page は対象 URL・目標と同じ normalizedPageMatch(正規表現の 422 は index / length 付き。
+ * `path` = [...path, "include" | "exclude", 行, "page", "value"])、その後に全行の命令数の合計の上限(url_match_too_large)。
+ * 保存する値は正規化した後のもの(行とパラメータの順は入力のまま)
  */
-export function targetingValidationFailed(data: unknown, err: Parameters<typeof validationFailed>[0], field: string): ApiError {
-  const at = typeof data === "object" && data !== null ? findLegacyTargeting((data as Record<string, unknown>)[field]) : null;
-  if (at) return new ApiError(422, "legacy_targeting", { path: [field, ...at], message: LEGACY_TARGETING_MESSAGE, hint: LEGACY_TARGETING_HINT });
+export function normalizedUrlMatch(m: UrlMatchInput, path: Path): UrlMatchInput {
+  const n = normalizeUrlMatch(m);
+  for (const key of ["include", "exclude"] as const) for (const [i, r] of (n[key] ?? []).entries()) normalizedPageMatch(r.page, [...path, key, i, "page"]);
+  const issue = urlMatchIssue(n);
+  if (issue) throw new ApiError(422, issue.code, { path: [...path, ...issue.path], message: issue.message, ...(issue.hint ? { hint: issue.hint } : {}) });
+  return n;
+}
+
+/** B69(spec §9.2): 古い形の urlMatch(一番外側に op / value / part)を送った呼び出し元への案内 */
+export const OLD_URL_MATCH_MESSAGE = "対象 URL(urlMatch)の形が変わりました。含める行(include)の配列で書きます";
+export const OLD_URL_MATCH_HINT =
+  '1 つのページの一致は、含める 1 行の page に入れてください(例: { "include": [{ "page": { "part": "path", "op": "startsWith", "value": "/lp/" } }] })';
+
+const field = (data: unknown, key: string): unknown => (typeof data === "object" && data !== null ? (data as Record<string, unknown>)[key] : undefined);
+
+/**
+ * 理由の分かる失敗を、zod の形の検査より先に見つけて 422 にする。validator の hook から呼ぶ(失敗時の data は生の入力)。順に:
+ * - 古い形の urlMatch(エクスペリエンスだけ。B69)→ invalid_input
+ * - 配信条件・オーディエンスから外したページの条件(B69、spec §4)→ invalid_experiment_targeting / invalid_audience_definition
+ * - 古い書式(URL パターンの ID を参照する閲覧の条件)→ legacy_targeting
+ * どれでもなければ今までどおり validation_failed
+ */
+export function targetingValidationFailed(data: unknown, err: Parameters<typeof validationFailed>[0], key: string, kind: "experiment" | "audience" = "experiment"): ApiError {
+  if (kind === "experiment" && isOldUrlMatch(field(data, "urlMatch")))
+    return new ApiError(422, "invalid_input", { path: ["urlMatch"], message: OLD_URL_MATCH_MESSAGE, hint: OLD_URL_MATCH_HINT });
+  const moved = findRemovedPageCondition(field(data, key));
+  if (moved) return pageConditionMovedError(kind, [key, ...moved]);
+  const at = findLegacyTargeting(field(data, key));
+  if (at) return new ApiError(422, "legacy_targeting", { path: [key, ...at], message: LEGACY_TARGETING_MESSAGE, hint: LEGACY_TARGETING_HINT });
   return validationFailed(err);
+}
+
+/**
+ * B69(spec §4): 外したページの条件の 422。kind = experiment はエクスペリエンスの配信条件(`invalid_experiment_targeting`)、
+ * audience はオーディエンスの定義(`invalid_audience_definition`)。`code` を替えたいとき(開始・再開・下書きでオーディエンス経由に
+ * 見つけたとき)は extra.code で渡す
+ */
+export function pageConditionMovedError(kind: "experiment" | "audience", path: Path, extra: { code?: string; audience?: string; experiment?: string } = {}): ApiError {
+  const code = extra.code ?? (kind === "experiment" ? "invalid_experiment_targeting" : "invalid_audience_definition");
+  return new ApiError(422, code, {
+    path,
+    ...(extra.experiment !== undefined ? { experiment: extra.experiment } : {}),
+    ...(extra.audience !== undefined ? { audience: extra.audience } : {}),
+    message: kind === "experiment" ? PAGE_CONDITION_MOVED_MESSAGE : PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE,
+    hint: kind === "experiment" ? PAGE_CONDITION_MOVED_HINT : PAGE_CONDITION_MOVED_AUDIENCE_HINT,
+  });
+}
+
+/**
+ * B69(spec §6.2.1): 開始・再開・下書きの確かめの前に、配信条件と、参照するオーディエンスの定義(`audiences` = ID → 定義。同じサイトのもの)に
+ * 外したページの条件が残っていないか。見つけたら 422 invalid_experiment_targeting(オーディエンス経由ならオーディエンスの文言と `audience`)。
+ * D1 は読まない(呼び出し元が読んだ値を渡す)。`experiment` を渡すと封筒に入れる(サイトの下書きをまとめて確かめるときに、どれかを示す)
+ */
+export function assertNoRemovedPageCondition(targeting: unknown, audiences: Readonly<Record<string, unknown>>, experiment?: string): void {
+  const ids = experiment !== undefined ? { experiment } : {};
+  const direct = findRemovedPageCondition(targeting);
+  if (direct) throw pageConditionMovedError("experiment", ["targeting", ...direct], ids);
+  for (const a of targetingReferences(targeting).audiences) {
+    if (!Object.prototype.hasOwnProperty.call(audiences, a)) continue;
+    const at = findRemovedPageCondition(audiences[a]);
+    if (at) throw pageConditionMovedError("audience", ["targeting"], { ...ids, code: "invalid_experiment_targeting", audience: a });
+  }
 }
 
 /**

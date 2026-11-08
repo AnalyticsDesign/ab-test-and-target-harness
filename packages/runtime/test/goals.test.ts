@@ -4,10 +4,10 @@ import { startGoalDetection } from "../src/goals";
 import { baseConfig } from "./fixtures";
 
 const goals: Goal[] = [
-  { id: "g_pv", name: "Pricing view", type: "PAGEVIEW", config: { page: { op: "contains", value: "/pricing" } } },
-  { id: "g_other", name: "Other page", type: "PAGEVIEW", config: { page: { op: "equals", value: "https://site.test/other" } } },
-  { id: "g_click", name: "CTA", type: "CLICK", config: { selector: ".cta" } },
-  { id: "g_custom", name: "Custom", type: "CUSTOM", config: {} },
+  { id: "g_pv", type: "PAGEVIEW", config: { page: { op: "contains", value: "/pricing" } } },
+  { id: "g_other", type: "PAGEVIEW", config: { page: { op: "equals", value: "https://site.test/other" } } },
+  { id: "g_click", type: "CLICK", config: { selector: ".cta" } },
+  { id: "g_custom", type: "CUSTOM", config: {} },
 ];
 const config = { ...baseConfig, goals };
 

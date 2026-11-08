@@ -2,7 +2,7 @@
 import { useId } from "react";
 import { DndContext, type DragEndEvent } from "@dnd-kit/core";
 import { useDragAlternatives } from "@/lib/a11y";
-import { defaultCond, dslHasHistory, groupText, makeNames, usesHistory } from "@/lib/conditions";
+import { defaultCond, dslHasHistory, usesHistory } from "@/lib/conditions";
 import type { TargetingDraft } from "@/lib/experiment-draft";
 import { experimentFormToDsl, reorder, type Cond, type ExperimentForm } from "@/lib/targeting-tree";
 import { DragAltHint } from "../DragAltHint";
@@ -14,7 +14,7 @@ import styles from "./Targeting.module.css";
 const END = "end:rows";
 
 /**
- * エクスペリエンスの配信条件(決定 49、設計書 §12): 「次の条件を [すべて満たす / いずれかを満たす] 訪問者に配信」+ 条件の行(1 段)+ 要約 + 保存される JSON。
+ * エクスペリエンスの配信条件(決定 49、設計書 §12): 「次の条件を [すべて満たす / いずれかを満たす] 訪問者に配信」+ 条件の行(1 段)+ 保存される JSON(要約の文は置かない。配信条件のカードの最後の 1 文だけが要約。B69 Q358)。
  * 入れ子や除外はオーディエンスで作る。行はドラッグで並べ替え、アクセシビリティ設定がオンなら ↑↓ でも並べ替えられる。
  * 画面で表せない保存値は JSON を読み取り専用で見せる(保存では送らない。plan ② P16)
  */
@@ -33,7 +33,6 @@ export function ExperimentTargeting({ value, onChange, ctx }: { value: Targeting
   const rowCtx: RowCtx = { ...ctx, allowAudience: true };
   const set = (next: ExperimentForm) => onChange({ kind: "form", form: next });
   const setRows = (rows: Cond[]) => set({ ...form, rows });
-  const names = makeNames(ctx.goals, ctx.audiences);
   const history = form.rows.some((r) => usesHistory(r, (id) => dslHasHistory(ctx.audiences.find((a) => a.id === id)?.definition)));
   const onDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over) return;
@@ -42,7 +41,7 @@ export function ExperimentTargeting({ value, onChange, ctx }: { value: Targeting
     if (from < 0 || to < 0 || from === to) return;
     setRows(reorder(form.rows, from, to));
   };
-  const add = (type: "audience" | "path") => setRows([...form.rows, defaultCond(type, { goal: ctx.goals[0]?.id, audience: ctx.audiences[0]?.id })]);
+  const add = (type: "audience" | "device") => setRows([...form.rows, defaultCond(type, { goal: ctx.goals[0]?.id, audience: ctx.audiences[0]?.id })]);
   const dsl = experimentFormToDsl(form);
   return (
     <div>
@@ -89,17 +88,13 @@ export function ExperimentTargeting({ value, onChange, ctx }: { value: Targeting
           <button type="button" className="btn" onClick={() => add("audience")}>
             + オーディエンス
           </button>
-          <button type="button" className="btn" onClick={() => add("path")}>
+          <button type="button" className="btn" onClick={() => add("device")}>
             + 条件
           </button>
-          <span className="muted">ページの条件は、対象 URL に一致したページの中をさらに絞るときに使います(両方を満たすときだけ配信)。入れ子や除外が要るときはオーディエンスで作ります</span>
+          <span className="muted">「+ 条件」で選べるもの: 端末・画面の幅・ブラウザ・OS・リファラー・曜日と時間帯・閲覧したページ・目標の達成・初回の訪問からの経過。入れ子や除外が要るときはオーディエンスで作ります</span>
         </div>
       )}
       {ctx.disabled ? null : <DragAltHint />}
-      <p className={styles.deliver}>
-        <span className="muted">配信する訪問者: </span>
-        <span data-testid="targeting-summary">{groupText({ id: "root", kind: "group", logic: form.logic, exclude: false, collapsed: false, children: form.rows }, names, true)}</span>
-      </p>
       <details>
         <summary>保存される JSON(エージェント・API と同じ形)</summary>
         <pre className={styles.json} data-testid="targeting-json">{dsl === null ? "null(全員)" : JSON.stringify(dsl, null, 2)}</pre>

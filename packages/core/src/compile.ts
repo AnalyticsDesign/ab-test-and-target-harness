@@ -1,23 +1,27 @@
 import { dslNeedsProfile } from "./evaluate";
 import {
   CompiledConfig, CompiledConfigSchema, DslNode, Experiment, ExperimentCommonShape, Goal, GoalInputSchema, LIMITS,
-  PageMatchInputSchema, PatternDef, ResultsConfigSchema, Variant, VariantSchema, refineVariantWeights,
+  PatternDef, ResultsConfigSchema, UrlMatchInputSchema, Variant, VariantSchema, refineVariantWeights,
 } from "./schema";
 import { ExperimentAnalyticsSchema, VariantAnalyticsSchema, exposurePayloadIssue, resolveConversionPayload, resolveExposurePayload } from "./analytics";
 import type { ConversionPayload, ExposurePayload } from "./analytics-defaults";
+import type { UrlMatch } from "./page";
 import { normalizePageMatch, pageMatchIssue, type PageMatchInput } from "./page-normalize";
+import type { UrlMatchInput } from "./url-match";
 import { patternIdOf } from "./pattern-id";
 import { compileRegex, REGEX_LIMITS } from "./regex-compile";
 import { SITE_ID_RE } from "./settings";
 import {
-  audienceDefinitionIssue, experimentTargetingIssue, findLegacyTargeting, LEGACY_TARGETING_MESSAGE, maxWithinDays,
-  normalizeTargeting, TargetingInputSchema, type Targeting,
+  audienceDefinitionIssue, experimentTargetingIssue, findLegacyTargeting, findRemovedPageCondition, LEGACY_TARGETING_MESSAGE, maxWithinDays,
+  normalizeTargeting, PAGE_CONDITION_MOVED_AUDIENCE_HINT, PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE, PAGE_CONDITION_MOVED_HINT, PAGE_CONDITION_MOVED_MESSAGE,
+  TargetingInputSchema, type Targeting,
 } from "./targeting";
 import { isValidTimeZone } from "./time";
 import { z } from "zod";
 
 export type CompileErrorCode =
   | "legacy_targeting"
+  | "page_condition_moved"
   | "invalid_experiment_targeting"
   | "invalid_audience_definition"
   | "unknown_audience"
@@ -61,7 +65,7 @@ export const ExperimentInputSchema = z
     name: z.string().min(1), // B77(K4): 入力では必須、出力には出さない
     /** 省略は test(既存の入力・fixture を変えない)。compiled config には載せない(設計書 §3.2) */
     kind: z.enum(EXPERIMENT_KINDS).default("test"),
-    urlMatch: PageMatchInputSchema,
+    urlMatch: UrlMatchInputSchema,
     targeting: TargetingInputSchema.optional(),
     variants: z.array(VariantInputSchema).min(1),
     analytics: ExperimentAnalyticsSchema.optional(),
@@ -125,6 +129,9 @@ export function compile(input: unknown): CompiledConfig {
   if (typeof input === "object" && input !== null && Array.isArray((input as { experiments?: unknown }).experiments)) {
     for (const e of (input as { experiments: Array<{ id?: unknown; targeting?: unknown } | null> }).experiments) {
       if (e && findLegacyTargeting(e.targeting)) throw new CompileError("legacy_targeting", `エクスペリエンス ${String(e.id)} の配信条件: ${LEGACY_TARGETING_MESSAGE}`);
+      // B69: ページの条件(url / host / path / query)は対象 URL に移した。黙って落とさず止める(D1 を手で戻したなど、通常は起きない状態の fail-closed)
+      if (e && findRemovedPageCondition(e.targeting))
+        throw new CompileError("page_condition_moved", `エクスペリエンス ${String(e.id)} の配信条件: ${PAGE_CONDITION_MOVED_MESSAGE}。${PAGE_CONDITION_MOVED_HINT}`);
     }
   }
   const parsed = CompileInputSchema.safeParse(input);
@@ -148,6 +155,8 @@ export function compile(input: unknown): CompiledConfig {
     if (!Object.prototype.hasOwnProperty.call(rawAudiences, id)) throw new CompileError("unknown_audience", `エクスペリエンス ${eid} の配信条件が参照するオーディエンス ${id} が見つかりません`);
     const raw = rawAudiences[id];
     if (findLegacyTargeting(raw)) throw new CompileError("legacy_targeting", `オーディエンス ${id}: ${LEGACY_TARGETING_MESSAGE}`);
+    if (findRemovedPageCondition(raw))
+      throw new CompileError("page_condition_moved", `オーディエンス ${id}(エクスペリエンス ${eid} が参照): ${PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE}。${PAGE_CONDITION_MOVED_AUDIENCE_HINT}`);
     const p = TargetingInputSchema.safeParse(raw);
     if (!p.success) throw new CompileError("invalid_audience_definition", `オーディエンス ${id} の条件の形が不正です`);
     const def = normalizeTargeting(p.data);
@@ -181,38 +190,31 @@ export function compile(input: unknown): CompiledConfig {
   };
 
   /**
-   * オーディエンスごとの展開の結果(最初の参照で 1 回だけ展開し、以後は同じ DslNode を使い回す)。regexes = 中の ctx の正規表現
-   * (場所の文言と命令数)。ctx の正規表現の命令列は参照するエクスペリエンスごとに配る設定へ写るので、参照のたびに budget に積み直す
-   * (場所はその参照のエクスペリエンス)。閲覧の条件の正規表現は patterns にパターン ID ごとに 1 回だけ積むので積み直さない。
-   * 使い回す DslNode は後の処理(maxWithinDays・dslNeedsProfile・CompiledConfigSchema.parse・JSON 化)が読むだけで書き換えない
+   * オーディエンスごとの展開の結果(最初の参照で 1 回だけ展開し、以後は同じ DslNode を使い回す)。版 3 の配信条件は命令列を持たない
+   * (ページの条件は対象 URL に移した。B69)ので、参照のたびに積み直す命令数は無い。閲覧の条件の正規表現は patterns にパターン ID ごとに
+   * 1 回だけ積む。使い回す DslNode は後の処理(maxWithinDays・dslNeedsProfile・CompiledConfigSchema.parse・JSON 化)が読むだけで書き換えない
    */
-  const expansionCache = new Map<string, { node: DslNode; regexes: Array<{ what: string; instructions: number }> }>();
+  const expansionCache = new Map<string, DslNode>();
 
   /**
    * 保存形 → 配る形を 1 回の走査で行う: オーディエンスの参照はその時点の定義に置き換えて(設計書 §4.3 の 1)その中を続けて変換し、
    * 閲覧の条件の page からパターン ID を決める(設計書 §4.3 の 2・§4.4)。via = そのノードが来たオーディエンスの ID(正規表現の場所の
-   * 文言に出し、regex_budget_exceeded の hint で原因のオーディエンスが分かるようにする。plan ② P20)。
-   * 正規表現の命令数は展開後に出てくるたびに数える(ctx の正規表現の命令列は参照するエクスペリエンスごとに配る設定へ写るため。
-   * 閲覧の条件の正規表現は patterns に 1 つだけ載るので、パターン ID ごとに 1 回)
+   * 文言に出し、regex_budget_exceeded の hint で原因のオーディエンスが分かるようにする。plan ② P20)
    */
-  const toCompiled = (node: Targeting, eid: string, via?: string, regexes?: Array<{ what: string; instructions: number }>): DslNode => {
+  const toCompiled = (node: Targeting, eid: string, via?: string): DslNode => {
     const where = (what: string) => `エクスペリエンス ${eid} の${what}${via !== undefined ? `(オーディエンス ${via})` : ""}`;
-    if ("and" in node) return { and: node.and.map((n) => toCompiled(n, eid, via, regexes)) };
-    if ("or" in node) return { or: node.or.map((n) => toCompiled(n, eid, via, regexes)) };
-    if ("not" in node) return { not: toCompiled(node.not, eid, via, regexes) };
+    if ("and" in node) return { and: node.and.map((n) => toCompiled(n, eid, via)) };
+    if ("or" in node) return { or: node.or.map((n) => toCompiled(n, eid, via)) };
+    if ("not" in node) return { not: toCompiled(node.not, eid, via) };
     if ("audience" in node) {
       // 定義の中に別の参照は無い(audienceDefinitionIssue が止める)
       const id = node.audience;
       const { def, nodes } = resolveAudience(id, eid);
       countExpansion(id, nodes); // 展開の前に量を見る
       const hit = expansionCache.get(id);
-      if (hit) {
-        for (const r of hit.regexes) budget.push({ where: `エクスペリエンス ${eid} の${r.what}(オーディエンス ${id})`, instructions: r.instructions });
-        return hit.node;
-      }
-      const found: Array<{ what: string; instructions: number }> = [];
-      const compiled = toCompiled(def, eid, id, found);
-      expansionCache.set(id, { node: compiled, regexes: found });
+      if (hit) return hit;
+      const compiled = toCompiled(def, eid, id);
+      expansionCache.set(id, compiled);
       return compiled;
     }
     if ("hist" in node) {
@@ -224,17 +226,14 @@ export function compile(input: unknown): CompiledConfig {
       patterns[id] ??= compileMatch(node.page, where("閲覧したページの条件"), budget);
       return { hist: "visited", pattern: id, ...(node.min !== undefined && node.min > 1 ? { min: node.min } : {}), ...(node.withinDays !== undefined ? { withinDays: node.withinDays } : {}) };
     }
-    if (node.ctx === "url") {
-      if (node.op === "regex") compileMatch({ op: "regex", value: node.value }, where("配信条件"), budget); // url の正規表現は必ず invalid_regex
-      return node as DslNode;
-    }
-    if (node.ctx === "host" || node.ctx === "path") {
-      const before = budget.length;
-      const m = compileMatch({ part: node.ctx, op: node.op, value: node.value }, where("配信条件"), budget);
-      if (regexes && budget.length > before) regexes.push({ what: "配信条件", instructions: budget[before]!.instructions });
-      return { ctx: node.ctx, op: node.op, value: m.value, ...(m.prog ? { prog: m.prog } : {}) } as DslNode;
-    }
-    return node as DslNode; // ページ以外の条件(クエリ・端末・時刻など)は保存形と配る形が同じ
+    return node as DslNode; // ctx の条件(端末・時刻など)は保存形と配る形が同じ
+  };
+
+  /** 対象 URL の各行の page を配る形にする(行ごとに場所の文言を付ける)。params はそのまま、空の exclude・params は省く */
+  const compileUrlMatch = (m: UrlMatchInput, eid: string): UrlMatch => {
+    const rows = (rs: UrlMatchInput["include"], label: string) =>
+      rs.map((r, i) => ({ page: compileMatch(r.page, `エクスペリエンス ${eid} の対象 URL(${label} ${i + 1} 行目)`, budget), ...(r.params?.length ? { params: r.params } : {}) }));
+    return { include: rows(m.include, "含める"), ...(m.exclude?.length ? { exclude: rows(m.exclude, "除く") } : {}) };
   };
 
   for (const exp of parsed.data.experiments) {
@@ -285,7 +284,7 @@ export function compile(input: unknown): CompiledConfig {
     }
     exposurePayloads[exp.id] = byVariant;
     const { analytics: _experimentAnalytics, variants: _authored, targeting: _input, urlMatch, kind: _kind, name: _experimentName, ...rest } = exp;
-    experiments.push({ ...rest, urlMatch: compileMatch(urlMatch, `エクスペリエンス ${exp.id} の対象 URL`, budget), ...(targeting ? { targeting } : {}), variants });
+    experiments.push({ ...rest, urlMatch: compileUrlMatch(urlMatch, exp.id), ...(targeting ? { targeting } : {}), variants });
   }
 
   // B77(K5): 目標も名前と著者の analytics を取り除き、dataLayer の名前は conversionPayloads に焼く(すべての目標について出す)
@@ -304,7 +303,7 @@ export function compile(input: unknown): CompiledConfig {
   }
 
   const config: CompiledConfig = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     version: parsed.data.version,
     siteId: parsed.data.siteId,
     siteSalt: parsed.data.siteSalt,

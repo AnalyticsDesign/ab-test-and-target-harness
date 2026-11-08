@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
 import { expressionBuilder, sql, type ExpressionBuilder } from "kysely";
 import { z } from "zod";
-import { TargetingInputSchema, targetingReferences } from "@wtt/core";
+import { TargetingInputSchema, TargetingReadSchema, targetingReferences } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
 import { auditActor, auditChanged, auditStatement, changedFieldsDetail, sameJsonText, unchangedValues, type AuditDetail, type AuditFieldChange, type AuditSql } from "../audit";
 import { toStatement, type AudienceRow, type Db, type ExperimentRow, type SiteRow, type Tables } from "../db";
@@ -20,8 +20,12 @@ import { assertTargetingRefs, normalizedTargeting, targetingValidationFailed, to
 export const audienceRoutes = new Hono<AppEnv>();
 
 const STATUSES = ["draft", "running", "paused", "archived"] as const;
-const Definition = TargetingInputSchema.describe(
-  "オーディエンスの条件(配信条件と同じ DSL。and / or / not の入れ子を一番外側の中に 4 段まで使える。{ \"audience\": … } は使えない)。保存する値は正規化した後のもの",
+const DEFINITION_DESCRIPTION =
+  "オーディエンスの条件(配信条件と同じ DSL。and / or / not の入れ子を一番外側の中に 4 段まで使える。{ \"audience\": … } は使えない)。保存する値は正規化した後のもの。ページの URL・ホスト・パス・パラメータの条件は使えない(エクスペリエンスの対象 URL で指定する)";
+const Definition = TargetingInputSchema.describe(DEFINITION_DESCRIPTION);
+/** 応答の定義。保存の前に残った、今は保存できないページの条件(url / host / path / query)も表せる */
+const DefinitionRead = TargetingReadSchema.describe(
+  `${DEFINITION_DESCRIPTION}。応答には、今は保存できないページの条件(ctx が url / host / path / query)が残っていることがあり、そのままでは保存できず、参照するエクスペリエンスを開始・再開できません`,
 );
 const Name = z.string().min(1).max(100);
 const Description = z.string().max(500);
@@ -40,11 +44,11 @@ const AudiencePatch = z.strictObject({ name: Name.optional(), description: Descr
 const UsedBySchema = z
   .array(z.object({ id: z.string(), name: z.string(), status: z.enum(STATUSES) }))
   .describe("このオーディエンスを配信条件で参照しているエクスペリエンス(状態を問わずすべて)");
-const AudienceJsonSchema = z.object({
+export const AudienceJsonSchema = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string(),
-  definition: Definition,
+  definition: DefinitionRead,
   usedBy: UsedBySchema,
   createdAt: z.number().int().describe("epoch ミリ秒"),
   updatedAt: z.number().int().describe("epoch ミリ秒"),
@@ -157,7 +161,7 @@ audienceRoutes.post(
   }),
   requireSession,
   validator("json", AudienceCreate, (r) => {
-    if (!r.success) throw targetingValidationFailed(r.data, r.error, "definition");
+    if (!r.success) throw targetingValidationFailed(r.data, r.error, "definition", "audience");
   }),
   async (c) => {
     const { site } = await loadSite(c, c.req.param("sid"), "editor");
@@ -208,7 +212,7 @@ audienceRoutes.patch(
   }),
   requireSession,
   validator("json", AudiencePatch, (r) => {
-    if (!r.success) throw targetingValidationFailed(r.data, r.error, "definition");
+    if (!r.success) throw targetingValidationFailed(r.data, r.error, "definition", "audience");
   }),
   async (c) => {
     const { site } = await loadSite(c, c.req.param("sid"), "editor");

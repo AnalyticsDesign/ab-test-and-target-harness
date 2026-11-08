@@ -1,5 +1,5 @@
 import { sql } from "kysely";
-import { expandAudiences, staticInputDigest, type StaticDeployHistoryEntry, type StaticGeneration, type Targeting } from "@wtt/core";
+import { canonicalUrlMatch, expandAudiences, staticInputDigest, type StaticDeployHistoryEntry, type StaticGeneration, type Targeting } from "@wtt/core";
 import { DEFAULT_PLAN, type EvaluationPlan } from "@wtt/stats";
 import type { Db, ExperimentDeliveredDefinitionRow, ExperimentRow, SiteRow, StaticDeployRequestRow } from "../db";
 import type { StoredChangeInput, StoredCompileInput } from "../publish";
@@ -323,9 +323,33 @@ export async function confirmDeliveries(db: Db, siteId: string, status: Delivery
   // 読めない historyFrom は「すべて切り詰められているかもしれない」として扱う(unknown 側に倒す)
   const historyFrom = status.historyFrom === null ? null : Number.isFinite(Date.parse(status.historyFrom)) ? Date.parse(status.historyFrom) : Infinity;
 
-  const versions = [...new Set(rows.map((r) => r.publish_version))];
-  const pubs = await db.selectFrom("publishes").select(["version", "published_by", "activated_at", "created_at"]).where("site_id", "=", siteId).where("version", "in", versions).execute();
+  // 行の版と点の版の公開の記録を 1 回で読む(点の版は行を持たないことがある: 一時停止したテストの入っていない版。B69 CX-High-2)。
+  // 点は最大 100 件(配った履歴の上限)なので、版の並びは json_each の 1 個のバインドで渡す(D1 の 1 文のバインドの上限 100 に当てない)
+  const versions = [...new Set([...rows.map((r) => r.publish_version), ...points.map((p) => p.version)])];
+  const pubs = await db
+    .selectFrom("publishes")
+    .select(["version", "published_by", "activated_at", "created_at", "experiment_ids_json"])
+    .where("site_id", "=", siteId)
+    .where("version", "in", sql<number>`(select value from json_each(${JSON.stringify(versions)}))`)
+    .execute();
   const pubByVersion = new Map(pubs.map((p) => [p.version, p]));
+  // 公開版ごとの ID の集合(版ごとに 1 回だけ解析する。run × 点で解析し直さない。B69 最終レビュー FR-Medium-2)。
+  // 集合を持たない版(experiment_ids_json が NULL = 更新の前の版・読めない・配列でない)は、入っていたものとする(今までどおり)
+  const idsByVersion = new Map<number, Set<string>>();
+  for (const p of pubs) {
+    if (p.experiment_ids_json === null) continue;
+    try {
+      const ids: unknown = JSON.parse(p.experiment_ids_json);
+      if (Array.isArray(ids)) idsByVersion.set(p.version, new Set(ids.filter((x): x is string => typeof x === "string")));
+    } catch {
+      // 読めない記録は入っていたものとする
+    }
+  }
+  /** 公開版にそのエクスペリエンスが入っていたか。公開の記録が無い・ID の集合が無い版は入っていたものとする(今までどおり) */
+  const containedIn = (version: number, experimentId: string): boolean => {
+    const ids = idsByVersion.get(version);
+    return !ids || ids.has(experimentId);
+  };
 
   const runs = new Map<string, Work[]>();
   for (const r of rows) {
@@ -337,8 +361,12 @@ export async function confirmDeliveries(db: Db, siteId: string, status: Delivery
 
   let changed = 0;
   for (const [runId, group] of runs) {
-    // 1. 点を行に当てる(R = publish_version <= v で最新の行)。最小の時刻を取る
+    // 1. 点を行に当てる(R = publish_version <= v で最新の行)。最小の時刻を取る。
+    // B69(spec §6.2、CX-High-2): 点の版の配る設定にこのエクスペリエンスが入っていなければ当てない(一時停止の後の版の確かめで、
+    // 確かめの済んでいない前の定義を配信済みにしない)
+    const experimentId = group[0]!.experiment_id;
     for (const p of points) {
+      if (!containedIn(p.version, experimentId)) continue;
       let target: Work | undefined;
       for (const w of group) if (w.publish_version <= p.version) target = w;
       if (target && (target.nextFrom === null || p.at < target.nextFrom)) target.nextFrom = p.at;
@@ -424,7 +452,6 @@ export async function confirmDeliveries(db: Db, siteId: string, status: Delivery
       existing.length === desired.length &&
       existing.every((e, i) => e.publish_version === desired[i]!.publish_version && e.at === desired[i]!.at && e.by === desired[i]!.by && e.parts_json === desired[i]!.parts_json);
     if (same) continue;
-    const experimentId = group[0]!.experiment_id;
     await guard();
     await db.deleteFrom("experiment_delivery_changes").where("site_id", "=", siteId).where("run_id", "=", runId).execute();
     for (const d of desired) {
@@ -470,7 +497,9 @@ export function changedParts(a: DeliveredDefinition, b: DeliveredDefinition): st
   const bVar = new Map(b.variants.map((v) => [v.id, canonicalJson(v.changes)]));
   const ids = [...b.variants.map((v) => v.id), ...a.variants.map((v) => v.id).filter((id) => !bVar.has(id))];
   for (const id of ids) if (aVar.get(id) !== bVar.get(id)) parts.push(`variants.${id}.changes`);
-  if (canonicalJson(a.urlMatch) !== canonicalJson(b.urlMatch)) parts.push("urlMatch");
+  // B69(spec §2.3): 対象 URL は正規の形で比べる(行・パラメータの順だけの違い、除く行・パラメータが無いのと空の配列は変更にしない)。
+  // 古い形(1 つのページの一致)は JSON のまま比べる(例外にしない)
+  if (canonicalUrlMatch(a.urlMatch) !== canonicalUrlMatch(b.urlMatch)) parts.push("urlMatch");
   if (canonicalJson(a.targeting ?? null) !== canonicalJson(b.targeting ?? null)) parts.push("targeting");
   if (canonicalJson(a.primaryGoal) !== canonicalJson(b.primaryGoal)) parts.push("primaryGoal");
   return parts;

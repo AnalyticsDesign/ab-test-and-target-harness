@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ConversionPayloadSchema, ExposurePayloadSchema, GoalAnalyticsSchema } from "./analytics";
-import { PAGE_OPS, PAGE_PARTS, type PageMatch, type PageOp, type PagePart } from "./page";
+import { PAGE_OPS, PAGE_PARTS, type PageMatch, type PageOp, type PagePart, type UrlMatch } from "./page";
 import { REGEX_LIMITS } from "./regex-compile";
 import { RUN_ID_RE } from "./results";
 import type { RegexProgram } from "./regex-run";
@@ -26,6 +26,12 @@ export const LIMITS = {
    * (2 万ノードで約 420 KB。一番小さい形でも、上限ちょうどの展開が 512 KB の内に収まる)
    */
   audienceExpansionMax: 20_000,
+  /** 対象 URL(urlMatch)の行数・パラメータの個数・名前の長さ・全行の正規表現の命令数の合計(B69) */
+  urlIncludeMax: 10,
+  urlExcludeMax: 10,
+  urlParamsMax: 5,
+  urlParamNameMax: 256,
+  urlInstructionsMax: 500,
 } as const;
 
 const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
@@ -74,13 +80,11 @@ export const CompiledPageMatchSchema = z
 // 配信条件の DSL(spec §6.2 / 決定 49 §4)
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * 配信条件の葉(版 3)。ページの URL・ホスト・パス・クエリ(`ctx: url / host / path / query`)は B69 で外し、エクスペリエンスの
+ * 対象 URL(urlMatch)で書く。版 2 の読み取りは schema-v2.ts
+ */
 export type CtxNode =
-  /** url は equals / contains / startsWith(正規表現は path / host だけ) */
-  | { ctx: "url"; op: "equals" | "contains" | "startsWith"; value: string }
-  | { ctx: "host"; op: "equals" | "endsWith" | "contains" | "regex"; value: string; prog?: RegexProgram }
-  | { ctx: "path"; op: "contains" | "equals" | "startsWith" | "regex"; value: string; prog?: RegexProgram }
-  | { ctx: "query"; name: string; op: "equals" | "contains"; value: string }
-  | { ctx: "query"; name: string; op: "exists" }
   | { ctx: "device"; op: "in"; value: Device[] }
   | { ctx: "browser"; op: "in"; value: Browser[] }
   | { ctx: "os"; op: "in"; value: Os[] }
@@ -121,11 +125,8 @@ const SinceFirstVisitSchema = z
   .strictObject({ ctx: z.literal("sinceFirstVisit"), op: z.enum(["gte", "lt"]), hours: z.number().int().min(1).max(8760).optional(), days: z.number().int().min(1).max(3650).optional() })
   .refine((v) => (v.hours === undefined) !== (v.days === undefined), { message: "exactly one of hours / days" });
 
-/** 保存形と配る形で同じ条件(ページ・端末・時刻など) */
-const commonCtx = [
-  z.strictObject({ ctx: z.literal("query"), name: z.string().min(1), op: z.literal("equals"), value: z.string() }),
-  z.strictObject({ ctx: z.literal("query"), name: z.string().min(1), op: z.literal("contains"), value: z.string().min(1) }),
-  z.strictObject({ ctx: z.literal("query"), name: z.string().min(1), op: z.literal("exists") }),
+/** 保存形と配る形で同じ条件(端末・時刻など)。版 2 の読み取り(schema-v2.ts)も使う */
+export const COMMON_CTX = [
   z.strictObject({ ctx: z.literal("device"), op: z.literal("in"), value: uniqueArray(z.enum(DEVICES)) }),
   z.strictObject({ ctx: z.literal("browser"), op: z.literal("in"), value: uniqueArray(z.enum(BROWSERS)) }),
   z.strictObject({ ctx: z.literal("os"), op: z.literal("in"), value: uniqueArray(z.enum(OSES)) }),
@@ -144,14 +145,24 @@ const pageCtx = (part: "host" | "path", compiled: boolean) =>
       if (compiled) refineCompiledRegex({ part, op: v.op, prog: (v as { prog?: unknown }).prog }, ctx);
     });
 
-/** 配る形の条件(版 2)。url は文字列の一致だけ(正規表現は path / host の命令列) */
-const CompiledCtxSchema = z.union([
-  z.strictObject({ ctx: z.literal("url"), op: z.enum(["equals", "contains", "startsWith"]), value: matchValue }),
-  pageCtx("host", true),
-  pageCtx("path", true),
-  ...commonCtx,
-]);
-const CompiledHistSchema = z.union([
+/**
+ * B69 で配信条件・オーディエンスから外したページの条件(ctx: url / host / path / query)の形。使う所は 2 つだけ:
+ * 保存の読み取り(StoredCtxReadSchema。D1 に残った古い条件を応答で表す。compiled = false)と、版 2 の読み取り(schema-v2.ts。compiled = true)。
+ * 保存形の url は正規表現も形としては受けていた(regexIssueIn が拒否していた)ので、読み取りでも受ける
+ */
+export const removedPageCtx = (compiled: boolean) =>
+  [
+    z.strictObject({ ctx: z.literal("url"), op: z.enum(compiled ? ["equals", "contains", "startsWith"] : ["equals", "contains", "startsWith", "regex"]), value: matchValue }),
+    pageCtx("host", compiled),
+    pageCtx("path", compiled),
+    z.strictObject({ ctx: z.literal("query"), name: z.string().min(1), op: z.literal("equals"), value: z.string() }),
+    z.strictObject({ ctx: z.literal("query"), name: z.string().min(1), op: z.literal("contains"), value: z.string().min(1) }),
+    z.strictObject({ ctx: z.literal("query"), name: z.string().min(1), op: z.literal("exists") }),
+  ] as const;
+
+/** 配る形の条件(版 3)。ページの条件は対象 URL に移した */
+const CompiledCtxSchema = z.union(COMMON_CTX);
+export const CompiledHistSchema = z.union([
   z.strictObject({ hist: z.literal("visited"), pattern: z.string().min(1), min: z.number().int().min(1).optional(), withinDays: z.number().int().min(1).max(3650).optional() }),
   z.strictObject({ hist: z.literal("converted"), goal: z.string().min(1), withinDays: z.number().int().min(1).max(3650).optional() }),
 ]);
@@ -181,16 +192,43 @@ export const DslNodeSchema = DslNodeBase.superRefine((node, ctx) => {
 });
 
 /**
- * 保存する形の ctx の条件(control が保存し、compile の入力になる)。url の正規表現は形としては受け、regexIssueIn(targeting.ts)が
- * 案内付きで拒否する(保存は 422、compile は CompileError)。閲覧の条件・オーディエンスの参照は targeting.ts
+ * 保存する形の ctx の条件(control が保存し、compile の入力になる)。閲覧の条件・オーディエンスの参照は targeting.ts。
+ * ページの条件(url / host / path / query)は受けない(B69。findRemovedPageCondition が zod より先に理由付きで止める)
  */
-export const StoredCtxSchema = z.union([
-  z.strictObject({ ctx: z.literal("url"), op: z.enum(["equals", "contains", "startsWith", "regex"]), value: matchValue }),
-  pageCtx("host", false),
-  pageCtx("path", false),
-  ...commonCtx,
-]);
+export const StoredCtxSchema = z.union(COMMON_CTX);
 export type StoredCtx = z.infer<typeof StoredCtxSchema>;
+
+/** 読み取りの応答で古い条件に付ける説明(OpenAPI の describe に出る) */
+export const REMOVED_CONDITION_DESCRIPTION = "使えなくなった条件。対象 URL に移すまで保存できない";
+
+/**
+ * 読み取りの応答の ctx の条件(GET・一覧・複製)。D1 に残った古いページの条件(url / host / path / query)も表せる。
+ * 保存の入力には使わない(StoredCtxSchema)
+ */
+export const StoredCtxReadSchema = z.union([...COMMON_CTX, ...removedPageCtx(false).map((s) => s.describe(REMOVED_CONDITION_DESCRIPTION))]);
+export type StoredCtxRead = z.infer<typeof StoredCtxReadSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// 対象 URL(urlMatch、B69)。照合は page.ts の matchTargetUrl、正規化・検査・正規の形は url-match.ts。
+// schema はここに置く(url-match.ts → schema.ts の一方向にする。逆向きの import があると、読み込みの順で LIMITS などを初期化の前に読む)
+// ---------------------------------------------------------------------------------------------
+
+/** パラメータの条件。equals の値は空文字可(`?ref=` に一致)、contains は 1 字以上。名前は大文字と小文字を区別する */
+const ParamMatchSchema = z.union([
+  z.strictObject({ name: z.string().min(1).max(LIMITS.urlParamNameMax), op: z.literal("equals"), value: z.string() }),
+  z.strictObject({ name: z.string().min(1).max(LIMITS.urlParamNameMax), op: z.literal("contains"), value: z.string().min(1) }),
+  z.strictObject({ name: z.string().min(1).max(LIMITS.urlParamNameMax), op: z.literal("exists") }),
+]);
+
+const urlMatchSchemaOf = <P extends z.ZodType>(page: P) => {
+  const row = z.strictObject({ page, params: z.array(ParamMatchSchema).max(LIMITS.urlParamsMax).optional() });
+  return z.strictObject({ include: z.array(row).min(1).max(LIMITS.urlIncludeMax), exclude: z.array(row).max(LIMITS.urlExcludeMax).optional() });
+};
+
+/** 対象 URL の保存の形(control が保存し API で読み書きする)。古い形 `{ op, value }` は strict で拒否する */
+export const UrlMatchInputSchema = urlMatchSchemaOf(PageMatchInputSchema);
+/** 対象 URL の配る形(compiled config)。行の page は命令列を持つ */
+export const CompiledUrlMatchSchema = urlMatchSchemaOf(CompiledPageMatchSchema);
 
 // ---------------------------------------------------------------------------------------------
 // Change / Variant(変更なし)
@@ -268,15 +306,11 @@ export const ChangeSchema = z.discriminatedUnion("type", [
 export type Change = z.infer<typeof ChangeSchema>;
 
 /**
- * B77(K4): 配る形の `name`(パターン・エクスペリエンス・目標)は任意。compile はもう出さないが、KV に残る古い config(名前付き)を
- * edge・deployer・control が読めるように受ける。compile の入力のスキーマ(VariantInputSchema・ExperimentInputSchema・GoalInputSchema)は必須のまま。
- * `name` の受け入れを消すのは、次に `schemaVersion` を上げるとき
+ * 配る形は `name`(パターン・エクスペリエンス・目標)を持たない(B77 で compile が出さなくなり、版 3 で受け入れも消した。B69)。
+ * 名前付きの版 2 は schema-v2.ts が受け、upgradeV2 が payload に移して落とす
  */
-const legacyName = z.string().min(1).optional();
-
 export const VariantSchema = z.strictObject({
   id: z.string().min(1),
-  name: legacyName,
   weight: z.number().int().min(0).max(100),
   changes: z.array(ChangeSchema),
 });
@@ -290,7 +324,6 @@ export function refineVariantWeights(e: { variants: Array<{ weight: number }> },
 /** Experiment の共通 shape(urlMatch / targeting 以外)。compiled と compile の入力で urlMatch / targeting / variants を差し替える */
 export const ExperimentCommonShape = {
   id: z.string().min(1),
-  name: legacyName, // B77(K4): compile の入力(ExperimentInputSchema)は必須に上書きする
   trafficPercentage: z.number().int().min(1).max(100),
   persistAssignment: z.boolean(),
 } as const;
@@ -298,7 +331,7 @@ export const ExperimentCommonShape = {
 export const ExperimentSchema = z
   .strictObject({
     ...ExperimentCommonShape,
-    urlMatch: CompiledPageMatchSchema,
+    urlMatch: CompiledUrlMatchSchema,
     targeting: DslNodeSchema.optional(),
     // 決定 51(設計書 §3.1): 種別は compiled config に載せないので、ここはパターン 1 つ以上だけを見る
     // (テストは 2 つ以上・パーソナライズは 1 つは、control の保存と compile の入力で確かめる)
@@ -307,8 +340,8 @@ export const ExperimentSchema = z
   .superRefine(refineVariantWeights);
 export type Experiment = z.infer<typeof ExperimentSchema>;
 
-/** 配る形の Goal の共通部分。`name` は古い config のためだけに受ける(K4)。外部計測は compile が conversionPayloads に焼くので置かない */
-const goalBase = { id: z.string().min(1), name: legacyName };
+/** 配る形の Goal の共通部分(名前は持たない)。外部計測は compile が conversionPayloads に焼くので置かない */
+const goalBase = { id: z.string().min(1) };
 /** 保存する形の Goal の共通部分。`name` は必須(管理画面の中で使う)、`analytics` = 目標の外部計測(B77、K5) */
 const goalInputBase = { id: z.string().min(1), name: z.string().min(1), analytics: GoalAnalyticsSchema.optional() };
 const clickConfig = z.strictObject({ selector });
@@ -367,15 +400,15 @@ export function refineConversionPayloads(
   }
 }
 
-/** 配る設定に入るすべての命令列の命令数(対象 URL・パターン・目標・配信条件の path / host) */
-export function regexInstructionTotal(c: { patterns: Record<string, { prog?: RegexProgram }>; goals: Goal[]; experiments: Array<{ urlMatch: { prog?: RegexProgram }; targeting?: DslNode }> }): number {
-  const size = (p?: RegexProgram): number => (p && Array.isArray(p.code) ? p.code.length / 3 : 0);
-  const inDsl = (n: DslNode): number =>
-    "and" in n ? n.and.reduce((a, x) => a + inDsl(x), 0) : "or" in n ? n.or.reduce((a, x) => a + inDsl(x), 0) : "not" in n ? inDsl(n.not) : "prog" in n ? size(n.prog) : 0;
+/** 命令列の命令数(1 命令 = 3 要素)。版 2 の読み取り(schema-v2.ts)も使う */
+export const programSize = (p?: RegexProgram): number => (p && Array.isArray(p.code) ? p.code.length / 3 : 0);
+
+/** 配る設定に入るすべての命令列の命令数(対象 URL の全行・パターン・目標)。版 3 の配信条件は命令列を持たない(ページの条件は対象 URL に移した) */
+export function regexInstructionTotal(c: { patterns: Record<string, { prog?: RegexProgram }>; goals: Goal[]; experiments: Array<{ urlMatch: UrlMatch }> }): number {
   let total = 0;
-  for (const p of Object.values(c.patterns)) total += size(p.prog);
-  for (const g of c.goals) if (g.type === "PAGEVIEW") total += size(g.config.page.prog);
-  for (const e of c.experiments) total += size(e.urlMatch.prog) + (e.targeting ? inDsl(e.targeting) : 0);
+  for (const p of Object.values(c.patterns)) total += programSize(p.prog);
+  for (const g of c.goals) if (g.type === "PAGEVIEW") total += programSize(g.config.page.prog);
+  for (const e of c.experiments) for (const r of e.urlMatch.include.concat(e.urlMatch.exclude ?? [])) total += programSize(r.page.prog);
   return total;
 }
 
@@ -390,12 +423,13 @@ export const ResultsConfigSchema = z.strictObject({
 export type ResultsConfig = z.infer<typeof ResultsConfigSchema>;
 
 /**
- * 版 2 の compiled config(決定 49)。版 1 との差は設計書 §4.3 の表。`timezone` = サイトのタイムゾーン(IANA 名)。
- * 欠けていれば曜日・時間帯の条件は判定できない(対象外)
+ * 版 3 の compiled config(B69)。版 2 との差: 対象 URL が含める・除くの行になった(urlMatch)、配信条件からページの条件
+ * (url / host / path / query)を外した、名前(name)を受けない。`timezone` = サイトのタイムゾーン(IANA 名)。
+ * 欠けていれば曜日・時間帯の条件は判定できない(対象外)。版 2 は schema-v2.ts で読み、upgradeV2(config-upgrade.ts)で版 3 にする
  */
 export const CompiledConfigSchema = z
   .strictObject({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.literal(3),
     version: z.number().int().min(1),
     siteId: z.string().min(1),
     siteSalt: z.string().min(1),

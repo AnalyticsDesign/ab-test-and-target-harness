@@ -1,5 +1,4 @@
 import type { CompiledConfig } from "./schema";
-import { withoutLegacyNames } from "./legacy-names";
 import { toRuntimeSettings, type RuntimeSettings, type SiteSettings } from "./settings";
 
 /**
@@ -15,7 +14,7 @@ export type BakeOptions = { previewSource?: string; apiBase?: string | null; run
 
 /**
  * bootstrap に焼く boot payload(`self.__WTT_BOOT__` の中身)。`bakeBootstrap` と `staticInputDigest`(static-deploy.ts)が共有する。
- * B77(K6): 古い config(名前付き)でも、焼く本文には名前を入れない。settings は runtime 向けサブセット(toRuntimeSettings)だけ。
+ * 版 3 の config は名前を持たない(名前付きの版 2 は parseCompiledConfig の upgradeV2 が payload に移して落とす。B69)。settings は runtime 向けサブセット(toRuntimeSettings)だけ。
  * apiBase は値があるときだけ入れる(null・空文字・省略は入れない)
  */
 export function bootPayload(
@@ -23,14 +22,14 @@ export function bootPayload(
   settings: SiteSettings,
   apiBase?: string | null,
 ): { config: CompiledConfig; settings: RuntimeSettings; apiBase?: string } {
-  return { config: withoutLegacyNames(config), settings: toRuntimeSettings(settings), ...(apiBase ? { apiBase } : {}) };
+  return { config, settings: toRuntimeSettings(settings), ...(apiBase ? { apiBase } : {}) };
 }
 
 /**
  * spec §9.4 / §5.4 / §20: runtime.js + compiled config + Identity 設定(runtime 向けサブセット)を 1 ファイルに連結する純関数。
  * KV / R2 / API へのアクセスは呼び出し側(デプロイ専用の Worker・control の下書きの bootstrap とサイズの警告)。決定 52
  * previewSource(決定 50)は下書きの bootstrap(control の draft-bootstrap)だけが渡す。本番の bootstrap はプレビューを別ファイルから読む。
- * B77: 焼く前に必ず withoutLegacyNames を通す(古い config の名前を payload に移して抜く)。
+ * 版 2 の config は parseCompiledConfig で版 3 にしてから渡す(B69)。
  * 出力形式(options なし)は edge の serveBootstrap が Plan 3 まで生成していた body と同一(bootstrap.test.ts が固定する)
  */
 export function bakeBootstrap(config: CompiledConfig, settings: SiteSettings, runtimeSource: string, opts: BakeOptions = {}): string {

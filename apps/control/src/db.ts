@@ -91,7 +91,9 @@ export type AssetRow = {
 };
 /** 公開したときの定義が使っている画像(B68。同じマイグレーション)。エクスペリエンスの削除で外部キーにより消える */
 export type AssetDeliveredRefRow = { site_id: string; asset_id: string; experiment_id: string };
-export type PublishRow = { id: string; site_id: string; version: number; status: "reserved" | "failed" | "active" | "superseded"; config_hash: string | null; config_json: string | null; needs_profile: number | null; error: string | null; kv_deleted: number; published_by: string; created_at: number; activated_at: number | null };
+export type PublishRow = { id: string; site_id: string; version: number; status: "reserved" | "failed" | "active" | "superseded"; config_hash: string | null; config_json: string | null; needs_profile: number | null; error: string | null; kv_deleted: number; published_by: string; created_at: number; activated_at: number | null;
+  /** B69(migrations/0026): その版の配る設定に入ったエクスペリエンスの ID(JSON の配列)。更新の前の版は NULL */
+  experiment_ids_json: string | null };
 
 /** Better Auth apiKey プラグインの表(B33: metadata の roleCap と、管理者向け一覧のための列を読む。書くのはプラグインと失効の 2 列だけ)。date 列は ISO 文字列 */
 /** migrations/0009_apikey_revocations.sql(backlog B42 / brief K15)。失効の正。revoked_at は epoch ミリ秒、revoked_by = 失効させた人の user ID(マイグレーションは null) */

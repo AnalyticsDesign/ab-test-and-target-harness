@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { audienceDefinitionIssue, normalizeTargeting, type Targeting } from "@wtt/core";
+import { LEGACY_COND_PROBLEM, treeProblem } from "../lib/conditions";
 import { COMPLETION_1_TARGETING } from "../../../packages/core/test/fixtures/completion-1";
 import {
   audienceTreeFromDsl, condToDsl, definitionBody, edit, experimentFormFromDsl, experimentFormToDsl, insertNode, moveNode, moveTargets, nestLevels, reorder, toDsl,
@@ -20,16 +21,16 @@ describe("DSL と画面の木(決定 49、設計書 §4.1.1)", () => {
       { and: [V(), { or: [{ ctx: "device", op: "in", value: ["mobile"] }, { and: [{ not: { ctx: "time", days: ["mon"], from: "22:00", to: "02:00" } }, { not: { or: [{ ctx: "browser", op: "in", value: ["safari"] }, { ctx: "os", op: "in", value: ["ios"] }] } }] }] }] },
       { not: { ctx: "time", days: ["fri", "sat"] } },
       { not: { ctx: "viewport", minWidth: 768 } },
-      { not: { ctx: "path", op: "startsWith", value: "/a" } },
-      { not: { ctx: "host", op: "endsWith", value: "example.com" } },
-      { and: [{ not: { hist: "converted", goal: "g_lead", withinDays: 7 } }, { ctx: "sinceFirstVisit", op: "gte", hours: 24 }, { ctx: "query", name: "u", op: "contains", value: "m" }, { not: { ctx: "query", name: "u", op: "exists" } }, { not: { ctx: "referrer", op: "isEmpty" } }, { ctx: "viewport", minWidth: 320, maxWidth: 768 }, { ctx: "path", op: "regex", value: "^/p/\\d+$" }, { not: { ctx: "url", op: "contains", value: "x" } }] },
+      { not: { ctx: "sinceFirstVisit", op: "gte", days: 3 } },
+      { not: { ctx: "device", op: "in", value: ["tablet"] } },
+      { and: [{ not: { hist: "converted", goal: "g_lead", withinDays: 7 } }, { ctx: "sinceFirstVisit", op: "gte", hours: 24 }, { ctx: "referrer", op: "contains", value: "m" }, { not: { ctx: "referrer", op: "contains", value: "u" } }, { not: { ctx: "referrer", op: "isEmpty" } }, { ctx: "viewport", minWidth: 320, maxWidth: 768 }, { hist: "visited", page: P("path", "regex", "^/p/\\d+$") }, { not: { ctx: "os", op: "in", value: ["ios"] } }] },
     ];
     for (const d of cases) expect(toDsl(audienceTreeFromDsl(d)!)).toEqual(norm(d));
     // 子が 1 つのグループは、control と同じく畳み込まれる
     const one = { and: [{ or: [V()] }, { ctx: "device", op: "in", value: ["mobile"] }] };
     expect(toDsl(audienceTreeFromDsl(one)!)).toEqual(norm(one));
     // エクスペリエンスのフォーム(1 段の and / or)
-    for (const d of [{ and: [{ audience: "a" }, { not: { audience: "b" } }, { not: V() }, { ctx: "time", days: ["mon"], from: "09:00", to: "18:00" }] }, { not: { ctx: "url", op: "equals", value: "x" } }, V({ withinDays: 13 })] as Dsl[])
+    for (const d of [{ and: [{ audience: "a" }, { not: { audience: "b" } }, { not: V() }, { ctx: "time", days: ["mon"], from: "09:00", to: "18:00" }] }, { not: { ctx: "referrer", op: "contains", value: "x" } }, V({ withinDays: 13 })] as Dsl[])
       expect(experimentFormToDsl(experimentFormFromDsl(d)!)).toEqual(norm(d));
   });
   it("エクスペリエンスのフォームで表せない形は null(否定の形を持たない条件の not・入れ子・グループの除外・古い書式)", () => {
@@ -94,8 +95,8 @@ describe("木の操作(入れ子の上限・移動・並べ替え)", () => {
     const negated: Dsl[] = [
       { ctx: "time", days: ["mon"] },
       { ctx: "viewport", minWidth: 768 },
-      { ctx: "path", op: "startsWith", value: "/a" },
-      { ctx: "host", op: "endsWith", value: "example.com" },
+      { ctx: "sinceFirstVisit", op: "gte", days: 3 },
+      { ctx: "referrer", op: "equals", value: "x" },
       { and: [V(), { ctx: "device", op: "in", value: ["mobile"] }] },
     ];
     for (const x of negated) {
@@ -137,5 +138,39 @@ describe("木の操作(入れ子の上限・移動・並べ替え)", () => {
     expect(reorder(["a", "b", "c", "d"], 0, 3)).toEqual(["b", "c", "a", "d"]);
     expect(reorder(["a", "b", "c", "d"], 3, 0)).toEqual(["d", "a", "b", "c"]);
     expect(reorder(["a", "b", "c"], 1, 3)).toEqual(["a", "c", "b"]); // 末尾へ
+  });
+});
+
+// B69(spec §7.5): 外したページの条件(ctx: url / host / path / query)が残った保存値は、画面を落とさず「使えない条件」の行として読む
+describe("legacy page conditions", () => {
+  const legacyLeaves: Dsl[] = [
+    { ctx: "path", op: "startsWith", value: "/lp/" },
+    { not: { ctx: "url", op: "contains", value: "x" } },
+    { ctx: "host", op: "endsWith", value: "example.com" },
+    { not: { ctx: "query", name: "u", op: "exists" } },
+    { ctx: "query", name: "u", op: "contains", value: "m" },
+    { not: { ctx: "path", op: "startsWith", value: "/a" } }, // 否定の形を持たなかった形も行として読む
+  ];
+  it("legacy_ctx_reads_as_unusable_row: 配信条件のフォームとオーディエンスの木が行として読み、DSL に戻すとそのまま残り、保存の前の検査で止まる", () => {
+    for (const leaf of legacyLeaves) {
+      const d: Dsl = { and: [{ ctx: "device", op: "in", value: ["mobile"] }, leaf] };
+      const form = experimentFormFromDsl(d);
+      expect(form).not.toBeNull();
+      expect(form!.rows[1]).toEqual({ id: "r2", kind: "cond", type: "legacy", dsl: leaf });
+      expect(experimentFormToDsl(form!)).toEqual(d);
+      expect(treeProblem(form!.rows, 90)).toBe(LEGACY_COND_PROBLEM);
+      // 単独の条件
+      expect(experimentFormFromDsl(leaf)!.rows).toEqual([{ id: "r1", kind: "cond", type: "legacy", dsl: leaf }]);
+      // オーディエンス
+      const tree = audienceTreeFromDsl({ or: [V(), leaf] });
+      expect(tree).not.toBeNull();
+      expect(tree!.children[1]).toMatchObject({ kind: "cond", type: "legacy", dsl: leaf });
+      expect(toDsl(tree!)).toEqual({ or: [V(), leaf] });
+      expect(treeProblem(tree!.children, 90)).toBe(LEGACY_COND_PROBLEM);
+    }
+  });
+  it("使えない条件があっても、ほかの形の制限は今までどおり(入れ子は読み取り専用)", () => {
+    expect(experimentFormFromDsl({ and: [{ ctx: "path", op: "startsWith", value: "/a" }, { or: [V(), V()] }] })).toBeNull();
+    expect(experimentFormFromDsl({ ctx: "path", op: "startsWith", value: "/a", extra: 1 })).toBeNull(); // 形の合わない葉
   });
 });

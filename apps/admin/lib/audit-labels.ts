@@ -2,6 +2,7 @@ import type { AuditAction, AuditVia } from "@wtt/core";
 import { STATUS_JA } from "./experiment-filter";
 import { KIND_JA } from "./experiment-kind";
 import { roleLabel } from "./roles";
+import { urlMatchAuditText } from "./url-match";
 
 /**
  * B129(spec §7.1・§7.3): 操作の記録の 1 行の日本語(操作・ログイン方法・操作した人・内容)。
@@ -213,7 +214,8 @@ const unchangedEntry = (v: unknown): boolean => {
 type FieldSpec = { label: string; fmt?: Fmt };
 const EXPERIMENT_FIELDS: Record<string, FieldSpec> = {
   name: { label: "名前", fmt: quoted },
-  urlMatch: { label: "対象 URL" },
+  // 記録が前後を持つときは、行の形は 1 文の要約、行の形に変わる前の値(古い形)は JSON(B69 spec §7.4)。今の control は名前だけを記録する
+  urlMatch: { label: "対象 URL", fmt: urlMatchAuditText },
   targeting: { label: "配信条件" },
   trafficPercentage: { label: "配信率", fmt: suffix("%") },
   persistAssignment: { label: "割当の固定", fmt: onOff },

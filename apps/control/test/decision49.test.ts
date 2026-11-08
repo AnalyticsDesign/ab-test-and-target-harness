@@ -16,29 +16,35 @@ describe("正規表現の規則(決定 49、設計書 §10)", () => {
   it("regex_policy_is_enforced_in_all_three_layers", async () => {
     // (1) control の保存: 理由のコード・日本語の説明・位置・書き換えの例付きの 422
     const { owner, sid } = await site();
-    const urlRe = await call("POST", `/sites/${sid}/experiments`, { token: owner.token, body: { id: "exp_re", name: "R", urlMatch: { op: "regex", value: "^/a" } } });
+    const urlRe = await call("POST", `/sites/${sid}/experiments`, { token: owner.token, body: { id: "exp_re", name: "R", urlMatch: { include: [{ page: { op: "regex", value: "^/a" } }] } } });
     expect(urlRe.status).toBe(422);
-    expect(await json(urlRe)).toMatchObject({ error: "regex_not_allowed_on_url", path: ["urlMatch", "value"] });
+    expect(await json(urlRe)).toMatchObject({ error: "regex_not_allowed_on_url", path: ["urlMatch", "include", 0, "page", "value"] });
     const unbounded = await call("POST", `/sites/${sid}/experiments`, {
       token: owner.token,
-      body: { id: "exp_re", name: "R", urlMatch: { op: "contains", value: "/" }, targeting: { and: [{ ctx: "device", op: "in", value: ["mobile"] }, { ctx: "path", op: "regex", value: "a{2,}" }] } },
+      body: { id: "exp_re", name: "R", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, targeting: { and: [{ ctx: "device", op: "in", value: ["mobile"] }, { hist: "visited", page: { part: "path", op: "regex", value: "a{2,}" } }] } },
     });
     expect(unbounded.status).toBe(422);
-    expect(await json(unbounded)).toMatchObject({ error: "regex_unbounded_repeat", path: ["targeting", "and", 1, "value"], index: 1, length: 4, hint: "書き換えの例: {2,10}" });
+    expect(await json(unbounded)).toMatchObject({ error: "regex_unbounded_repeat", path: ["targeting", "and", 1, "page", "value"], index: 1, length: 4, hint: "書き換えの例: {2,10}" });
+    // B69: 対象 URL の行の正規表現も、行の位置付きで同じ 422
+    const rowRe = await call("POST", `/sites/${sid}/experiments`, {
+      token: owner.token,
+      body: { id: "exp_re", name: "R", urlMatch: { include: [{ page: { op: "contains", value: "/" } }], exclude: [{ page: { part: "path", op: "regex", value: "a{2,}" } }] } },
+    });
+    expect(await json(rowRe)).toMatchObject({ error: "regex_unbounded_repeat", path: ["urlMatch", "exclude", 0, "page", "value"], index: 1, length: 4 });
     const goal = await call("POST", `/sites/${sid}/goals`, { token: owner.token, body: { id: "g_re", name: "G", type: "PAGEVIEW", config: { page: { part: "path", op: "regex", value: "(?=x)" } } } });
     expect(goal.status).toBe(422);
     expect(await json(goal)).toMatchObject({ error: "regex_unsupported_group", path: ["config", "page", "value"] });
 
     // (2) fixture の compile(`pnpm fixture` が使う関数)
-    const exp = (targeting: unknown) => ({
-      id: "e", name: "e", urlMatch: { op: "contains", value: "/" }, targeting, trafficPercentage: 100, persistAssignment: false,
+    const exp = (page: unknown) => ({
+      id: "e", name: "e", urlMatch: { include: [{ page }] }, trafficPercentage: 100, persistAssignment: false,
       variants: [{ id: "a", name: "A", weight: 50, changes: [] }, { id: "b", name: "B", weight: 50, changes: [] }],
     });
     const input = { siteId: "s", siteSalt: "x", version: 1, goals: [] };
-    expect(() => compile({ ...input, experiments: [exp({ ctx: "path", op: "regex", value: "(?=a)" })] })).toThrowError(expect.objectContaining({ code: "invalid_regex" }));
+    expect(() => compile({ ...input, experiments: [exp({ part: "path", op: "regex", value: "(?=a)" })] })).toThrowError(expect.objectContaining({ code: "invalid_regex" }));
 
     // (3) edge の読み込み(parseCompiledConfig): 版 2 の url の正規表現・命令列の無い正規表現・サイト全体 500 命令超は読まない
-    const ok = compile({ ...input, experiments: [exp({ ctx: "path", op: "regex", value: "^/a" })] });
+    const ok = compile({ ...input, experiments: [exp({ part: "path", op: "regex", value: "^/a" })] });
     expect(parseCompiledConfig(ok)).not.toBeNull();
     const tampered = (patch: (c: Record<string, any>) => void) => {
       const c = JSON.parse(JSON.stringify(ok)) as Record<string, any>;
@@ -46,7 +52,7 @@ describe("正規表現の規則(決定 49、設計書 §10)", () => {
       return parseCompiledConfig(c);
     };
     expect(tampered((c) => void (c.experiments[0].targeting = { ctx: "url", op: "regex", value: "a" }))).toBeNull();
-    expect(tampered((c) => void delete c.experiments[0].targeting.prog)).toBeNull();
+    expect(tampered((c) => void delete c.experiments[0].urlMatch.include[0].page.prog)).toBeNull();
     const big = compileRegex(".{0,98}"); // 197 命令
     if (!big.ok) throw new Error(big.issue.code);
     const p = (v: string) => ({ part: "path", op: "regex", value: v, prog: big.prog });
@@ -58,17 +64,22 @@ describe("正規表現の規則(決定 49、設計書 §10)", () => {
     const res = await call("POST", `/sites/${sid}/experiments`, {
       token: owner.token,
       body: {
-        id: "exp_n", name: "N", urlMatch: { part: "path", op: "startsWith", value: "/料金/" },
-        targeting: { and: [{ ctx: "host", op: "endsWith", value: "Shop.Example.COM." }, { ctx: "path", op: "regex", value: "^/p/¥d+$" }] },
+        id: "exp_n", name: "N",
+        urlMatch: {
+          include: [{ page: { part: "path", op: "startsWith", value: "/料金/" } }, { page: { part: "host", op: "endsWith", value: "Shop.Example.COM." } }],
+          exclude: [{ page: { part: "path", op: "regex", value: "^/p/¥d+$" } }],
+        },
       },
     });
     expect(res.status).toBe(201);
     expect(await json(res)).toMatchObject({
-      urlMatch: { part: "path", op: "startsWith", value: "/%E6%96%99%E9%87%91/" },
-      targeting: { and: [{ ctx: "host", op: "endsWith", value: "shop.example.com" }, { ctx: "path", op: "regex", value: "^/p/\\d+$" }] },
+      urlMatch: {
+        include: [{ page: { part: "path", op: "startsWith", value: "/%E6%96%99%E9%87%91/" } }, { page: { part: "host", op: "endsWith", value: "shop.example.com" } }],
+        exclude: [{ page: { part: "path", op: "regex", value: "^/p/\\d+$" } }],
+      },
     });
-    const patched = await call("PATCH", `/sites/${sid}/experiments/exp_n`, { token: owner.token, body: { urlMatch: { part: "url", op: "contains", value: "/lp/" } } });
-    expect((await json<{ urlMatch: unknown }>(patched)).urlMatch).toEqual({ op: "contains", value: "/lp/" });
+    const patched = await call("PATCH", `/sites/${sid}/experiments/exp_n`, { token: owner.token, body: { urlMatch: { include: [{ page: { part: "url", op: "contains", value: "/lp/" } }] } } });
+    expect((await json<{ urlMatch: unknown }>(patched)).urlMatch).toEqual({ include: [{ page: { op: "contains", value: "/lp/" } }] });
     const goal = await call("POST", `/sites/${sid}/goals`, { token: owner.token, body: { id: "g_jp", name: "J", type: "PAGEVIEW", config: { page: { part: "path", op: "equals", value: "/完了" } } } });
     expect((await json<{ config: unknown }>(goal)).config).toEqual({ page: { part: "path", op: "equals", value: "/%E5%AE%8C%E4%BA%86" } });
   });
@@ -76,7 +87,7 @@ describe("正規表現の規則(決定 49、設計書 §10)", () => {
   it("Publish は v0.9 から残った URL 全体の正規表現を invalid_regex で止める(hint は日本語の説明)", async () => {
     const { owner, sid } = await site();
     const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_old" });
-    await sql`update experiments set url_match_json = ${JSON.stringify({ op: "regex", value: "^https://" })} where site_id = ${sid} and id = ${eid}`.execute(getDb(env));
+    await sql`update experiments set url_match_json = ${JSON.stringify({ include: [{ page: { op: "regex", value: "^https://" } }] })} where site_id = ${sid} and id = ${eid}`.execute(getDb(env));
     await runDirect(sid, eid);
     const r = await json<PublishBody>(await publishRes(owner.token, sid));
     expect(r).toMatchObject({ ok: false, error: "invalid_regex" });
@@ -86,12 +97,12 @@ describe("正規表現の規則(決定 49、設計書 §10)", () => {
   it("Publish はサイト全体の命令数 500 超を regex_budget_exceeded で止め、hint に大きいものから並べる", async () => {
     const { owner, sid } = await site();
     for (const k of [1, 2, 3]) {
-      const { id } = await createExperiment(owner.token, sid, { id: `exp_big${k}`, urlMatch: { part: "path", op: "regex", value: `^/${k}.{0,97}` } });
+      const { id } = await createExperiment(owner.token, sid, { id: `exp_big${k}`, urlMatch: { include: [{ page: { part: "path", op: "regex", value: `^/${k}.{0,97}` } }] } });
       await runDirect(sid, id);
     }
     const r = await json<PublishBody>(await publishRes(owner.token, sid));
     expect(r).toMatchObject({ ok: false, error: "regex_budget_exceeded" });
-    expect(r.hint).toMatch(/エクスペリエンス exp_big\d の対象 URL\(198\)/);
+    expect(r.hint).toMatch(/エクスペリエンス exp_big\d の対象 URL\(含める 1 行目\)\(198\)/);
   });
 
   it("Publish はオーディエンスの展開の合計 20,000 超を audience_expansion_too_large で止め、hint に compile の文言を出す(B159、G32)", async () => {

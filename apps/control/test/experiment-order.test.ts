@@ -34,7 +34,7 @@ describe("orderForCompile (決定 51、設計書 §3.2: 後に並ぶものほど
   });
 });
 
-const exp = (id: string, kind: "test" | "single", selectors: string[], urlMatch: unknown = { op: "startsWith", value: "/" }) => ({
+const exp = (id: string, kind: "test" | "single", selectors: string[], urlMatch: unknown = { include: [{ page: { op: "startsWith", value: "/" } }] }) => ({
   id, name: id.toUpperCase(), kind, urlMatch,
   variants: [{ changes: [] as Array<{ selector?: string }> }, { changes: selectors.map((s) => ({ selector: s })) }],
 });
@@ -56,9 +56,31 @@ describe("overlapWarnings (決定 51、設計書 §3.3)", () => {
   });
 
   it("needs both the same urlMatch and the same selector string", () => {
-    expect(overlapWarnings([exp("a", "test", ["#cta"], { op: "equals", value: "/lp" }), exp("b", "test", ["#cta"])])).toEqual([]); // 範囲の重なりは見ない
+    expect(overlapWarnings([exp("a", "test", ["#cta"], { include: [{ page: { op: "equals", value: "/lp" } }] }), exp("b", "test", ["#cta"])])).toEqual([]); // 範囲の重なりは見ない
     expect(overlapWarnings([exp("a", "test", ["#cta"]), exp("b", "test", ["#cta "])])).toEqual([]); // 文字列の完全一致
-    expect(overlapWarnings([exp("a", "test", ["#cta"], { part: "url", op: "startsWith", value: "/" }), exp("b", "test", ["#cta"])])).toHaveLength(1); // part の省略 = url
+    // 除く行が増えれば別の対象 URL(範囲の違いは見ない)
+    const excluded = { include: [{ page: { op: "startsWith", value: "/" } }], exclude: [{ page: { part: "path", op: "startsWith", value: "/old/" } }] };
+    expect(overlapWarnings([exp("a", "test", ["#cta"], excluded), exp("b", "test", ["#cta"])])).toEqual([]);
+  });
+
+  // B69(spec §2.3): 行の順・パラメータの順だけが違う対象 URL は同じ。除く行・パラメータが無いのと空の配列も同じ
+  it("overlap_uses_canonical_url_match", () => {
+    const p1 = { page: { part: "path", op: "startsWith", value: "/lp/" }, params: [{ name: "a", op: "exists" }, { name: "b", op: "equals", value: "1" }] };
+    const p2 = { page: { part: "host", op: "equals", value: "shop.example.com" } };
+    const one = { include: [p1, p2] };
+    const reordered = { include: [p2, { ...p1, params: [...p1.params].reverse() }], exclude: [] };
+    expect(overlapWarnings([exp("a", "test", ["#cta"], one), exp("b", "test", ["#cta"], reordered)])).toEqual([
+      expect.objectContaining({ path: "experiments.a", experimentIds: ["a", "b"] }),
+    ]);
+  });
+
+  it("overlap_ignores_explicit_url_part (B69 final review FR-Medium-1)", () => {
+    // part の省略と part: "url" は同じ対象 URL(保存のときの正規化と同じ)
+    const omitted = { include: [{ page: { op: "contains", value: "/lp/" } }] };
+    const explicit = { include: [{ page: { part: "url", op: "contains", value: "/lp/" } }] };
+    expect(overlapWarnings([exp("a", "test", ["#cta"], omitted), exp("b", "test", ["#cta"], explicit)])).toEqual([
+      expect.objectContaining({ path: "experiments.a", experimentIds: ["a", "b"] }),
+    ]);
   });
 
   it("lists up to three selectors and counts the rest", () => {
@@ -68,7 +90,7 @@ describe("overlapWarnings (決定 51、設計書 §3.3)", () => {
   });
 
   it("ignores selectorless changes (CSS)", () => {
-    const css = (id: string) => ({ id, name: id, kind: "test" as const, urlMatch: { op: "startsWith", value: "/" }, variants: [{ changes: [{}] }] });
+    const css = (id: string) => ({ id, name: id, kind: "test" as const, urlMatch: { include: [{ page: { op: "startsWith", value: "/" } }] }, variants: [{ changes: [{}] }] });
     expect(overlapWarnings([css("a"), css("b")])).toEqual([]);
   });
 });

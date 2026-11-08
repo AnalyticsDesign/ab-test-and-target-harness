@@ -1,14 +1,11 @@
 "use client";
-import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { normalizeRegexInput } from "@wtt/core";
 import type { Audience, Goal } from "@/lib/types";
-import { BROWSER_LABELS, DAY_LABELS, DEVICE_LABELS, HOST_OPS, OS_LABELS, PATH_OPS, QUERY_OPS, REF_OPS, URL_OPS, audienceItems, makeNames } from "@/lib/conditions";
+import { BROWSER_LABELS, DAY_LABELS, DEVICE_LABELS, OS_LABELS, REF_OPS, audienceItems, legacyCondText, makeNames } from "@/lib/conditions";
 import { hh, type Cond, type Weekday } from "@/lib/targeting-tree";
 import { PageMatchField } from "../PageMatchField";
 import { Combo } from "../ui/Combo";
 import { Picker } from "../ui/Picker";
-import { RegexAssist } from "./RegexAssist";
 import styles from "./Targeting.module.css";
 
 /** goalsHref = 目標の画面(目標が 0 件のときの案内のリンク。B66 c) */
@@ -65,26 +62,6 @@ function PeriodField({ within, lead, unit, retentionDays, onChange, disabled }: 
   );
 }
 
-/** ページの URL / パス / ホストの条件の値と一致の仕方。正規表現なら ¥ を置き換えて案内を出す */
-function PageCondFields({ cond, onChange, disabled }: { cond: Extract<Cond, { type: "url" | "path" | "host" }>; onChange: (c: Cond) => void; disabled: boolean }) {
-  const [replaced, setReplaced] = useState(false);
-  const regex = cond.op === "regex" || cond.op === "notRegex";
-  const set = (next: typeof cond) => {
-    const isRx = next.op === "regex" || next.op === "notRegex";
-    const value = isRx ? normalizeRegexInput(next.value) : next.value;
-    setReplaced(isRx && value !== next.value);
-    onChange({ ...next, value });
-  };
-  const ops = cond.type === "url" ? URL_OPS : cond.type === "path" ? PATH_OPS : HOST_OPS;
-  return (
-    <>
-      <input className={styles.text} aria-label="値" value={cond.value} disabled={disabled} onChange={(e) => set({ ...cond, value: e.target.value })} />
-      <Picker label="一致の仕方" value={cond.op} disabled={disabled} options={ops} onChange={(op) => set({ ...cond, op })} />
-      {regex && cond.type !== "url" ? <RegexAssist value={cond.value} part={cond.type} replaced={replaced} onApply={(v) => set({ ...cond, value: v })} /> : null}
-    </>
-  );
-}
-
 /**
  * B66 c: 目標が 0 件のときの案内。目標の画面は新しいタブで開く(この画面の未保存の入力を消さないため)。
  * 作った後は「目標を読み直す」で、入力を残したまま目標の一覧だけを読み直す(router.refresh。編集の本体は作り直さない)
@@ -110,18 +87,9 @@ function NoGoalsHint({ href }: { href: string }) {
 export function ConditionFields({ cond, onChange, ctx }: { cond: Cond; onChange: (c: Cond) => void; ctx: RowCtx }) {
   const d = ctx.disabled;
   switch (cond.type) {
-    case "url":
-    case "path":
-    case "host":
-      return <PageCondFields cond={cond} onChange={onChange} disabled={d} />;
-    case "query":
-      return (
-        <>
-          <input className={styles.text} aria-label="パラメータ名" placeholder="utm_source" value={cond.name} disabled={d} onChange={(e) => onChange({ ...cond, name: e.target.value })} />
-          {cond.op === "exists" || cond.op === "notExists" ? null : <input className={styles.text} aria-label="値" value={cond.value} disabled={d} onChange={(e) => onChange({ ...cond, value: e.target.value })} />}
-          <Picker label="一致の仕方" value={cond.op} disabled={d} options={QUERY_OPS} onChange={(op) => onChange({ ...cond, op: op as typeof cond.op })} />
-        </>
-      );
+    case "legacy":
+      // 保存値に残った、外したページの条件(B69)。値は編集させず、文で見せる(警告の行の形は ConditionRow の側)
+      return <code>{legacyCondText(cond.dsl)}</code>;
     case "device":
     case "browser":
     case "os": {

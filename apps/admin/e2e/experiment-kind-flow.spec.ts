@@ -156,7 +156,7 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
 
   test("start_overlap_confirmation_shows_priority_and_cancel_prevents_start", async () => {
     for (const id of ["exp_e2e_ov1", "exp_e2e_ov2"]) {
-      expect(await control(page, "POST", `/sites/${SITE_KIND.id}/experiments`, { id, name: id, urlMatch: { op: "contains", value: "/" } })).toBe(201);
+      expect(await control(page, "POST", `/sites/${SITE_KIND.id}/experiments`, { id, name: id, urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } })).toBe(201);
       expect(await control(page, "PUT", `/sites/${SITE_KIND.id}/experiments/${id}/variants/b/changes`, [{ id: "c1", type: "TEXT", selector: ".hero-title", payload: { text: id } }])).toBe(200);
     }
     expect(await control(page, "POST", `/sites/${SITE_KIND.id}/experiments/exp_e2e_ov1/status`, { status: "running" })).toBe(200);
@@ -196,7 +196,7 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
 
   test("start_double_click_during_preview_sends_one_status_request", async () => {
     // 重なりの取得を待つ間もボタンは押せない(2 回目の開始が 409 になり、成功の知らせをエラーで上書きしないように)
-    expect(await control(page, "POST", `/sites/${SITE_KIND.id}/experiments`, { id: "exp_e2e_dbl", name: "exp_e2e_dbl", urlMatch: { op: "contains", value: "/" } })).toBe(201);
+    expect(await control(page, "POST", `/sites/${SITE_KIND.id}/experiments`, { id: "exp_e2e_dbl", name: "exp_e2e_dbl", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } })).toBe(201);
     const preview = "**/api/control/sites/*/publish-preview*";
     // 取得を遅らせて、2 回目の押下が取得の途中に入るようにする
     await page.route(preview, async (route) => {
@@ -234,7 +234,7 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
   test("start_proceeds_when_publish_preview_fails", async () => {
     // 重なりの取得に失敗しても開始できる(警告は開始を止めない。K7)。D9 ③: 下書きのテストの開始は必ず確認を出すので、
     // 確認は重なりの一覧なしで出る(結果を記録しないサイトなので、記録しない文)。開始の応答の警告(記録しない)も画面に出る
-    expect(await control(page, "POST", `/sites/${SITE_KIND.id}/experiments`, { id: "exp_e2e_ov3", name: "exp_e2e_ov3", urlMatch: { op: "contains", value: "/" } })).toBe(201);
+    expect(await control(page, "POST", `/sites/${SITE_KIND.id}/experiments`, { id: "exp_e2e_ov3", name: "exp_e2e_ov3", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } })).toBe(201);
     const preview = "**/api/control/sites/*/publish-preview*";
     await page.route(preview, (route) => route.fulfill({ status: 500, body: "{}" }));
     try {

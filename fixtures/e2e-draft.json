@@ -8,7 +8,7 @@
     {
       "id": "exp_injected",
       "name": "Draft only",
-      "urlMatch": { "op": "contains", "value": "/preview" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/preview" } }] },
       "trafficPercentage": 100,
       "persistAssignment": false,
       "variants": [
@@ -26,7 +26,7 @@
     {
       "id": "exp_injected_csp",
       "name": "Draft only (CSP page)",
-      "urlMatch": { "op": "contains", "value": "/code-csp" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/code-csp" } }] },
       "trafficPercentage": 100,
       "persistAssignment": false,
       "variants": [

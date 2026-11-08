@@ -1,5 +1,6 @@
 import type { Draft } from "./experiment-draft";
 import { treeProblem } from "./conditions";
+import { urlMatchKey, urlMatchProblem } from "./url-match";
 import type { Experiment, Status } from "./types";
 
 /**
@@ -49,6 +50,10 @@ export function preSaveLockProblem(e: LockTarget, patch: Record<string, unknown>
     const traffic = trafficError(e, draft.traffic);
     if (traffic) return traffic;
   }
+  if ("urlMatch" in patch) {
+    const url = urlMatchProblem(draft.urlMatch);
+    if (url) return url;
+  }
   if ("targeting" in patch && draft.targeting.kind === "form") return treeProblem(draft.targeting.form.rows, retentionDays);
   return null;
 }
@@ -65,7 +70,7 @@ export type LockedField = "urlMatch" | "targeting" | "changes";
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 export function lockedFieldChanges(initial: Draft, current: Draft): LockedField[] {
   const out: LockedField[] = [];
-  if (!same(initial.urlMatch, current.urlMatch)) out.push("urlMatch");
+  if (urlMatchKey(initial.urlMatch) !== urlMatchKey(current.urlMatch)) out.push("urlMatch"); // 正規の形(行の並べ替えだけは変更にしない。B69)
   if (!same(initial.targeting, current.targeting)) out.push("targeting");
   const before = new Map(initial.variants.map((v) => [v.id, v.changes]));
   if (current.variants.some((v) => !v.original && !same(v.changes, before.get(v.id) ?? []))) out.push("changes");

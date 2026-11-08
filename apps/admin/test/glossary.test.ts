@@ -50,7 +50,6 @@ const BANNED: Array<{ re: RegExp; use: string }> = [
 ];
 /** 画面の語ではない使い方(理由を書く) */
 const ALLOW: Array<{ file: string; re: RegExp; why: string }> = [
-  { file: "lib/targeting-tree.ts", re: /\.toUpperCase\(\)/, why: "演算子の名前(notEquals など)を組み立てる" },
   { file: "components/experiment/VariantsTab.tsx", re: /\.toUpperCase\(\)/, why: "新しいパターンの既定の名前(ID の大文字)= データ" },
 ];
 /** englishProseIn の検査を外すファイル(理由を書く。ALLOW と同じく、直したら消す) */

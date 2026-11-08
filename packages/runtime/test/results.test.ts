@@ -654,7 +654,7 @@ it("participant_is_sent_only_after_scan_end", async () => {
   const config: CompiledConfig = {
     ...baseConfig,
     results: { forget: true, runs: { exp_hero: RUN_A } },
-    experiments: [{ ...baseConfig.experiments[0]!, variants: [baseConfig.experiments[0]!.variants[0]!, { id: "vB", name: "B", weight: 50, changes: [{ id: "c_img", type: "IMAGE", selector: ".hero-title", payload: { src: "/b.png" } }] }] }],
+    experiments: [{ ...baseConfig.experiments[0]!, variants: [baseConfig.experiments[0]!.variants[0]!, { id: "vB", weight: 50, changes: [{ id: "c_img", type: "IMAGE", selector: ".hero-title", payload: { src: "/b.png" } }] }] }],
   };
   const f = eventFetch();
   createRuntime(deps(f.fn), { config, settings: baseSettings });

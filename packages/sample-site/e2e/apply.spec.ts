@@ -34,7 +34,7 @@ test("runtime_unknown_schema_applies_nothing", async ({ context, page }) => {
   await presetVisitor(context, findVisitor("exp_hero", "B"));
   await page.route("**/s/site_demo.js", async (route) => {
     const res = await route.fetch();
-    const body = (await res.text()).replace('"schemaVersion":2', '"schemaVersion":3');
+    const body = (await res.text()).replace('"schemaVersion":3', '"schemaVersion":4');
     await route.fulfill({ response: res, body });
   });
   await page.goto("/");

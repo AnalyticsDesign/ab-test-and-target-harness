@@ -58,7 +58,7 @@ async function open(page: Page, path: string): Promise<void> {
 
 const navLink = (page: Page, label: string) => page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: label, exact: true });
 const h1 = (page: Page, name: string) => page.getByRole("heading", { level: 1, name, exact: true });
-const nameInput = (page: Page) => page.getByRole("region", { name: "基本設定" }).getByLabel("名前(100 字以内)");
+const nameInput = (page: Page) => page.getByRole("region", { name: "基本", exact: true }).getByLabel("名前(100 字以内)");
 const leaveConfirm = (page: Page) => page.getByRole("alertdialog", { name: "保存していない変更があります" });
 const busyConfirm = (page: Page) => page.getByRole("alertdialog", { name: "保存の途中です" });
 const pathname = (page: Page) => new URL(page.url()).pathname;

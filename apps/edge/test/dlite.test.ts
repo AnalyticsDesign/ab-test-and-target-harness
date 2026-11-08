@@ -10,14 +10,14 @@ import type { Env } from "../src/env";
 
 const HOST = "site.example";
 const exp: Experiment = {
-  id: "exp_001", name: "hero", urlMatch: { op: "contains", value: "/" },
+  id: "exp_001", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
   trafficPercentage: 100, persistAssignment: false,
   variants: [
-    { id: "vA", name: "A", weight: 50, changes: [] },
-    { id: "vB", name: "B", weight: 50, changes: [] },
+    { id: "vA", weight: 50, changes: [] },
+    { id: "vB", weight: 50, changes: [] },
   ],
 };
-const cfg = { schemaVersion: 2, version: 1, siteId: "site_p", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
+const cfg = { schemaVersion: 3, version: 1, siteId: "site_p", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
 const decisionBody = () => ({ v: 1, url: `https://${HOST}/lp/`, referrer: "", device: "mobile" });
 
 async function seedSettings(overrides: Record<string, unknown> = {}): Promise<void> {
@@ -241,7 +241,7 @@ describe("POST /__ab/decision (spec §9.6 / §5.4 / §16)", () => {
     const config = compile({
       siteId: "site_p", siteSalt: "salt_test", version: 1, goals: [],
       experiments: [{
-        id: "e_new", name: "new", urlMatch: { op: "contains", value: "/" }, trafficPercentage: 100, persistAssignment: false,
+        id: "e_new", name: "new", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, trafficPercentage: 100, persistAssignment: false,
         targeting: { ctx: "sinceFirstVisit", op: "lt", days: 1 },
         variants: [{ id: "vA", name: "A", weight: 0, changes: [] }, { id: "vB", name: "B", weight: 100, changes: [] }],
       }],
@@ -430,7 +430,7 @@ describe("D-lite shared visitor cookie (B139 §3)", () => {
 // D9 ② Task 6(設計書 §6.2・§6.4): D-lite の結果の受信は Cookie の ID で行い、decision の応答に ID の短いハッシュ(vh)を返す
 describe("D-lite results (D9 ②)", () => {
   const RUN = "r".repeat(22);
-  const resultsCfg = { ...cfg, version: 3, goals: [{ id: "g_buy", name: "Buy", type: "CUSTOM", config: {} }], results: { forget: true, runs: { exp_001: RUN } } };
+  const resultsCfg = { ...cfg, version: 3, goals: [{ id: "g_buy", type: "CUSTOM", config: {} }], results: { forget: true, runs: { exp_001: RUN } } };
   async function postEvent(body: unknown, cookie?: string): Promise<Response> {
     const headers = new Headers({ "Content-Type": "application/json" });
     if (cookie) headers.set("Cookie", cookie);

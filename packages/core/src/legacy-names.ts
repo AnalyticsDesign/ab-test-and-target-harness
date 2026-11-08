@@ -1,20 +1,20 @@
 import { own } from "./own";
-import type { CompiledConfig } from "./schema";
+import type { CompiledConfigV2 } from "./schema-v2";
 import type { ConversionPayload, ExposurePayload } from "./analytics-defaults";
 
 /**
- * B77(K6): KV の active な版が `name`(エクスペリエンス・パターン・目標)を持つ間の変換。
- * `name` の受け入れ(K4)と一緒に、次に `schemaVersion` を上げるときに消す。
+ * B77(K6): 版 2 の config が `name`(エクスペリエンス・パターン・目標)を持つときの変換。版 3 は名前を受けないので、
+ * 版 2 の読み取り(upgradeV2、config-upgrade.ts)の最初の段としてだけ呼ぶ(B69)。版 2 の読み取りと一緒に、版 4 で消す。
  *
  * 古い config は名前を config 本体に持ち、dataLayer の名前は「payload があればその値、無ければ name」で出ていた。
- * 新しい runtime の予備の導出は ID なので、bake の前にここで
+ * 新しい runtime の予備の導出は ID なので、版 3 にする前にここで
  *   (1) exposurePayloads に無い組を、名前(無ければ ID)で埋め
  *   (2) conversionPayloads に無い目標を、名前(無ければ ID)で埋め
  *   (3) 3 か所の `name` を消す
  * ことで、訪問者のブラウザに名前のキーを届けずに dataLayer の出力を保つ。
  * 純関数。入力を書き換えず、名前が無い config はそのまま返す(冪等)。
  */
-export function withoutLegacyNames(config: CompiledConfig): CompiledConfig {
+export function withoutLegacyNames(config: CompiledConfigV2): CompiledConfigV2 {
   const hasName =
     config.goals.some((g) => g.name !== undefined) ||
     config.experiments.some((e) => e.name !== undefined || e.variants.some((v) => v.name !== undefined));
@@ -42,7 +42,7 @@ export function withoutLegacyNames(config: CompiledConfig): CompiledConfig {
     ...e,
     variants: variants.map(({ name: _vn, ...v }) => v),
   }));
-  const goals = config.goals.map(({ name: _gn, ...g }) => g) as CompiledConfig["goals"];
+  const goals = config.goals.map(({ name: _gn, ...g }) => g) as CompiledConfigV2["goals"];
 
   return { ...config, experiments, goals, exposurePayloads, conversionPayloads };
 }

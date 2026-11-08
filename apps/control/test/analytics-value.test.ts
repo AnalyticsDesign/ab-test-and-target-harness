@@ -41,13 +41,13 @@ describe("analytics values (B77 K12)", () => {
         label: "experiment create (override)",
         ok: 201,
         path: ["analytics", "overrides", "experimentName"],
-        send: (v) => call("POST", `/sites/${sid}/experiments`, { token, body: { id: `exp_c${++n}`, name: "Hero", urlMatch: { op: "contains", value: "/" }, analytics: { overrides: { experimentName: v } } } }),
+        send: (v) => call("POST", `/sites/${sid}/experiments`, { token, body: { id: `exp_c${++n}`, name: "Hero", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, analytics: { overrides: { experimentName: v } } } }),
       },
       {
         label: "experiment create (extra)",
         ok: 201,
         path: ["analytics", "extra", "campaign"],
-        send: (v) => call("POST", `/sites/${sid}/experiments`, { token, body: { id: `exp_c${++n}`, name: "Hero", urlMatch: { op: "contains", value: "/" }, analytics: { extra: { campaign: v } } } }),
+        send: (v) => call("POST", `/sites/${sid}/experiments`, { token, body: { id: `exp_c${++n}`, name: "Hero", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, analytics: { extra: { campaign: v } } } }),
       },
       {
         label: "experiment patch (override)",

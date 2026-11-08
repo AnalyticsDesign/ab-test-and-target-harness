@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchPage, matchesUrl, pageOf } from "../src/page";
+import { matchPage, matchTargetUrl, matchesTargetUrl, matchesUrl, pageOf } from "../src/page";
 import { normalizeHostValue, normalizePageMatch, normalizePathValue, pageMatchIssue } from "../src/page-normalize";
 import { compileRegex } from "../src/regex-compile";
 
@@ -17,10 +17,10 @@ describe("pageOf: 照合する値(設計書 §4.1.2 (a))", () => {
     ["https://example.com./x", "example.com", "/x"], // 末尾ドット
     ["https://例え.jp/料金", "xn--r8jz45g.jp", "/%E6%96%99%E9%87%91"], // IDN は punycode、パスは percent-encoding のまま
   ])("%s → host %s / path %s", (url, host, path) => {
-    expect(pageOf(url)).toEqual({ url, host, path });
+    expect(pageOf(url)).toEqual({ url, host, path, params: expect.any(URLSearchParams) });
   });
   it("URL を解析できなければ host / path は null", () => {
-    expect(pageOf("/relative")).toEqual({ url: "/relative", host: null, path: null });
+    expect(pageOf("/relative")).toEqual({ url: "/relative", host: null, path: null, params: null });
   });
 });
 
@@ -82,5 +82,84 @@ describe("pageMatchIssue", () => {
     expect(pageMatchIssue({ part: "path", op: "regex", value: "a{2,}" })?.code).toBe("regex_unbounded_repeat");
     expect(pageMatchIssue({ part: "host", op: "regex", value: "^shop\\." })).toBeNull();
     expect(pageMatchIssue({ op: "contains", value: "(" })).toBeNull();
+  });
+});
+
+describe("matchTargetUrl: 対象 URL の行(含める / 除く + パラメータの AND)", () => {
+  const page = pageOf("https://shop.example.com/lp/spring/?utm_source=a&utm_source=news&ref=&q=a+b");
+  const startsLp = { page: { part: "path", op: "startsWith", value: "/lp/" } } as const;
+  const path257 = pageOf(`https://shop.example.com/${"a".repeat(256)}?utm_source=a`); // パスは 257 字
+  const pathRe = (src: string) => ({ part: "path" as const, op: "regex" as const, value: src, prog: prog(src) });
+
+  it("include_one_row_matches", () => {
+    expect(matchTargetUrl({ include: [startsLp] }, page)).toBe(true);
+  });
+  it("include_any_row", () => {
+    expect(matchTargetUrl({ include: [{ page: { part: "path", op: "startsWith", value: "/x/" } }, startsLp] }, page)).toBe(true);
+  });
+  it("exclude_wins", () => {
+    const exclude = [{ page: { part: "path", op: "contains", value: "/spring/" } }] as const;
+    expect(matchTargetUrl({ include: [startsLp], exclude: [...exclude] }, page)).toBe(false);
+  });
+  it("exclude_null_is_excluded", () => {
+    const row = { page: pathRe("^/a+$") };
+    expect(matchTargetUrl({ include: [{ page: { part: "host", op: "equals", value: "shop.example.com" } }], exclude: [row] }, path257)).toBe(false);
+    expect(matchTargetUrl({ include: [row] }, path257)).toBe(false);
+  });
+  it("exclude_row_null_and_false_is_excluded", () => {
+    const include = [{ page: { part: "host", op: "equals", value: "shop.example.com" } }] as const;
+    // null(257 字のパスの正規表現)+ false(utm_source=nope)は短絡せず null → 除く側
+    const nullThenFalse = { page: pathRe("^/a+$"), params: [{ name: "utm_source", op: "equals", value: "nope" }] } as const;
+    expect(matchTargetUrl({ include: [...include], exclude: [nullThenFalse] }, path257)).toBe(false);
+    // 逆の組: ページが false + パラメータが null(URL を解析できない)。解析できない URL ではページの条件も null なので、
+    // ページを url(解析不要)にして false、パラメータを null にする
+    const falseThenNull = { page: { op: "equals", value: "never" }, params: [{ name: "a", op: "exists" }] } as const;
+    expect(matchTargetUrl({ include: [{ page: { op: "contains", value: "not" } }], exclude: [falseThenNull] }, pageOf("not a url"))).toBe(false);
+  });
+  it("param_any_of_multiple_values", () => {
+    const row = { page: { part: "path", op: "startsWith", value: "/lp/" }, params: [{ name: "utm_source", op: "equals", value: "news" }] } as const;
+    expect(matchTargetUrl({ include: [row] }, page)).toBe(true);
+  });
+  it("param_equals_empty", () => {
+    const row = (p: object) => ({ include: [{ ...startsLp, params: [p] }] });
+    expect(matchTargetUrl(row({ name: "ref", op: "equals", value: "" }), page)).toBe(true);
+    expect(matchTargetUrl(row({ name: "missing", op: "exists" }), page)).toBe(false);
+  });
+  it("param_decoding", () => {
+    const row = (p: object) => ({ include: [{ page: { op: "contains", value: "x" }, params: [p] }] });
+    expect(matchTargetUrl(row({ name: "q", op: "equals", value: "a b" }), pageOf("https://x.example/?q=a+b"))).toBe(true);
+    expect(matchTargetUrl(row({ name: "q", op: "equals", value: "あ" }), pageOf("https://x.example/?q=%E3%81%82"))).toBe(true);
+  });
+  it("unparsable_url", () => {
+    const bad = pageOf("not a url");
+    const p = { name: "a", op: "exists" } as const;
+    expect(matchTargetUrl({ include: [{ page: { op: "contains", value: "not" }, params: [p] }] }, bad)).toBe(false);
+    expect(matchTargetUrl({ include: [{ page: { op: "contains", value: "not" } }], exclude: [{ page: { op: "contains", value: "zzz" }, params: [p] }] }, bad)).toBe(false);
+  });
+  it("malformed_input_is_false", () => {
+    const ok = startsLp;
+    for (const m of [
+      null,
+      {},
+      { include: "x" },
+      { part: "path", op: "startsWith", value: "/lp/" }, // 版 2 の PageMatch
+      { include: [{}] },
+      { include: [ok, {}] },
+      { include: [{}, ok] },
+      { include: [ok], exclude: {} }, // 配列でない exclude(concat が 1 つの行として足し、page が無いので false)
+      { include: [ok], exclude: "x" },
+      { include: [{ ...ok, params: {} }] }, // 配列でない params(map で例外にしない)
+      { include: [{ ...ok, params: "x" }] },
+      { include: [ok], exclude: [{ ...ok, params: {} }] },
+    ]) expect(matchTargetUrl(m, page)).toBe(false);
+  });
+});
+
+describe("matchesTargetUrl", () => {
+  it("文字列の URL に対する対象 URL の照合", () => {
+    const m = { include: [{ page: { part: "path", op: "startsWith", value: "/lp/" }, params: [{ name: "a", op: "exists" }] }] };
+    expect(matchesTargetUrl("https://a.example/lp/?a=1", m)).toBe(true);
+    expect(matchesTargetUrl("https://a.example/lp/", m)).toBe(false);
+    expect(matchesTargetUrl("not a url", m)).toBe(false);
   });
 });

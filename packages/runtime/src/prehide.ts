@@ -1,4 +1,4 @@
-import { matchesUrl } from "@wtt/core";
+import { matchesTargetUrl } from "@wtt/core";
 import type { CompiledConfig } from "@wtt/core";
 import { setNonce } from "./code";
 
@@ -16,7 +16,7 @@ export function prehideSelectorsFor(config: CompiledConfig, experimentIds: strin
 export function prehideSelectors(config: CompiledConfig, url: string): string[] {
   return prehideSelectorsFor(
     config,
-    config.experiments.filter((exp) => matchesUrl(url, exp.urlMatch)).map((exp) => exp.id),
+    config.experiments.filter((exp) => matchesTargetUrl(url, exp.urlMatch)).map((exp) => exp.id),
   );
 }
 

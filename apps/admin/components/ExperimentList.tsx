@@ -1,5 +1,5 @@
 "use client";
-import { describePageMatch } from "@/lib/page-match";
+import { urlMatchListText } from "@/lib/url-match";
 import { useState } from "react";
 import { AppLink } from "@/components/ui/AppLink";
 import type { Experiment } from "@/lib/types";
@@ -92,7 +92,7 @@ export function ExperimentList({ wid, sid, experiments, canPublish, initialFilte
                     )}
                   </td>
                   <td>
-                    {describePageMatch(e.urlMatch)}
+                    {urlMatchListText(e.urlMatch)}
                   </td>
                   <td>{e.trafficPercentage}%</td>
                   {/* D9 ③: 採用の要約(正の判定の記録から。パーソナライズと未記録は空) */}

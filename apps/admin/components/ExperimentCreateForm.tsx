@@ -2,8 +2,8 @@
 import { useState } from "react";
 import { api, describeError } from "@/lib/client";
 import { Field } from "./Field";
-import { PageMatchField } from "./PageMatchField";
-import { DEFAULT_PAGE_MATCH, type PageMatchValue } from "@/lib/page-match";
+import { TargetUrlField } from "./TargetUrlField";
+import { DEFAULT_URL_MATCH, type UrlMatchValue } from "@/lib/url-match";
 import { ErrorBox } from "./ErrorBox";
 import { SubmitButton } from "./SubmitButton";
 import { KIND_HINT, KIND_JA, createButtonLabel } from "@/lib/experiment-kind";
@@ -31,7 +31,7 @@ function ExperimentCreateFormBody({ wid, sid }: { wid: string; sid: string }) {
   const { busy, run } = useBusyAction();
   const [error, setError] = useState<string | null>(null);
   const [idError, setIdError] = useState<string | null>(null);
-  const [urlMatch, setUrlMatch] = useState<PageMatchValue>(DEFAULT_PAGE_MATCH);
+  const [urlMatch, setUrlMatch] = useState<UrlMatchValue>(DEFAULT_URL_MATCH);
   const [kind, setKind] = useState<ExperimentKind>("test");
   return (
     <form
@@ -77,8 +77,8 @@ function ExperimentCreateFormBody({ wid, sid }: { wid: string; sid: string }) {
         ))}
         <p className="muted">種別は作成後に変えられません。変えるときは、作成した後に「複製」で作り直します</p>
       </fieldset>
-      <Field label="対象 URL" hint="このエクスペリエンスを動かすページ。ここに一致しないページでは、配信条件にかかわらず何もしません">
-        <PageMatchField value={urlMatch} onChange={setUrlMatch} />
+      <Field label="対象 URL" group hint="このエクスペリエンスを動かすページ。ここに一致しないページでは、配信条件にかかわらず何もしません">
+        <TargetUrlField value={urlMatch} onChange={setUrlMatch} />
       </Field>
       <ErrorBox message={error} />
       <SubmitButton busy={busy}>{createButtonLabel(kind)}</SubmitButton>

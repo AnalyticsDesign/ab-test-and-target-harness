@@ -49,7 +49,7 @@ describe("docs/agent-guide.md のレシピ(§13.10)", () => {
     expect((await call("GET", `/workspaces/${wid}/sites`, { token: key })).status).toBe(200);
     const created = await call("POST", `/sites/${sid}/experiments`, {
       token: key,
-      body: { id: "exp_hero_q1", name: "Hero Q1", urlMatch: { op: "contains", value: "/lp/" }, trafficPercentage: 100 },
+      body: { id: "exp_hero_q1", name: "Hero Q1", urlMatch: { include: [{ page: { op: "contains", value: "/lp/" } }] }, trafficPercentage: 100 },
     });
     expect(created.status).toBe(201);
     const changes = await call("PUT", `/sites/${sid}/experiments/exp_hero_q1/variants/b/changes`, {
@@ -66,7 +66,7 @@ describe("docs/agent-guide.md のレシピ(§13.10)", () => {
   it("agent_guide_recipe_verify_draft", async () => {
     const { key, wid, token } = await agentKey();
     const { id: sid } = await createSite(token, wid);
-    await call("POST", `/sites/${sid}/experiments`, { token: key, body: { id: "exp_draft", name: "D", urlMatch: { op: "contains", value: "/lp/" } } });
+    await call("POST", `/sites/${sid}/experiments`, { token: key, body: { id: "exp_draft", name: "D", urlMatch: { include: [{ page: { op: "contains", value: "/lp/" } }] } } });
     await call("PUT", `/sites/${sid}/experiments/exp_draft/variants/b/changes`, {
       token: key,
       body: [{ id: "c_text", type: "TEXT", selector: "h1.hero", payload: { text: "下書き" } }],
@@ -81,7 +81,7 @@ describe("docs/agent-guide.md のレシピ(§13.10)", () => {
   it("agent_guide_recipe_read_results", async () => {
     const { key, wid, token } = await agentKey();
     const { id: sid } = await createSite(token, wid);
-    await call("POST", `/sites/${sid}/experiments`, { token: key, body: { id: "exp_r", name: "R", urlMatch: { op: "contains", value: "/" } } });
+    await call("POST", `/sites/${sid}/experiments`, { token: key, body: { id: "exp_r", name: "R", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     const r = await json<{
       ga4: { propertyId: string; exposureByVariant: { method: string; url: string; body: Record<string, unknown> } };
       bigquery: { visitorCvrSql: string };
@@ -96,7 +96,7 @@ describe("docs/agent-guide.md のレシピ(§13.10)", () => {
   it("agent_guide_recipe_what_if", async () => {
     const { key, wid, token } = await agentKey();
     const { id: sid } = await createSite(token, wid);
-    await call("POST", `/sites/${sid}/experiments`, { token: key, body: { id: "exp_w", name: "W", urlMatch: { op: "contains", value: "/lp/" } } });
+    await call("POST", `/sites/${sid}/experiments`, { token: key, body: { id: "exp_w", name: "W", urlMatch: { include: [{ page: { op: "contains", value: "/lp/" } }] } } });
     await call("PUT", `/sites/${sid}/experiments/exp_w/variants/b/changes`, {
       token: key,
       body: [{ id: "c_text", type: "TEXT", selector: "h1.hero", payload: { text: "b" } }],
@@ -128,7 +128,7 @@ describe("docs/agent-guide.md のレシピ(§13.10)", () => {
   it("agent_guide_recipe_duplicate", async () => {
     const { key, wid, token } = await agentKey();
     const { id: sid } = await createSite(token, wid);
-    expect((await call("POST", `/sites/${sid}/experiments`, { token: key, body: { id: "exp_src", name: "Source", urlMatch: { op: "contains", value: "/" } } })).status).toBe(201);
+    expect((await call("POST", `/sites/${sid}/experiments`, { token: key, body: { id: "exp_src", name: "Source", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } })).status).toBe(201);
     const same = await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token: key, body: { mode: "same" } });
     expect(same.status).toBe(201);
     expect(await json(same)).toMatchObject({ kind: "test", status: "draft" });

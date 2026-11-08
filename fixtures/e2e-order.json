@@ -12,7 +12,7 @@
   "experiments": [
     {
       "id": "exp_order_s", "name": "Order personalization", "kind": "single",
-      "urlMatch": { "op": "contains", "value": "/order.html" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/order.html" } }] },
       "trafficPercentage": 100, "persistAssignment": false,
       "variants": [
         { "id": "vA", "name": "A", "weight": 100, "changes": [
@@ -23,7 +23,7 @@
     },
     {
       "id": "exp_order_t", "name": "Order test",
-      "urlMatch": { "op": "contains", "value": "/order.html" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/order.html" } }] },
       "trafficPercentage": 100, "persistAssignment": false,
       "variants": [
         { "id": "vA", "name": "A", "weight": 50, "changes": [] },

@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
-import { kvKeys, parseCompiledConfig, RUN_ID_RE } from "@wtt/core";
+import {
+  kvKeys,
+  PAGE_CONDITION_MOVED_AUDIENCE_HINT,
+  PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE,
+  PAGE_CONDITION_MOVED_HINT,
+  PAGE_CONDITION_MOVED_MESSAGE,
+  parseCompiledConfig,
+  RUN_ID_RE,
+} from "@wtt/core";
 import { getDb } from "../src/db";
 import {
   call,
@@ -19,6 +27,7 @@ import {
   experimentRow,
   runDirect,
   RESULTS_STORE,
+  countingD1,
 } from "./helpers";
 
 const setStatus = (token: string, sid: string, eid: string, status: string, envOverride?: Record<string, unknown>) =>
@@ -394,5 +403,123 @@ describe("run_id の発行と開始の警告(D9 ②)", () => {
     const body = await json(res);
     expect((await experimentRow(sid, eid)).run_id).toBeNull();
     expect(body.warnings).toEqual([NOT_RECORDED]);
+  });
+});
+
+// B69(spec §6.2.1): 開始・再開は、外したページの条件(直接・参照するオーディエンス経由)が残っていれば状態の CAS の前に 422
+describe("開始・再開の前の、外したページの条件の検査(B69)", () => {
+  const QUERY = { ctx: "query", name: "a", op: "exists" };
+  const DEVICE = { ctx: "device", op: "in", value: ["mobile"] };
+  const writeTargeting = (sid: string, eid: string, targeting: unknown) =>
+    env.DB.prepare("update experiments set targeting_json = ? where site_id = ? and id = ?").bind(JSON.stringify(targeting), sid, eid).run();
+  /** オーディエンスの定義を D1 に直接書く(古い条件は保存の検査を通らないため) */
+  const writeAudience = (sid: string, aid: string, definition: unknown) =>
+    env.DB.prepare(
+      "insert into audiences (site_id, id, name, definition_json, created_at, updated_at) values (?1, ?2, ?2, ?3, 1, 1) on conflict (site_id, id) do update set definition_json = excluded.definition_json",
+    ).bind(sid, aid, JSON.stringify(definition)).run();
+  const planRow = (sid: string, eid: string) => getDb(env).selectFrom("evaluation_plans").selectAll().where("site_id", "=", sid).where("experiment_id", "=", eid).executeTakeFirst();
+  let siteSeq = 0;
+  /** 結果を記録するサイトのテスト(開始で run_id を振り、評価計画を固定する) */
+  async function recordingTest(owner: Awaited<ReturnType<typeof setupOwner>>, eid: string) {
+    const res = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Site", domains: [`www.b69-${++siteSeq}.example.com`] }, envOverride: RESULTS_STORE });
+    expect(res.status).toBe(201);
+    const { id: sid } = await json<{ id: string }>(res);
+    await createExperiment(owner.token, sid, { id: eid });
+    await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
+    await choosePrimaryGoal(owner.token, sid, eid);
+    return sid;
+  }
+
+  it("start_and_resume_reject_moved_page_condition", async () => {
+    const owner = await setupOwner();
+    // assetGuardEnabled が真(既定の R2 あり)と偽(R2 もアップローダーも無い)の両方で
+    for (const [label, guardOff] of [["guard", {}], ["no guard", { ASSETS: undefined }]] as const) {
+      for (const via of ["direct", "audience"] as const) {
+        for (const from of ["draft", "paused"] as const) {
+          const eid = `exp_${via}_${from}_${label === "guard" ? "g" : "n"}`;
+          const sid = await recordingTest(owner, eid);
+          if (via === "direct") await writeTargeting(sid, eid, { and: [DEVICE, QUERY] });
+          else {
+            await writeAudience(sid, "aud_old", { or: [DEVICE, { not: { ctx: "path", op: "startsWith", value: "/lp/" } }] });
+            await writeTargeting(sid, eid, { and: [DEVICE, { audience: "aud_old" }] });
+          }
+          if (from === "paused") await runDirect(sid, eid, "paused");
+          const before = await experimentRow(sid, eid);
+          const plan = await planRow(sid, eid);
+          const res = await setStatus(owner.token, sid, eid, "running", { ...RESULTS_STORE, ...guardOff });
+          const tag = `${label} ${via} ${from}`;
+          expect(res.status, tag).toBe(422);
+          const body = await json(res);
+          if (via === "direct") expect(body, tag).toMatchObject({ error: "invalid_experiment_targeting", path: ["targeting", "and", 1], message: PAGE_CONDITION_MOVED_MESSAGE, hint: PAGE_CONDITION_MOVED_HINT });
+          else expect(body, tag).toMatchObject({ error: "invalid_experiment_targeting", audience: "aud_old", message: PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE, hint: PAGE_CONDITION_MOVED_AUDIENCE_HINT });
+          // 状態・開始時刻・run_id・評価計画は変わらない(CAS も公開も走らない)
+          expect(await experimentRow(sid, eid), tag).toEqual(before);
+          expect(await planRow(sid, eid), tag).toEqual(plan);
+          expect((await siteRow(sid)).active_version, tag).toBeNull();
+        }
+      }
+    }
+  });
+
+  it("start reads only the audiences of the same site (another site's legacy audience with the same id does not block)", async () => {
+    const owner = await setupOwner();
+    const { id: other } = await createSite(owner.token, owner.workspaceId);
+    await writeAudience(other, "aud_x", { ctx: "query", name: "a", op: "exists" });
+    const { id: sid } = await createSite(owner.token, owner.workspaceId);
+    expect((await call("POST", `/sites/${sid}/audiences`, { token: owner.token, body: { id: "aud_x", name: "X", definition: DEVICE } })).status).toBe(201);
+    const { id: eid } = await createExperiment(owner.token, sid, { targeting: { audience: "aud_x" } });
+    await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
+    const res = await setStatus(owner.token, sid, eid, "running");
+    expect(res.status).toBe(200);
+    expect((await json(res)).publish.ok).toBe(true);
+  });
+
+  it("start_reads_at_most_one_more_d1", async () => {
+    const owner = await setupOwner();
+    /** 同じ形のサイトで 1 回開始し、D1 の往復(文の実行 + batch)を数える */
+    const startTrips = async (targeting: unknown, audience: boolean) => {
+      const { id: sid } = await createSite(owner.token, owner.workspaceId);
+      if (audience) expect((await call("POST", `/sites/${sid}/audiences`, { token: owner.token, body: { id: "aud_ok", name: "OK", definition: DEVICE } })).status).toBe(201);
+      const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_load", ...(targeting !== null ? { targeting } : {}) });
+      await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
+      const counter = countingD1(env.DB);
+      const res = await setStatus(owner.token, sid, eid, "running", { DB: counter.db });
+      expect(res.status).toBe(200);
+      expect((await json(res)).publish.ok).toBe(true);
+      const c = counter.counts();
+      return { trips: c.queries + c.batches, sql: c.sql };
+    };
+    const none = await startTrips(null, false);
+    const device = await startTrips(DEVICE, false);
+    const viaAudience = await startTrips({ and: [DEVICE, { audience: "aud_ok" }] }, true);
+    // オーディエンスを参照しない開始は今と同じ回数。参照する開始だけ、その定義の読み 1 回が増える
+    expect(device.trips).toBe(none.trips);
+    expect(viaAudience.trips).toBe(none.trips + 1);
+    const audienceReads = (s: string[]) => s.filter((q) => /from "audiences"/.test(q) && /json_each/.test(q)).length;
+    expect(audienceReads(none.sql)).toBe(0);
+    expect(audienceReads(viaAudience.sql)).toBe(1);
+  });
+
+  it("pause_and_archive_pass_on_legacy_row", async () => {
+    const owner = await setupOwner();
+    const { id: sid } = await createSite(owner.token, owner.workspaceId);
+    for (const [eid, targeting] of [["exp_direct", QUERY], ["exp_aud", { audience: "aud_old" }]] as const) {
+      await createExperiment(owner.token, sid, { id: eid });
+      await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
+      await runDirect(sid, eid, "running");
+      await writeTargeting(sid, eid, targeting);
+    }
+    await writeAudience(sid, "aud_old", { ctx: "host", op: "equals", value: "example.com" });
+    // 一時停止・終了は止めない(片付けを止めない)。一時停止で 2 つとも配る設定から外れたので公開も通る
+    expect((await setStatus(owner.token, sid, "exp_direct", "paused")).status).toBe(200);
+    const paused = await setStatus(owner.token, sid, "exp_aud", "paused");
+    expect(paused.status).toBe(200);
+    expect((await json(paused)).publish.ok).toBe(true);
+    for (const eid of ["exp_direct", "exp_aud"]) {
+      const res = await setStatus(owner.token, sid, eid, "archived");
+      expect(res.status, eid).toBe(200);
+      expect((await json(res)).publish.ok, eid).toBe(true);
+      expect((await experimentRow(sid, eid)).status).toBe("archived");
+    }
   });
 });

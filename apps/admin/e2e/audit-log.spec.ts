@@ -96,7 +96,7 @@ test.describe.serial("experiment history tab and the operation log (B129)", () =
   test("history_tab_reloads_in_tab_after_save", async () => {
     await page.goto(expUrl);
     await waitForHydration(page);
-    await page.getByRole("region", { name: "基本設定" }).getByLabel("名前(100 字以内)").fill("E2E audit renamed");
+    await page.getByRole("region", { name: "基本", exact: true }).getByLabel("名前(100 字以内)").fill("E2E audit renamed");
     // 未保存の入力を持ったまま変更履歴のタブへ移り、そこで保存する
     await historyTab(page).click();
     await expect(table(page)).toBeVisible();

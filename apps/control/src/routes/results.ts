@@ -125,7 +125,9 @@ export const ResultReportSchema = z.object({
   definition: z
     .object({
       variants: z.array(z.object({ id: z.string(), changes: z.array(z.unknown()) })),
-      urlMatch: z.unknown(),
+      urlMatch: z
+        .unknown()
+        .describe("対象 URL(含める行 include・除く行 exclude)。対象 URL の形が行の形に変わる前に作られた記録では、古い形(1 つのページの一致 { part, op, value })のまま"),
       targeting: z.unknown(),
       primaryGoal: z.object({ id: z.string(), config: z.unknown() }).nullable(),
     })

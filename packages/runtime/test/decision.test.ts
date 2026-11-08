@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { decideLocally, needsRemoteDecision, onEdgePath, requestDecision } from "../src/decision";
 import { baseConfig, baseSettings, remoteConfig } from "./fixtures";
 
-const CTX = { url: "https://site.test/pricing", query: {}, device: "desktop" as const, referrer: "" };
+const CTX = { url: "https://site.test/pricing", device: "desktop" as const, referrer: "" };
 
 it("mode A with needsProfile=false decides locally — no request (spec §7.1)", () => {
   expect(needsRemoteDecision(false, baseConfig, CTX.url)).toBe(false);
@@ -28,10 +28,26 @@ it("onEdgePath: Mode B で https かつ host(ポート込み)が Cloudflare 経�
 
 it("mode A with needsProfile=true requests when url matches an experiment or a pattern (spec §7.1)", () => {
   expect(needsRemoteDecision(false, remoteConfig, CTX.url)).toBe(true);
-  const noMatch = { ...remoteConfig, experiments: [{ ...remoteConfig.experiments[0]!, urlMatch: { op: "contains" as const, value: "/never" } }], patterns: { p_x: { op: "contains" as const, value: "/pricing" } } };
+  const noMatch = { ...remoteConfig, experiments: [{ ...remoteConfig.experiments[0]!, urlMatch: { include: [{ page: { op: "contains" as const, value: "/never" } }] } }], patterns: { p_x: { op: "contains" as const, value: "/pricing" } } };
   expect(needsRemoteDecision(false, noMatch, CTX.url)).toBe(true);  // patterns 一致でも送る(履歴記録)
   const noneMatch = { ...noMatch, patterns: { p_x: { op: "contains" as const, value: "/never" } } };
   expect(needsRemoteDecision(false, noneMatch, CTX.url)).toBe(false); // どちらにも一致しなければ送らない
+});
+
+it("needs_remote_decision_uses_target_url_rows: 要求を出すかもパラメータの条件と除くの行で決める(B69 spec §3.2)", () => {
+  const cfg = {
+    ...remoteConfig,
+    experiments: [{
+      ...remoteConfig.experiments[0]!,
+      urlMatch: {
+        include: [{ page: { part: "path" as const, op: "startsWith" as const, value: "/lp/" }, params: [{ name: "utm_source", op: "equals" as const, value: "news" }] }],
+        exclude: [{ page: { part: "path" as const, op: "startsWith" as const, value: "/lp/old/" } }],
+      },
+    }],
+  };
+  expect(needsRemoteDecision(false, cfg, "https://site.test/lp/?utm_source=news")).toBe(true);
+  expect(needsRemoteDecision(false, cfg, "https://site.test/lp/")).toBe(false);
+  expect(needsRemoteDecision(false, cfg, "https://site.test/lp/old/?utm_source=news")).toBe(false);
 });
 
 /** 実 Response に依存しない最小スタブ(requestDecision が使うのは ok と json() だけ。r1 CL-Medium-4) */

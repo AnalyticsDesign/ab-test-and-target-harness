@@ -15,7 +15,7 @@ const TZ = "Asia/Tokyo";
 
 const TEXT = { id: "c1", type: "TEXT", selector: "#cta", payload: { text: "B" } };
 const EXP = {
-  id: "exp_buy", siteId: "s", name: "購入ボタンの文言テスト", kind: "test", status: "running", publishedStatus: "running", urlMatch: { op: "equals", value: "/" }, targeting: null,
+  id: "exp_buy", siteId: "s", name: "購入ボタンの文言テスト", kind: "test", status: "running", publishedStatus: "running", urlMatch: { include: [{ page: { op: "equals", value: "/" } }] }, targeting: null,
   trafficPercentage: 100, persistAssignment: false, analytics: null, createdBy: "u", updatedBy: "u", createdAt: 1, updatedAt: 2, unpublished: false, description: "", runId: "run_1",
   variants: [
     { id: "a", name: "A(現行)", weight: 50, original: true, description: "", analytics: null, changes: [] },

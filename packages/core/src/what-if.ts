@@ -1,6 +1,6 @@
 import { inTraffic } from "./hash";
 import { dslNeedsProfile, evaluateDsl, experimentUsesInvalidPattern, pickVariant, type PageContext, type ProfileSnapshot } from "./evaluate";
-import { matchPage, pageOf } from "./page";
+import { matchTargetUrl, pageOf } from "./page";
 import type { CompiledConfig, Experiment } from "./schema";
 
 /** D1 `experiments.status`(spec §13.8)。core は D1 を知らないので型だけ持つ */
@@ -75,12 +75,12 @@ export function evaluateWhatIf(items: WhatIfInput[], ctx: PageContext, opts: Wha
     // 決定 39 (7): draft: false は公開 config を評価する。status が running でも載っていなければ配っていない
     // (未 Publish の Site も全 Experiment が published: false になるのでここに落ちる)
     if (opts.draft !== true && !published) return no("not_published");
-    if (matchPage(experiment.urlMatch, page) !== true) return no("url_mismatch");
+    if (!matchTargetUrl(experiment.urlMatch, page)) return no("url_mismatch"); // 除くの行に当たって外れたときも同じ理由(B69)
     if (experiment.targeting) {
       if (profile === null && dslNeedsProfile(experiment.targeting)) return no("needs_history");
       // 使えないパターンを参照する閲覧の条件は、本番の edge では DO に渡さない = 対象外(experimentsForUrl と同じ関数)
       if (opts.patterns !== undefined && experimentUsesInvalidPattern(experiment, opts.patterns, page)) return no("input_missing");
-      const r = evaluateDsl(experiment.targeting, ctx, profile, opts.timezone, page);
+      const r = evaluateDsl(experiment.targeting, ctx, profile, opts.timezone);
       if (r === null) return no("input_missing");
       if (!r) return no("targeting_false");
     }

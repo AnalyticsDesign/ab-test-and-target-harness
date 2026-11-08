@@ -1,17 +1,17 @@
 import type { AnalyticsSettings, CompiledConfig, RuntimeSettings } from "@wtt/core";
 
 export const baseConfig: CompiledConfig = {
-  schemaVersion: 2, version: 3, siteId: "site_unit", siteSalt: "salt",
+  schemaVersion: 3, version: 3, siteId: "site_unit", siteSalt: "salt",
   needsProfile: false, patterns: {},
   prehide: { exp_hero: [".hero-title"] },
   exposureSelectors: { exp_hero: [".hero-title"] },
-  goals: [{ id: "g_cta", name: "CTA click", type: "CUSTOM", config: {} }],
+  goals: [{ id: "g_cta", type: "CUSTOM", config: {} }],
   experiments: [{
-    id: "exp_hero", name: "Hero", urlMatch: { op: "contains", value: "/" },
+    id: "exp_hero", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
     trafficPercentage: 100, persistAssignment: false,
     variants: [
-      { id: "vA", name: "A", weight: 50, changes: [] },
-      { id: "vB", name: "B", weight: 50, changes: [{ id: "c_text", type: "TEXT", selector: ".hero-title", payload: { text: "B!" } }] },
+      { id: "vA", weight: 50, changes: [] },
+      { id: "vB", weight: 50, changes: [{ id: "c_text", type: "TEXT", selector: ".hero-title", payload: { text: "B!" } }] },
     ],
   }],
 };
@@ -57,8 +57,8 @@ export const namedConfig: CompiledConfig = {
 export const goalsConfig: CompiledConfig = {
   ...remoteConfig,
   goals: [
-    { id: "g_cta", name: "CTA click", type: "CUSTOM", config: {} },
-    { id: "g_pv", name: "Pricing view", type: "PAGEVIEW", config: { page: { op: "contains", value: "/pricing" } } },
-    { id: "g_click", name: "CTA", type: "CLICK", config: { selector: ".cta" } },
+    { id: "g_cta", type: "CUSTOM", config: {} },
+    { id: "g_pv", type: "PAGEVIEW", config: { page: { op: "contains", value: "/pricing" } } },
+    { id: "g_click", type: "CLICK", config: { selector: ".cta" } },
   ],
 };

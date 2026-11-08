@@ -35,4 +35,7 @@
 .targetingHead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .raw { border: 1px solid var(--warn); background: var(--warn-soft); border-radius: var(--radius); padding: 10px 12px; }
 .json { font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; margin: 6px 0 0; }
-.deliver { margin-top: 10px; }
+/* 保存値に残った、使えなくなった条件の行(B69 spec §7.5) */
+.unusableRow { border-color: var(--warn); background: var(--warn-soft); }
+.unusableBody { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.unusableBody code { word-break: break-all; }

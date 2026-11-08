@@ -12,7 +12,7 @@
   "experiments": [
     {
       "id": "exp_results", "name": "Results hero",
-      "urlMatch": { "op": "contains", "value": "/results.html" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/results.html" } }] },
       "trafficPercentage": 100, "persistAssignment": false,
       "variants": [
         { "id": "vA", "name": "A", "weight": 50, "changes": [] },
@@ -21,7 +21,7 @@
     },
     {
       "id": "exp_results_late", "name": "Results late target",
-      "urlMatch": { "op": "contains", "value": "/results-late.html" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/results-late.html" } }] },
       "trafficPercentage": 100, "persistAssignment": false,
       "variants": [
         { "id": "vA", "name": "A", "weight": 50, "changes": [] },

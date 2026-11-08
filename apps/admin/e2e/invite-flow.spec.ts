@@ -300,7 +300,7 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   expect((await ctl(`/workspaces/${tempId}/sites`, { name: "E2E Temp Site", domains: ["temp.e2e-temp.example"], id: "site_e2e_temp" })).status()).toBe(201); // B139: 他の spec のサイトと登録ドメインを分ける
   // D9 ③: 計測用のデータベースがある導入の新しい Site は結果を記録する(開始に評価計画の目標が要る)ので、記録しない設定にしてから開始する(fixtures.ts の createSite と同じ)
   expect((await page.request.patch(`${ADMIN_URL}/api/control/sites/site_e2e_temp`, { headers: controlHeaders(), data: { resultsEnabled: false } })).status()).toBe(200);
-  expect((await ctl("/sites/site_e2e_temp/experiments", { id: "exp_e2e_temp", name: "E2E temp", urlMatch: { op: "contains", value: "/" } })).status()).toBe(201);
+  expect((await ctl("/sites/site_e2e_temp/experiments", { id: "exp_e2e_temp", name: "E2E temp", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } })).status()).toBe(201);
   expect((await ctl("/sites/site_e2e_temp/experiments/exp_e2e_temp/status", { status: "running" })).status()).toBe(200);
   await confirmBox.getByRole("button", { name: "削除する" }).click();
   await expect(confirmBox.getByRole("alert")).toContainText("配信中のエクスペリエンスがあります"); // サーバーの 409 の文がその行に出る

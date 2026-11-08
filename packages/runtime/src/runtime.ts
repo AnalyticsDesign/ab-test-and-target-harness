@@ -66,14 +66,14 @@ export type AbApi = {
 /**
  * boot payload の形チェック(zod なし — サイズ予算)。bootstrap は edge が KV parse 済みの値を焼き込むため、
  * ここでは「別物・改竄・未知 schemaVersion」を弾く最小限に留める(§6.4: 未知 schemaVersion は何も適用しない)。
- * 版 1 の設定は edge が版 2 の内部表現に変換してから焼き込む(決定 49、設計書 §6.1)ので、ここで受けるのは版 2 だけ
+ * 版 2 の設定は deployer・control が版 3 に変換してから焼き込む(B69 spec §5)ので、ここで受けるのは版 3 だけ
  */
 export function parseBootPayload(raw: unknown): BootPayload | null {
   if (typeof raw !== "object" || raw === null) return null;
   const config = (raw as Record<string, unknown>).config as CompiledConfig | undefined;
   const settings = (raw as Record<string, unknown>).settings as RuntimeSettings | undefined;
   const isRecord = (v: unknown): boolean => typeof v === "object" && v !== null && !Array.isArray(v);
-  if (typeof config !== "object" || config === null || (config as { schemaVersion?: unknown }).schemaVersion !== 2) return null;
+  if (typeof config !== "object" || config === null || (config as { schemaVersion?: unknown }).schemaVersion !== 3) return null;
   if (!Array.isArray(config.experiments) || typeof config.siteId !== "string" || typeof config.version !== "number" || typeof config.siteSalt !== "string") return null;
   // 起動経路が触るコレクションの形も見る(壊れた payload で for-of / Object.values が throw するのを防ぐ。r1 CL-High-1)
   if (!isRecord(config.prehide) || !isRecord(config.exposureSelectors) || !isRecord(config.patterns) || !Array.isArray(config.goals)) return null;

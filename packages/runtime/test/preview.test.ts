@@ -113,14 +113,13 @@ const previewConfig = {
     {
       id: "exp_preview",
       name: "Preview",
-      urlMatch: { op: "contains", value: "/" },
+      urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
       trafficPercentage: 100,
       persistAssignment: false,
       variants: [
-        { id: "vA", name: "A", weight: 50, changes: [] },
+        { id: "vA", weight: 50, changes: [] },
         {
           id: "vB",
-          name: "B",
           weight: 50,
           changes: [
             { id: "c_hit", type: "TEXT", selector: ".preview-title", payload: { text: "適用" } },
@@ -160,8 +159,8 @@ describe("preview mode (spec §12.3 (a) / §10.8)", () => {
     const config = {
       ...baseConfig,
       experiments: [
-        { id: "exp_low", name: "Low", urlMatch: { op: "contains", value: "/" }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "a", name: "A", weight: 100, changes: [{ id: "c", type: "TEXT", selector: ".hero-title", payload: { text: "S" } }] }] },
-        { id: "exp_high", name: "High", urlMatch: { op: "contains", value: "/" }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "vA", name: "A", weight: 50, changes: [] }, { id: "vB", name: "B", weight: 50, changes: [{ id: "c", type: "TEXT", selector: ".hero-title", payload: { text: "T" } }] }] },
+        { id: "exp_low", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "a", weight: 100, changes: [{ id: "c", type: "TEXT", selector: ".hero-title", payload: { text: "S" } }] }] },
+        { id: "exp_high", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "vA", weight: 50, changes: [] }, { id: "vB", weight: 50, changes: [{ id: "c", type: "TEXT", selector: ".hero-title", payload: { text: "T" } }] }] },
       ],
       prehide: { exp_low: [".hero-title"], exp_high: [".hero-title"] },
       exposureSelectors: { exp_low: [".hero-title"], exp_high: [".hero-title"] },
@@ -245,15 +244,13 @@ const loopConfig = {
   experiments: [
     {
       id: "exp_loop",
-      name: "Loop",
-      urlMatch: { op: "contains", value: "/" },
+      urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
       trafficPercentage: 100,
       persistAssignment: false,
       variants: [
-        { id: "vA", name: "A", weight: 50, changes: [] },
+        { id: "vA", weight: 50, changes: [] },
         {
           id: "vB",
-          name: "B",
           weight: 50,
           changes: [
             { id: "c_loop", type: "HTML", selector: ".loop", payload: { html: '<section><div class="loop"></div></section>', position: "append", runScripts: false } },
@@ -272,15 +269,13 @@ const errorConfig = {
   experiments: [
     {
       id: "exp_err",
-      name: "Errors",
-      urlMatch: { op: "contains", value: "/" },
+      urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
       trafficPercentage: 100,
       persistAssignment: false,
       variants: [
-        { id: "vA", name: "A", weight: 50, changes: [] },
+        { id: "vA", weight: 50, changes: [] },
         {
           id: "vB",
-          name: "B",
           weight: 50,
           changes: [
             { id: "c_img", type: "IMAGE", selector: "img.pic", payload: { src: "https://img.test/new.png" } },
@@ -408,15 +403,13 @@ const nonceConfig = {
   experiments: [
     {
       id: "exp_nonce",
-      name: "Nonce",
-      urlMatch: { op: "contains", value: "/" },
+      urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
       trafficPercentage: 100,
       persistAssignment: false,
       variants: [
-        { id: "vA", name: "A", weight: 50, changes: [] },
+        { id: "vA", weight: 50, changes: [] },
         {
           id: "vB",
-          name: "B",
           weight: 50,
           changes: [
             { id: "c_css", type: "CSS", payload: { css: ".preview-title{color:red}" } },

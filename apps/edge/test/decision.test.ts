@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { createExecutionContext, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
-import { compile, generateVisitorId, inTraffic, kvKeys, parseSiteSettings, patternIdOf, pickVariant, type Experiment } from "@wtt/core";
+import { compile, compileRegex, experimentsForUrl, generateVisitorId, inTraffic, kvKeys, parseSiteSettings, patternIdOf, pickVariant, type Experiment } from "@wtt/core";
 import { evaluateDecision } from "../src/decision";
 import app from "../src/index";
 import { PROFILE_KEY, profileStub, type ProfileRecord } from "../src/profile";
@@ -11,14 +11,14 @@ import type { Env } from "../src/env";
 
 const ORIGIN = "https://site.example";
 const exp: Experiment = {
-  id: "exp_001", name: "hero", urlMatch: { op: "contains", value: "/" },
+  id: "exp_001", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
   trafficPercentage: 100, persistAssignment: false,
   variants: [
-    { id: "vA", name: "A", weight: 50, changes: [] },
-    { id: "vB", name: "B", weight: 50, changes: [] },
+    { id: "vA", weight: 50, changes: [] },
+    { id: "vB", weight: 50, changes: [] },
   ],
 };
-const cfg = { schemaVersion: 2, version: 1, siteId: "site_d", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
+const cfg = { schemaVersion: 3, version: 1, siteId: "site_d", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
 const okBody = () => ({ v: 1, url: `${ORIGIN}/lp/`, referrer: "", device: "desktop", visitorId: generateVisitorId() });
 
 async function post(path: string, body: unknown, opts: { origin?: string | null; envOverride?: Partial<Env>; raw?: string } = {}): Promise<Response> {
@@ -70,17 +70,17 @@ beforeEach(async () => {
   await env.CONFIG_KV.put(kvKeys.config("site_d", 5), JSON.stringify({
     ...cfg, version: 5, needsProfile: true,
     patterns: { p_pricing: { op: "contains", value: "/pricing" } },
-    goals: [{ id: "g_lead", name: "Lead", type: "CUSTOM", config: {} }],
+    goals: [{ id: "g_lead", type: "CUSTOM", config: {} }],
     experiments: [
-      { ...exp, id: "exp_lp", urlMatch: { op: "contains", value: "/lp" }, targeting: { hist: "visited", pattern: "p_pricing" } },
-      { ...exp, id: "exp_conv", urlMatch: { op: "contains", value: "/lp" }, targeting: { hist: "converted", goal: "g_lead" } },
-      { ...exp, id: "exp_persist", urlMatch: { op: "contains", value: "/persist" }, persistAssignment: true, trafficPercentage: 100 },
-      { ...exp, id: "exp_here", urlMatch: { op: "contains", value: "/pricing" }, targeting: { hist: "visited", pattern: "p_pricing" } },
+      { ...exp, id: "exp_lp", urlMatch: { include: [{ page: { op: "contains", value: "/lp" } }] }, targeting: { hist: "visited", pattern: "p_pricing" } },
+      { ...exp, id: "exp_conv", urlMatch: { include: [{ page: { op: "contains", value: "/lp" } }] }, targeting: { hist: "converted", goal: "g_lead" } },
+      { ...exp, id: "exp_persist", urlMatch: { include: [{ page: { op: "contains", value: "/persist" } }] }, persistAssignment: true, trafficPercentage: 100 },
+      { ...exp, id: "exp_here", urlMatch: { include: [{ page: { op: "contains", value: "/pricing" } }] }, targeting: { hist: "visited", pattern: "p_pricing" } },
     ],
   }));
   await env.CONFIG_KV.put(kvKeys.settings("site_e"), JSON.stringify({ settingsVersion: 1, siteId: "site_e", allowedOrigins: [ORIGIN] }));
   await env.CONFIG_KV.put(kvKeys.active("site_e"), "5");
-  await env.CONFIG_KV.put(kvKeys.config("site_e", 5), JSON.stringify({ ...cfg, siteId: "site_e", version: 5, needsProfile: true, patterns: { p_pricing: { op: "contains", value: "/pricing" } }, experiments: [{ ...exp, id: "exp_lp", urlMatch: { op: "contains", value: "/lp" }, targeting: { hist: "visited", pattern: "p_pricing" } }] }));
+  await env.CONFIG_KV.put(kvKeys.config("site_e", 5), JSON.stringify({ ...cfg, siteId: "site_e", version: 5, needsProfile: true, patterns: { p_pricing: { op: "contains", value: "/pricing" } }, experiments: [{ ...exp, id: "exp_lp", urlMatch: { include: [{ page: { op: "contains", value: "/lp" } }] }, targeting: { hist: "visited", pattern: "p_pricing" } }] }));
 });
 
 describe("POST /v1/sites/:siteId/decision", () => {
@@ -220,7 +220,7 @@ describe("POST /v1/sites/:siteId/decision", () => {
   });
   // spec 18.1 の edge 半分: schemaVersion 3 の config は未知 version と同じ空応答になる(core 半分は CompiledConfigSchema の拒否)
   it("unsupported_compiled_config_version_is_rejected", async () => {
-    await env.CONFIG_KV.put(kvKeys.config("site_d", 2), JSON.stringify({ ...cfg, schemaVersion: 3, version: 2 }));
+    await env.CONFIG_KV.put(kvKeys.config("site_d", 2), JSON.stringify({ ...cfg, schemaVersion: 4, version: 2 }));
     const res = await post("/v1/sites/site_d/decision", { ...okBody(), v: 2 });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ v: 2, experiments: [] });
@@ -271,7 +271,7 @@ describe("POST /v1/sites/:siteId/decision with the visitor profile (spec §7.4)"
     const v = vid();
     const raw = JSON.parse((await env.CONFIG_KV.get(kvKeys.config("site_d", 5)))!);
     raw.version = 7;
-    raw.experiments = [{ ...exp, id: "exp_twice", urlMatch: { op: "contains", value: "/pricing" }, targeting: { hist: "visited", pattern: "p_pricing", min: 2 } }];
+    raw.experiments = [{ ...exp, id: "exp_twice", urlMatch: { include: [{ page: { op: "contains", value: "/pricing" } }] }, targeting: { hist: "visited", pattern: "p_pricing", min: 2 } }];
     await env.CONFIG_KV.put(kvKeys.config("site_d", 7), JSON.stringify(raw));
     expect(await ids(await post("/v1/sites/site_d/decision", { ...body("/pricing", v), v: 7 }))).toEqual([]);
     expect(await ids(await post("/v1/sites/site_d/decision", { ...body("/pricing", v), v: 7 }))).toEqual(["exp_twice"]);
@@ -337,12 +337,12 @@ describe("POST /v1/sites/:siteId/decision with the visitor profile (spec §7.4)"
 });
 
 describe("決定 49: 判定の入力(設計書 §11.1)", () => {
-  /** needsProfile: false の版 2 の config を compile で作って KV に置く(v = 20) */
+  /** needsProfile: false の版 3 の config を compile で作って KV に置く(v = 20) */
   async function seedV2(experiments: Array<{ id: string; targeting?: unknown; persistAssignment?: boolean }>, timezone?: string): Promise<void> {
     const config = compile({
       siteId: "site_d", siteSalt: "salt_test", version: 20, ...(timezone ? { timezone } : {}), goals: [],
       experiments: experiments.map((e) => ({
-        id: e.id, name: e.id, urlMatch: { op: "contains", value: "/" }, trafficPercentage: 100, persistAssignment: e.persistAssignment ?? false,
+        id: e.id, name: e.id, urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, trafficPercentage: 100, persistAssignment: e.persistAssignment ?? false,
         ...(e.targeting ? { targeting: e.targeting } : {}),
         variants: [{ id: "vA", name: "A", weight: 0, changes: [] }, { id: "vB", name: "B", weight: 100, changes: [] }],
       })),
@@ -381,8 +381,8 @@ describe("決定 49: 判定の入力(設計書 §11.1)", () => {
     const config = compile({
       siteId: "site_d", siteSalt: "salt_test", version: 20, goals: [],
       experiments: [
-        { id: "X", name: "X", urlMatch: { op: "contains", value: "/" }, trafficPercentage: 100, persistAssignment: false, targeting: { not: { hist: "visited", page: { op: "contains", value: "/never" } } }, variants },
-        { id: "Y", name: "Y", urlMatch: { op: "contains", value: "/" }, trafficPercentage: 100, persistAssignment: false, variants },
+        { id: "X", name: "X", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, trafficPercentage: 100, persistAssignment: false, targeting: { not: { hist: "visited", page: { op: "contains", value: "/never" } } }, variants },
+        { id: "Y", name: "Y", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, trafficPercentage: 100, persistAssignment: false, variants },
       ],
     });
     // compile は不正な命令列を作らないので、配る形を書き換える(手書き・改竄の再現)。zod は形だけを見るので読み込みは通る
@@ -395,12 +395,12 @@ describe("決定 49: 判定の入力(設計書 §11.1)", () => {
   });
 });
 
-describe("閲覧の条件(保存する形の page から compile した版 2。決定 49)", () => {
+describe("閲覧の条件(保存する形の page から compile した版 3。決定 49)", () => {
   const PRICING = { part: "path", op: "startsWith", value: "/pricing" } as const;
   const PID = patternIdOf(PRICING);
   const variants = [{ id: "vA", name: "A", weight: 0, changes: [] }, { id: "vB", name: "B", weight: 100, changes: [] }];
   const e = (id: string, path: string, targeting?: unknown) => ({
-    id, name: id, urlMatch: { part: "path", op: "startsWith", value: path }, trafficPercentage: 100, persistAssignment: false, ...(targeting ? { targeting } : {}), variants,
+    id, name: id, urlMatch: { include: [{ page: { part: "path", op: "startsWith", value: path } }] }, trafficPercentage: 100, persistAssignment: false, ...(targeting ? { targeting } : {}), variants,
   });
   const LEAD = [{ id: "g_lead", name: "Lead", type: "CUSTOM", config: {} }];
   async function seed(siteId: string, experiments: unknown[], goals: unknown[] = []) {
@@ -556,5 +556,26 @@ describe("新しい Profile の予算(plan12 K9)", () => {
     expect(res.headers.get("Retry-After")).toBe("10");
     expect(await res.text()).toBe("rate limited");
     expect(touched).toBe(0);
+  });
+});
+
+describe("対象 URL の除くの行(B69 spec §3.1)", () => {
+  it("edge_subset_excludes_on_null_exclude_row: 除くの行が判定できない(257 字のパスでパスの正規表現)なら DO に渡す部分集合に入らない", async () => {
+    const prog = compileRegex("^/lp/old/");
+    if (!prog.ok) throw new Error("fixture regex");
+    const guarded: Experiment = {
+      ...exp, id: "exp_guarded", persistAssignment: true, // needsProfile = DO で判定する経路
+      urlMatch: { include: [{ page: { op: "contains", value: "/" } }], exclude: [{ page: { part: "path", op: "regex", value: "^/lp/old/", prog: prog.prog } }] },
+    };
+    const config = { ...cfg, version: 40, needsProfile: true, experiments: [guarded] };
+    const longUrl = `${ORIGIN}/lp/${"a".repeat(253)}`; // パスは 257 字(パスの正規表現の照合の上限 256 を超える)
+    expect(experimentsForUrl(config, `${ORIGIN}/lp/new/`).map((e) => e.id)).toEqual(["exp_guarded"]); // 除くの行が false なら入る
+    expect(experimentsForUrl(config, longUrl)).toEqual([]);
+    await env.CONFIG_KV.put(kvKeys.config("site_d", 40), JSON.stringify(config));
+    let touched = 0;
+    const res = await post("/v1/sites/site_d/decision", { ...okBody(), v: 40, url: longUrl }, { envOverride: { VISITOR_PROFILE: doSpy(() => touched++) } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ v: 40, experiments: [] });
+    expect(touched).toBe(0); // 部分集合も一致するパターンも無いので DO に触れない
   });
 });

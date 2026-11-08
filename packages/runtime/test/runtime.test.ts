@@ -203,10 +203,9 @@ it("conversion_uses_conversion_payload", async () => {
 });
 
 it("conversion_falls_back_to_goal_id", async () => {
-  // 組が無い(別の目標の組だけある)なら目標 ID。config に name が残っていても使わない
+  // 組が無い(別の目標の組だけある)なら目標 ID。版 3 の config は name を持たない(B69)
   const f = deferredFetch();
   const config = { ...baseConfig, conversionPayloads: { g_other: { goalId: "g_other", goalName: "別" } } };
-  expect(baseConfig.goals[0]!.name).toBe("CTA click");
   const api = createRuntime(makeDeps(f.fn), { config, settings: baseSettings });
   await flush();
   api.track("g_cta");
@@ -513,13 +512,21 @@ it("keeps the new generation's prehide when a revoked generation finishes late (
   expect(dataLayer().filter((e) => e.event === "ab_exposure")).toHaveLength(0);
 });
 
-it("does nothing for an unknown schemaVersion (spec §6.4)", async () => {
-  const f = deferredFetch();
-  const api = createRuntime(makeDeps(f.fn), { config: { ...baseConfig, schemaVersion: 3 as unknown as 2 }, settings: baseSettings });
+it("runtime_accepts_v3_rejects_v2: 版 3 は適用し、版 2・版 4 は何も適用しない(B69 spec §5、spec §6.4)", async () => {
+  // 版 2 は deployer・control が版 3 に変換してから焼く。runtime に版 2 の評価の道は無い(ページの条件を評価できないため)
+  for (const schemaVersion of [2, 4]) {
+    document.cookie = `_ab_vid=${VB}; Path=/`;
+    const f = deferredFetch();
+    const api = createRuntime(makeDeps(f.fn), { config: { ...baseConfig, schemaVersion: schemaVersion as unknown as 3 }, settings: baseSettings });
+    await flush();
+    expect(f.calls.length).toBe(0);
+    expect(document.querySelector(".hero-title")!.textContent, `schemaVersion ${schemaVersion}`).toBe("orig");
+    expect(api.getAssignments()).toEqual({}); // AB は無害なスタブとして残る
+  }
+  const api = createRuntime(makeDeps(deferredFetch().fn), { config: baseConfig, settings: baseSettings });
   await flush();
-  expect(document.cookie).toBe("");
-  expect(f.calls.length).toBe(0);
-  expect(api.getAssignments()).toEqual({}); // AB は無害なスタブとして残る
+  expect(document.querySelector(".hero-title")!.textContent).toBe("B!");
+  expect(api.getAssignments()).toEqual({ exp_hero: "vB" });
 });
 
 it("aborts the in-flight decision before posting the d-lite consent body (spec §16 / §9.6)", async () => {
@@ -841,8 +848,8 @@ it("passes the runtime nonce to prehide / injected <style> and the variantId to 
     prehide: { exp_hero: [".hero-title"] },
     exposureSelectors: { exp_hero: [".hero-title", ":root"] },
     experiments: [{ ...baseConfig.experiments[0]!, variants: [
-      { id: "vA", name: "A", weight: 0, changes: [] },
-      { id: "vB", name: "B", weight: 100, changes: [{ id: "c_css", type: "CSS", payload: { css: ".hero-title{color:red}" } }] },
+      { id: "vA", weight: 0, changes: [] },
+      { id: "vB", weight: 100, changes: [{ id: "c_css", type: "CSS", payload: { css: ".hero-title{color:red}" } }] },
     ] }],
   };
   const seenPrehideNonce: string[] = [];
@@ -873,8 +880,8 @@ it("code_changes_do_not_rerun_after_regrant", async () => {
     prehide: { exp_hero: [".hero-title"] },
     exposureSelectors: { exp_hero: [".hero-title", ":root"] },
     experiments: [{ ...baseConfig.experiments[0]!, variants: [
-      { id: "vA", name: "A", weight: 0, changes: [] },
-      { id: "vB", name: "B", weight: 100, changes: [
+      { id: "vA", weight: 0, changes: [] },
+      { id: "vB", weight: 100, changes: [
         { id: "c_js", type: "CUSTOM_JS", selector: ".hero-title", payload: { code: "1" } }, // 既定環境では登録が取れず失敗 → debug 1 回(c_html より先に試行させる)
         { id: "c_html", type: "HTML", selector: ".hero-title", payload: { html: "<h2 class=\"changed\">B</h2>", position: "replace", runScripts: false } }, // 適用後は .hero-title が消える
         { id: "c_css", type: "CSS", payload: { css: ".x{}" } },
@@ -983,8 +990,8 @@ it("rank_follows_config_order_not_decision_order", async () => {
     prehide: { exp_s: [".hero-title"], exp_t: [".hero-title"] },
     exposureSelectors: { exp_s: [".hero-title"], exp_t: [".hero-title"] },
     experiments: [
-      { id: "exp_s", name: "S", urlMatch: { op: "contains" as const, value: "/" }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "a", name: "A", weight: 100, changes: [{ id: "c", type: "TEXT" as const, selector: ".hero-title", payload: { text: "S" } }] }] },
-      { id: "exp_t", name: "T", urlMatch: { op: "contains" as const, value: "/" }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "vA", name: "A", weight: 50, changes: [] }, { id: "vB", name: "B", weight: 50, changes: [{ id: "c", type: "TEXT" as const, selector: ".hero-title", payload: { text: "T" } }] }] },
+      { id: "exp_s", urlMatch: { include: [{ page: { op: "contains" as const, value: "/" } }] }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "a", weight: 100, changes: [{ id: "c", type: "TEXT" as const, selector: ".hero-title", payload: { text: "S" } }] }] },
+      { id: "exp_t", urlMatch: { include: [{ page: { op: "contains" as const, value: "/" } }] }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "vA", weight: 50, changes: [] }, { id: "vB", weight: 50, changes: [{ id: "c", type: "TEXT" as const, selector: ".hero-title", payload: { text: "T" } }] }] },
     ],
   };
   const f = deferredFetch();
@@ -1147,9 +1154,9 @@ it("participant_applied_pending_when_own_selector_is_absent", async () => {
   const exp = {
     ...baseConfig.experiments[0]!,
     variants: [
-      { id: "vA", name: "A", weight: 0, changes: [] },
-      { id: "vB", name: "B", weight: 100, changes: [{ id: "c", type: "TEXT" as const, selector: ".x", payload: { text: "B" } }] },
-      { id: "vC", name: "C", weight: 0, changes: [{ id: "c", type: "TEXT" as const, selector: ".y", payload: { text: "C" } }] },
+      { id: "vA", weight: 0, changes: [] },
+      { id: "vB", weight: 100, changes: [{ id: "c", type: "TEXT" as const, selector: ".x", payload: { text: "B" } }] },
+      { id: "vC", weight: 0, changes: [{ id: "c", type: "TEXT" as const, selector: ".y", payload: { text: "C" } }] },
     ],
   };
   const f = resultsFetch();
@@ -1167,7 +1174,7 @@ it("all-variants-without-changes test participates on :root and converts", async
   const config = compile({
     siteId: "site_unit", siteSalt: "salt", version: 3,
     goals: [{ id: "g_cta", name: "CTA", type: "CUSTOM", config: {} }],
-    experiments: [{ id: "exp_aa", name: "AA", urlMatch: { op: "contains", value: "/" }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "vA", name: "A", weight: 50, changes: [] }, { id: "vB", name: "B", weight: 50, changes: [] }] }],
+    experiments: [{ id: "exp_aa", name: "AA", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, trafficPercentage: 100, persistAssignment: false, variants: [{ id: "vA", name: "A", weight: 50, changes: [] }, { id: "vB", name: "B", weight: 50, changes: [] }] }],
     results: { forget: true, runs: { exp_aa: RUN } },
   });
   expect(config.exposureSelectors.exp_aa).toEqual([":root"]);

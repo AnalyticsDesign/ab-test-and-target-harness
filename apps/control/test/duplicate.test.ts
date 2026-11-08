@@ -10,7 +10,7 @@ import { call, choosePrimaryGoal, createExperiment, createSite, expectEnvelope, 
 async function sourceTest() {
   const owner = await setupOwner();
   const { id: sid } = await createSite(owner.token, owner.workspaceId);
-  await createExperiment(owner.token, sid, { id: "exp_src", name: "購入ボタンの文言テスト", urlMatch: { op: "startsWith", value: "/lp" }, trafficPercentage: 50, persistAssignment: true, analytics: { overrides: { experimentName: "buy_copy" } } });
+  await createExperiment(owner.token, sid, { id: "exp_src", name: "購入ボタンの文言テスト", urlMatch: { include: [{ page: { op: "startsWith", value: "/lp" } }] }, trafficPercentage: 50, persistAssignment: true, analytics: { overrides: { experimentName: "buy_copy" } } });
   await call("PUT", `/sites/${sid}/experiments/exp_src/variants`, { token: owner.token, body: [{ id: "a", name: "A", weight: 50 }, { id: "b", name: "B", weight: 50, analytics: { overrides: { variantName: "buy_b" } } }] });
   await call("PUT", `/sites/${sid}/experiments/exp_src/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE("c1"), { id: "c2", type: "HIDE", selector: ".old", payload: {} }] });
   return { ...owner, sid };
@@ -27,7 +27,7 @@ describe("POST …/duplicate (決定 51、設計書 §4.1)", () => {
     const res = await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token, body: { mode: "same" } });
     expect(res.status).toBe(201);
     const created = await json(res);
-    expect(created).toMatchObject({ id: "exp_src-copy", name: "購入ボタンの文言テスト のコピー", kind: "test", status: "draft", publishedStatus: null, trafficPercentage: 50, persistAssignment: true, urlMatch: { op: "startsWith", value: "/lp" }, analytics: { overrides: { experimentName: "buy_copy" } }, unpublished: true });
+    expect(created).toMatchObject({ id: "exp_src-copy", name: "購入ボタンの文言テスト のコピー", kind: "test", status: "draft", publishedStatus: null, trafficPercentage: 50, persistAssignment: true, urlMatch: { include: [{ page: { op: "startsWith", value: "/lp" } }] }, analytics: { overrides: { experimentName: "buy_copy" } }, unpublished: true });
     const d = await detail(token, sid, created.id);
     expect(d.variants.map((v: any) => [v.id, v.name, v.weight, v.analytics])).toEqual([["a", "A", 50, null], ["b", "B", 50, { overrides: { variantName: "buy_b" } }]]);
     expect(d.variants[1].changes.map((c: any) => [c.id, c.payload])).toEqual([["c1", { text: "saved after publish" }]]); // 保存済みの中身
@@ -69,7 +69,7 @@ describe("POST …/duplicate (決定 51、設計書 §4.1)", () => {
     const res = await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token, body: { mode: "variant", variantId: "b" } });
     expect(res.status).toBe(201);
     const created = await json(res);
-    expect(created).toMatchObject({ id: "exp_src-copy", name: "購入ボタンの文言テスト(B だけを表示)", kind: "single", trafficPercentage: 100, persistAssignment: false, urlMatch: { op: "startsWith", value: "/lp" } });
+    expect(created).toMatchObject({ id: "exp_src-copy", name: "購入ボタンの文言テスト(B だけを表示)", kind: "single", trafficPercentage: 100, persistAssignment: false, urlMatch: { include: [{ page: { op: "startsWith", value: "/lp" } }] } });
     const d = await detail(token, sid, created.id);
     expect(d.variants.map((v: any) => [v.id, v.name, v.weight, v.analytics])).toEqual([["b", "B", 100, { overrides: { variantName: "buy_b" } }]]);
     expect(d.variants[0].changes.map((c: any) => c.id)).toEqual(["c1", "c2"]);
@@ -119,7 +119,7 @@ describe("POST …/duplicate (決定 51、設計書 §4.1)", () => {
     const { token, sid } = await sourceTest();
     const now = Date.now();
     const ids = ["exp_src-copy", ...Array.from({ length: 98 }, (_, i) => `exp_src-copy-${i + 2}`)];
-    await env.DB.batch(ids.map((id) => env.DB.prepare("insert into experiments (site_id, id, name, url_match_json, created_by, updated_by, created_at, updated_at) values (?, ?, 'x', '{\"op\":\"contains\",\"value\":\"/\"}', 'u', 'u', ?, ?)").bind(sid, id, now, now)));
+    await env.DB.batch(ids.map((id) => env.DB.prepare("insert into experiments (site_id, id, name, url_match_json, created_by, updated_by, created_at, updated_at) values (?, ?, 'x', '{\"include\":[{\"page\":{\"op\":\"contains\",\"value\":\"/\"}}]}', 'u', 'u', ?, ?)").bind(sid, id, now, now)));
     const res = await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token, body: { mode: "same" } });
     expect(res.status).toBe(409);
     expect(await expectEnvelope(res)).toMatchObject({ error: "id_taken", hint: "使っていない複製を削除してから、もう一度複製してください(API では id を指定できます)" });
@@ -237,7 +237,7 @@ describe("複製の中身と評価計画(D9 ③)", () => {
       { id: "a", changes: [] },
       { id: "b", changes: [{ id: "c_text", type: "TEXT", selector: ".hero-title", payload: { text } }, { id: "c_hide", type: "HIDE", selector: ".old", payload: {} }] },
     ],
-    urlMatch: { op: "contains", value: "/" },
+    urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
     targeting: null,
     primaryGoal: { id: "g_primary", config: {} },
   });
@@ -388,7 +388,7 @@ describe("複製の中身と評価計画(D9 ③)", () => {
 describe("experiment id `new` is reserved (B37)", () => {
   it("作成と複製の ID に new を使うと 422 validation_failed(path は id)", async () => {
     const { token, sid } = await sourceTest();
-    const created = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "new", name: "x", urlMatch: { op: "contains", value: "/" } } });
+    const created = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "new", name: "x", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     expect(created.status).toBe(422);
     expect(await json(created)).toMatchObject({ error: "validation_failed", path: ["id"] });
     const dup = await call("POST", `/sites/${sid}/experiments/exp_src/duplicate`, { token, body: { mode: "same", id: "new" } });

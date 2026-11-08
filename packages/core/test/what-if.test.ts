@@ -1,18 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { decide, evaluateWhatIf, type Experiment, type PageContext, type WhatIfInput } from "../src/index";
 
-const ctx: PageContext = { url: "https://site.test/lp/", query: { utm: "x" }, device: "desktop", referrer: "" };
+const ctx: PageContext = { url: "https://site.test/lp/?utm=x", device: "desktop", referrer: "" };
+const url = (value: string): Experiment["urlMatch"] => ({ include: [{ page: { op: "contains", value } }] });
 
 function exp(overrides: Partial<Experiment> = {}): Experiment {
   return {
     id: "exp_001",
-    name: "Hero",
-    urlMatch: { op: "contains", value: "/lp/" },
+    urlMatch: url("/lp/"),
     trafficPercentage: 100,
     persistAssignment: false,
     variants: [
-      { id: "a", name: "A", weight: 50, changes: [] },
-      { id: "b", name: "B", weight: 50, changes: [] },
+      { id: "a", weight: 50, changes: [] },
+      { id: "b", weight: 50, changes: [] },
     ],
     ...overrides,
   };
@@ -42,13 +42,27 @@ describe("evaluateWhatIf (spec §13.10 / 決定 39 (2) (7))", () => {
     });
     // URL が一致しなくても not_published が先(公開されていないことが先に分かる)
     expect(
-      evaluateWhatIf([{ experiment: exp({ urlMatch: { op: "contains", value: "/other/" } }), status: "running", published: false }], ctx)[0]!.reason,
+      evaluateWhatIf([{ experiment: exp({ urlMatch: url("/other/") }), status: "running", published: false }], ctx)[0]!.reason,
     ).toBe("not_published");
     // draft: true では published を見ない(D1 の現状を評価するため)
     expect(evaluateWhatIf([{ experiment: exp(), status: "running", published: false }], ctx, { draft: true })[0]!.eligible).toBe(true);
 
     // URL 不一致
-    expect(evaluateWhatIf([running(exp({ urlMatch: { op: "contains", value: "/other/" } }))], ctx)[0]!.reason).toBe("url_mismatch");
+    expect(evaluateWhatIf([running(exp({ urlMatch: url("/other/") }))], ctx)[0]!.reason).toBe("url_mismatch");
+  });
+
+  it("what_if_exclude_is_url_mismatch(B69: 除くの行に当たって外れたときも url_mismatch。新しい理由は足さない)", () => {
+    const lp = { op: "contains" as const, value: "/lp/" };
+    const excluded = exp({ urlMatch: { include: [{ page: lp }], exclude: [{ page: lp, params: [{ name: "utm", op: "equals", value: "x" }] }] } });
+    expect(evaluateWhatIf([running(excluded)], ctx)[0]).toMatchObject({ eligible: false, reason: "url_mismatch" });
+    // 除くに当たらなければ対象(パラメータの値が違う)
+    const other = exp({ urlMatch: { include: [{ page: lp }], exclude: [{ page: lp, params: [{ name: "utm", op: "equals", value: "y" }] }] } });
+    expect(evaluateWhatIf([running(other)], ctx)[0]).toMatchObject({ eligible: true });
+    // 含めるのパラメータの条件に合わないのも url_mismatch
+    expect(evaluateWhatIf([running(exp({ urlMatch: { include: [{ page: lp, params: [{ name: "utm", op: "exists" }, { name: "ref", op: "exists" }] }] } }))], ctx)[0]!.reason).toBe("url_mismatch");
+  });
+
+  it("what_if_reason_order_history_targeting_traffic(url_mismatch の後の段: needs_history → targeting_false → traffic_excluded)", () => {
 
     // 履歴条件があるのに history が無い
     const hist = exp({ targeting: { hist: "visited", pattern: "p_pricing" } });
@@ -105,11 +119,11 @@ describe("evaluateWhatIf (spec §13.10 / 決定 39 (2) (7))", () => {
 describe("evaluateWhatIf: input_missing(決定 49)", () => {
   it("配信条件が使う入力が欠けていれば input_missing(本番では対象外)", () => {
     const experiment = {
-      id: "e", name: "e", urlMatch: { op: "contains" as const, value: "/" }, trafficPercentage: 100, persistAssignment: false,
+      id: "e", urlMatch: url("/"), trafficPercentage: 100, persistAssignment: false,
       targeting: { ctx: "viewport" as const, minWidth: 768 },
-      variants: [{ id: "vA", name: "A", weight: 50, changes: [] }, { id: "vB", name: "B", weight: 50, changes: [] }],
+      variants: [{ id: "vA", weight: 50, changes: [] }, { id: "vB", weight: 50, changes: [] }],
     };
-    const ctx = { url: "https://a.example/", query: {}, device: "desktop" as const, referrer: "" };
+    const ctx = { url: "https://a.example/", device: "desktop" as const, referrer: "" };
     expect(evaluateWhatIf([{ experiment, status: "running", published: true }], ctx)[0]).toMatchObject({ eligible: false, reason: "input_missing" });
     expect(evaluateWhatIf([{ experiment, status: "running", published: true }], { ...ctx, viewportWidth: 1024 })[0]).toMatchObject({ eligible: true });
   });

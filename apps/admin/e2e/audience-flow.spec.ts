@@ -125,13 +125,15 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     await login(page);
     await openSite(page, SITE_AUD.name);
     await newAudience(page, "Host case");
-    await chip(page, "ページのホスト").click();
+    // B69: ページのホストの条件は外したので、閲覧したページの条件の「ホスト」で、control の小文字への正規化を通す
+    await chip(page, "閲覧したページ").click();
+    await choose(rows(page).nth(0), "照合する部分", "ホスト");
     await rows(page).nth(0).getByLabel("値").fill("www.example.com");
     await page.getByRole("button", { name: "保存", exact: true }).click();
     await expect(page).toHaveURL(/\/audiences\/aud_host_case$/);
     await waitForHydration(page);
     await expect(page.getByTestId("save-state")).toHaveText("変更はありません");
-    // control はホストを小文字にして保存する。応答の値にそろえるので、保存の後に「未保存の変更あり」が残らない
+    // control はホストを小文字にして保存する(閲覧したページの条件のページの一致も同じ)。応答の値にそろえるので、保存の後に「未保存の変更あり」が残らない
     await rows(page).nth(0).getByLabel("値").fill("SHOP.Example.COM");
     await expect(page.getByTestId("save-state")).toHaveText("未保存の変更あり");
     await page.getByRole("button", { name: "保存", exact: true }).click();
@@ -242,8 +244,11 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     await page.getByRole("option", { name: /^Pricing visitors/ }).click();
     await page.getByRole("button", { name: "+ 条件" }).click();
     await choose(rows(page).nth(1), "条件の種類", "端末");
-    await expect(page.getByTestId("targeting-summary")).toHaveText("オーディエンス「Pricing visitors」に含まれる かつ 端末が モバイル");
-    await page.getByText("保存される JSON").click();
+    // B69 Q358: 配信条件のカードの要約は最後の 1 文だけ(②の段の「配信する訪問者」の行は無い)
+    await expect(page.getByTestId("targeting-summary")).toHaveCount(0);
+    await expect(page.getByTestId("delivery-summary")).toContainText("オーディエンス「Pricing visitors」に含まれる かつ 端末が モバイル の訪問者のうち");
+    // B69: 対象 URL の欄にも同じ見出しの「保存される JSON」があるので、配信条件の JSON の折りたたみを開く
+    await page.locator("details").filter({ has: page.getByTestId("targeting-json") }).locator("summary").click();
     await expect(page.getByTestId("targeting-json")).toContainText('"audience": "aud_pricing_visitors"');
     const saved = page.waitForResponse((r) => r.url().includes(`/api/control/sites/${SITE_AUD.id}/experiments/${EXP_AUD.id}`) && r.request().method() === "PATCH");
     await page.getByRole("button", { name: "保存(下書き)" }).click();
@@ -309,7 +314,7 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     await page.getByRole("button", { name: "+ 条件" }).click();
     await choose(rows(page).nth(4), "条件の種類", "ブラウザ");
     const summary = "パスが「/pricing/」で始まるページを 2 回以上閲覧(最後の閲覧が 30 日以内) かつ 目標「資料請求」が未達成 かつ 月〜金 の 09:00〜18:00 かつ OSが iOS かつ ブラウザが Safari";
-    await expect(page.getByTestId("targeting-summary")).toHaveText(summary);
+    await expect(page.getByTestId("delivery-summary")).toContainText(`${summary} の訪問者のうち`);
     const saved = page.waitForResponse((r) => r.url().includes(`/api/control/sites/${SITE_AUD.id}/experiments/${EXP_C1.id}`) && r.request().method() === "PATCH");
     await page.getByRole("button", { name: "保存(下書き)" }).click();
     const res = await saved;
@@ -319,7 +324,7 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     expect((await res.json()).targeting).toEqual(COMPLETION_1_TARGETING);
     // 再表示しても同じ条件
     await page.reload();
-    await expect(page.getByTestId("targeting-summary")).toHaveText(summary);
+    await expect(page.getByTestId("delivery-summary")).toContainText(`${summary} の訪問者のうち`);
     await expect(rows(page).nth(0).getByLabel("回数")).toHaveValue("2");
     await expect(rows(page).nth(0).getByLabel("日数")).toHaveValue("30");
   });
@@ -345,20 +350,26 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
   test("publish_preview_shows_compile_error_for_site_regex_budget(保存は通るが、Site 全体の正規表現の命令数で Publish が止まる)", async ({ page }) => {
     await login(page);
     await openSite(page, SITE_AUD.name);
-    // 1 つずつの上限(200 命令)には収まり、参照の数だけ数えると Site 全体の 500 を超える件数を core で求める
-    const src = "^/item/[0-9]{1,60}$";
-    const r = compileRegex(src);
-    if (!r.ok) throw new Error(r.issue.code);
-    expect(r.instructions).toBeGreaterThan(100); // 準備のエクスペリエンスを 5 件以下に抑える
-    const n = Math.floor(REGEX_LIMITS.instructionsPerSite / r.instructions) + 1;
-    expect((await page.request.post(`/api/control/sites/${SITE_AUD.id}/audiences`, { headers: controlHeaders(), data: { id: "aud_e2e_budget", name: "E2E budget", definition: { ctx: "path", op: "regex", value: src } } })).status()).toBe(201);
-    for (let i = 0; i < n; i++) {
-      await nav(page).getByRole("link", { name: "エクスペリエンス" }).click(); // 2 回目以降は編集画面にいるので、毎回実験の一覧へ戻ってから作る
-      const e = { id: `exp_e2e_budget_${i}`, name: `E2E budget ${i}` };
-      await createExperiment(page, e);
-      expect((await page.request.patch(`/api/control/sites/${SITE_AUD.id}/experiments/${e.id}`, { headers: controlHeaders(), data: { targeting: { audience: "aud_e2e_budget" } } })).status()).toBe(200); // 保存は通る
-      await changeStatus(page, SITE_AUD.id, e.id, /^開始/); // 最後の 1 件の自動 Publish は止まるが、status は running になる
+    // 1 つずつの上限(200 命令)には収まり、合計で Site 全体の 500 を超える数の正規表現を core で求める。
+    // B69: オーディエンスでパスの条件(ctx: path)は使えなくなったので、閲覧したページの条件(hist: visited)の正規表現を使う。
+    // 閲覧の条件のパターンは同じ定義を Site 全体で 1 回だけ数える(compile.ts の patterns の ??=)ので、1 つのオーディエンスに
+    // 別々の正規表現を OR で並べ、それを 1 件のエクスペリエンスが参照する(hint の場所に原因のオーディエンスが出ることは変わらない)
+    const leaves: Array<{ hist: "visited"; page: { part: "path"; op: "regex"; value: string } }> = [];
+    let total = 0;
+    while (total <= REGEX_LIMITS.instructionsPerSite) {
+      const src = `^/item${leaves.length}/[0-9]{1,60}$`;
+      const r = compileRegex(src);
+      if (!r.ok) throw new Error(r.issue.code);
+      expect(r.instructions).toBeGreaterThan(100); // 並べる数を 5 個以下に抑える
+      total += r.instructions;
+      leaves.push({ hist: "visited", page: { part: "path", op: "regex", value: src } });
     }
+    expect((await page.request.post(`/api/control/sites/${SITE_AUD.id}/audiences`, { headers: controlHeaders(), data: { id: "aud_e2e_budget", name: "E2E budget", definition: { or: leaves } } })).status()).toBe(201);
+    await nav(page).getByRole("link", { name: "エクスペリエンス" }).click();
+    const e = { id: "exp_e2e_budget_0", name: "E2E budget 0" };
+    await createExperiment(page, e);
+    expect((await page.request.patch(`/api/control/sites/${SITE_AUD.id}/experiments/${e.id}`, { headers: controlHeaders(), data: { targeting: { audience: "aud_e2e_budget" } } })).status()).toBe(200); // 保存は通る
+    await changeStatus(page, SITE_AUD.id, e.id, /^開始/); // 自動 Publish は止まるが、status は running になる
     await openPublish(page);
     const err = page.getByTestId("publish-compile-error");
     await expect(err).toBeVisible();

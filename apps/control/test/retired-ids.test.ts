@@ -28,13 +28,13 @@ describe("一度開始した ID の使い直しの禁止(D9 ②)", () => {
     await startArchiveDelete(token, sid, "exp_old");
     expect(await retiredRows(sid)).toEqual([{ experiment_id: "exp_old" }]);
     expect(await getDb(env).selectFrom("experiments").select("id").where("site_id", "=", sid).where("id", "=", "exp_old").executeTakeFirst()).toBeUndefined();
-    const res = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_old", name: "Hero", urlMatch: { op: "contains", value: "/" } } });
+    const res = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_old", name: "Hero", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     expect(res.status).toBe(409);
     const body = await expectEnvelope(res);
     expect(body).toMatchObject({ error: "id_taken", id: "exp_old", hint: RETIRED_HINT });
     // 別の Site では使える(退役は Site ごと)
     const { id: other } = await createSite(token, workspaceId);
-    expect((await call("POST", `/sites/${other}/experiments`, { token, body: { id: "exp_old", name: "Hero", urlMatch: { op: "contains", value: "/" } } })).status).toBe(201);
+    expect((await call("POST", `/sites/${other}/experiments`, { token, body: { id: "exp_old", name: "Hero", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } })).status).toBe(201);
   });
 
   it("deleted_draft_experiment_id_can_be_reused", async () => {
@@ -42,7 +42,7 @@ describe("一度開始した ID の使い直しの禁止(D9 ②)", () => {
     await createExperiment(token, sid, { id: "exp_draft" });
     expect((await call("DELETE", `/sites/${sid}/experiments/exp_draft`, { token })).status).toBe(204);
     expect(await retiredRows(sid)).toEqual([]);
-    const res = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_draft", name: "Hero", urlMatch: { op: "contains", value: "/" } } });
+    const res = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_draft", name: "Hero", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     expect(res.status).toBe(201);
   });
 

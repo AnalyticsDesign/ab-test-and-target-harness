@@ -5,10 +5,10 @@ import { generateVisitorId, inTraffic, type Experiment, type PageContext } from 
 import { PROFILE_KEY, profileStub, readDecideOut, readRecordGoalOut, type ProfileDecideInput, type ProfileRecord, type VisitorProfile } from "../src/profile";
 
 const DAY = 86400;
-const ctx: PageContext = { url: "https://site.example/pricing", query: {}, device: "desktop", referrer: "" };
+const ctx: PageContext = { url: "https://site.example/pricing", device: "desktop", referrer: "" };
 const exp = (over: Partial<Experiment> = {}): Experiment => ({
-  id: "exp_001", name: "hero", urlMatch: { op: "contains", value: "/" }, trafficPercentage: 100, persistAssignment: false,
-  variants: [{ id: "vA", name: "A", weight: 50, changes: [] }, { id: "vB", name: "B", weight: 50, changes: [] }],
+  id: "exp_001", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, trafficPercentage: 100, persistAssignment: false,
+  variants: [{ id: "vA", weight: 50, changes: [] }, { id: "vB", weight: 50, changes: [] }],
   ...over,
 });
 const input = (over: Partial<ProfileDecideInput> = {}): ProfileDecideInput => ({

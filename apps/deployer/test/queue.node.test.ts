@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { DEPLOY_HISTORY_DAYS, DEPLOY_HISTORY_LIMIT, parseCompiledConfig, SITE_REMOVED_SEQ, staticInputDigest, staticPaths, type CompiledConfig } from "@wtt/core";
+import { DEPLOY_HISTORY_DAYS, DEPLOY_HISTORY_LIMIT, parseCompiledConfig, SITE_REMOVED_SEQ, staticInputDigest, staticPaths, type CompiledConfig, type CompiledConfigV2 } from "@wtt/core";
+import { COMPILED_V2 } from "../../../packages/core/test/fixtures/compiled-v2";
 import type { DeployInput } from "../src/cf-api";
 import { DeployQueueLogic, REBAKE_ALARM_MS, RETRY_DELAYS_MS, SAFETY_ALARM_MS, type QueueStorage, type RuntimeBundle } from "../src/queue";
 
@@ -16,7 +17,7 @@ class MemStorage implements QueueStorage {
 }
 
 const CONFIG: CompiledConfig = {
-  schemaVersion: 2, version: 1, siteId: "site_a", siteSalt: "s", needsProfile: false,
+  schemaVersion: 3, version: 1, siteId: "site_a", siteSalt: "s", needsProfile: false,
   patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [], exposurePayloads: {},
 };
 const cfgOf = (siteId: string, version: number): CompiledConfig => ({ ...CONFIG, siteId, version });
@@ -218,9 +219,10 @@ describe("DeployQueueLogic", () => {
   });
 
   it("rebake_strips_legacy_names", async () => {
-    // 名前付き・conversionPayloads 無しの古い config を、古い runtime の hash で保存する(B77、K6)
-    const legacy: CompiledConfig = {
+    // 名前付き・conversionPayloads 無しの古い config(版 2)を、古い runtime の hash で保存する(B77、K6)
+    const legacy: CompiledConfigV2 = {
       ...CONFIG,
+      schemaVersion: 2,
       goals: [{ id: "g_buy", name: "購入完了", type: "CUSTOM", config: {} }],
       experiments: [{
         id: "exp1", name: "社内のヒーロー検証", trafficPercentage: 100, persistAssignment: true, urlMatch: { op: "contains", value: "/lp/" },
@@ -236,6 +238,34 @@ describe("DeployQueueLogic", () => {
     const boot = JSON.parse(text.slice(text.indexOf("self.__WTT_BOOT__=") + "self.__WTT_BOOT__=".length, text.lastIndexOf(";\n")));
     expect(boot.config.conversionPayloads.g_buy).toEqual({ goalId: "g_buy", goalName: "購入完了" }); // 名前だった値は payload にだけ残る
     expect(boot.config.exposurePayloads.exp1.b).toMatchObject({ experimentName: "社内のヒーロー検証", variantName: "B案" });
+  });
+
+  /** 焼いた bootstrap の boot JSON */
+  const bootOf = (text: string) => JSON.parse(text.slice(text.indexOf("self.__WTT_BOOT__=") + "self.__WTT_BOOT__=".length, text.lastIndexOf(";\n"))) as { config: CompiledConfig };
+  /** 版 2 の fixture を site_a・版 1 にした入力(配信条件にクエリの条件を持つ e_query が版 3 では外れる) */
+  const v2Input = () => ({ ...req("site_a", 10, 1), config: { ...COMPILED_V2, siteId: "site_a", version: 1 } });
+
+  it("previous_schema_version_config_is_served: 版 2 の入力も焼き、焼いた bootstrap の設定は版 3(B69 spec §5)", async () => {
+    const r = await makeQueue(RT).redeploySite(v2Input());
+    expect(r).not.toMatchObject({ state: "rejected" });
+    const boot = bootOf((await servedText("site_a"))!);
+    expect(boot.config.schemaVersion).toBe(3);
+    expect(boot.config.experiments.map((e) => e.id)).toEqual(["e_path_re", "e_host_re", "e_plain"]); // ページの条件を持つ e_query だけが外れる
+    expect(boot.config.experiments[0]!.urlMatch).toEqual({ include: [{ page: COMPILED_V2.experiments[0]!.urlMatch }] });
+    expect(boot.config.prehide.e_query).toBeUndefined();
+    expect(boot.config.needsProfile).toBe(false); // e_query が唯一の persistAssignment
+  });
+
+  it("rebake_on_runtime_hash_change_upgrades_v2: 保存した入力が版 2 のサイトを runtime の hash の違いで焼き直すと、ページの条件を持つエクスペリエンスが外れる", async () => {
+    await makeQueue(RT).redeploySite(v2Input());
+    now += 60_000;
+    await makeQueue(RT2, 10).tick(); // runtime の hash が変わったので焼き直す(保存した入力 = 版 2 のまま)
+    const text = (await servedText("site_a"))!;
+    expect(text.endsWith("/*RT2*/")).toBe(true);
+    const boot = bootOf(text);
+    expect(boot.config.schemaVersion).toBe(3);
+    expect(boot.config.experiments.map((e) => e.id)).not.toContain("e_query");
+    expect(boot.config.experiments.map((e) => e.id)).toEqual(["e_path_re", "e_host_re", "e_plain"]);
   });
 
   it("previews_keep_current_and_previous", async () => {

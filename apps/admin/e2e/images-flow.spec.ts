@@ -398,7 +398,7 @@ test("experience: the start 409 lists the missing image; the row for this experi
 
   // (a) 下書きが未保存のとき: 基本設定で名前を変えてから行を押す
   await expect(tab("基本設定")).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("region", { name: "基本設定" }).getByLabel("名前(100 字以内)").fill("E2E images guard edited");
+  await page.getByRole("region", { name: "基本", exact: true }).getByLabel("名前(100 字以内)").fill("E2E images guard edited");
   // 押す前に下書きが未保存であること(未保存のまま押した場面であることを確かめる)
   await expect(page.getByTestId("save-state")).toHaveText("未保存の変更あり");
   let renders = countRenders(page, path);

@@ -70,7 +70,7 @@ test("instance admins see the static delivery banner while deploys fail, members
     const ctl = (method: "POST" | "PATCH", path: string, data: unknown) => page.request.fetch(`${ADMIN_URL}/api/control${path}`, { method, headers: controlHeaders(), data });
     expect((await ctl("POST", `/workspaces/${wid}/sites`, { name: SITE_STATIC.name, domains: ["static.e2e-static.example"], id: SITE_STATIC.id })).status()).toBe(201); // B139: 他の spec のサイトと登録ドメインを分ける(同じ登録ドメインだと作成で訪問者 ID の Cookie 名が自動で変わる)
     expect((await ctl("PATCH", `/sites/${SITE_STATIC.id}`, { resultsEnabled: false })).status()).toBe(200);
-    expect((await ctl("POST", `/sites/${SITE_STATIC.id}/experiments`, { ...EXPERIMENT_STATIC, urlMatch: { op: "contains", value: "/" } })).status()).toBe(201);
+    expect((await ctl("POST", `/sites/${SITE_STATIC.id}/experiments`, { ...EXPERIMENT_STATIC, urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } })).status()).toBe(201);
 
     // 偽の API を失敗にして公開する → 配置は失敗し、公開そのものは成功して配信ファイルの更新は pending
     await setFakeApiFailing(request, true);

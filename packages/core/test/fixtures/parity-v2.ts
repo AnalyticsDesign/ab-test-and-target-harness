@@ -6,26 +6,28 @@ import type { CompiledConfig } from "../../src/schema";
  * edge(apps/edge/test/parity.test.ts)と runtime(packages/runtime/test/parity.test.ts)が同じ期待値と照らす。
  * すべて needsProfile: false(履歴を使わない条件)、weight は B が 100(Variant に揺れが無い)
  */
-const exp = (id: string, targeting: unknown) => ({
-  id, name: id, urlMatch: { op: "contains", value: "/" }, targeting, trafficPercentage: 100, persistAssignment: false,
+const ANY = { op: "contains", value: "/" };
+/** urlMatch = 含める 1 行(B69: ページの条件は対象 URL で書く)。targeting は訪問者の条件だけ */
+const exp = (id: string, targeting: unknown, row: { page: unknown; params?: unknown[] } = { page: ANY }) => ({
+  id, name: id, urlMatch: { include: [row] }, ...(targeting ? { targeting } : {}), trafficPercentage: 100, persistAssignment: false,
   variants: [{ id: "vA", name: "A", weight: 0, changes: [] }, { id: "vB", name: "B", weight: 100, changes: [] }],
 });
 
 export const PARITY_CONFIG: CompiledConfig = compile({
   siteId: "site_parity", siteSalt: "salt_parity", version: 1, timezone: "Asia/Tokyo", goals: [],
   experiments: [
-    exp("e_path_re", { ctx: "path", op: "regex", value: "^/products/\\d+$" }),
-    exp("e_host", { ctx: "host", op: "endsWith", value: "example.com" }),
+    exp("e_path_re", undefined, { page: { part: "path", op: "regex", value: "^/products/\\d+$" } }),
+    exp("e_host", undefined, { page: { part: "host", op: "endsWith", value: "example.com" } }),
     exp("e_safari", { ctx: "browser", op: "in", value: ["safari"] }),
     exp("e_not_windows", { not: { ctx: "os", op: "in", value: ["windows"] } }),
     exp("e_wide", { ctx: "viewport", minWidth: 768 }),
     exp("e_weekday_day", { ctx: "time", days: ["mon", "tue", "wed", "thu", "fri"], from: "09:00", to: "18:00" }),
     exp("e_new", { ctx: "sinceFirstVisit", op: "lt", days: 1 }),
-    exp("e_mail", { ctx: "query", name: "utm", op: "contains", value: "mail" }),
-    // B135: prototype にある名前のクエリ。無ければ一致しない(直す前は exists が常に真・contains が TypeError)
-    exp("e_q_ctor", { ctx: "query", name: "constructor", op: "exists" }),
-    exp("e_q_tostring", { ctx: "query", name: "toString", op: "contains", value: "x" }),
-    exp("e_q_proto", { ctx: "query", name: "__proto__", op: "exists" }),
+    exp("e_mail", undefined, { page: ANY, params: [{ name: "utm", op: "contains", value: "mail" }] }),
+    // B135: prototype にある名前のクエリ(B69 で対象 URL のパラメータに移した)。無ければ一致しない(直す前は exists が常に真・contains が TypeError)
+    exp("e_q_ctor", undefined, { page: ANY, params: [{ name: "constructor", op: "exists" }] }),
+    exp("e_q_tostring", undefined, { page: ANY, params: [{ name: "toString", op: "contains", value: "x" }] }),
+    exp("e_q_proto", undefined, { page: ANY, params: [{ name: "__proto__", op: "exists" }] }),
   ],
 });
 

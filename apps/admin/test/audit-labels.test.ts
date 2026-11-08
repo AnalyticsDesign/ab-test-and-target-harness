@@ -84,6 +84,13 @@ describe("audit detail line", () => {
   it("experiment.update: changed fields, short values before and after, and the save without field changes (R30・R64)", () => {
     expect(auditDetailLine(ev("experiment.update", { fields: ["trafficPercentage"], trafficPercentage: { from: 50, to: 100 } }))).toBe("配信率 50% → 100%");
     expect(auditDetailLine(ev("experiment.update", { fields: ["name", "urlMatch"], name: { from: "旧", to: "新" } }))).toBe("名前「旧」→「新」、対象 URL");
+    // B69: audit_label_old_url_match。前後を持つ記録では、新しい形は要約の文、古い形(行の形に変わる前の記録)は JSON。例外を出さない
+    const newShape = { include: [{ page: { part: "path", op: "startsWith", value: "/lp/" } }], exclude: [{ page: { part: "path", op: "contains", value: "/old/" } }] };
+    expect(auditDetailLine(ev("experiment.update", { fields: ["urlMatch"], urlMatch: { from: { part: "path", op: "startsWith", value: "/lp/" }, to: newShape } }))).toBe(
+      '対象 URL {"part":"path","op":"startsWith","value":"/lp/"} → パス が「/lp/」で始まる(ただし パス が「/old/」を含む を除く)',
+    );
+    for (const from of [{ op: "equals" }, { part: "zzz", op: "equals", value: "/" }, null, "x", { include: [] }])
+      expect(() => auditDetailLine(ev("experiment.update", { fields: ["urlMatch"], urlMatch: { from, to: newShape } }))).not.toThrow();
     expect(auditDetailLine(ev("experiment.update", { fields: ["persistAssignment"], persistAssignment: { from: false, to: true } }))).toBe("割当の固定 オフ → オン");
     // 記録は値が変わった欄だけを持つ(R64)。変わった欄が無い保存は fields: []
     expect(auditDetailLine(ev("experiment.update", { fields: [] }))).toBe("項目の変更なしの保存");

@@ -802,7 +802,7 @@ export function failingKv(pattern: RegExp, op: "put" | "get" = "put", times = In
 export async function createExperiment(token: string, siteId: string, overrides: Record<string, unknown> = {}): Promise<{ id: string }> {
   const res = await call("POST", `/sites/${siteId}/experiments`, {
     token,
-    body: { id: `exp_${randomSuffix()}`, name: "Hero", urlMatch: { op: "contains", value: "/" }, ...overrides },
+    body: { id: `exp_${randomSuffix()}`, name: "Hero", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, ...overrides },
   });
   expect(res.status).toBe(201);
   return json(res);

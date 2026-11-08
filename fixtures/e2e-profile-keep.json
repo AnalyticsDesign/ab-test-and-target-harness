@@ -10,7 +10,7 @@
   "experiments": [
     {
       "id": "exp_visited", "name": "Visited pricing",
-      "urlMatch": { "op": "contains", "value": "/profile-keep.html" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/profile-keep.html" } }] },
       "targeting": { "hist": "visited", "page": { "op": "contains", "value": "/profile-keep-pricing.html" } },
       "trafficPercentage": 100, "persistAssignment": false,
       "variants": [
@@ -20,7 +20,7 @@
     },
     {
       "id": "exp_converted", "name": "Converted buy",
-      "urlMatch": { "op": "contains", "value": "/profile-keep.html" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/profile-keep.html" } }] },
       "targeting": { "hist": "converted", "goal": "g_buy" },
       "trafficPercentage": 100, "persistAssignment": false,
       "variants": [

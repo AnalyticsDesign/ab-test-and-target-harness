@@ -12,16 +12,16 @@ import type { Env } from "../src/env";
 const HOST = "site.example";
 const RUN = "r".repeat(22);
 const exp: Experiment = {
-  id: "exp_001", name: "hero", urlMatch: { op: "contains", value: "/" },
+  id: "exp_001", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
   trafficPercentage: 100, persistAssignment: false,
   variants: [
-    { id: "vA", name: "A", weight: 50, changes: [] },
-    { id: "vB", name: "B", weight: 50, changes: [] },
+    { id: "vA", weight: 50, changes: [] },
+    { id: "vB", weight: 50, changes: [] },
   ],
 };
 const cfg = {
-  schemaVersion: 2, version: 1, siteId: "site_p", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {},
-  goals: [{ id: "g_buy", name: "Buy", type: "CUSTOM", config: {} }], experiments: [exp], results: { forget: true, runs: { exp_001: RUN } },
+  schemaVersion: 3, version: 1, siteId: "site_p", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {},
+  goals: [{ id: "g_buy", type: "CUSTOM", config: {} }], experiments: [exp], results: { forget: true, runs: { exp_001: RUN } },
 };
 const decisionBody = () => ({ v: 1, url: `https://${HOST}/lp/`, referrer: "", device: "mobile" });
 

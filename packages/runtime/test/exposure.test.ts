@@ -76,8 +76,7 @@ it("pushes the assigned ids even if the baked payload carries different id copie
 });
 
 it("exposure_falls_back_to_ids", () => {
-  // B77: 組が無いときの予備は ID。config に name が残っていても(古い config)使わない
-  expect(baseConfig.experiments[0]!.name).toBe("Hero");
+  // B77: 組が無いときの予備は ID(版 3 の config は name を持たない。B69)
   expect(baseConfig.exposurePayloads).toBeUndefined();
   const pushed: Array<Record<string, unknown>> = [];
   createExposureTracker(baseConfig, DEFAULT_ANALYTICS, { exp_hero: "vA" }, (e) => pushed.push(e)).expose("exp_hero");

@@ -7,7 +7,7 @@
   "experiments": [
     {
       "id": "exp_remote", "name": "Remote hero",
-      "urlMatch": { "op": "contains", "value": "/" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/" } }] },
       "trafficPercentage": 100, "persistAssignment": true,
       "variants": [
         { "id": "vA", "name": "A", "weight": 0, "changes": [] },

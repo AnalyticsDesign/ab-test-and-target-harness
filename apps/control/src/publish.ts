@@ -224,6 +224,7 @@ const FAILURE_MESSAGES: Record<string, { message: string; hint?: string }> = {
   unknown_goal: { message: "参照している目標が見つかりません" },
   legacy_targeting: { message: "古い書式の配信条件があります" },
   invalid_experiment_targeting: { message: "この形では配信できない配信条件があります" },
+  page_condition_moved: { message: "配信条件・オーディエンスに、使えなくなったページの条件があります" },
   invalid_audience_definition: { message: "配信できないオーディエンスがあります" },
   unknown_audience: { message: "参照しているオーディエンスが見つかりません" },
   within_days_exceeds_retention: { message: "期間が訪問者データの保存期間を超える条件があります" },
@@ -246,6 +247,7 @@ const FAILURE_MESSAGES: Record<string, { message: string; hint?: string }> = {
 export const COMPILE_HINT_CODES: ReadonlySet<string> = new Set([
   "invalid_regex", "regex_too_large", "regex_budget_exceeded", "audience_expansion_too_large",
   "legacy_targeting", "invalid_experiment_targeting", "invalid_audience_definition", "unknown_audience", "unknown_goal", "within_days_exceeds_retention",
+  "page_condition_moved",
 ]);
 
 /** Publish の失敗(と、確認画面の compile の失敗)の利用者向けの文言。古い書式は書き換え方も足す */
@@ -358,7 +360,10 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserAc
   // 手順 4: 公開履歴(本体 + hash)を予約行に記録。KV の put の前に、画像が消す途中・消し終えていないことを条件にした 1 文で書く。
   // Cron の印の文は「届きうる版(kv_deleted = 0 かつ config_hash あり)の config_json に ID が無い」を条件に持つので、D1 が書き込みを
   // 1 本ずつ通す順で、こちらが先なら印は付かず、印が先ならこちらが 0 行になる。往復は前の UPDATE と同じ 1 回
-  const [recorded] = await env.DB.batch([toStatement(env, configRecordUpdate(db, rowId, site.id, hash, body, config.needsProfile, assetIds))]);
+  // B69(CX-High-2): 同じ文で、この版の配る設定に入ったエクスペリエンスの ID も記録する(配信の確かめが、入っていない版を証拠にしない)
+  const [recorded] = await env.DB.batch([
+    toStatement(env, configRecordUpdate(db, rowId, site.id, hash, body, config.needsProfile, assetIds, config.experiments.map((e) => e.id))),
+  ]);
   if ((recorded?.meta.changes ?? 0) === 0) {
     // 失敗のときだけ D1 をもう 1 回読んで、無い画像を決める(KV に何も置いていないので後始末は無い)
     const g = await guardAssets(env, db, site, input, body, { readD1: true });

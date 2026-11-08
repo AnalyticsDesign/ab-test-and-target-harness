@@ -29,13 +29,13 @@ it("viewport width never changes the device classification (spec §6.1、2026-09
   expect(viewport).toEqual({ w: 380, h: 800 }); // 判定には使わないが decision body では送る(§9.1)
 });
 
-it("collects url, query, referrer, browser / os, viewport and the decision time (spec §10.1 / 決定 49 §11.1)", () => {
+it("collects url, referrer, browser / os, viewport and the decision time — no query object (spec §10.1 / 決定 49 §11.1 / B69 §4)", () => {
   const { ctx, viewport } = collectContext({
     url: "https://site.test/pricing?utm=x&b=2", referrer: "https://google.com/",
     userAgent: MAC, width: 1440, height: 900, hasViewportMeta: true, now: 1_700_000_000_000, firstVisitAt: 1_690_000_000_000,
   });
   expect(ctx).toEqual({
-    url: "https://site.test/pricing?utm=x&b=2", query: { utm: "x", b: "2" }, device: "desktop", browser: "chrome", os: "macos",
+    url: "https://site.test/pricing?utm=x&b=2", device: "desktop", browser: "chrome", os: "macos",
     referrer: "https://google.com/", now: 1_700_000_000_000, viewportWidth: 1440, firstVisitAt: 1_690_000_000_000,
   });
   expect(viewport).toEqual({ w: 1440, h: 900 });

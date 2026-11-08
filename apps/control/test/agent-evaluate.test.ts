@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
 import { sql } from "kysely";
+import { PAGE_CONDITION_MOVED_AUDIENCE_HINT, PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE, PAGE_CONDITION_MOVED_HINT, PAGE_CONDITION_MOVED_MESSAGE } from "@wtt/core";
 import { active, call, createExperiment, createSite, expectEnvelope, inviteAndJoin, json, publishRes, runDirect, setupOwner, siteRow, testEnv, TEXT_CHANGE, userActor } from "./helpers";
 import { getDb } from "../src/db";
 import { publishSite } from "../src/publish";
@@ -32,7 +33,7 @@ const of = (items: EvaluateItem[], id: string): EvaluateItem => items.find((i) =
 async function publishedSite() {
   const owner = await setupOwner();
   const { id: sid } = await createSite(owner.token, owner.workspaceId);
-  const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_lp", urlMatch: { op: "contains", value: "/lp/" } });
+  const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_lp", urlMatch: { include: [{ page: { op: "contains", value: "/lp/" } }] } });
   await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
   expect((await call("POST", `/sites/${sid}/experiments/${eid}/status`, { token: owner.token, body: { status: "running" } })).status).toBe(200);
   return { owner, sid, eid };
@@ -110,7 +111,7 @@ describe("POST /sites/:sid/evaluate (spec §13.10 / 決定 39 (2) (7))", () => {
     // /setup は初回のみ(setup_closed)なので、既存 owner の別 Workspace として新しい Site を作る
     const wsFresh = (await json<{ id: string }>(await call("POST", "/workspaces", { token: owner.token, body: { name: "Fresh" } })));
     const { id: sid2 } = await createSite(owner.token, wsFresh.id);
-    const { id: eid2 } = await createExperiment(owner.token, sid2, { id: "exp_unpublished", urlMatch: { op: "contains", value: "/lp/" } });
+    const { id: eid2 } = await createExperiment(owner.token, sid2, { id: "exp_unpublished", urlMatch: { include: [{ page: { op: "contains", value: "/lp/" } }] } });
     await call("PUT", `/sites/${sid2}/experiments/${eid2}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
     // Start は自動 Publish を伴うので、「未 Publish の running」は D1 の status を直接書いて作る
     await sql`update experiments set status = 'running' where site_id = ${sid2} and id = ${eid2}`.execute(getDb(env));
@@ -124,7 +125,7 @@ describe("POST /sites/:sid/evaluate (spec §13.10 / 決定 39 (2) (7))", () => {
     });
 
     // (b) Publish 済みの Site でも、D1 が running なのに公開 config に無ければ not_published
-    const { id: extra } = await createExperiment(owner.token, sid, { id: "exp_extra", urlMatch: { op: "contains", value: "/lp/" } });
+    const { id: extra } = await createExperiment(owner.token, sid, { id: "exp_extra", urlMatch: { include: [{ page: { op: "contains", value: "/lp/" } }] } });
     await call("PUT", `/sites/${sid}/experiments/${extra}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
     await sql`update experiments set status = 'running' where site_id = ${sid} and id = ${extra}`.execute(getDb(env));
     const drifted = await evaluate(owner.token, sid, { url: "https://www.example.com/lp/" });
@@ -143,7 +144,7 @@ describe("POST /sites/:sid/evaluate (spec §13.10 / 決定 39 (2) (7))", () => {
   it("draft: true は未公開の変更を見る / draft: false は配信中の config を見る", async () => {
     const { owner, sid } = await publishedSite();
     // 公開後に URL 条件だけ書き換える(Publish しない)
-    await call("PATCH", `/sites/${sid}/experiments/exp_lp`, { token: owner.token, body: { urlMatch: { op: "contains", value: "/new/" } } });
+    await call("PATCH", `/sites/${sid}/experiments/exp_lp`, { token: owner.token, body: { urlMatch: { include: [{ page: { op: "contains", value: "/new/" } }] } } });
     const published = await evaluate(owner.token, sid, { url: "https://www.example.com/lp/" });
     expect(of(published.items, "exp_lp").eligible).toBe(true); // 配信中はまだ /lp/
     const draft = await evaluate(owner.token, sid, { url: "https://www.example.com/lp/", draft: true });
@@ -242,7 +243,7 @@ describe("evaluate の新しい入力(決定 49、設計書 §13)", () => {
       schemaVersion: 1, version: 7, siteSalt: "salt_v1", needsProfile: true,
       patterns: { p_pricing: { op: "contains", value: "/pricing" } }, prehide: { exp_v1: [] }, exposureSelectors: { exp_v1: [] }, goals: [],
       experiments: [{
-        id: "exp_v1", name: "v1", urlMatch: { op: "regex", value: "^https://a\\.example/(lp|top)/" },
+        id: "exp_v1", name: "v1", urlMatch: { include: [{ page: { op: "regex", value: "^https://a\\.example/(lp|top)/" } }] },
         targeting: { hist: "page_view_count", pattern: "p_pricing", gte: 2 }, trafficPercentage: 100, persistAssignment: false,
         variants: [{ id: "vA", name: "A", weight: 0, changes: [] }, { id: "vB", name: "B", weight: 100, changes: [] }],
       }],
@@ -293,5 +294,48 @@ describe("evaluate の新しい入力(決定 49、設計書 §13)", () => {
     const missing = await items({}); // lastAt の欠落 = 期間を判定できない
     expect(of(missing, "exp_recent")).toMatchObject({ eligible: false, reason: "input_missing" });
     expect(of(missing, "exp_not_recent")).toMatchObject({ eligible: false, reason: "input_missing" }); // 否定でも配信を広げない
+  });
+});
+
+// B69(spec §4・§9.1): 下書きの確かめは、外したページの条件を compile の前に 422 にする。evaluate のクエリの上書きは受けない
+describe("evaluate / draft-bootstrap と外したページの条件(B69)", () => {
+  it("draft_evaluate_and_bootstrap_reject_moved_page_condition", async () => {
+    const owner = await setupOwner();
+    const { id: sid } = await createSite(owner.token, owner.workspaceId);
+    const { id: direct } = await createExperiment(owner.token, sid, { id: "exp_direct" });
+    await sql`update experiments set targeting_json = ${JSON.stringify({ ctx: "query", name: "utm", op: "exists" })} where site_id = ${sid} and id = ${direct}`.execute(getDb(env));
+    const draftEval = await call("POST", `/sites/${sid}/evaluate`, { token: owner.token, body: { url: "https://www.example.com/lp/", draft: true } });
+    expect(draftEval.status).toBe(422);
+    expect(await json(draftEval)).toMatchObject({ error: "invalid_experiment_targeting", experiment: "exp_direct", path: ["targeting"], message: PAGE_CONDITION_MOVED_MESSAGE, hint: PAGE_CONDITION_MOVED_HINT });
+    const boot = await call("GET", `/sites/${sid}/experiments/${direct}/draft-bootstrap`, { token: owner.token });
+    expect(boot.status).toBe(422);
+    expect(await json(boot)).toMatchObject({ error: "invalid_experiment_targeting", message: PAGE_CONDITION_MOVED_MESSAGE });
+    // オーディエンス経由(同じサイトの定義だけを見る)
+    const { id: s2 } = await createSite(owner.token, owner.workspaceId);
+    await env.DB.prepare("insert into audiences (site_id, id, name, definition_json, created_at, updated_at) values (?, 'aud_old', 'old', ?, 1, 1)").bind(s2, JSON.stringify({ ctx: "path", op: "startsWith", value: "/lp/" })).run();
+    const { id: viaAud } = await createExperiment(owner.token, s2, { id: "exp_aud" });
+    await sql`update experiments set targeting_json = ${JSON.stringify({ audience: "aud_old" })} where site_id = ${s2} and id = ${viaAud}`.execute(getDb(env));
+    const audEval = await call("POST", `/sites/${s2}/evaluate`, { token: owner.token, body: { url: "https://www.example.com/lp/", draft: true } });
+    expect(audEval.status).toBe(422);
+    expect(await json(audEval)).toMatchObject({ error: "invalid_experiment_targeting", experiment: "exp_aud", audience: "aud_old", message: PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE, hint: PAGE_CONDITION_MOVED_AUDIENCE_HINT });
+    const audBoot = await call("GET", `/sites/${s2}/experiments/${viaAud}/draft-bootstrap`, { token: owner.token });
+    expect(await json(audBoot)).toMatchObject({ error: "invalid_experiment_targeting", audience: "aud_old" });
+    // 公開済みの評価(draft: false)は止めない(未公開のサイトは not_published で返る)
+    expect((await call("POST", `/sites/${sid}/evaluate`, { token: owner.token, body: { url: "https://www.example.com/lp/" } })).status).toBe(200);
+  });
+
+  it("evaluate_rejects_query_override", async () => {
+    const { owner, sid } = await publishedSite();
+    const res = await call("POST", `/sites/${sid}/evaluate`, { token: owner.token, body: { url: "https://www.example.com/lp/?a=1", query: { a: "1" } } });
+    expect(res.status).toBe(422);
+    expect(await json(res)).toMatchObject({ error: "validation_failed" });
+    // 対象 URL のパラメータは url から読む
+    const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_param", urlMatch: { include: [{ page: { op: "contains", value: "/lp/" }, params: [{ name: "utm_source", op: "equals", value: "news" }] }] } });
+    await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
+    expect((await call("POST", `/sites/${sid}/experiments/${eid}/status`, { token: owner.token, body: { status: "running" } })).status).toBe(200);
+    const hit = await evaluate(owner.token, sid, { url: "https://www.example.com/lp/?utm_source=a&utm_source=news" });
+    expect(of(hit.items, "exp_param")).toMatchObject({ eligible: true });
+    const miss = await evaluate(owner.token, sid, { url: "https://www.example.com/lp/?utm_source=ads" });
+    expect(of(miss.items, "exp_param")).toMatchObject({ eligible: false, reason: "url_mismatch" });
   });
 });

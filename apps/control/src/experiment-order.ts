@@ -1,4 +1,4 @@
-import type { ExperimentKind } from "@wtt/core";
+import { canonicalUrlMatch, type ExperimentKind } from "@wtt/core";
 
 /**
  * 決定 51(設計書 §3.2・§9.3): compile の入力に並べる順 = 優先の順(後に並ぶものほど優先が高い)。
@@ -25,20 +25,15 @@ export function orderForCompile<T extends OrderRow>(rows: readonly T[]): T[] {
 }
 
 /**
- * 決定 51(設計書 §3.3): 同じ対象 URL の条件(`urlMatch` の完全一致)で、同じセレクタの文字列を変えるエクスペリエンスの組を警告する(拒否しない)。
+ * 決定 51(設計書 §3.3): 同じ対象 URL の条件(`urlMatch` の正規の形の一致。B69: 行・パラメータの順だけが違うものも同じ)で、同じセレクタの文字列を変えるエクスペリエンスの組を警告する(拒否しない)。
  * 入力は compile の入力と同じ並び(後ろほど優先が高い)。警告は優先の低い方に付け、どちらが優先されるかを文に入れる。
  * 範囲の違う URL の条件の重なり(サイト全体と特定のページ)・セレクタの意味の重なりは見ない(見えない重なりは並びの規則で
- * 一意に決まり、② 以降は適用の失敗として数える)。範囲の重なりを足すときは `urlKey` の比較をここで差し替える
+ * 一意に決まり、② 以降は適用の失敗として数える)。範囲の重なりを足すときは `canonicalUrlMatch` の比較をここで差し替える
  */
 export type OverlapExperiment = { id: string; name: string; kind: ExperimentKind; urlMatch: unknown; variants: Array<{ changes: Array<{ selector?: string }> }> };
 export type OverlapWarning = { path: string; message: string; experimentIds: [string, string] };
 
 const SHOWN_SELECTORS = 3;
-
-function urlKey(m: unknown): string {
-  const { part, op, value } = (m ?? {}) as { part?: string; op?: string; value?: string };
-  return JSON.stringify([part ?? "url", op, value]);
-}
 
 function selectorsOf(e: OverlapExperiment): string[] {
   const out: string[] = [];
@@ -58,7 +53,7 @@ function overlapMessage(lo: OverlapExperiment, hi: OverlapExperiment, sels: stri
 }
 
 export function overlapWarnings(experiments: readonly OverlapExperiment[]): OverlapWarning[] {
-  const keyed = experiments.map((e) => ({ e, url: urlKey(e.urlMatch), sels: selectorsOf(e) }));
+  const keyed = experiments.map((e) => ({ e, url: canonicalUrlMatch(e.urlMatch), sels: selectorsOf(e) }));
   const out: OverlapWarning[] = [];
   for (let i = 0; i < keyed.length; i++) {
     for (let j = i + 1; j < keyed.length; j++) {

@@ -1,0 +1,23 @@
+/* 対象 URL の入力(含める・除くの 2 つの枠)。入力の節は灰色の面に載せ、行は白くする(admin_ui_rules 4.1) */
+.box { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.group { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--sunken); min-width: 0; }
+.head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.head b { font-size: 12.5px; }
+.kindIn { color: var(--ok); }
+.kindOut { color: var(--danger); }
+.rowWrap { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.joiner { font-size: 11.5px; color: var(--muted); padding-left: 10px; }
+.row { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); min-width: 0; }
+.line { display: flex; gap: 8px; align-items: center; justify-content: space-between; min-width: 0; }
+.param { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-left: 22px; }
+.and { font-size: 11.5px; color: var(--muted); width: 26px; }
+.paramText { width: 140px; max-width: 100%; }
+.iconX { flex: none; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 15px; width: 28px; height: 28px; border-radius: var(--radius); }
+.iconX:hover { background: var(--sunken); color: var(--danger); }
+.link { border: 0; background: none; padding: 0; font: inherit; font-size: 12.5px; color: var(--accent-text); cursor: pointer; }
+.link:hover { text-decoration: underline; }
+.summary { font-size: 12.5px; background: var(--sunken); border-radius: var(--radius); padding: 6px 10px; overflow-wrap: anywhere; }
+.summary b { font-weight: 600; }
+.json summary { font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.json pre { margin: 6px 0 0; padding: 8px 10px; background: var(--code-bg); border-radius: var(--radius); font-family: var(--font-mono); font-size: 12px; overflow-x: auto; }
+@media (max-width: 760px) { .param { padding-left: 8px; } }

@@ -1,20 +1,25 @@
 import { describe, it, expect } from "vitest";
-import { compile, CompileError } from "../src/compile";
+import { compile, CompileError, ExperimentInputSchema } from "../src/compile";
+import type { z } from "zod";
 import { patternIdOf } from "../src/pattern-id";
 import { compileRegex, REGEX_LIMITS } from "../src/regex-compile";
-import { CompiledConfigSchema, DslNodeSchema, LIMITS, type CompiledConfig, type Experiment } from "../src/schema";
+import { CompiledConfigSchema, DslNodeSchema, LIMITS, regexInstructionTotal, type CompiledConfig } from "../src/schema";
 import { parseCompiledConfig } from "../src/config-read";
 import { decide, dslNeedsProfile, evaluateDsl, type PageContext } from "../src/evaluate";
 import { evaluateWhatIf } from "../src/what-if";
-import { withoutLegacyNames } from "../src/legacy-names";
 import { bakeBootstrap, bootPayload } from "../src/bake";
 import { staticInputDigest } from "../src/static-deploy";
 import { parseSiteSettings } from "../src/settings";
-import { maxWithinDays } from "../src/targeting";
+import { maxWithinDays, PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE, PAGE_CONDITION_MOVED_MESSAGE } from "../src/targeting";
 
-const exp = (targeting?: unknown, persist = false): Experiment => ({
+/** compile の入力のエクスペリエンス(kind は省略できる) */
+type ExpIn = z.input<typeof ExperimentInputSchema>;
+/** 対象 URL を含める 1 行で書く(B69) */
+const url = (page: unknown) => ({ include: [{ page }] }) as never;
+
+const exp = (targeting?: unknown, persist = false): ExpIn => ({
   id: "exp_001", name: "hero",
-  urlMatch: { op: "contains", value: "/lp/" },
+  urlMatch: url({ op: "contains", value: "/lp/" }),
   ...(targeting ? { targeting: targeting as never } : {}),
   trafficPercentage: 100, persistAssignment: persist,
   variants: [
@@ -31,9 +36,9 @@ const base = { siteId: "site_1", siteSalt: "salt_test", version: 1, retentionDay
 const PRICING = { part: "path" as const, op: "startsWith" as const, value: "/pricing/" };
 
 describe("compile", () => {
-  it("produces schemaVersion 2 config with prehide/exposureSelectors from change selectors", () => {
+  it("produces schemaVersion 3 config with prehide/exposureSelectors from change selectors", () => {
     const cfg = compile({ ...base, experiments: [exp()] });
-    expect(cfg.schemaVersion).toBe(2);
+    expect(cfg.schemaVersion).toBe(3);
     expect(cfg.needsProfile).toBe(false);
     expect(cfg.exposureSelectors["exp_001"]).toEqual([".hero-title", ":root"]); // CSS(selector なし)は :root で表す(決定 38)
     expect(cfg.prehide["exp_001"]).toEqual([".hero-title"]);
@@ -48,7 +53,7 @@ describe("compile", () => {
     expect(cfg.prehide["exp_001"]).toEqual([".hero-title"]);
 
     // CSS だけの Variant でも同じ(selector の和集合が空でも :root は入る)
-    const cssOnly: Experiment = { ...exp(), variants: [
+    const cssOnly: ExpIn = { ...exp(), variants: [
       { id: "vA", name: "A", weight: 50, changes: [] },
       { id: "vB", name: "B", weight: 50, changes: [{ id: "c2", type: "CSS", payload: { css: ".x{}" } }] },
     ] };
@@ -57,14 +62,14 @@ describe("compile", () => {
     expect(cfg2.prehide["exp_001"]).toEqual([]);
 
     // selector 付きの Change だけなら従来どおり :root は入らない
-    const noCss: Experiment = { ...exp(), variants: [
+    const noCss: ExpIn = { ...exp(), variants: [
       { id: "vA", name: "A", weight: 50, changes: [] },
       { id: "vB", name: "B", weight: 50, changes: [{ id: "c1", type: "TEXT", selector: ".hero-title", payload: { text: "B" } }] },
     ] };
     expect(compile({ ...base, experiments: [noCss] }).exposureSelectors["exp_001"]).toEqual([".hero-title"]);
 
     // selector として :root を既に使っていれば二重に足さない(r1 CX-Low-1)
-    const rootSel: Experiment = { ...exp(), variants: [
+    const rootSel: ExpIn = { ...exp(), variants: [
       { id: "vA", name: "A", weight: 50, changes: [] },
       { id: "vB", name: "B", weight: 50, changes: [
         { id: "c1", type: "ATTRIBUTE", selector: ":root", payload: { name: "data-theme", value: "b" } },
@@ -211,7 +216,7 @@ describe("compile", () => {
     // exposurePayloads を持たない旧 config は parse できる(optional。§10.9「バージョンと異常時」)
     const { exposurePayloads: _omit, ...legacy } = cfg;
     expect(CompiledConfigSchema.safeParse(legacy).success).toBe(true);
-    expect(cfg.schemaVersion).toBe(2);
+    expect(cfg.schemaVersion).toBe(3);
   });
 
   it("compile_output_has_no_names", () => {
@@ -227,6 +232,16 @@ describe("compile", () => {
     for (const g of cfg.goals) expect("name" in g).toBe(false);
     const text = JSON.stringify(cfg);
     for (const name of ["社内の部長案", "部長の推しパターン", "社内の目標名"]) expect(text).not.toContain(name);
+    // B69: 版 3 の CompiledConfigSchema は名前を受けない(エクスペリエンス・パターン・目標のどれでも。名前付きの版 2 は upgradeV2 が落とす)
+    const named = (f: (c: Record<string, any>) => void) => {
+      const c = JSON.parse(JSON.stringify(cfg));
+      f(c);
+      return CompiledConfigSchema.safeParse(c).success;
+    };
+    expect(named(() => {})).toBe(true);
+    expect(named((c) => (c.experiments[0].name = "x"))).toBe(false);
+    expect(named((c) => (c.experiments[0].variants[0].name = "x"))).toBe(false);
+    expect(named((c) => (c.goals[0].name = "x"))).toBe(false);
     // 入力では名前は必須のまま(管理画面の中で使う)
     const { name: _n, ...nameless } = exp();
     expect(() => compile({ ...base, experiments: [nameless] })).toThrowError(expect.objectContaining({ code: "invalid_input" }));
@@ -285,8 +300,79 @@ describe("compile", () => {
   });
 });
 
-describe("compile: 版 2(決定 49)", () => {
-  const withTargeting = (targeting: unknown, urlMatch: unknown = { op: "contains", value: "/lp/" }) => ({ ...exp(), urlMatch, targeting }) as never;
+describe("compile: 版 3(決定 49・B69)", () => {
+  const withTargeting = (targeting: unknown, urlMatch: unknown = url({ op: "contains", value: "/lp/" })) => ({ ...exp(), urlMatch, targeting }) as never;
+
+  it("compile_v3_url_match(対象 URL の各行の page に命令列を付け、params はそのまま。全行の命令数を数える)", () => {
+    const re1 = "^/lp/\\d+$";
+    const re2 = "^/lp/old/";
+    const urlMatch = {
+      include: [{ page: { part: "path", op: "regex", value: re1 }, params: [{ name: "utm_source", op: "equals", value: "news" }] }, { page: { op: "contains", value: "/campaign/" }, params: [] }],
+      exclude: [{ page: { part: "path", op: "regex", value: re2 } }],
+    };
+    const cfg = compile({ ...base, experiments: [withTargeting(undefined, urlMatch)] });
+    expect(cfg.schemaVersion).toBe(3);
+    const m = cfg.experiments[0]!.urlMatch;
+    expect(m.include[0]!.page.prog).toMatchObject({ v: 1 });
+    expect(m.include[0]!.params).toEqual([{ name: "utm_source", op: "equals", value: "news" }]);
+    expect(m.include[1]).toEqual({ page: { op: "contains", value: "/campaign/" } }); // 空の params は省く
+    expect(m.exclude![0]!.page.prog).toMatchObject({ v: 1 });
+    // regexInstructionTotal は 2 行分(含めるの 1 行目と除くの 1 行目)を数える
+    const n1 = compileRegex(re1);
+    const n2 = compileRegex(re2);
+    if (!n1.ok || !n2.ok) throw new Error("regex");
+    expect(regexInstructionTotal(cfg)).toBe(n1.instructions + n2.instructions);
+    expect(CompiledConfigSchema.safeParse(cfg).success).toBe(true);
+    // 空の exclude は省く
+    expect(compile({ ...base, experiments: [withTargeting(undefined, { include: urlMatch.include, exclude: [] })] }).experiments[0]!.urlMatch).not.toHaveProperty("exclude");
+  });
+
+  it("compile_v3_url_match: regexInstructionTotal は全行の prog を足す(行を足すと版 3 の schema の上限に掛かる)", () => {
+    const big = (k: number) => ({ part: "path", op: "regex", value: `^/${k}.{0,97}` }); // 1 つ 199 命令前後
+    const r = compileRegex(big(1).value);
+    if (!r.ok) throw new Error(r.issue.code);
+    const two = compile({ ...base, experiments: [withTargeting(undefined, { include: [{ page: big(1) }], exclude: [{ page: big(2) }] })] });
+    expect(two.experiments[0]!.urlMatch.exclude).toHaveLength(1);
+    // 配った後に 3 行目を手で足すと(compile の検査を迂回した改竄)、全行の合計が 500 を超えて版 3 の schema が断る
+    const tampered = JSON.parse(JSON.stringify(two)) as CompiledConfig;
+    tampered.experiments[0]!.urlMatch.include.push(JSON.parse(JSON.stringify(two.experiments[0]!.urlMatch.exclude![0]!)));
+    expect(r.instructions * 3).toBeGreaterThan(REGEX_LIMITS.instructionsPerSite);
+    expect(CompiledConfigSchema.safeParse(tampered).success).toBe(false);
+    expect(CompiledConfigSchema.safeParse(two).success).toBe(true);
+  });
+
+  it("compile_rejects_moved_page_condition(配信条件・参照するオーディエンスのページの条件は page_condition_moved)", () => {
+    const err = (input: Record<string, unknown>): CompileError => {
+      try {
+        compile({ ...base, ...input });
+      } catch (e) {
+        return e as CompileError;
+      }
+      throw new Error("expected CompileError");
+    };
+    const leaves = [
+      { ctx: "url", op: "contains", value: "/lp/" },
+      { ctx: "host", op: "equals", value: "shop.example.com" },
+      { ctx: "path", op: "regex", value: "^/a/" },
+      { ctx: "query", name: "utm", op: "exists" },
+    ];
+    for (const leaf of leaves) {
+      const e1 = err({ experiments: [withTargeting({ and: [{ ctx: "device", op: "in", value: ["mobile"] }, { not: leaf }] })] });
+      expect(e1.code).toBe("page_condition_moved");
+      expect(e1.message).toContain("エクスペリエンス exp_001 の配信条件");
+      expect(e1.message).toContain(PAGE_CONDITION_MOVED_MESSAGE);
+      const e2 = err({ audiences: { aud_page: { or: [{ ctx: "device", op: "in", value: ["mobile"] }, leaf] } }, experiments: [withTargeting({ audience: "aud_page" })] });
+      expect(e2.code).toBe("page_condition_moved");
+      expect(e2.message).toContain("オーディエンス aud_page");
+      expect(e2.message).toContain(PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE);
+    }
+    // 参照されないオーディエンスにページの条件があっても止めない(今までどおり、参照されたものだけを検査する)
+    expect(() => compile({ ...base, audiences: { aud_unused: { ctx: "query", name: "a", op: "exists" } }, experiments: [exp()] })).not.toThrow();
+  });
+
+  it("古い形の対象 URL(一番外側の op / value)は invalid_input", () => {
+    expect(() => compile({ ...base, experiments: [withTargeting(undefined, { op: "contains", value: "/lp/" })] })).toThrowError(expect.objectContaining({ code: "invalid_input" }));
+  });
 
   it("保存する形を正規化してから配る形にする(min: 1 と part: url を省く・子 1 つのグループを畳む・期間を写す)", () => {
     const cfg = compile({ ...base, experiments: [withTargeting({ and: [{ or: [{ hist: "visited", page: { part: "url", op: "contains", value: "/pricing/" }, min: 1 }] }, { hist: "converted", goal: "g_lead", withinDays: 7 }] })] });
@@ -296,45 +382,51 @@ describe("compile: 版 2(決定 49)", () => {
     expect(cfg.needsProfile).toBe(true);
   });
 
-  it("パス・ホストの正規表現に命令列を付ける(対象 URL・目標・配信条件)。値は ¥ を \\ に置き換えてから", () => {
+  it("パス・ホストの正規表現に命令列を付ける(対象 URL・目標)。値は ¥ を \\ に置き換えてから", () => {
     const cfg = compile({
       ...base,
       goals: [{ id: "g_thanks", name: "thanks", type: "PAGEVIEW", config: { page: { part: "path", op: "regex", value: "^/thanks/¥d+$" } } }],
-      experiments: [withTargeting({ ctx: "host", op: "regex", value: "^shop\\." }, { part: "path", op: "regex", value: "^/lp/" })],
+      experiments: [withTargeting(undefined, { include: [{ page: { part: "path", op: "regex", value: "^/lp/" } }, { page: { part: "host", op: "regex", value: "^shop\\." } }] })],
     });
     const goal = cfg.goals[0]!;
     expect(goal.type === "PAGEVIEW" && goal.config.page).toMatchObject({ part: "path", op: "regex", value: "^/thanks/\\d+$", prog: { v: 1 } });
-    expect(cfg.experiments[0]!.urlMatch).toMatchObject({ part: "path", op: "regex", prog: { v: 1 } });
-    expect(cfg.experiments[0]!.targeting).toMatchObject({ ctx: "host", op: "regex", prog: { v: 1 } });
+    expect(cfg.experiments[0]!.urlMatch.include[0]!.page).toMatchObject({ part: "path", op: "regex", prog: { v: 1 } });
+    expect(cfg.experiments[0]!.urlMatch.include[1]!.page).toMatchObject({ part: "host", op: "regex", prog: { v: 1 } });
   });
 
   it("文字列の一致のホスト・パスは正規化する(小文字化・末尾ドット・punycode・日本語のエンコード)。part: url は省く", () => {
     const cfg = compile({
       ...base,
-      experiments: [withTargeting({ and: [{ ctx: "host", op: "endsWith", value: "Example.COM." }, { ctx: "path", op: "startsWith", value: "/料金/" }] }, { part: "url", op: "contains", value: "/lp/" })],
+      experiments: [withTargeting(undefined, { include: [{ page: { part: "url", op: "contains", value: "/lp/" } }, { page: { part: "host", op: "endsWith", value: "Example.COM." } }], exclude: [{ page: { part: "path", op: "startsWith", value: "/料金/" } }] })],
     });
-    expect(cfg.experiments[0]!.urlMatch).toEqual({ op: "contains", value: "/lp/" });
-    expect(cfg.experiments[0]!.targeting).toEqual({ and: [{ ctx: "host", op: "endsWith", value: "example.com" }, { ctx: "path", op: "startsWith", value: "/%E6%96%99%E9%87%91/" }] });
+    expect(cfg.experiments[0]!.urlMatch).toEqual({
+      include: [{ page: { op: "contains", value: "/lp/" } }, { page: { part: "host", op: "endsWith", value: "example.com" } }],
+      exclude: [{ page: { part: "path", op: "startsWith", value: "/%E6%96%99%E9%87%91/" } }],
+    });
   });
 
-  it("url の正規表現は invalid_regex(配信条件・対象 URL・目標・パターンのどこでも)", () => {
+  it("url の正規表現は invalid_regex(対象 URL・目標・パターンのどこでも)", () => {
     const cases: Array<() => unknown> = [
-      () => compile({ ...base, experiments: [withTargeting({ ctx: "url", op: "regex", value: "a" })] }),
-      () => compile({ ...base, experiments: [withTargeting(undefined, { op: "regex", value: "a" })] }),
+      () => compile({ ...base, experiments: [withTargeting(undefined, url({ op: "regex", value: "a" }))] }),
+      () => compile({ ...base, experiments: [withTargeting(undefined, { include: [{ page: { op: "contains", value: "/" } }], exclude: [{ page: { op: "regex", value: "a" } }] })] }),
       () => compile({ ...base, goals: [{ id: "g", name: "g", type: "PAGEVIEW", config: { page: { op: "regex", value: "a" } } }], experiments: [] }),
       () => compile({ ...base, experiments: [withTargeting({ hist: "visited", page: { op: "regex", value: "a" } })] }),
     ];
     for (const run of cases) expect(run).toThrowError(expect.objectContaining({ code: "invalid_regex" }));
   });
 
-  it("許可リストに無い書き方は invalid_regex、1 つ 200 命令超は regex_too_large", () => {
-    expect(() => compile({ ...base, experiments: [withTargeting({ ctx: "path", op: "regex", value: "(?=a)" })] })).toThrowError(expect.objectContaining({ code: "invalid_regex" }));
-    expect(() => compile({ ...base, experiments: [withTargeting({ ctx: "path", op: "regex", value: ".{0,100}" })] })).toThrowError(expect.objectContaining({ code: "regex_too_large" }));
+  it("許可リストに無い書き方は invalid_regex、1 つ 200 命令超は regex_too_large(場所は行で示す)", () => {
+    expect(() => compile({ ...base, experiments: [withTargeting(undefined, url({ part: "path", op: "regex", value: "(?=a)" }))] })).toThrowError(
+      expect.objectContaining({ code: "invalid_regex", message: expect.stringContaining("エクスペリエンス exp_001 の対象 URL(含める 1 行目)") }),
+    );
+    expect(() => compile({ ...base, experiments: [withTargeting(undefined, { include: [{ page: { op: "contains", value: "/" } }], exclude: [{ page: { part: "path", op: "regex", value: ".{0,100}" } }] })] })).toThrowError(
+      expect.objectContaining({ code: "regex_too_large", message: expect.stringContaining("エクスペリエンス exp_001 の対象 URL(除く 1 行目)") }),
+    );
   });
 
   it("regex_instruction_budget_is_enforced_per_regex_and_site(サイト全体 500 命令超は regex_budget_exceeded。大きいものから並べる)", () => {
     const big = (k: number) => ({ part: "path", op: "regex", value: `^/${k}.{0,97}` }); // 1 つ 199 命令前後
-    const three = [1, 2, 3].map((k) => ({ ...exp(), id: `exp_${k}`, urlMatch: big(k) })) as never[];
+    const three = [1, 2, 3].map((k) => ({ ...exp(), id: `exp_${k}`, urlMatch: url(big(k)) })) as never[];
     const err = (() => {
       try {
         compile({ ...base, experiments: three });
@@ -344,7 +436,7 @@ describe("compile: 版 2(決定 49)", () => {
       return null;
     })();
     expect(err?.code).toBe("regex_budget_exceeded");
-    expect(err?.message).toMatch(/エクスペリエンス exp_\d の対象 URL\(\d+\)/);
+    expect(err?.message).toMatch(/エクスペリエンス exp_\d の対象 URL\(含める 1 行目\)\(\d+\)/);
     expect(compile({ ...base, experiments: three.slice(0, 2) }).experiments).toHaveLength(2);
   });
 
@@ -401,24 +493,11 @@ describe("compile: 版 2(決定 49)", () => {
       const { retentionDays: _r, ...noRetention } = base;
       expect(() => compile({ ...noRetention, experiments: [withTargeting({ hist: "visited", page: PRICING, withinDays: 3650 })] })).not.toThrow();
     });
-    it("同じオーディエンスの正規表現は参照の数だけ数え、合計が上限を超えたら hint の場所に原因のオーディエンスを出す(plan ② P20)", () => {
-      // 命令数は compileRegex で測り、上限に収まる最大の参照数 n を求める(数え方を確かめる。式の命令数そのものには依存しない)
-      const src = "^/(ja|en)/products/[0-9]+$";
-      const r = compileRegex(src);
-      if (!r.ok) throw new Error(r.issue.code);
-      const audiences = { aud_rx: { ctx: "path", op: "regex", value: src } };
-      const exps = (k: number) => Array.from({ length: k }, (_, i) => ({ ...exp({ audience: "aud_rx" }), id: `exp_${i}` }));
-      const n = Math.floor(REGEX_LIMITS.instructionsPerSite / r.instructions);
-      expect(() => compile({ ...base, audiences, experiments: exps(n) })).not.toThrow();
-      expect(() => compile({ ...base, audiences, experiments: exps(n + 1) })).toThrowError(
-        expect.objectContaining({ code: "regex_budget_exceeded", message: expect.stringContaining("エクスペリエンス exp_0 の配信条件(オーディエンス aud_rx)") }),
-      );
-    });
     it("閲覧したページの条件の正規表現は、何件のエクスペリエンスから使ってもパターン ID ごとに 1 回だけ数える(plan ② P20)", () => {
       const src = "^/(ja|en)/products/[0-9]+$";
       const r = compileRegex(src);
       if (!r.ok) throw new Error(r.issue.code);
-      const n = Math.floor(REGEX_LIMITS.instructionsPerSite / r.instructions) + 1; // ctx の正規表現なら上限を超える件数
+      const n = Math.floor(REGEX_LIMITS.instructionsPerSite / r.instructions) + 1; // 参照ごとに数えたら上限を超える件数
       const visited = { hist: "visited", page: { part: "path", op: "regex", value: src } };
       const cfg = compile({ ...base, experiments: Array.from({ length: n }, (_, i) => ({ ...exp(visited), id: `exp_${i}` })) });
       expect(Object.keys(cfg.patterns)).toHaveLength(1);
@@ -472,12 +551,12 @@ describe("compile: オーディエンスの展開の上限(B159、G32)", () => {
   });
 
   it("展開の結果を使い回しても、参照ごとの出力は今と同じ(それぞれ定義を展開した形)", () => {
-    const aud = { and: [{ ctx: "path", op: "regex", value: "^/a/\\d+$" }, { not: { ctx: "device", op: "in", value: ["mobile"] } }, { hist: "visited", page: PRICING }] };
+    const aud = { and: [{ ctx: "referrer", op: "contains", value: "news" }, { not: { ctx: "device", op: "in", value: ["mobile"] } }, { hist: "visited", page: PRICING }] };
     const cfg = compile({ ...base, audiences: { aud_x: aud }, experiments: [expWith({ audience: "aud_x" }, "exp_a"), expWith({ or: [{ audience: "aud_x" }, { audience: "aud_x" }] }, "exp_b")] });
     const one = cfg.experiments[0]!.targeting;
     expect(one).toEqual({
       and: [
-        { ctx: "path", op: "regex", value: "^/a/\\d+$", prog: expect.objectContaining({ v: 1 }) },
+        { ctx: "referrer", op: "contains", value: "news" },
         { not: { ctx: "device", op: "in", value: ["mobile"] } },
         { hist: "visited", pattern: patternIdOf(PRICING) },
       ],
@@ -488,7 +567,7 @@ describe("compile: オーディエンスの展開の上限(B159、G32)", () => {
   });
 
   it("使い回した展開の結果(共有の DslNode)は、出力を受ける下流の関数が書き換えない(deep-freeze しても結果が同じ)", async () => {
-    const aud = { and: [{ ctx: "path", op: "regex", value: "^/lp/\\d+$" }, { not: { ctx: "device", op: "in", value: ["mobile"] } }, { hist: "visited", page: PRICING }] };
+    const aud = { and: [{ ctx: "referrer", op: "isEmpty" }, { not: { ctx: "device", op: "in", value: ["mobile"] } }, { hist: "visited", page: PRICING }] };
     const input = { ...base, audiences: { aud_x: aud }, experiments: [expWith({ audience: "aud_x" }, "exp_a"), expWith({ or: [{ audience: "aud_x" }, { ctx: "referrer", op: "isEmpty" }] }, "exp_b")] };
     const deepFreeze = <T>(v: T): T => {
       if (v !== null && typeof v === "object" && !Object.isFrozen(v)) {
@@ -509,12 +588,11 @@ describe("compile: オーディエンスの展開の上限(B159、G32)", () => {
 
     // 書き換えようとすれば TypeError(ESM は strict)。下流の関数が通り、凍らせない出力と同じ結果になる
     const settings = parseSiteSettings({ settingsVersion: 1, siteId: base.siteId })!;
-    expect(withoutLegacyNames(frozen)).toEqual(withoutLegacyNames(fresh));
     expect(bootPayload(frozen, settings, "https://edge.example")).toEqual(bootPayload(fresh, settings, "https://edge.example"));
     expect(bakeBootstrap(frozen, settings, "/*R*/", { apiBase: "https://edge.example" })).toBe(bakeBootstrap(fresh, settings, "/*R*/", { apiBase: "https://edge.example" }));
     expect(await staticInputDigest({ config: frozen, settings, apiBase: null })).toBe(await staticInputDigest({ config: fresh, settings, apiBase: null }));
     expect(parseCompiledConfig(frozen)).toEqual(parseCompiledConfig(fresh));
-    const ctx: PageContext = { url: "https://example.com/lp/12", query: {}, referrer: "", device: "desktop", now: 0 };
+    const ctx: PageContext = { url: "https://example.com/lp/12", referrer: "", device: "desktop", now: 0 };
     const profile = { goals: {}, pages: { [patternIdOf(PRICING)]: { count: 1, lastAt: 1 } } };
     expect(evaluateDsl(shared, ctx, profile)).toBe(true);
     expect(decide(frozen, ctx, "visitor_1", profile)).toEqual(decide(fresh, ctx, "visitor_1", profile));
@@ -524,29 +602,12 @@ describe("compile: オーディエンスの展開の上限(B159、G32)", () => {
     );
     expect(JSON.stringify(frozen)).toBe(JSON.stringify(fresh));
   });
-
-  it("regex_budget_exceeded は、同じオーディエンスを複数のエクスペリエンスから参照したとき、参照のたびの場所と今と同じ合計で出る", () => {
-    const src = "^/(ja|en)/products/[0-9]+$";
-    const r = compileRegex(src);
-    if (!r.ok) throw new Error(r.issue.code);
-    const n = Math.floor(REGEX_LIMITS.instructionsPerSite / r.instructions) + 1;
-    const audiences = { aud_rx: { and: [{ ctx: "path", op: "regex", value: src }, LEAF] } };
-    let err: CompileError | null = null;
-    try {
-      compile({ ...base, audiences, experiments: Array.from({ length: n }, (_, i) => expWith({ audience: "aud_rx" }, `exp_${i}`)) });
-    } catch (e) {
-      err = e as CompileError;
-    }
-    expect(err?.code).toBe("regex_budget_exceeded");
-    expect(err?.message).toContain(`正規表現の命令の数の合計 ${n * r.instructions} / ${REGEX_LIMITS.instructionsPerSite}`);
-    expect(err?.message).toContain("エクスペリエンス exp_0 の配信条件(オーディエンス aud_rx)(" + r.instructions + ")");
-  });
 });
 
 describe("experiment kind (決定 51、設計書 §3.1・§3.2)", () => {
   const single = (id = "exp_s") => ({
     id, name: "personalize", kind: "single" as const,
-    urlMatch: { op: "contains" as const, value: "/lp/" },
+    urlMatch: url({ op: "contains", value: "/lp/" }),
     trafficPercentage: 100, persistAssignment: false,
     variants: [{ id: "a", name: "A", weight: 100, changes: [{ id: "c1", type: "TEXT" as const, selector: ".hero-title", payload: { text: "S" } }] }],
   });
@@ -621,7 +682,7 @@ describe("experiment kind (決定 51、設計書 §3.1・§3.2)", () => {
     });
     it("all_variants_without_changes_adds_root_to_exposure_selectors", () => {
       // A/A のテスト(全パターンの Change が 0 件)も ab_exposure が出るよう :root を足す(K20)。prehide は空のまま
-      const aa: Experiment = { ...exp(), variants: [
+      const aa: ExpIn = { ...exp(), variants: [
         { id: "vA", name: "A", weight: 50, changes: [] },
         { id: "vB", name: "B", weight: 50, changes: [] },
       ] };

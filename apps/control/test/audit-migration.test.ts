@@ -24,11 +24,11 @@ const insertEvent = (at: number, extra: { category?: string; via?: string } = {}
 
 const T = 1_700_000_000_000;
 const insertOrg = () => env.DB.prepare(`insert into organization (id, name, slug, "createdAt") values ('w1', 'W', 'ws-1', '2026-09-01T00:00:00.000Z')`);
-/** 旧 control の形(世代の列を書かない)。列の既定に頼れない列だけを書く */
+/** 旧 control の形(世代の列を書かない)。列の既定に頼れない列だけを書く。対象 URL は後のマイグレーション(B69)が古い形を包むので、包んだ後の形で入れる(ほかの列が変わらないことを見るため) */
 const legacySite = (id: string) =>
   env.DB.prepare(`insert into sites (id, workspace_id, name, domain, site_salt, content_updated_at, created_at, updated_at) values (?1, 'w1', ?1, 'example.com', 'salt', ?2, ?2, ?2)`).bind(id, T);
 const legacyExperiment = (siteId: string, id: string) =>
-  env.DB.prepare(`insert into experiments (site_id, id, name, url_match_json, created_by, updated_by, created_at, updated_at) values (?1, ?2, ?2, '{}', 'u', 'u', ?3, ?3)`).bind(siteId, id, T);
+  env.DB.prepare(`insert into experiments (site_id, id, name, url_match_json, created_by, updated_by, created_at, updated_at) values (?1, ?2, ?2, '{"include":[{"page":{"op":"contains","value":"/"}}]}', 'u', 'u', ?3, ?3)`).bind(siteId, id, T);
 
 type IndexListRow = { name: string; unique: number; origin: string; partial: number };
 type IndexXinfoRow = { seqno: number; cid: number; name: string | null; key: number };
@@ -204,7 +204,7 @@ describe("migration audit_events (B129)", () => {
     expect(exp1b).not.toBe(exp1);
     // 世代を書いた INSERT はトリガーが上書きしない
     await env.DB.prepare(
-      `insert into experiments (site_id, id, name, url_match_json, created_by, updated_by, created_at, updated_at, generation) values ('s1', 'e9', 'e9', '{}', 'u', 'u', ?1, ?1, 'given')`,
+      `insert into experiments (site_id, id, name, url_match_json, created_by, updated_by, created_at, updated_at, generation) values ('s1', 'e9', 'e9', '{"include":[{"page":{"op":"contains","value":"/"}}]}', 'u', 'u', ?1, ?1, 'given')`,
     ).bind(T).run();
     expect(await env.DB.prepare(`select generation from experiments where site_id = 's1' and id = 'e9'`).first("generation")).toBe("given");
   });

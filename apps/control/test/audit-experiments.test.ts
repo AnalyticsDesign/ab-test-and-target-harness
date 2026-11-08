@@ -46,7 +46,7 @@ const events = async (action?: string): Promise<Event[]> =>
     ).all<Row>()
   ).results.map((r) => ({ ...r, detail: JSON.parse(r.detail_json) as Record<string, unknown> }));
 
-const urlMatch = { op: "contains", value: "/" };
+const urlMatch = { include: [{ page: { op: "contains", value: "/" } }] };
 /** オーナーとサイト・テストの下書き(名前 Hero。a = オリジナル / b) */
 async function draft(eid = "exp_a"): Promise<{ owner: Owner; sid: string; eid: string; base: string }> {
   const owner = await setupOwner();
@@ -189,12 +189,12 @@ describe("experiment.update / memo", () => {
     // (1) 1 欄だけ変えて全部の欄を送る (2) 同じ値の送り直し (3) 長い値の欄(配信条件・対象 URL)の変更は名前だけ
     await patch(full({ trafficPercentage: 40 }));
     await patch(full({ trafficPercentage: 40 }));
-    await patch(full({ trafficPercentage: 40, urlMatch: { op: "contains", value: "/lp" }, targeting: { ctx: "device", op: "in", value: ["mobile"] } }));
+    await patch(full({ trafficPercentage: 40, urlMatch: { include: [{ page: { op: "contains", value: "/lp" } }] }, targeting: { ctx: "device", op: "in", value: ["mobile"] } }));
     // (4) 保存してある外部計測の JSON の鍵の順だけが違う(同じ値の送り直しは変わらず)
     await env.DB.prepare(`update experiments set analytics_json = ?1 where site_id = ?2 and id = ?3`)
       .bind(JSON.stringify({ extra: { team: "web" }, overrides: { experimentName: "hero" } }), sid, eid)
       .run();
-    await patch(full({ trafficPercentage: 40, urlMatch: { op: "contains", value: "/lp" }, targeting: { ctx: "device", op: "in", value: ["mobile"] } }));
+    await patch(full({ trafficPercentage: 40, urlMatch: { include: [{ page: { op: "contains", value: "/lp" } }] }, targeting: { ctx: "device", op: "in", value: ["mobile"] } }));
     const rows = (await events("experiment.update")).slice(1);
     expect(rows.map((e) => e.detail)).toEqual([
       { fields: ["trafficPercentage"], trafficPercentage: { from: 100, to: 40 } },

@@ -1,18 +1,43 @@
 "use client";
 import type { AnalyticsSettings, Audience, Experiment, Goal, Site } from "@/lib/types";
-import type { Draft, TabProps } from "@/lib/experiment-draft";
-import { isStartedTest, PERSIST_HINT, testLockMessage, trafficError } from "@/lib/test-locks";
+import { groupText, makeNames, summarizeDsl, type Names } from "@/lib/conditions";
+import type { Draft, TabProps, TargetingDraft } from "@/lib/experiment-draft";
+import { isStartedTest, testLockMessage, trafficError } from "@/lib/test-locks";
 import { Field } from "../Field";
 import { MemoField } from "../MemoField";
-import { PageMatchField } from "../PageMatchField";
+import { TargetUrlField } from "../TargetUrlField";
 import { ExperimentTargeting } from "../targeting/ExperimentTargeting";
+import { DeliverySummary } from "./DeliverySummary";
 import { ExperimentAnalyticsCard } from "./ExperimentAnalyticsCard";
+import { PersistFold } from "./PersistFold";
+import d from "./Delivery.module.css";
 import styles from "./VariantsTab.module.css";
 
 const NAME_MAX = 100;
 
+/** 配信条件のカードの段の小見出し(番号 + 名前 + 補足。admin_ui_rules 2.1) */
+function Step({ n, title, hint, first }: { n: string; title: string; hint: string; first?: boolean }) {
+  return (
+    <h3 className={`${d.step} ${first ? d.firstStep : ""}`}>
+      <span className={d.num} aria-hidden="true">
+        {n}
+      </span>
+      {title}{" "}
+      <span className={d.stepHint}>{hint}</span>
+    </h3>
+  );
+}
+
+/** 要約の 1 文の「訪問者の条件」の部分(条件なしは空文字 = すべての訪問者。画面で表せない保存値は summarizeDsl の文) */
+function targetingText(t: TargetingDraft, names: Names): string {
+  if (t.kind === "raw") return summarizeDsl(t.json, names);
+  if (t.form.rows.length === 0) return "";
+  return groupText({ id: "root", kind: "group", logic: t.form.logic, exclude: false, collapsed: false, children: t.form.rows }, names, true);
+}
+
 /**
- * 基本設定のタブ(B77 Q30)。名前 → メモ → 対象 URL・配信率・割当の固定 → 配信条件 のカードと、下部の外部計測のカード。
+ * 基本設定のタブ(B77 Q30・B69 spec §7.1)。カード「基本」(名前・メモ)、カード「配信条件」(① どのページで = 対象 URL → ② どの訪問者に = 配信条件 →
+ * ③ そのうち何 % に = 配信率と、畳んだ割当の固定 → 要約の 1 文)、下部の外部計測のカードの 3 枚。
  * memoRo: メモは状態にかかわらず編集できる(終了したエクスペリエンスでも。閉じるのは閲覧者と保存中だけ)。
  * lock: 保存済みの種別・状態・配信率(D9 ③ Task 14、設計書 §5.5)。実行中・一時停止中のテストは配信率を下げられず(欄の下にエラー)、割当の固定は灰色
  */
@@ -55,7 +80,8 @@ export function OverviewTab({
   const trafficProblem = !ro && trafficSent ? trafficError(lock, draft.traffic) : null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <section className="card" aria-label="基本設定">
+      <section className="card" aria-label="基本">
+        <h2>基本</h2>
         <div className={styles.countRow}>
           <Field label="名前(100 字以内)">
             <input value={draft.name} maxLength={NAME_MAX} disabled={ro} onChange={(e) => set("name", e.target.value)} />
@@ -65,9 +91,17 @@ export function OverviewTab({
           </span>
         </div>
         <MemoField value={draft.description} disabled={memoRo} placeholder="例: 目的・仮説・担当・関連するチケット" onChange={(v) => set("description", v)} />
-        <Field label="対象 URL" hint="このエクスペリエンスを動かすページ。ここに一致しないページでは、配信条件にかかわらず何もしません">
-          <PageMatchField value={draft.urlMatch} disabled={ro} onChange={(v) => set("urlMatch", v)} />
-        </Field>
+      </section>
+      <section className="card" aria-label="配信条件">
+        <h2>配信条件</h2>
+        <Step n="①" title="どのページで" hint="対象 URL" first />
+        <p className={`muted ${d.stepNote}`}>このエクスペリエンスを動かすページ。ページの URL・ホスト・パス・パラメータの条件はここだけで指定します</p>
+        <TargetUrlField value={draft.urlMatch} disabled={ro} onChange={(v) => set("urlMatch", v)} />
+        <hr className={d.sep} />
+        <Step n="②" title="どの訪問者に" hint="訪問者の条件。無ければ全員" />
+        <ExperimentTargeting value={draft.targeting} onChange={(v) => set("targeting", v)} ctx={{ goals, goalsHref, audiences, retentionDays: site.retentionDays, timezone: site.timezone, disabled: ro }} />
+        <hr className={d.sep} />
+        <Step n="③" title="そのうち何 % に" hint="配信率" />
         <Field
           label="配信率(1〜100%。0% にしたいときは一時停止します)"
           hint={started ? `テストの開始後は、今の値(${lock.trafficPercentage}%)より上げることだけができます` : undefined}
@@ -83,21 +117,8 @@ export function OverviewTab({
             onChange={(e) => set("traffic", Number(e.target.value))}
           />
         </Field>
-        <Field
-          label="割当の固定"
-          hint={
-            <>
-              {PERSIST_HINT}
-              {persistLocked && !ro ? <span style={{ display: "block", marginTop: 4 }}>{persistLocked}</span> : null}
-            </>
-          }
-        >
-          <span className="row">
-            <input type="checkbox" checked={draft.persist} disabled={ro || persistLocked !== null} onChange={(e) => set("persist", e.target.checked)} /> 有効
-          </span>
-        </Field>
-        <h2>配信条件</h2>
-        <ExperimentTargeting value={draft.targeting} onChange={(v) => set("targeting", v)} ctx={{ goals, goalsHref, audiences, retentionDays: site.retentionDays, timezone: site.timezone, disabled: ro }} />
+        <PersistFold checked={draft.persist} disabled={ro || persistLocked !== null} lockMessage={ro ? null : persistLocked} onChange={(v) => set("persist", v)} />
+        <DeliverySummary urlMatch={draft.urlMatch} targetingText={targetingText(draft.targeting, makeNames(goals, audiences))} traffic={draft.traffic} persist={draft.persist} />
       </section>
       <ExperimentAnalyticsCard
         experimentId={experimentId}

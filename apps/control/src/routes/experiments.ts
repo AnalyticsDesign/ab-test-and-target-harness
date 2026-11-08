@@ -7,8 +7,9 @@ import {
   EXPERIMENT_KINDS,
   ExperimentAnalyticsRequestSchema,
   ExperimentAnalyticsSchema,
-  PageMatchInputSchema,
   TargetingInputSchema,
+  TargetingReadSchema,
+  UrlMatchInputSchema,
   VariantAnalyticsRequestSchema,
   VariantAnalyticsSchema,
   duplicateIdCandidates,
@@ -18,6 +19,7 @@ import {
   type ExperimentKind,
   type VariantAnalytics,
   newRunId,
+  targetingReferences,
   MAX_CHANGES_PER_VARIANT,
   compile,
   CompileError,
@@ -74,9 +76,10 @@ import {
   assertDescription,
   assertExperimentAnalytics,
   assertName,
+  assertNoRemovedPageCondition,
   assertTargetingRefs,
-  normalizedPageMatch,
   normalizedTargeting,
+  normalizedUrlMatch,
   parseChange,
   assertImageAssetsExist,
   targetingValidationFailed,
@@ -152,8 +155,15 @@ const retiredIdTaken = (id: string) =>
 
 // spec §13.1: id は Site 内一意のスラッグで作成後は変更不可(割当ハッシュの入力なので特に)。status は Task 7 の /status 専用
 const ExperimentName = z.string().min(1);
-const Targeting = TargetingInputSchema.nullable().describe(
-  "配信条件。条件 1 つ、否定の形を持つ条件の not、または and / or の下に条件か否定の形を持つ条件の not が並ぶ形だけを受けます。入れ子やグループの除外はオーディエンスで作ります",
+const TARGETING_DESCRIPTION =
+  "配信条件。条件 1 つ、否定の形を持つ条件の not、または and / or の下に条件か否定の形を持つ条件の not が並ぶ形だけを受けます。入れ子やグループの除外はオーディエンスで作ります。ページの URL・ホスト・パス・パラメータは配信条件ではなく対象 URL(urlMatch)で指定します";
+const Targeting = TargetingInputSchema.nullable().describe(TARGETING_DESCRIPTION);
+/** 応答の配信条件。保存の前に残った、今は保存できないページの条件(url / host / path / query)も表せる */
+const TargetingRead = TargetingReadSchema.nullable().describe(
+  `${TARGETING_DESCRIPTION}。応答には、今は保存できないページの条件(ctx が url / host / path / query)が残っていることがあり、そのままでは保存・開始・再開できません。対象 URL に移してから保存してください`,
+);
+const UrlMatch = UrlMatchInputSchema.describe(
+  "対象 URL。含める行(include。1〜10 行)のどれかに一致し、除く行(exclude。0〜10 行)のどれにも一致しないページが対象。行 = ページの一致(page)と、URL のパラメータの条件(params。0〜5 個。すべてを満たすと一致)。除く行が判定できないページは対象外",
 );
 const Traffic = z.number().int().min(1).max(100).describe("1〜100。0 は paused で表現する");
 /** B77(K12): 受け口は値を文字列として受けるだけ(値の検査は assertAnalyticsValues)。応答は保存する形 */
@@ -175,7 +185,7 @@ const ExperimentCreate = z.strictObject({
   id: ExperimentId.describe("サイト内で一意。作成後は変えられない。new と constructor は使えない"),
   name: ExperimentName,
   kind: Kind.default("test"),
-  urlMatch: PageMatchInputSchema,
+  urlMatch: UrlMatch,
   targeting: Targeting.optional(),
   trafficPercentage: Traffic.default(100),
   persistAssignment: z.boolean().default(false),
@@ -189,7 +199,7 @@ const ExperimentCreate = z.strictObject({
  */
 const ExperimentPatch = z.strictObject({
   name: ExperimentName.optional(),
-  urlMatch: PageMatchInputSchema.optional(),
+  urlMatch: UrlMatch.optional(),
   targeting: Targeting.optional(),
   trafficPercentage: Traffic.optional(),
   persistAssignment: z.boolean().optional(),
@@ -235,7 +245,7 @@ const ChangesPut = z
     items: z.toJSONSchema(ChangeSchema) as Record<string, unknown>,
   });
 
-const ExperimentJsonSchema = z.object({
+export const ExperimentJsonSchema = z.object({
   id: z.string(),
   siteId: z.string(),
   name: z.string(),
@@ -243,8 +253,8 @@ const ExperimentJsonSchema = z.object({
   kind: Kind,
   status: z.enum(["draft", "running", "paused", "archived"]),
   publishedStatus: z.enum(["draft", "running", "paused", "archived"]).nullable().describe("前回公開時の status"),
-  urlMatch: PageMatchInputSchema,
-  targeting: Targeting,
+  urlMatch: UrlMatch,
+  targeting: TargetingRead,
   trafficPercentage: z.number().int(),
   persistAssignment: z.boolean(),
   analytics: AnalyticsJson,
@@ -274,7 +284,7 @@ const VariantJsonSchema = z.object({
   description: z.string().describe("メモ(社内用。外部には出力されない)"),
   analytics: VariantAnalyticsSchema.nullable(),
 });
-const ExperimentDetailJsonSchema = ExperimentJsonSchema.extend({
+export const ExperimentDetailJsonSchema = ExperimentJsonSchema.extend({
   variants: z.array(VariantJsonSchema.extend({ changes: z.array(ChangeJsonSchema) })),
 });
 
@@ -369,6 +379,25 @@ async function assertStartAssets(env: AppEnv["Bindings"], db: Db, site: SiteRow,
   }
   const g = await guardAssets(env, db, site, input, body, { readD1: true });
   if (!g.ok) throw assetGuardRejected(g.error, g.assetProblems);
+}
+
+/**
+ * B69(spec §6.2.1): 開始・再開の CAS の前の、外したページの条件の検査。エクスペリエンスの行は状態の変更の処理が読んだものを使い、
+ * 配信条件に無ければ、参照するオーディエンスがあるときだけ、その定義を同じサイトから 1 回(`IN`)読む。D1 の読みは 0〜1 回
+ */
+async function assertNoMovedPageConditions(db: Db, site: SiteRow, exp: ExperimentRow): Promise<void> {
+  if (exp.targeting_json === null) return;
+  const targeting: unknown = JSON.parse(exp.targeting_json);
+  assertNoRemovedPageCondition(targeting, {});
+  const refs = targetingReferences(targeting).audiences;
+  if (refs.length === 0) return;
+  const rows = await db
+    .selectFrom("audiences")
+    .select(["id", "definition_json"])
+    .where("site_id", "=", site.id)
+    .where("id", "in", sql<string>`(select value from json_each(${JSON.stringify(refs)}))`)
+    .execute();
+  assertNoRemovedPageCondition(targeting, Object.fromEntries(rows.map((r) => [r.id, JSON.parse(r.definition_json) as unknown])));
 }
 
 /** spec §13.8: draft → running、running ↔ paused、running | paused → archived(復帰不可)。表外は 409 invalid_transition */
@@ -518,7 +547,7 @@ experimentRoutes.post(
     assertName(body.name, ["name"]);
     if (body.description !== undefined) assertDescription(body.description, ["description"]);
     assertAnalyticsValues(body.analytics, null, ["analytics"]);
-    const urlMatch = normalizedPageMatch(body.urlMatch, ["urlMatch"]);
+    const urlMatch = normalizedUrlMatch(body.urlMatch, ["urlMatch"]);
     const targeting = normalizedTargeting(body.targeting ?? null, "experiment", "targeting");
     await assertTargetingRefs(db, site, targeting, "targeting");
     // 決定 51(設計書 §3.1): テストは A / B(50:50)、パーソナライズは A(重み 100)を 1 つ。
@@ -665,7 +694,7 @@ experimentRoutes.patch(
       assertName(body.name, ["name"]);
       set.name = body.name;
     }
-    if (body.urlMatch !== undefined) set.url_match_json = JSON.stringify(normalizedPageMatch(body.urlMatch, ["urlMatch"]));
+    if (body.urlMatch !== undefined) set.url_match_json = JSON.stringify(normalizedUrlMatch(body.urlMatch, ["urlMatch"]));
     if (body.targeting !== undefined) {
       const targeting = normalizedTargeting(body.targeting, "experiment", "targeting");
       await assertTargetingRefs(db, site, targeting, "targeting");
@@ -1127,7 +1156,7 @@ experimentRoutes.post(
   describeRoute({
     tags: ["experiments"],
     summary:
-      "エクスペリエンスの status を遷移する(管理者以上)。成功した遷移は必ずサイトを自動公開する。結果を記録するサイトでテストの下書きを開始するときは、判定に使う目標が無い・基準の重みが 0 なら 422 evaluation_plan_incomplete で、通れば評価計画を固定する。結果を記録しないテストを開始したときは warnings で知らせる。テストの終了(archived)には採用(adoption)を付けられ、配信を止める公開の後に結果と採用を記録する(応答の results.recorded)。開始・再開は、画像の確かめに通らなければ(遷移の後に配信する内容に、見つからない画像・別のサイトの画像がある)状態を変えずに 409 asset_missing / asset_other_site を返す(封筒の assetProblems に画像の URL とそれを含む変更)。一時停止・終了は画像を確かめずに状態を変えて公開する",
+      "エクスペリエンスの status を遷移する(管理者以上)。成功した遷移は必ずサイトを自動公開する。結果を記録するサイトでテストの下書きを開始するときは、判定に使う目標が無い・基準の重みが 0 なら 422 evaluation_plan_incomplete で、通れば評価計画を固定する。結果を記録しないテストを開始したときは warnings で知らせる。テストの終了(archived)には採用(adoption)を付けられ、配信を止める公開の後に結果と採用を記録する(応答の results.recorded)。開始・再開は、画像の確かめに通らなければ(遷移の後に配信する内容に、見つからない画像・別のサイトの画像がある)状態を変えずに 409 asset_missing / asset_other_site を返す(封筒の assetProblems に画像の URL とそれを含む変更)。一時停止・終了は画像を確かめずに状態を変えて公開する。開始・再開は、配信条件か参照するオーディエンスに、今は使えないページの条件(URL・ホスト・パス・パラメータ)が残っていれば、状態を変えずに 422 invalid_experiment_targeting を返す(対象 URL に移してから開始する)",
     security: [{ bearer: [] }],
     responses: {
       200: {
@@ -1147,6 +1176,8 @@ experimentRoutes.post(
     const exp = await loadExperiment(db, site.id, c.req.param("eid"));
     const body = c.req.valid("json");
     if (!TRANSITIONS[exp.status].includes(body.status)) throw new ApiError(409, "invalid_transition", { from: exp.status, to: body.status });
+    // B69(spec §6.2.1): 開始・再開は、外したページの条件が残っていれば状態を変えずに 422(画像の確かめの有無によらない)
+    if (body.status === "running") await assertNoMovedPageConditions(db, site, exp);
     // D9 ③(K16、設計書 §8.1): 採用はテストを終了するときだけ。検査は状態を変える前に行う
     const stoppingTest = exp.kind === "test" && body.status === "archived";
     if (body.adoption !== undefined && exp.kind !== "test") throw adoptionNotAllowed(422, "パーソナライズには採用を記録しません");

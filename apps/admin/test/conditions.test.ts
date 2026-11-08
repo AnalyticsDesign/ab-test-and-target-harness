@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { condProblem, condText, dslHasHistory, groupText, periodProblem, summarizeDsl, treeProblem, type Names } from "../lib/conditions";
+import { COND_META, condProblem, condText, dslHasHistory, groupText, LEGACY_COND_PROBLEM, PAGE_TYPES, periodProblem, summarizeDsl, treeProblem, typeOptions, VISITOR_TYPES, type Names } from "../lib/conditions";
 import { audienceTreeFromDsl, type Cond } from "../lib/targeting-tree";
 
 const names: Names = { goal: (id) => (id === "g_lead" ? "資料請求" : id), audience: (id) => (id === "aud_p" ? "料金ページ閲覧" : id) };
@@ -13,7 +13,7 @@ describe("条件の要約(設計書 §12)", () => {
     expect(condText(c({ type: "time", days: ["fri", "mon", "tue", "wed", "thu"], allDay: false, from: 9, to: 18 }), names)).toBe("月〜金 の 09:00〜18:00");
     expect(condText(c({ type: "time", days: ["fri"], allDay: false, from: 22, to: 2 }), names)).toBe("金 の 22:00〜翌 02:00");
     expect(condText(c({ type: "browser", neg: false, values: ["safari", "chrome"] }), names)).toBe("ブラウザが Safari・Chrome のいずれか");
-    expect(condText(c({ type: "host", op: "endsWith", value: "example.com" }), names)).toBe("ホストが「example.com」で終わる");
+    expect(condText(c({ type: "referrer", op: "contains", value: "google" }), names)).toBe("リファラーが「google」を含む");
     expect(condText(c({ type: "audience", neg: true, audience: "aud_p" }), names)).toBe("オーディエンス「料金ページ閲覧」に含まれない");
   });
   it("グループの要約(除外・入れ子)と、DSL の要約", () => {
@@ -26,8 +26,8 @@ describe("条件の要約(設計書 §12)", () => {
     expect(dslHasHistory({ ctx: "sinceFirstVisit", op: "gte", days: 1 })).toBe(false); // 初回の訪問からの経過は履歴を使わない
   });
   it("保存の前の確認(値の入力漏れ・範囲・期間の上限・正規表現)", () => {
-    expect(condProblem(c({ type: "path", op: "startsWith", value: "" }), 90)).toBe("値を入力してください");
-    expect(condProblem(c({ type: "path", op: "regex", value: "a{2,}" }), 90)).toBe("正規表現を直してください");
+    expect(condProblem(c({ type: "referrer", op: "contains", value: "" }), 90)).toBe("値を入力してください");
+    expect(condProblem(c({ type: "visited", neg: false, page: { part: "path", op: "regex", value: "a{2,}" }, min: 1, within: null }), 90)).toBe("正規表現を直してください");
     expect(condProblem(c({ type: "viewport", op: "between", min: 800, max: 600 }), 90)).toBe("範囲は小さい幅から大きい幅の順にしてください");
     expect(condProblem(c({ type: "time", days: ["mon"], allDay: false, from: 9, to: 9 }), 90)).toMatch(/同じ時刻/);
     expect(condProblem(c({ type: "goal", neg: false, goal: "g_lead", within: 120 }), 90)).toBe("期間は訪問者データの保存期間(90 日)以下にしてください");
@@ -41,5 +41,31 @@ describe("条件の要約(設計書 §12)", () => {
     for (const n of [NaN, 0, -1, 1.5]) expect(periodProblem(n, 90)).toBe("期間は 1〜3650 の整数で入力してください");
     expect(periodProblem(91, 90)).toBe("期間は訪問者データの保存期間(90 日)以下にしてください");
     expect(condProblem(c({ type: "visited", neg: false, page: { part: "path", op: "startsWith", value: "/a" }, min: 1, within: NaN }), 90)).toBe("期間は 1〜3650 の整数で入力してください");
+  });
+});
+
+// B69(spec §4・§7.2): ページの URL・ホスト・パス・クエリパラメータの条件は対象 URL に移した
+describe("配信条件から外したページの条件", () => {
+  it("condition_menu_has_no_page_ctx: 「+ 条件」の選択肢に URL・ホスト・パス・クエリパラメータが無い", () => {
+    for (const allow of [true, false]) {
+      const values = typeOptions(allow).flatMap((g) => g.options.map((o) => o.value));
+      const labels = typeOptions(allow).flatMap((g) => g.options.map((o) => o.label));
+      for (const t of ["url", "host", "path", "query", "legacy"]) expect(values).not.toContain(t);
+      for (const l of ["ページの URL", "ページのホスト", "ページのパス", "クエリパラメータ"]) expect(labels).not.toContain(l);
+      expect(values).toContain("referrer");
+    }
+    expect([...PAGE_TYPES, ...VISITOR_TYPES]).not.toContain("legacy");
+    expect(PAGE_TYPES).toEqual(["device", "viewport", "browser", "os", "referrer", "time"]);
+  });
+  it("使えない条件の行の要約と、保存の前の確認", () => {
+    const legacy = (dsl: Record<string, unknown>) => c({ type: "legacy", dsl });
+    expect(condText(legacy({ ctx: "path", op: "startsWith", value: "/lp/" }), names)).toBe("ページのパス が「/lp/」で始まる");
+    expect(condText(legacy({ not: { ctx: "host", op: "equals", value: "a.example.com" } }), names)).toBe("ページのホスト が「a.example.com」と完全一致 ではない");
+    expect(condText(legacy({ ctx: "query", name: "utm", op: "exists" }), names)).toBe("クエリパラメータ utm がある");
+    expect(condText(legacy({ ctx: "query", name: "utm", op: "equals", value: "x" }), names)).toBe("クエリパラメータ utm が「x」");
+    expect(condText(legacy({ ctx: "url", op: "weird", value: 3 }), names)).toBe('ページの URL {"ctx":"url","op":"weird","value":3}'); // 知らない形は JSON(例外を出さない)
+    expect(condProblem(legacy({ ctx: "path", op: "startsWith", value: "/lp/" }), 90)).toBe(LEGACY_COND_PROBLEM);
+    expect(treeProblem([c({ type: "device", neg: false, values: ["mobile"] }), legacy({ ctx: "path", op: "startsWith", value: "/lp/" })], 90)).toBe(LEGACY_COND_PROBLEM);
+    expect(COND_META.legacy.label).toBe("使えなくなった条件");
   });
 });

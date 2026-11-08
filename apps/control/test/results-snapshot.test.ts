@@ -78,6 +78,27 @@ describe("結果の記録(固定)", () => {
     expect(JSON.parse(rows[0]!.result_json).definition).toEqual(def(null));
   });
 
+  // B69(spec §6.1): 結果の記録はその時点の写しなのでマイグレーションで包まない。古い形の definition.urlMatch のまま 200 で返す
+  test("results_api_returns_old_definition_url_match", async () => {
+    const owner = await setupOwner();
+    const sid = await recordingSite(owner);
+    const runId = await startTest(owner, sid, "exp_def");
+    const s = Date.now() - 15 * DAY;
+    await backdate(sid, "exp_def", s);
+    await seedDelivered(sid, "exp_def", runId, [{ version: 1, d: def(null), from: s }]);
+    await seedResults(seedWinner(runId, sid, s + HOUR));
+    expect((await getResults(owner, sid, "exp_def")).status).toBe(200);
+    const old = { op: "contains", value: "/" };
+    await env.DB.prepare("update result_snapshots set result_json = json_set(result_json, '$.definition.urlMatch', json(?)) where site_id = ? and experiment_id = ?")
+      .bind(JSON.stringify(old), sid, "exp_def")
+      .run();
+    const res = await getResults(owner, sid, "exp_def");
+    expect(res.status).toBe(200);
+    const r = await json<Report>(res);
+    expect(r).toMatchObject({ phase: "fixed", persisted: true });
+    expect(r.definition?.urlMatch).toEqual(old);
+  });
+
   test("snapshot_definition_when_test_paused_at_cutoff / stop_snapshot_definition_taken_from_version_before_archive", async () => {
     const owner = await setupOwner();
     const sid = await recordingSite(owner);

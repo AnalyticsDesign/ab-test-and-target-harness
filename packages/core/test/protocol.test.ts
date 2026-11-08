@@ -16,7 +16,7 @@ describe("EventBodySchema (spec §9.2)", () => {
   });
   it("GoalSchema を通る ID は /event でも受理される(producer / consumer の契約。r1 CX-Medium-1)", () => {
     for (const id of ["g_lead", "purchase.completed", "a".repeat(65), "a".repeat(201), "constructor", "日本語"]) {
-      expect(GoalSchema.safeParse({ id, name: "n", type: "CUSTOM", config: {} }).success).toBe(true);
+      expect(GoalSchema.safeParse({ id, type: "CUSTOM", config: {} }).success).toBe(true);
       expect(EventBodySchema.safeParse({ type: "goal", goalId: id, visitorId: "x" }).success).toBe(true);
     }
   });

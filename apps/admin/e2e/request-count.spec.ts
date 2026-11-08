@@ -417,7 +417,7 @@ test("main screens: control requests per view stay within the budget (direct HTM
     await createExperiment(page, EXP);
     const aud = await page.request.post(`/api/control/sites/${SITE_RC.id}/audiences`, {
       headers: controlHeaders(),
-      data: { id: AUD.id, name: AUD.name, definition: { ctx: "path", op: "regex", value: "^/$" } },
+      data: { id: AUD.id, name: AUD.name, definition: { ctx: "device", op: "in", value: ["mobile"] } },
     });
     expect(aud.status()).toBe(201);
     const goal = await page.request.post(`/api/control/sites/${SITE_RC.id}/goals`, { headers: controlHeaders(), data: { id: GOAL.id, name: GOAL.name, type: "CUSTOM", config: {} } });
@@ -669,7 +669,7 @@ test("experience save: one write and one refresh stay within the control request
 
   const expPath = `${new URL(siteUrl).pathname}/experiments/${exp.id}`;
   const writePath = `/api/control/sites/${site.id}/experiments/${exp.id}`;
-  const region = page.getByRole("region", { name: "基本設定" });
+  const region = page.getByRole("region", { name: "基本", exact: true });
   const nameInput = region.getByLabel("名前(100 字以内)");
   const saveButton = page.getByRole("button", { name: "保存(下書き)" });
 
@@ -822,9 +822,9 @@ test("stage 2 writes: an audience save, a goal edit, an experiment create and a 
   const wid = new URL(page.url()).pathname.split("/")[2]!;
   const sitePath = new URL(page.url()).pathname;
   const api = async (method: string, path: string, data: unknown) => (await page.request.fetch(`/api/control${path}`, { method, headers: controlHeaders(), data })).status();
-  expect(await api("POST", `/sites/${site.id}/audiences`, { id: aud.id, name: aud.name, definition: { ctx: "path", op: "regex", value: "^/$" } })).toBe(201);
+  expect(await api("POST", `/sites/${site.id}/audiences`, { id: aud.id, name: aud.name, definition: { ctx: "device", op: "in", value: ["mobile"] } })).toBe(201);
   expect(await api("POST", `/sites/${site.id}/goals`, { id: goal.id, name: goal.name, type: "CUSTOM", config: {} })).toBe(201);
-  for (const id of starts) expect(await api("POST", `/sites/${site.id}/experiments`, { id, name: id, urlMatch: { op: "contains", value: "/" } })).toBe(201);
+  for (const id of starts) expect(await api("POST", `/sites/${site.id}/experiments`, { id, name: id, urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } })).toBe(201);
   // 観測の口が使えること(見えないと下の数が 0 になる。「≥ 1」の表明と合わせた保険)
   expect(count(await adminRequests(started), wid).total).toBeGreaterThan(0);
 

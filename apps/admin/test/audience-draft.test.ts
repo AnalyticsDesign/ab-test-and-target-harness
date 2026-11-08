@@ -1,8 +1,11 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { ConditionRow, type RowCtx } from "@/components/targeting/ConditionRow";
 import {
   audienceDiscardTarget, audienceDraftOf, audienceInputDraft, audiencePatchBody, audienceServerKey, isAudienceDirty, reconcileAudienceUpdate, type AudienceDraft,
 } from "@/lib/audience-draft";
-import { audienceTreeFromDsl, type Group } from "@/lib/targeting-tree";
+import { audienceTreeFromDsl, type Cond, type Group } from "@/lib/targeting-tree";
 import type { Audience } from "@/lib/types";
 
 /**
@@ -196,5 +199,27 @@ describe("audience draft", () => {
     expect(audienceServerKey(aud())).toBe(audienceServerKey(aud()));
     expect(audienceServerKey(aud())).not.toBe(audienceServerKey(aud({ description: "other" })));
     expect(audienceServerKey(aud())).not.toBe(audienceServerKey(aud({ updatedAt: 3 })));
+  });
+});
+
+/** B69 Task 7(spec §4・§7.5): オーディエンスの木に残った、外したページの条件の行 */
+describe("使えなくなった条件の行(オーディエンス)", () => {
+  const ctx = (allowAudience: boolean, disabled = false): RowCtx => ({ goals: [], goalsHref: "/goals", audiences: [], retentionDays: 30, timezone: "Asia/Tokyo", allowAudience, disabled });
+  const PATH = { ctx: "path", op: "startsWith", value: "/lp/" };
+  it("legacy_row_renders: オーディエンスの木の行は、エクスペリエンスの対象 URL へ案内する", () => {
+    const tree = audienceTreeFromDsl({ or: [{ ctx: "device", op: "in", value: ["mobile"] }, { not: PATH }] });
+    const cond = tree?.children[1] as Cond;
+    expect(cond.type).toBe("legacy");
+    const html = renderToStaticMarkup(createElement(ConditionRow, { cond, onChange: () => {}, onRemove: () => {}, ctx: ctx(false) }));
+    expect(html).toContain("この条件はオーディエンスでは使えなくなりました");
+    expect(html).toContain("ページのパス が「/lp/」で始まる ではない");
+    expect(html).toContain("ページの URL・ホスト・パス・パラメータの条件は、エクスペリエンスの対象 URL で指定してください。このオーディエンスを使うエクスペリエンスごとに書きます。この条件を消してください。このままでは保存できません");
+    expect(html).toContain(">この条件を消す</button>");
+    expect(html).not.toContain("この条件は配信条件では");
+    expect(html).not.toMatch(/legacy/i);
+    // 閲覧者には消すボタンを出さない
+    const ro = renderToStaticMarkup(createElement(ConditionRow, { cond, onChange: () => {}, onRemove: () => {}, ctx: ctx(false, true) }));
+    expect(ro).toContain("この条件はオーディエンスでは使えなくなりました");
+    expect(ro).not.toContain("この条件を消す");
   });
 });

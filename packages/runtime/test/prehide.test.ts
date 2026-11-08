@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { CompiledConfig } from "@wtt/core";
+import { compileRegex, type CompiledConfig } from "@wtt/core";
 import { injectPrehide, prehideSelectors, removePrehide } from "../src/prehide";
 import { baseConfig } from "./fixtures"; // Task 5 で作る共有フィクスチャ(下記)
 
@@ -8,11 +8,45 @@ it("collects prehide selectors only for experiments matching the current url (sp
     ...baseConfig,
     prehide: { exp_hero: [".hero-title", ".cta"], exp_other: [".other"] },
     experiments: [
-      { ...baseConfig.experiments[0]!, id: "exp_hero", urlMatch: { op: "contains", value: "/pricing" } },
-      { ...baseConfig.experiments[0]!, id: "exp_other", urlMatch: { op: "contains", value: "/never" } },
+      { ...baseConfig.experiments[0]!, id: "exp_hero", urlMatch: { include: [{ page: { op: "contains", value: "/pricing" } }] } },
+      { ...baseConfig.experiments[0]!, id: "exp_other", urlMatch: { include: [{ page: { op: "contains", value: "/never" } }] } },
     ],
   };
   expect(prehideSelectors(config, "https://site.test/pricing?utm=x")).toEqual([".hero-title", ".cta"]);
+});
+
+it("prehide_respects_params_and_exclude: パラメータの条件と除くの行もプリハイドの範囲に効く(B69 spec §3.3)", () => {
+  const config: CompiledConfig = {
+    ...baseConfig,
+    prehide: { exp_hero: [".hero-title"] },
+    experiments: [{
+      ...baseConfig.experiments[0]!,
+      urlMatch: {
+        include: [{ page: { part: "path", op: "startsWith", value: "/lp/" }, params: [{ name: "utm_source", op: "equals", value: "news" }] }],
+        exclude: [{ page: { part: "path", op: "startsWith", value: "/lp/old/" } }],
+      },
+    }],
+  };
+  expect(prehideSelectors(config, "https://site.test/lp/?utm_source=news")).toEqual([".hero-title"]);
+  expect(prehideSelectors(config, "https://site.test/lp/")).toEqual([]);
+  expect(prehideSelectors(config, "https://site.test/lp/old/?utm_source=news")).toEqual([]);
+});
+
+it("prehide_excludes_on_null_exclude_row: 除くの行が判定できない(257 字のパスでパスの正規表現)なら隠さない(B69 spec §3.1)", () => {
+  const prog = compileRegex("^/lp/old/");
+  if (!prog.ok) throw new Error("fixture regex");
+  const config: CompiledConfig = {
+    ...baseConfig,
+    prehide: { exp_hero: [".hero-title"] },
+    experiments: [{
+      ...baseConfig.experiments[0]!,
+      urlMatch: { include: [{ page: { op: "contains", value: "/" } }], exclude: [{ page: { part: "path", op: "regex", value: "^/lp/old/", prog: prog.prog } }] },
+    }],
+  };
+  expect(prehideSelectors(config, "https://site.test/lp/new/")).toEqual([".hero-title"]); // 除くの行が false なら対象
+  const longPath = "/lp/" + "a".repeat(253);
+  expect(longPath.length).toBe(257);
+  expect(prehideSelectors(config, `https://site.test${longPath}`)).toEqual([]);
 });
 
 it("injects opacity:0 !important style and removes it by id (spec §10.3)", () => {

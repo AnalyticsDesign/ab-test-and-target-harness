@@ -1,4 +1,4 @@
-import { decide, matchesUrl } from "@wtt/core";
+import { decide, matchesTargetUrl, matchesUrl } from "@wtt/core";
 import type { CompiledConfig, PageContext, RuntimeSettings } from "@wtt/core";
 
 /** vh = D-lite の decision の応答の訪問者 ID の短いハッシュ(結果の送信済みの印の i。設計書 §6.2) */
@@ -20,7 +20,7 @@ export const onEdgePath = (settings: RuntimeSettings, loc: { protocol: string; h
 export function needsRemoteDecision(edgePath: boolean, config: CompiledConfig, url: string): boolean {
   if (edgePath) return true;
   if (!config.needsProfile) return false;
-  if (config.experiments.some((e) => matchesUrl(url, e.urlMatch))) return true;
+  if (config.experiments.some((e) => matchesTargetUrl(url, e.urlMatch))) return true;
   return Object.values(config.patterns).some((p) => matchesUrl(url, p));
 }
 

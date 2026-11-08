@@ -48,7 +48,7 @@ const def = (text: string, over: Partial<DeliveredDefinition> = {}): DeliveredDe
     { id: "a", changes: [] },
     { id: "b", changes: [{ id: "c_text", type: "TEXT", selector: ".hero-title", payload: { text } }] },
   ],
-  urlMatch: { op: "contains", value: "/" },
+  urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
   targeting: null,
   primaryGoal: { id: "g_primary", config: {} },
   ...over,
@@ -166,7 +166,7 @@ describe("届く定義(D9 ③ K14)", () => {
     const d = JSON.parse(rs[0]!.definition_json) as DeliveredDefinition;
     expect(d).toEqual({
       variants: [{ id: "a", changes: [] }, { id: "b", changes: [TEXT_CHANGE()] }],
-      urlMatch: { op: "contains", value: "/" },
+      urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
       targeting: null,
       primaryGoal: { id: "g_primary", config: {} },
     });
@@ -395,7 +395,7 @@ describe("届く定義(D9 ③ K14)", () => {
     expect(recorded.map((c) => c.at)).toEqual(confirmedRows.slice(1).map((r) => r.delivered_from));
     // 部分の比較(変わらなければ空)
     expect(changedParts(def("x"), def("x"))).toEqual([]);
-    expect(changedParts(def("x"), def("y", { urlMatch: { op: "contains", value: "/lp" } }))).toEqual(["variants.b.changes", "urlMatch"]);
+    expect(changedParts(def("x"), def("y", { urlMatch: { include: [{ page: { op: "contains", value: "/lp" } }] } }))).toEqual(["variants.b.changes", "urlMatch"]);
   });
 
   it("一時停止中のテストは行を作らない(直前の定義のまま)", async () => {
@@ -833,5 +833,179 @@ describe("配信の確認の入力の digest(7o K24)", () => {
     await seedRequest(f.sid, 3, 3, 2_500, "d-new");
     await confirm(f.sid, [digestPoint(3, 3_000, "d-new")]);
     expect(await rowOf(f.sid, 3)).toMatchObject({ delivered_from: 3_000, settled: "delivered" });
+  });
+});
+
+// B69(spec §2.3・§6.1・§6.2): 対象 URL の行の形・マイグレーションの一時停止と、配信の確かめ(公開版に入ったエクスペリエンスだけを証拠にする)
+describe("対象 URL の行と配信の確かめ(B69)", () => {
+  const DEVICE = { ctx: "device", op: "in", value: ["mobile"] };
+  /** マイグレーション 0026 の文を流し直す(列の追加は済んでいるので飛ばす)。ページの条件が残った running を一時停止して記録する */
+  async function runMigrationPause() {
+    const mine = env.TEST_MIGRATIONS.find((m) => m.name.endsWith("_url_match_include.sql"))!;
+    for (const q of mine.queries) if (!/^\s*ALTER TABLE/i.test(q)) await env.DB.prepare(q).run();
+  }
+  const writeTargeting = (sid: string, eid: string, targeting: unknown) =>
+    env.DB.prepare("update experiments set targeting_json = ? where site_id = ? and id = ?").bind(JSON.stringify(targeting), sid, eid).run();
+  /** 偽のデプロイ専用の Worker の history の全体で確かめる(Cron と同じ入力) */
+  async function confirmAll(sid: string, fake: ReturnType<typeof fakeDeployer>, extra: StaticDeployHistoryEntry[] = []) {
+    const st = await fake.siteStatus(sid);
+    return confirmDeliveries(db(), sid, { history: [...st.history, ...extra], historyFrom: st.historyFrom }, Date.now(), noGuard, null);
+  }
+  const rowsOf = async (sid: string, eid: string) => (await rows(sid)).filter((r) => r.experiment_id === eid);
+  const publishIds = async (sid: string) =>
+    Object.fromEntries((await db().selectFrom("publishes").select(["version", "experiment_ids_json"]).where("site_id", "=", sid).execute()).map((p) => [p.version, p.experiment_ids_json]));
+
+  for (const how of ["manual", "migration"] as const) {
+    it(`pause_does_not_confirm_prior_pending_definition (${how})`, async () => {
+      const { owner, sid } = await resultsSite();
+      const token = owner.token;
+      await testExperiment(token, sid, "exp_t");
+      const fake = fakeDeployer();
+      const viaFake = { DEPLOYER: fake };
+      // 公開版 1: 定義 A を配って確かめる
+      await transition(token, sid, "exp_t", "running", viaFake);
+      await confirmAll(sid, fake);
+      const a = (await rows(sid))[0]!;
+      expect(a).toMatchObject({ settled: "delivered", delivered_until: null });
+      // 公開版 2: 定義 B は出し直しが配られないまま(未確定)
+      fake.setMode("pending");
+      expect((await setText(token, sid, "exp_t", "B")).status).toBe(200);
+      const v2 = (await publishOk(token, sid, viaFake)).version as number;
+      expect((await rowOf(sid, v2)).delivered_from).toBeNull();
+      // 一時停止(手で / マイグレーションで)して、公開版 3 を配る
+      fake.setMode("deploy");
+      if (how === "manual") await transition(token, sid, "exp_t", "paused", viaFake);
+      else {
+        await writeTargeting(sid, "exp_t", { and: [DEVICE, { ctx: "query", name: "utm", op: "exists" }] });
+        await runMigrationPause();
+        expect((await experimentRow(sid, "exp_t")).status).toBe("paused");
+        await publishOk(token, sid, viaFake);
+      }
+      const ids = await publishIds(sid);
+      expect(JSON.parse(ids[1]!)).toEqual(["exp_t"]);
+      expect(JSON.parse(ids[v2 + 1]!)).toEqual([]); // 公開版 3 の配る設定にエクスペリエンスは入っていない
+      await confirmAll(sid, fake);
+      // 公開版 3 の確かめでは B を配信済みにしない。A の delivered_until は閉じない。テスト中の変更は増えない
+      expect(await rowOf(sid, v2)).toMatchObject({ delivered_from: null, settled: null });
+      expect(await rowOf(sid, a.publish_version)).toMatchObject({ delivered_until: null, settled: "delivered" });
+      expect(await changes(sid)).toEqual([]);
+      // 公開版 2 の確かめが後から届けば B が配信済みになる
+      const req = await db().selectFrom("static_deploy_requests").selectAll().where("site_id", "=", sid).where("version", "=", v2).executeTakeFirstOrThrow();
+      const at = Date.now() + 1_000;
+      await confirmAll(sid, fake, [{ generation: { epoch: req.epoch, seq: req.seq }, deployedAt: iso(at), ...(req.input_digest !== null ? { digest: req.input_digest } : {}) }]);
+      expect(await rowOf(sid, v2)).toMatchObject({ delivered_from: at, settled: "delivered" });
+      expect((await rowOf(sid, a.publish_version)).delivered_until).toBe(at);
+      expect((await changes(sid)).map((c) => JSON.parse(c.parts_json))).toEqual([["variants.b.changes"]]);
+    });
+  }
+
+  it("pause_does_not_confirm_prior_pending_definition (experiment_ids_json が NULL の公開版の点は今のとおり当たる)", async () => {
+    const s = await unitSite();
+    for (const [v, at] of [[1, 500], [2, 1_500], [3, 2_500]] as const) {
+      await seedPublish(s.sid, v, `u${v}`, at);
+      await seedRequest(s.sid, v, v, at);
+    }
+    await record(s, 1, g(1), def("A"));
+    await record(s, 2, g(2), def("B"));
+    await confirmDeliveries(db(), s.sid, { history: [point(1, 1_000)], historyFrom: null }, 1_100, noGuard, null);
+    await confirmDeliveries(db(), s.sid, { history: [point(3, 3_000), point(1, 1_000)], historyFrom: null }, 3_100, noGuard, null);
+    expect(await rowOf(s.sid, 2)).toMatchObject({ delivered_from: 3_000, settled: "delivered" });
+    // 同じ形で、公開版 3 の記録にエクスペリエンスが無ければ当てない
+    const t = await unitSite(s.owner);
+    for (const [v, at] of [[1, 500], [2, 1_500], [3, 2_500]] as const) {
+      await seedPublish(t.sid, v, `u${v}`, at);
+      await seedRequest(t.sid, v, v, at);
+    }
+    await sql`update publishes set experiment_ids_json = ${JSON.stringify([t.eid])} where site_id = ${t.sid} and version in (1, 2)`.execute(db());
+    await sql`update publishes set experiment_ids_json = '[]' where site_id = ${t.sid} and version = 3`.execute(db());
+    await record(t, 1, g(1), def("A"));
+    await record(t, 2, g(2), def("B"));
+    await confirmDeliveries(db(), t.sid, { history: [point(3, 3_000), point(1, 1_000)], historyFrom: null }, 3_100, noGuard, null);
+    expect(await rowOf(t.sid, 2)).toMatchObject({ delivered_from: null, settled: null });
+    expect(await rowOf(t.sid, 1)).toMatchObject({ delivered_from: 1_000, delivered_until: null });
+  });
+
+  it("publish_after_migration_pause_reaches_delivery", async () => {
+    const { owner, sid } = await resultsSite();
+    const token = owner.token;
+    const fake = fakeDeployer();
+    const viaFake = { DEPLOYER: fake };
+    // 更新の前から実行中だったテスト。配信条件にページの条件が残っていて、マイグレーションで一時停止になる
+    await testExperiment(token, sid, "exp_old");
+    await transition(token, sid, "exp_old", "running", viaFake);
+    await writeTargeting(sid, "exp_old", { ctx: "path", op: "startsWith", value: "/lp/" });
+    await runMigrationPause();
+    expect((await experimentRow(sid, "exp_old")).status).toBe("paused");
+    const oldRows = (await rowsOf(sid, "exp_old")).length;
+    // 別のエクスペリエンスの公開・一時停止・終了は、どれも Publish が通り(transition が ok: true を見る)、配信の確かめまで進む
+    await testExperiment(token, sid, "exp_new", { urlMatch: { include: [{ page: { part: "path", op: "startsWith", value: "/new/" } }] } });
+    await transition(token, sid, "exp_new", "running", viaFake);
+    await confirmAll(sid, fake);
+    expect((await rowsOf(sid, "exp_new"))[0]).toMatchObject({ settled: "delivered" });
+    expect(JSON.parse((await publishIds(sid))[(await siteRow(sid)).active_version!]!)).toEqual(["exp_new"]);
+    await transition(token, sid, "exp_new", "paused", viaFake);
+    await transition(token, sid, "exp_new", "archived", viaFake);
+    await confirmAll(sid, fake);
+    // 一時停止したものの新しい届いた定義は作られない
+    expect(await rowsOf(sid, "exp_old")).toHaveLength(oldRows);
+    expect(await changes(sid)).toEqual([]);
+  });
+
+  it("reorder_only_is_not_a_change", async () => {
+    const { owner, sid } = await resultsSite();
+    const token = owner.token;
+    const r1 = { page: { part: "path", op: "startsWith", value: "/lp/" }, params: [{ name: "a", op: "exists" }, { name: "b", op: "equals", value: "1" }] };
+    const r2 = { page: { part: "host", op: "equals", value: "www.example.com" } };
+    await testExperiment(token, sid, "exp_t", { urlMatch: { include: [r1, r2] } });
+    const fake = fakeDeployer();
+    await transition(token, sid, "exp_t", "running", { DEPLOYER: fake });
+    await confirmAll(sid, fake);
+    // 行とパラメータの順だけを替える(空の除く行も足す)
+    const reordered = { include: [r2, { ...r1, params: [...r1.params].reverse() }], exclude: [] };
+    expect((await call("PATCH", `/sites/${sid}/experiments/exp_t`, { token, body: { urlMatch: reordered } })).status).toBe(200);
+    await publishOk(token, sid, { DEPLOYER: fake });
+    await confirmAll(sid, fake);
+    // 届いた定義の hash は違うので行は 1 件増えてよい(spec §6.1)。テスト中の変更には数えない
+    expect((await rows(sid)).length).toBeLessThanOrEqual(2);
+    expect(await changes(sid)).toEqual([]);
+  });
+
+  it("migrated_then_fixed_records_one_change", async () => {
+    const { owner, sid } = await resultsSite();
+    const token = owner.token;
+    const fake = fakeDeployer();
+    const viaFake = { DEPLOYER: fake };
+    await testExperiment(token, sid, "exp_t", { targeting: DEVICE });
+    await transition(token, sid, "exp_t", "running", viaFake);
+    await confirmAll(sid, fake);
+    // 更新の前の形を再現: 配信条件にページの条件があり、届いた定義にも同じ配信条件が入っている(urlMatch はマイグレーションで包んだ形)
+    const legacy = { and: [DEVICE, { ctx: "path", op: "startsWith", value: "/lp/" }] };
+    await writeTargeting(sid, "exp_t", legacy);
+    await sql`update experiment_delivered_definitions set definition_json = json_set(definition_json, '$.targeting', json(${JSON.stringify(legacy)})) where site_id = ${sid}`.execute(db());
+    await runMigrationPause();
+    expect((await experimentRow(sid, "exp_t")).status).toBe("paused");
+    // 直して再開する: ページの条件を対象 URL に移す
+    const fixed = await call("PATCH", `/sites/${sid}/experiments/exp_t`, { token, body: { targeting: DEVICE, urlMatch: { include: [{ page: { part: "path", op: "startsWith", value: "/lp/" } }] } } });
+    expect(fixed.status).toBe(200);
+    await transition(token, sid, "exp_t", "running", viaFake);
+    await confirmAll(sid, fake);
+    // テスト中の変更が 1 件(判定は止めない: 状態は実行中のまま)
+    expect((await changes(sid)).map((c) => JSON.parse(c.parts_json))).toEqual([["urlMatch", "targeting"]]);
+    expect((await experimentRow(sid, "exp_t")).status).toBe("running");
+  });
+
+  it("changed_parts_old_and_new_url_match_shapes", () => {
+    const page = { op: "contains", value: "/" };
+    const old = def("x", { urlMatch: page });
+    const wrapped = def("x", { urlMatch: { include: [{ page }] } });
+    // 移行の前の形と包んだ形を比べても例外にならない
+    expect(() => changedParts(old, wrapped)).not.toThrow();
+    expect(changedParts(old, old)).toEqual([]);
+    // 正規の形で比べる: 行・パラメータの順、空の exclude・params は変更にしない
+    const rows2 = [{ page, params: [{ name: "a", op: "exists" }, { name: "b", op: "exists" }] }, { page: { op: "contains", value: "/lp" } }];
+    const a = def("x", { urlMatch: { include: rows2 } });
+    const b = def("x", { urlMatch: { include: [rows2[1]!, { ...rows2[0]!, params: [...rows2[0]!.params!].reverse() }], exclude: [] } });
+    expect(changedParts(a, b)).toEqual([]);
+    expect(changedParts(a, def("x", { urlMatch: { include: rows2, exclude: [{ page }] } }))).toEqual(["urlMatch"]);
   });
 });

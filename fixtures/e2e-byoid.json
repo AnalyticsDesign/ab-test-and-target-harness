@@ -7,7 +7,7 @@
   "experiments": [
     {
       "id": "exp_byoid", "name": "BYOID hero",
-      "urlMatch": { "op": "contains", "value": "/" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/" } }] },
       "trafficPercentage": 100, "persistAssignment": false,
       "variants": [
         { "id": "vA", "name": "A", "weight": 50, "changes": [] },

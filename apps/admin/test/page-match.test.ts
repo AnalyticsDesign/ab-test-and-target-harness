@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PAGE_MATCH, describePageMatch, hostRegexHasUppercase, normalizeRegexValue, previewPageUrl, withPart } from "../lib/page-match";
+import type { UrlMatchValue } from "../lib/url-match";
 
 describe("page-match(対象 URL・目標の PAGEVIEW の入力欄)", () => {
   it("既定はパスで始まる", () => {
@@ -16,12 +17,25 @@ describe("page-match(対象 URL・目標の PAGEVIEW の入力欄)", () => {
     expect(describePageMatch({ part: "host", op: "endsWith", value: "example.com" })).toBe("ホスト が「example.com」で終わる(サブドメインを含む)");
     expect(describePageMatch({ op: "regex", value: "a" })).toBe("URL が「a」regex"); // v0.9 から残った URL 全体の正規表現(Publish で止まる)
   });
-  it("previewPageUrl はパスと URL の完全一致 / で始まるだけ", () => {
-    expect(previewPageUrl("www.example.com", { part: "path", op: "startsWith", value: "/lp/" })).toBe("https://www.example.com/lp/");
-    expect(previewPageUrl("www.example.com", { op: "equals", value: "https://www.example.com/x" })).toBe("https://www.example.com/x");
-    expect(previewPageUrl("www.example.com", { op: "startsWith", value: "/lp/" })).toBeNull(); // URL の値がパスだけ = 今の判定では一致しない
-    expect(previewPageUrl("www.example.com", { part: "path", op: "regex", value: "^/lp/" })).toBeNull();
-    expect(previewPageUrl("www.example.com", { part: "host", op: "equals", value: "www.example.com" })).toBeNull();
+  it("previewPageUrl はパスと URL の完全一致 / で始まるだけ(含めるの最初の組み立てられる行から作る)", () => {
+    const one = (page: { part?: "url" | "path" | "host"; op: string; value: string }): UrlMatchValue => ({ include: [{ page }] });
+    expect(previewPageUrl("www.example.com", one({ part: "path", op: "startsWith", value: "/lp/" }))).toBe("https://www.example.com/lp/");
+    expect(previewPageUrl("www.example.com", one({ op: "equals", value: "https://www.example.com/x" }))).toBe("https://www.example.com/x");
+    expect(previewPageUrl("www.example.com", one({ op: "startsWith", value: "/lp/" }))).toBeNull(); // URL の値がパスだけ = 今の判定では一致しない
+    expect(previewPageUrl("www.example.com", one({ part: "path", op: "regex", value: "^/lp/" }))).toBeNull();
+    expect(previewPageUrl("www.example.com", one({ part: "host", op: "equals", value: "www.example.com" }))).toBeNull();
+  });
+  it("previewPageUrl は組み立てられない行を飛ばし、パラメータの「次に一致」をクエリに足す(除くの行は使わない)", () => {
+    const m: UrlMatchValue = {
+      include: [
+        { page: { part: "path", op: "regex", value: "^/a" } },
+        { page: { part: "path", op: "equals", value: "/lp/" }, params: [{ name: "utm_source", op: "equals", value: "news letter" }, { name: "ref", op: "exists" }, { name: "c", op: "contains", value: "x" }] },
+      ],
+      exclude: [{ page: { part: "path", op: "equals", value: "/x/" } }],
+    };
+    expect(previewPageUrl("www.example.com", m)).toBe("https://www.example.com/lp/?utm_source=news+letter");
+    expect(previewPageUrl("www.example.com", { include: [{ page: { op: "equals", value: "https://www.example.com/?a=1" }, params: [{ name: "b", op: "equals", value: "" }] }] })).toBe("https://www.example.com/?a=1&b=");
+    expect(previewPageUrl("www.example.com", { include: [{ page: { part: "host", op: "equals", value: "x" } }] })).toBeNull();
   });
   it("正規表現の値は ¥ と全角を core と同じ関数で置き換え、置き換えたことを返す(通知を出す。設計書 §10.4 の 4 / §15 の入力の正規化の admin の部分)", () => {
     expect(normalizeRegexValue({ part: "path", op: "regex", value: "^/p/¥d＋$" })).toEqual({ value: { part: "path", op: "regex", value: "^/p/\\d+$" }, replaced: true });

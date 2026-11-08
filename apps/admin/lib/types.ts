@@ -1,5 +1,5 @@
 import type { AnalyticsSettings, ExperimentKind } from "@wtt/core";
-import type { PageMatchValue } from "./page-match";
+import type { UrlMatchValue } from "./url-match";
 /**
  * control が返す JSON の形(apps/control/src/serialize.ts と各ルートの zod スキーマに一致させる)。
  * 時刻は epoch ミリ秒(Global Constraints)。`previousCookieNames[].until` だけ epoch 秒。
@@ -85,7 +85,7 @@ export type Change = { id: string; type: ChangeType; selector?: string; payload:
 /** B77: original = 元のページのまま表示するパターン(変更を持てない)、description = メモ(社内用。config には出ない) */
 export type Variant = { id: string; name: string; weight: number; original: boolean; description: string; analytics: { overrides?: { variantName?: string }; extra?: Record<string, string> } | null; changes: Change[] };
 export type Experiment = {
-  id: string; siteId: string; name: string; kind: ExperimentKind; status: Status; publishedStatus: Status | null; urlMatch: PageMatchValue; targeting: unknown | null;
+  id: string; siteId: string; name: string; kind: ExperimentKind; status: Status; publishedStatus: Status | null; urlMatch: UrlMatchValue; targeting: unknown | null;
   trafficPercentage: number; persistAssignment: boolean; analytics: { overrides?: { experimentName?: string }; extra?: Record<string, string> } | null;
   createdBy: string; updatedBy: string; createdAt: number; updatedAt: number; unpublished: boolean;
   /** メモ(社内用。config には出ない。B77) */

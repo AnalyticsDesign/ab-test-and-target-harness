@@ -19,13 +19,13 @@ const publishCount = async (sid: string): Promise<number> =>
 async function siteWithDraft() {
   const owner = await setupOwner();
   const { id: sid } = await createSite(owner.token, owner.workspaceId);
-  const { id: live } = await createExperiment(owner.token, sid, { id: "exp_live", urlMatch: { op: "contains", value: "/" } });
+  const { id: live } = await createExperiment(owner.token, sid, { id: "exp_live", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } });
   await call("PUT", `/sites/${sid}/experiments/${live}/variants/b/changes`, {
     token: owner.token,
     body: [{ id: "c_live", type: "TEXT", selector: ".live", payload: { text: "公開済み" } }],
   });
   expect((await call("POST", `/sites/${sid}/experiments/${live}/status`, { token: owner.token, body: { status: "running" } })).status).toBe(200);
-  const { id: draft } = await createExperiment(owner.token, sid, { id: "exp_draft", urlMatch: { op: "contains", value: "/lp/" } });
+  const { id: draft } = await createExperiment(owner.token, sid, { id: "exp_draft", urlMatch: { include: [{ page: { op: "contains", value: "/lp/" } }] } });
   await call("PUT", `/sites/${sid}/experiments/${draft}/variants/b/changes`, {
     token: owner.token,
     body: [{ id: "c_draft", type: "TEXT", selector: ".draft-title", payload: { text: "下書きの文言" } }],

@@ -21,16 +21,16 @@ export const PAGE_OPS: Record<PagePart, readonly PageOp[]> = {
  */
 export type PageMatch = { part?: PagePart; op: PageOp; value: string; prog?: RegexProgram };
 
-/** 照合する値。host と path は URL を解析できなければ null(その条件は判定できない) */
-export type PageView = { url: string; host: string | null; path: string | null };
+/** 照合する値。host・path・params は URL を解析できなければ null(その条件は判定できない) */
+export type PageView = { url: string; host: string | null; path: string | null; params: URLSearchParams | null };
 
 /** ホスト = hostname(ポートを含まない)を小文字化し末尾のドットを除いた値。パス = pathname(percent-encoding のまま)。URL = 今の判定と同じ文字列 */
 export function pageOf(url: string): PageView {
   try {
     const u = new URL(url);
-    return { url, host: u.hostname.toLowerCase().replace(/\.+$/, ""), path: u.pathname };
+    return { url, host: u.hostname.toLowerCase().replace(/\.+$/, ""), path: u.pathname, params: u.searchParams };
   } catch {
-    return { url, host: null, path: null };
+    return { url, host: null, path: null, params: null };
   }
 }
 
@@ -63,4 +63,41 @@ export function matchPage(m: PageMatch, page: PageView): boolean | null {
 /** 文字列の URL に対する一致(true のときだけ一致。null は一致しない側)。対象 URL・パターン・目標の判定用 */
 export function matchesUrl(url: string, m: PageMatch): boolean {
   return matchPage(m, pageOf(url)) === true;
+}
+
+/** パラメータの条件(対象 URL の行。値は URL の searchParams と同じ文字列で照合する) */
+export type ParamMatch = { name: string; op: "equals"; value: string } | { name: string; op: "contains"; value: string } | { name: string; op: "exists" };
+/** 対象 URL の 1 行 = ページの一致 AND すべてのパラメータの条件 */
+export type UrlRow<P = PageMatch> = { page: P; params?: ParamMatch[] };
+/** 対象 URL = 含める行のどれかに一致し、除く行のどれにも一致しない */
+export type UrlMatch<P = PageMatch> = { include: UrlRow<P>[]; exclude?: UrlRow<P>[] };
+
+/**
+ * 対象 URL の照合(true = 対象)。行の結果は 3 値で、page とすべてのパラメータを短絡せず評価し、どれかが null なら null。
+ * 除くの行が null なら対象外(判定できないページで配信先を広げない)、含めるの行が null なら一致しない。
+ * 形の合わない入力(null・include が配列でない・page の無い行・版 2 の PageMatch・配列でない params)は例外を投げず false。
+ * 配列でない exclude は、偽の値なら無いのと同じ、page を持たない値なら false。ただし page を持つオブジェクト(配列に包んでいない 1 行)は
+ * 例外になる(schema が保存・配る形で止める入力で、ここでは守らない)
+ */
+export function matchTargetUrl(m: unknown, page: PageView): boolean {
+  const { include, exclude } = (m || {}) as Partial<UrlMatch>;
+  if (!Array.isArray(include)) return false;
+  const rows = include.concat(exclude || []);
+  if (rows.some((r) => !r || !r.page || (r.params && !Array.isArray(r.params)))) return false;
+  // 行の結果。同じ名前のパラメータが複数あれば、どれか 1 つが条件を満たせば一致
+  const row = ({ page: pm, params }: UrlRow): boolean | null => {
+    const rs = [matchPage(pm, page)].concat(
+      (params || []).map((p) => {
+        const vs = page.params && page.params.getAll(p.name);
+        return vs && (p.op === "exists" ? vs.length > 0 : vs.some((v) => (p.op === "equals" ? v === p.value : v.includes(p.value))));
+      }),
+    );
+    return rs.includes(null) ? null : rs.every((r) => r);
+  };
+  return !(exclude || []).map(row).some((r) => r !== false) && include.map(row).some((r) => r === true);
+}
+
+/** 文字列の URL に対する対象 URL の照合(null は一致しない側)。テストなど、PageView を持たない呼び手用 */
+export function matchesTargetUrl(url: string, m: unknown): boolean {
+  return matchTargetUrl(m, pageOf(url));
 }

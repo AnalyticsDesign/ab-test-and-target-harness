@@ -85,7 +85,7 @@ describe("api key role cap (backlog B33, decision 48)", () => {
     expect(start.status).toBe(403);
     expect(await json(start)).toMatchObject({ error: "forbidden", required: "admin" });
     const viewerKey = await makeKey(owner.token, "viewer-cap", "viewer");
-    const draft = await call("POST", `/sites/${site.id}/experiments`, { token: viewerKey.key, body: { id: "exp_v", name: "V", urlMatch: { op: "contains", value: "/" } } });
+    const draft = await call("POST", `/sites/${site.id}/experiments`, { token: viewerKey.key, body: { id: "exp_v", name: "V", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     expect(draft.status).toBe(403);
     expect(await json(draft)).toMatchObject({ error: "forbidden", required: "editor" });
   });

@@ -42,7 +42,7 @@ test("results recording: enabling asks with the running-test count; stopping ask
   await createSite(page, SITE_RES); // 記録しない設定で作る(fixtures.ts の createSite)
   const siteUrl = page.url();
   // 実行中のテスト 1 件を作る(開始の公開まで通す。記録しない Site なので評価計画は要らない)
-  expect(await api(page, "POST", `/sites/${SITE_RES.id}/experiments`, { id: EXP_ID, name: EXP_ID, urlMatch: { op: "contains", value: "/" } })).toBe(201);
+  expect(await api(page, "POST", `/sites/${SITE_RES.id}/experiments`, { id: EXP_ID, name: EXP_ID, urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } })).toBe(201);
   expect(await api(page, "PUT", `/sites/${SITE_RES.id}/experiments/${EXP_ID}/variants/b/changes`, [{ id: "c1", type: "TEXT", selector: ".hero-title", payload: { text: "res" } }])).toBe(200);
   expect(await api(page, "POST", `/sites/${SITE_RES.id}/experiments/${EXP_ID}/status`, { status: "running" })).toBe(200);
 

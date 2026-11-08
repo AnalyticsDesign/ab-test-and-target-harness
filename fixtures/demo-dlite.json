@@ -7,7 +7,7 @@
   "experiments": [
     {
       "id": "exp_dlite", "name": "D-lite demo",
-      "urlMatch": { "op": "contains", "value": "/" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/" } }] },
       "trafficPercentage": 100, "persistAssignment": true,
       "variants": [
         { "id": "vA", "name": "A", "weight": 50, "changes": [] },
@@ -16,7 +16,7 @@
     },
     {
       "id": "exp_dlite_converted", "name": "D-lite converted",
-      "urlMatch": { "op": "contains", "value": "/dlite.html" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/dlite.html" } }] },
       "targeting": { "hist": "converted", "goal": "g_dlite_buy" },
       "trafficPercentage": 100, "persistAssignment": false,
       "variants": [

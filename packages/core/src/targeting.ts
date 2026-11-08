@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { normalizePageMatch, pageMatchIssue, type PageMatchInput } from "./page-normalize";
 import type { RegexIssue } from "./regex-compile";
-import { LIMITS, PageMatchInputSchema, StoredCtxSchema, dslDepth, type StoredCtx } from "./schema";
+import { LIMITS, PageMatchInputSchema, StoredCtxReadSchema, StoredCtxSchema, dslDepth, type StoredCtx, type StoredCtxRead } from "./schema";
 
 export type Path = Array<string | number>;
 export type VisitedInput = { hist: "visited"; page: PageMatchInput; min?: number; withinDays?: number };
@@ -14,6 +14,8 @@ export type ConvertedInput = { hist: "converted"; goal: string; withinDays?: num
 export type AudienceRef = { audience: string };
 export type TargetingLeaf = StoredCtx | VisitedInput | ConvertedInput | AudienceRef;
 export type Targeting = TargetingLeaf | { and: Targeting[] } | { or: Targeting[] } | { not: Targeting };
+/** 読み取りの応答の形(D1 に残った古いページの条件も表せる。保存の入力には使わない) */
+export type TargetingRead = StoredCtxRead | VisitedInput | ConvertedInput | AudienceRef | { and: TargetingRead[] } | { or: TargetingRead[] } | { not: TargetingRead };
 
 const withinDays = z.number().int().min(1).max(3650);
 const StoredHistSchema = z.union([
@@ -39,6 +41,51 @@ const TargetingBase: z.ZodType<Targeting> = z.lazy(() =>
 export const TargetingInputSchema = TargetingBase.superRefine((node, ctx) => {
   if (dslDepth(node) > LIMITS.dslDepthMax) ctx.addIssue({ code: "custom", message: `dsl depth over ${LIMITS.dslDepthMax}` });
 });
+
+const TargetingReadBase: z.ZodType<TargetingRead> = z.lazy(() =>
+  z.union([
+    StoredCtxReadSchema,
+    StoredHistSchema,
+    AudienceRefSchema,
+    z.strictObject({ and: z.array(TargetingReadBase).min(1) }),
+    z.strictObject({ or: z.array(TargetingReadBase).min(1) }),
+    z.strictObject({ not: TargetingReadBase }),
+  ]),
+) as z.ZodType<TargetingRead>;
+
+/**
+ * 読み取りの応答の配信条件・オーディエンスの定義(GET・一覧・複製。B69)。D1 に残った古いページの条件(url / host / path / query)も
+ * 受ける(その葉には「使えなくなった条件」の説明が付く)。保存の入力は TargetingInputSchema
+ */
+export const TargetingReadSchema = TargetingReadBase;
+
+/** B69 で配信条件・オーディエンスから外し、対象 URL に移したページの条件の ctx */
+export const REMOVED_PAGE_CTX = ["url", "host", "path", "query"] as const;
+
+export const PAGE_CONDITION_MOVED_MESSAGE = "ページの URL・ホスト・パス・パラメータの条件は、配信条件では使えなくなりました";
+export const PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE = "ページの URL・ホスト・パス・パラメータの条件は、オーディエンスでは使えなくなりました";
+export const PAGE_CONDITION_MOVED_HINT =
+  '対象 URL(urlMatch)で指定してください(例: { "include": [{ "page": { "part": "path", "op": "startsWith", "value": "/lp/" } }] })';
+export const PAGE_CONDITION_MOVED_AUDIENCE_HINT = "エクスペリエンスの対象 URL で指定してください。このオーディエンスを使うエクスペリエンスごとに書きます";
+
+/**
+ * 外したページの条件(ctx: url / host / path / query)の最初の位置(B69、spec §4)。zod の形の検査より先に呼ぶ(invalid_input に紛れさせず、
+ * 理由付きで止める)。型を問わずたどり、壊れた値でも例外を投げない。保存する形・配る形(版 2)のどちらにも使える
+ */
+export function findRemovedPageCondition(raw: unknown, at: Path = []): Path | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const n = raw as Record<string, unknown>;
+  for (const key of ["and", "or"] as const) {
+    if (!Array.isArray(n[key])) continue;
+    for (const [i, c] of (n[key] as unknown[]).entries()) {
+      const p = findRemovedPageCondition(c, [...at, key, i]);
+      if (p) return p;
+    }
+    return null;
+  }
+  if ("not" in n) return findRemovedPageCondition(n.not, [...at, "not"]);
+  return (REMOVED_PAGE_CTX as readonly unknown[]).includes(n.ctx) ? at : null;
+}
 
 export const LEGACY_TARGETING_MESSAGE = "URL パターンを参照する古い書式の条件です";
 export const LEGACY_TARGETING_HINT =
@@ -82,7 +129,7 @@ export function findLegacyTargeting(raw: unknown, at: Path = []): Path | null {
 
 /**
  * 保存時の正規化(設計書 §4.1・§4.1.1): 子が 1 つのグループを畳む・not(not(x)) を x に・min: 1 を省く・閲覧の条件の page を
- * normalizePageMatch(part: url を省く・ホストとパスの値)・ホストとパスの条件の値。control は保存の前に、compile は入口で通す
+ * normalizePageMatch(part: url を省く・ホストとパスの値)。control は保存の前に、compile は入口で通す
  */
 export function normalizeTargeting(node: Targeting): Targeting {
   if (isGroup(node)) {
@@ -101,19 +148,14 @@ export function normalizeTargeting(node: Targeting): Targeting {
       ...(node.min !== undefined && node.min > 1 ? { min: node.min } : {}),
       ...(node.withinDays !== undefined ? { withinDays: node.withinDays } : {}),
     };
-  if ("ctx" in node && (node.ctx === "host" || node.ctx === "path")) return { ...node, value: normalizePageMatch({ part: node.ctx, op: node.op, value: node.value }).value } as Targeting;
   return node;
 }
 
-/** 正規表現の検査(ページの URL / パス / ホストの条件と、閲覧の条件の page)。最初の 1 つと DSL の中の位置(値の欄まで) */
+/** 正規表現の検査(閲覧の条件の page)。最初の 1 つと DSL の中の位置(値の欄まで) */
 export function regexIssueIn(node: Targeting, at: Path = []): { issue: RegexIssue; path: Path } | null {
   for (const [c, p] of children(node)) {
     const found = regexIssueIn(c, [...at, ...p]);
     if (found) return found;
-  }
-  if ("ctx" in node && (node.ctx === "url" || node.ctx === "host" || node.ctx === "path") && node.op === "regex") {
-    const issue = pageMatchIssue({ ...(node.ctx === "url" ? {} : { part: node.ctx }), op: "regex", value: node.value });
-    return issue ? { issue, path: [...at, "value"] } : null;
   }
   if ("hist" in node && node.hist === "visited") {
     const issue = pageMatchIssue(node.page);
@@ -124,20 +166,12 @@ export function regexIssueIn(node: Targeting, at: Path = []): { issue: RegexIssu
 
 /**
  * 否定の形を持つ条件か(設計書 §4.1.1 の対応表。画面の「含まない」「いずれでもない」「未達成」「含まれない」など)。
- * 持たない条件(画面の幅・曜日と時間帯・初回の訪問からの経過・で始まる・で終わる など)の not は、エクスペリエンスの配信条件では使えない
+ * 持たない条件(画面の幅・曜日と時間帯・初回の訪問からの経過・回数を付けた閲覧 など)の not は、エクスペリエンスの配信条件では使えない
  */
 export function hasNegatedForm(n: TargetingLeaf): boolean {
   if ("audience" in n) return true;
   if ("hist" in n) return n.hist === "converted" || n.min === undefined;
   switch (n.ctx) {
-    case "url":
-      return n.op === "contains" || n.op === "equals";
-    case "path":
-      return n.op === "contains" || n.op === "equals" || n.op === "regex";
-    case "host":
-      return n.op === "equals" || n.op === "regex";
-    case "query":
-      return n.op === "equals" || n.op === "exists";
     case "device":
     case "browser":
     case "os":
@@ -183,7 +217,7 @@ export function experimentTargetingIssue(node: Targeting): TargetingIssue | null
 
 /**
  * 画面がグループとして開くノードか(入れ子の段数に数える。plan ② P5): and / or と、否定の形を持たない条件の not
- * (`not(time)`・`not(viewport)`・`not(path startsWith)`・`not(host endsWith)` など。画面は子 1 つの除外したグループとして開く。設計書 §4.1.1)。
+ * (`not(time)`・`not(viewport)`・`not(sinceFirstVisit)` など。画面は子 1 つの除外したグループとして開く。設計書 §4.1.1)。
  * `not(and|or)` は中の and / or で 1 つと数える(not そのものは数えない)
  */
 function opensAsGroup(n: Targeting): boolean {

@@ -8,7 +8,10 @@ export * from "./regex-run"; // zod-free
 export * from "./regex-compile";
 export * from "./page"; // zod-free
 export * from "./page-normalize";
+export * from "./url-match"; // 対象 URL の正規化・検査・正規の形(runtime には入れない。schema は ./schema)
 export * from "./schema";
+export * from "./schema-v2"; // 版 2 の読み取り(版 4 で消す)
+export * from "./config-upgrade";
 export * from "./config-read";
 export * from "./evaluate";
 export * from "./what-if";

@@ -80,7 +80,7 @@ describe("static-deploy", () => {
 
   describe("staticInputDigest", () => {
     const cfg: CompiledConfig = {
-      schemaVersion: 2, version: 3, siteId: "site_b", siteSalt: "s", needsProfile: false,
+      schemaVersion: 3, version: 3, siteId: "site_b", siteSalt: "s", needsProfile: false,
       patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [], exposurePayloads: {},
     };
     const settings = { settingsVersion: 1, siteId: "site_b", hosts: ["a.example"], allowedOrigins: ["https://a.example"] };

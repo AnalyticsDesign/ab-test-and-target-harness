@@ -37,8 +37,8 @@ describe("lowerClientVersion", () => {
 });
 
 describe("版の定数", () => {
-  it("MIN_CLIENT_VERSION は 4(B68 で画像の一覧の形とアップロードの欄が変わった)で、契約の版以下", () => {
-    expect(MIN_CLIENT_VERSION).toBe(4);
+  it("MIN_CLIENT_VERSION は 5(B69 で対象 URL の形が変わった)で、契約の版以下", () => {
+    expect(MIN_CLIENT_VERSION).toBe(5);
     expect(MIN_CLIENT_VERSION).toBeLessThanOrEqual(API_CONTRACT_VERSION);
   });
   it("MIN を契約の版より低く据え置くなら理由を書く", () => {

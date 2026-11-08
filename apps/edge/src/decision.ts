@@ -33,18 +33,12 @@ export async function readBodyWithin4kb(req: Request): Promise<{ ok: true; text:
 }
 
 /**
- * spec §9.1 / 決定 49 §11.1: body が評価入力のすべて。query は body.url から復元する。判定時刻は edge が決めて固定し、DO にも同じ値を渡す。
+ * spec §9.1 / 決定 49 §11.1: body が評価入力のすべて(ページの条件は対象 URL が body.url を照合する。B69)。判定時刻は edge が決めて固定し、DO にも同じ値を渡す。
  * body に無い値(古い runtime は browser / os / firstVisitAt を送らない。viewport の meta が無いページは viewport を送らない)は
  * 欠けたままにする = それを使う条件を含むエクスペリエンスだけが対象外になる
  */
 export function toPageContext(body: DecisionBody, now: number, firstVisitAt: number | null | undefined): PageContext {
-  let query: Record<string, string> = {};
-  try {
-    query = Object.fromEntries(new URL(body.url).searchParams);
-  } catch {
-    // URL として解釈できない場合はクエリなし(ホスト・パスの条件は判定できない側に倒れる)
-  }
-  const ctx: PageContext = { url: body.url, query, device: body.device, referrer: body.referrer, now };
+  const ctx: PageContext = { url: body.url, device: body.device, referrer: body.referrer, now };
   if (body.browser !== undefined) ctx.browser = body.browser;
   if (body.os !== undefined) ctx.os = body.os;
   // 古い runtime(Publish 直後の bootstrap キャッシュ、最大 約 60 秒)は viewport の meta が無くても viewport を送るが無害: 新しい条件は新しい control の Publish 後にしか存在せず、そのころには古い bootstrap は失効している

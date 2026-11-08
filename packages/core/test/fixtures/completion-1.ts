@@ -24,7 +24,7 @@ export const COMPLETION_1_CONFIG: CompiledConfig = compile({
   siteId: "site_c1", siteSalt: "salt_c1", version: 1, timezone: "Asia/Tokyo", retentionDays: 90,
   goals: [{ id: "g_lead", name: "資料請求", type: "CUSTOM", config: {} }],
   experiments: [{
-    id: "exp_c1", name: "完成の基準 1", urlMatch: { part: "path", op: "startsWith", value: "/products/" }, targeting: COMPLETION_1_TARGETING,
+    id: "exp_c1", name: "完成の基準 1", urlMatch: { include: [{ page: { part: "path", op: "startsWith", value: "/products/" } }] }, targeting: COMPLETION_1_TARGETING,
     trafficPercentage: 100, persistAssignment: false,
     variants: [{ id: "vA", name: "A", weight: 0, changes: [] }, { id: "vB", name: "B", weight: 100, changes: [] }],
   }],

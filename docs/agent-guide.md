@@ -95,7 +95,7 @@ curl -sS "$AB_CONTROL_URL/workspaces/$WID/sites" -H "Authorization: Bearer $AB_A
 # 2. エクスペリエンス(experiment)を作る(パターン a(名前 A・オリジナル)と b(名前 B)が 50:50 で自動生成される。`"kind":"single"` を足すとパーソナライズで、パターン a(名前 A)が重み 100 で 1 つ。省略は `test`)
 curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments" -H "Authorization: Bearer $AB_API_KEY" \
   -H 'content-type: application/json' \
-  -d '{"id":"exp_hero_q1","name":"Hero Q1","urlMatch":{"part":"path","op":"startsWith","value":"/lp/"},"trafficPercentage":100}'
+  -d '{"id":"exp_hero_q1","name":"Hero Q1","urlMatch":{"include":[{"page":{"part":"path","op":"startsWith","value":"/lp/"}}]},"trafficPercentage":100}'
 
 # 3. パターン b の変更(change)を全置換する(空配列で全消し。オリジナルの a には変更を保存できない)
 curl -sS -X PUT "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/variants/b/changes" \
@@ -122,7 +122,39 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/status" \
 
 **開始・再開と画像**: 開始・再開(`status: "running"`)は、状態を変える前に、変えた後に配信する内容(ほかの配信中のエクスペリエンスを含む)を公開と同じ画像の確かめにかけます。通らなければ、状態を変えずに 409 `asset_missing` か `asset_other_site` を返します(封筒の `assetProblems` に URL と変更の場所が入ります。その変更を直してからやり直してください)。一時停止・終了は配信を止める操作なので、画像を確かめずに必ず状態を変えて公開します。
 
-対象 URL(`urlMatch`)は `{ "part": "url" | "path" | "host", "op": …, "value": … }` の形で書きます(`part` を省略すると URL 全体)。目標(`goal`)の `PAGEVIEW` も同じ形で、`config` は `{ "page": { "part": "path", "op": "equals", "value": "/thanks/" } }` です。目標の古い形 `{ "urlOp", "urlValue" }` は受け付けず 422 です。対象 URL の `part` を省略した `{ "op", "value" }` は URL 全体への一致として今までどおり使えますが、URL 全体の正規表現は使えません(下の「踏みやすい制約」)。
+**対象 URL(`urlMatch`)**は、含める行(`include`)と除く行(`exclude`)で書きます。含める行のどれかに一致し、除く行のどれにも一致しないページが対象です。ページの URL・ホスト・パス・パラメータの条件は、対象 URL だけに書きます(配信条件・オーディエンスには書けません。下の「ページの条件を対象 URL に移す」)。
+
+```json
+{ "include": [
+    { "page": { "part": "path", "op": "startsWith", "value": "/lp/spring/" } },
+    { "page": { "part": "host", "op": "equals", "value": "shop.example.com" },
+      "params": [{ "name": "utm_source", "op": "equals", "value": "news" }] } ],
+  "exclude": [
+    { "page": { "part": "path", "op": "contains", "value": "/lp/spring/old/" } } ] }
+```
+
+- **行**は `{ "page": …, "params"?: [...] }` です。`page` と `params` のすべてを満たすと、その行に一致します。`page` は `{ "part": "url" | "path" | "host", "op", "value" }` で、`part` を省略すると URL 全体です。`op` は URL が `equals` / `contains` / `startsWith`(URL 全体の正規表現は使えません。下の「踏みやすい制約」)、パスが `equals` / `contains` / `startsWith` / `regex`、ホストが `equals` / `endsWith` / `contains` / `regex` です。ホストの `endsWith` はドット区切りの境界で一致します(`example.com` はサブドメインの `www.example.com` に一致し、`notexample.com` には一致しない)
+- **パラメータの条件**(`params`)は URL のパラメータを見ます。`op` は `equals`(値が一致。`value` は空文字も可で、`?ref=` のように値が空のパラメータに一致)/ `contains`(値を含む。`value` は 1 字以上)/ `exists`(そのパラメータがある。`value` は書かない)。名前と値は大文字と小文字を区別し、値は percent-encoding を解いた文字列(`+` は空白)を、前後の空白も含めてそのまま比べます。**同じ名前のパラメータが複数あれば、どれか 1 つの値が条件を満たせば一致**します(`?utm_source=a&utm_source=news` は `equals news` に一致)
+- 「パラメータが無い」「値が一致しない」の演算子はありません。除く行で書きます(例: `utm_source` の無い `/lp/` のページだけ = 含める「パスが `/lp/` で始まる」+ 除く「パスが `/lp/` で始まり、かつ `utm_source` がある」)
+- **上限**: 含める 1〜10 行(必須)、除く 0〜10 行(省略可)、1 行のパラメータ 0〜5 個、パラメータの名前 1〜256 字。1 つのエクスペリエンスの対象 URL の全部の行の正規表現の命令数の合計は 500 まで(超えると保存が 422)。空の `exclude` と `params` は保存のときに省きます。行とパラメータは送った順のまま保存し、順を入れ替えただけの保存は、開始後のテストでも「テスト中の変更」になりません
+- **判定できない行**(URL を解析できないページ、パスが 256 字を超えるページでのパスの正規表現など): 除く行が判定できないページは対象外、判定できない含める行は一致しない扱いです(配信先を広げないため)
+- **古い形**(一番外側に `op` / `value` / `part` を置いた 1 つのページの一致)は 422 `invalid_input`(`path: ["urlMatch"]`、`hint` に新しい形の例)です。1 つのページの一致は、含める 1 行の `page` に入れてください: `{ "include": [{ "page": { "part": "path", "op": "startsWith", "value": "/lp/" } }] }`
+
+目標(`goal`)の `PAGEVIEW` は 1 つのページの一致のままで、`config` は `{ "page": { "part": "path", "op": "equals", "value": "/thanks/" } }` です(行・除く・パラメータは使えません)。目標の古い形 `{ "urlOp", "urlValue" }` は受け付けず 422 です。
+
+**ページの条件を対象 URL に移す**(配信条件・オーディエンスからページの条件を外した版で変わった点):
+
+- 配信条件(`targeting`)とオーディエンスの定義(`definition`)で、ページの URL・ホスト・パス・パラメータの条件(`ctx` が `url` / `host` / `path` / `query`)は使えなくなりました。送ると 422 で、配信条件は `invalid_experiment_targeting`、オーディエンスは `invalid_audience_definition` です(`hint` に対象 URL での書き方)。閲覧したページ(`hist: "visited"` の `page`)・リファラー・目標の `PAGEVIEW` は今までどおりです
+- 更新の前に保存した古い条件は残っていて、エクスペリエンスとオーディエンスの取得・一覧・複製の応答の `targeting` / `definition` に出ることがあります(`/openapi.json` では「使えなくなった条件」と説明しています)。そのままでは、`targeting`(`definition`)を送る保存と、開始・再開が 422 です。開始・再開は、配信条件が参照する同じサイトのオーディエンスに古い条件が残っているときも 422 です。`targeting` を送らない `PATCH`(名前・メモ・配信率など)・一時停止・終了・削除・複製はできます。複製は古い条件ごと写すので、写した下書きも直します
+- 直し方: 古い条件の意味を対象 URL の行に書き、配信条件(オーディエンスの定義)からその条件を消して保存します。一時停止になっていれば、その後に再開します。**古い条件が、更新の前の対象 URL と「かつ」で組み合わさっていたときは、新しい行を足さずに同じ行に入れます**(パラメータの条件は行の `params` に、ホスト・パスの条件は行の URL の `equals` / `startsWith` の値にまとめる)。別の行に足すと「または」になり、配信先が広がります
+- 更新のとき、古い条件を持っていた配信中のエクスペリエンス(直接、または参照するオーディエンスに持っていたもの)は、データベースの更新で一時停止になっています。変更履歴に `via: "system"` の `experiment.status` の行(`detail.reason` が `page_condition_moved`)が残ります。直して再開すると、その後の公開で、結果に「テスト中の変更」が 1 件記録されます(届く定義の書き方が変わるため。判定は止まりません)
+- 対象 URL では書けない形と、代わりの書き方:
+  - ページの条件と訪問者の条件を `or` でまたぐ形(例: 「`/lp/` のページ、またはスマートフォンの訪問者」)→ エクスペリエンスを 2 つに分けます(片方は対象 URL を `/lp/` に、もう片方は対象 URL をサイト全体・配信条件を端末に)。両方に当たるページでは、重なったときの優先(下の「踏みやすい制約」)で表示が決まります
+  - オーディエンスの中の `not` の下のページの条件(例: 「`/cart/` 以外のページで、料金ページを見た人」)→ ページの部分は、エクスペリエンスの対象 URL の除く行で書きます
+  - 「ホストが X、かつパスが正規表現に一致する(またはパスを含む)」の形 → 1 つの行の `page` はホストかパスの一方しか見ないので、正確には書けません。URL の `startsWith`(例: `https://www.example.com/lp/`)で書けるかを確かめてください。いくつものホストでタグを使うサイトで当たります
+  - ページの条件を持つオーディエンスを、いくつものエクスペリエンスで使い回す形 → ページの条件はエクスペリエンスごとに対象 URL に書き、オーディエンスには訪問者の条件だけを残します
+- 配信条件の確かめ(`POST /sites/{sid}/evaluate`)は `query` を受けなくなりました。対象 URL のパラメータは `url` から読みます
+- この変更で API 契約の版(`GET /capabilities` の `apiVersion`)は 5 になりました。版 4 のときの手順や保存済みの要求の本文は、`/openapi.json` を読み直して新しい形に直してください
 
 変更の型(`type`)は `TEXT` / `IMAGE` / `HIDE` / `ATTRIBUTE` / `HTML` / `CSS` / `CUSTOM_JS` の 7 種で、正確な形は `/openapi.json` にあります。
 
@@ -277,6 +309,7 @@ curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/results" -H "Author
 - 注記は `notes: [{ key, params }]` の形で、文言を持ちません。各鍵の意味は下の「注記の鍵」の表にあり、数値の読み方は表の「説明の項目」(`docs/experiment-results.md` の見出し)にあります(`helpKeys` は、その応答に関係する説明の項目の鍵)。人に報告するときは、品質の注記(`quality_blocked_*`・`collection_failures`・`collection_stops`・`apply_failures`)と `stopped_early`(評価時点前に終了)も必ず伝えてください
 - 速報は 5 分間同じ値を返します。読み取りが混み合っているか今日の読み取りの上限に達したときは、前に計算した速報に注記 `interim_stale` を付けて返します(繰り返し読み直さないでください)
 - 下書きは 409 `results_not_started`、パーソナライズは 404 `results_not_applicable` です
+- 記録に写した定義(`definition`)の `urlMatch` は、対象 URL が含める・除くの行の形になる前に作られた記録では、古い形(1 つのページの一致 `{ "part", "op", "value" }`)のままです。両方の形を読めるようにしてください
 
 **注記の鍵**(`notes[].key`)。`params` の割合は 0〜1 の小数、時刻は epoch ミリ秒、時間は時間(h)です。「説明の項目」は `docs/experiment-results.md` の見出しです(`helpKeys` に入る鍵の項目)。
 
@@ -358,7 +391,7 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/evaluate" -H "Authorization: Bearer
                      "weights": [{"variantId":"a","weight":50},{"variantId":"b","weight":50}] } ] }
 ```
 
-- `reason` は `not_running` → `not_published` → `url_mismatch` → `needs_history` → `input_missing` → `targeting_false` → `traffic_excluded` の順に判定した結果です
+- `reason` は `not_running` → `not_published` → `url_mismatch` → `needs_history` → `input_missing` → `targeting_false` → `traffic_excluded` の順に判定した結果です。`url_mismatch` は対象 URL に一致しなかったときで、除く行に一致したときも同じです。対象 URL のパラメータの条件は `url` のパラメータで判定します(パラメータを別に渡す入力はありません)
 - `status` は**状態(Desired Status)**(管理画面で設定した状態)、`published` は**公開 config に載っているか**です。`status: "running"` でも `published: false` なら `reason` は `not_published`(まだ公開していない、または公開後に消えた)。`paused` / `draft` / `archived` は `not_running` です
 - 配信条件が使う入力は次のとおりです。**与えないと、その入力を使う条件を含むエクスペリエンスは `input_missing`(本番でも判定できず対象外になるのと同じ扱い)になります**。`device` と `userAgent` の両方を省くと端末は不明として扱い、端末の条件を含むエクスペリエンスは `input_missing` になります(端末に依らないエクスペリエンスは今までどおり評価します。`device` の既定値 `desktop` はありません)
   - `userAgent`: 端末・ブラウザ・OS をここから判定します(`device` / `browser` / `os` を直接指定するとそちらが優先)
@@ -467,28 +500,25 @@ done
 - **ID は作成後に変更できません**(エクスペリエンス / パターン / 目標 / オーディエンス)。`experimentId` は割当ハッシュの入力なので、変えると全訪問者の割当が変わります。作り直す場合は新しい ID で作ります。エクスペリエンスとオーディエンスの ID に `new` は使えません(管理画面の新規作成の画面と重なるため。422)。エクスペリエンス・パターン・目標の ID に `constructor` は使えません(JavaScript で特別な意味を持つ名前で、設置タグが設定を読むときに取り違えるため。422)
 - **公開の反映**: 公開の結果の `staticDeploy` が `deployed` なら、訪問者のブラウザには 60 秒以内に届きます。`pending` なら配信ファイルの更新を再試行中です(`GET /sites/:sid` の `staticStale` が `true`。続くときは `POST /sites/:sid/static/redeploy` で作り直せます。管理者以上)。公開直後の検証は 1 分ほど待つか、キャッシュを迂回する URL で確認してください。`GET /sites/:sid` の `staticMismatch` が `true` なら、配信ファイルの記録が食い違っています(データベースを過去の時点に戻した後などに起きます)。`staticMismatch` が `false` でも食い違っていないとは限りません。15 分ごとの定期処理がサイトに印を付けるのは、公開中のサイトで、デプロイ専用の Worker の記録が通常の更新の世代で先に進んでいるときだけで、それ以外の形の食い違い(データベースでは未公開のサイト・データベースに無いサイトなど)では、`staticMismatch` もサイトの警告も出ないことがあります。全体は、管理画面の配信ファイルの画面か、`GET /static/status` の `mismatchSites` で確かめてください。ただし、同じ世代で中身が食い違うかの比較は、ID の順に先頭の 25 サイトまで(公開中の設定の合計が大きいときはそれより少ない)なので、その形の食い違いが多いと `mismatchSites` に出ないサイトが残りえます。疑わしいときは、システム管理者に全サイトの配信ファイルの作り直しを頼んでください。`POST /sites/:sid/static/redeploy` で今の公開内容に作り直せます(管理者以上)
 - **種別は作成後に変えられない**。パターンの数はテストが 2 つ以上、パーソナライズが 1 つ(違反は 422 `variant_count_invalid`)。変えたいときは複製する
-- **重なったときの優先**: 同じ要素の部分を複数のエクスペリエンスが変えると、パーソナライズ(作成の古い順)→ テスト(開始・再開の新しい順)の後ろが勝つ(テストどうしは先に配信に入ったもの。再開したテストは、その間に開始したテストより優先が低い)。保証するのは同じ要素の同じ部分までで、祖先と子孫にまたがる重なりは保証しない。公開の応答の `warnings`(`path` = `experiments.<優先の低い方>`)と `GET …/publish-preview` の `overlaps` に、対象 URL の条件とセレクタの文字列がどちらも完全に一致する組だけが出る。`?starting=<id>` を付けると、その下書きを開始したとき・一時停止中のテストを再開したときの組が分かる
+- **重なったときの優先**: 同じ要素の部分を複数のエクスペリエンスが変えると、パーソナライズ(作成の古い順)→ テスト(開始・再開の新しい順)の後ろが勝つ(テストどうしは先に配信に入ったもの。再開したテストは、その間に開始したテストより優先が低い)。保証するのは同じ要素の同じ部分までで、祖先と子孫にまたがる重なりは保証しない。公開の応答の `warnings`(`path` = `experiments.<優先の低い方>`)と `GET …/publish-preview` の `overlaps` に、対象 URL の条件とセレクタの文字列がどちらも完全に一致する組だけが出る(対象 URL は、行とパラメータの順の違いを無視して比べる)。`?starting=<id>` を付けると、その下書きを開始したとき・一時停止中のテストを再開したときの組が分かる
 - **開始後のテストで変えられないもの**: パターンの追加・削除・重み、基準、判定に使う目標の選択(パターンの集合の `PUT …/variants` は下書きだけ。409 `experiment_active`)、配信率(`trafficPercentage`)を下げる・割当の固定(`persistAssignment`)を変える(409 `test_setting_locked`。絞るときは一時停止か終了)。配信率を上げる・変更・対象 URL・配信条件・目標の定義の変更はできますが、公開して配信を確かめた時点で「テスト中の変更」として結果に記録されます。大きく変えるなら複製して新しいテストにします。パーソナライズはどの状態でも編集できます
 - **終了したテストは読み取り専用**: エクスペリエンスの更新・パターン・変更・評価計画の保存は 409 `experiment_archived_readonly` です(変えるときは複製する)。メモ(`description` だけの `PATCH` と `PATCH …/variants/:vid`)・採用の記録・削除はできます
 - **一度開始したテストを削除すると**、結果の記録・採用・計画の変更の履歴もすぐに消え、参加者ごとの記録は削除の直後から順に消えます。ID はこのサイトでは使い直せません
 - **パターンの weight は合計 100**(テストは 2 つ以上のパターン、パーソナライズは 1 つで weight 100)。`trafficPercentage` は 1〜100(0% 配信は一時停止で表現します)
-- **正規表現は URL のパスとホストだけ**に使えます(`part` が `path` / `host`)。URL 全体(`part` が `url` または省略)の正規表現は 422 です。「ホストが一致」+「パスが正規表現に一致」で書き換えてください。クエリで絞るなら配信条件のクエリパラメータ(`query`)の `equals` / `contains` を使います
+- **正規表現は URL のパスとホストだけ**に使えます(`part` が `path` / `host`)。URL 全体(`part` が `url` または省略)の正規表現は 422 です。パスの正規表現(`part: "path"`)で書き換えてください。対象 URL の 1 つの行の `page` はホストかパスの一方しか見ないので、ホストとパスの両方で絞るときは、URL の `startsWith`(例: `https://www.example.com/lp/`)で書けるかを確かめてください。パラメータで絞るなら、対象 URL の行のパラメータの条件(`params`)を使います
   - 使える書き方: ふつうの ASCII 文字、記号のエスケープ(`\.` `\/` `\-` `\?` `\*` `\+` `\(` `\)` `\[` `\]` `\{` `\}` `\|` `\^` `\$` `\\`)、`.`、`[...]` と `[^...]`、`\d` `\w` `\s`、`^` `$`、`( )` と `(?: )` と `|`、繰り返し `?` `*` `+` `{n}` `{n,m}`(m は 100 まで。0 回だけの `{0}` `{0,0}` は 422 `regex_ambiguous`)。日本語のパスは `%E3%81%82` のようにエンコードした形で書きます
   - 使えないもの: 後方参照、先読み・後読み、名前付きグループ、フラグ、上限のない `{n,}`、最短一致(`*?` など)
-  - 上限: 式は 200 字まで、1 つの正規表現は 200 命令(変換後の大きさ。`{n,m}` は展開して数える)まで、サイト全体で 500 命令まで(超えると公開が `ok: false`)。照合するパスが 256 字を超えるページでは、パスの正規表現を含む条件を判定せず、そのエクスペリエンスは対象外になります
+  - 上限: 式は 200 字まで、1 つの正規表現は 200 命令(変換後の大きさ。`{n,m}` は展開して数える)まで、1 つのエクスペリエンスの対象 URL の全部の行で 500 命令まで(超えると保存が 422)、サイト全体で 500 命令まで(超えると公開が `ok: false`)。照合するパスが 256 字を超えるページでは、パスの正規表現を判定しません(対象 URL の含める行なら一致しない、除く行ならそのページは対象外になります)
   - 意味: **部分一致**です(全体に一致させるには `^` と `$` を付ける)。**大文字と小文字は区別します**。ホストは小文字にして照合するので、式のホストも小文字で書いてください
-- **配信条件(`targeting`)で使える条件**は次のとおりです。`and` / `or` / `not` で組み合わせます。
+- **配信条件(`targeting`)で使える条件**は次のとおりです。`and` / `or` / `not` で組み合わせます。ページの URL・ホスト・パス・パラメータの条件はありません。対象 URL(`urlMatch`)で書きます(レシピ 1 の後の「ページの条件を対象 URL に移す」)
 
 | 条件 | 書き方の例 | 備考 |
 |---|---|---|
-| ホスト | `{"ctx":"host","op":"equals","value":"www.example.com"}` | `op` は `equals` / `endsWith` / `contains` / `regex`。`endsWith` はドット区切りの境界で一致する(`example.com` はサブドメインの `www.example.com` に一致し、`notexample.com` には一致しない) |
-| パス | `{"ctx":"path","op":"startsWith","value":"/lp/"}` | `op` は `equals` / `contains` / `startsWith` / `regex` |
 | ブラウザ | `{"ctx":"browser","op":"in","value":["chrome","safari"]}` | `chrome` / `safari` / `edge` / `firefox` / `samsung` / `other` |
 | OS | `{"ctx":"os","op":"in","value":["ios","android"]}` | `ios` / `android` / `windows` / `macos` / `chromeos` / `linux` / `other` |
 | 画面の幅 | `{"ctx":"viewport","minWidth":768,"maxWidth":1200}` | px。`minWidth` 以上 `maxWidth` 未満。片方だけでもよい。ページを開いた時点の幅で判定し、viewport の meta が無い・タグが meta より前にあるページでは判定できず配信されません |
 | 曜日と時間帯 | `{"ctx":"time","days":["sat","sun"],"from":"09:00","to":"18:00"}` | サイトのタイムゾーンで判定。`from` / `to` は 1 時間刻み(`to` は `24:00` も可)で、両方か、どちらも付けない(終日)。`to` が `from` より前なら日をまたぐ(曜日は開始時刻の曜日で数える) |
 | 初回の訪問からの経過 | `{"ctx":"sinceFirstVisit","op":"gte","days":7}` | `op` は `gte`(以上)/ `lt`(未満)。`hours` か `days` のどちらか 1 つ |
-| クエリ | `{"ctx":"query","name":"utm_source","op":"contains","value":"news"}` | `op` は `equals` / `contains` / `exists` |
 | 端末・リファラー | `{"ctx":"device","op":"in","value":["mobile"]}` / `{"ctx":"referrer","op":"contains","value":"google"}` | 従来どおり |
 | 閲覧したページ | `{"hist":"visited","page":{"part":"path","op":"startsWith","value":"/pricing/"},"min":2,"withinDays":30}` | `min` と `withinDays` は省略できる。`page` の `part` は `url` / `path` / `host` |
 | 目標の達成 | `{"hist":"converted","goal":"g_lead","withinDays":30}` | `withinDays` は省略できる |
@@ -496,8 +526,8 @@ done
 
 - **閲覧・目標の条件の書き方**: 閲覧は `{ "hist": "visited", "page": { "part", "op", "value" }, "min"?, "withinDays"? }`(`min` は 2 以上のときだけ意味があります。否定した閲覧の条件には `min` を付けられません)、目標は `{ "hist": "converted", "goal", "withinDays"? }` です。`withinDays` は 1〜3650 かつサイトの `retentionDays` 以下です
 - **URL パターンの ID を参照する古い書式**(`"pattern": "p_xxx"` / `page_view_count`)は、保存が 422 `legacy_targeting`、公開は `ok: false` です。`page` を直接書く形に書き換えてください
-- **エクスペリエンスの `targeting` の形の制限**: 条件 1 つ / 否定の形を持つ条件の `not` / `and`・`or` の下に条件か否定の形を持つ条件の `not` が並ぶ形だけです(入れ子とグループの `not` は 422 `invalid_experiment_targeting`)。否定の形を持つ条件は次のとおりです: URL の含む・完全一致、パスの含む・完全一致・正規表現、ホストの完全一致・正規表現、クエリの完全一致・存在、端末・ブラウザ・OS、リファラーの含む・空、閲覧(回数なし)、目標、オーディエンス。入れ子が要るときはオーディエンスで作ります
-- **オーディエンスの `definition`** は、入れ子を一番外側の中に 4 段まで使えます。`{ "audience": … }`(オーディエンスの中のオーディエンス)は使えません(422 `invalid_audience_definition`)。配信条件で参照したオーディエンスは公開のときに参照のたびに展開され、サイト全体で「オーディエンスの条件の数 × 参照の数」の合計が 20,000 を超えると公開が `ok: false`(`audience_expansion_too_large`)になります
+- **エクスペリエンスの `targeting` の形の制限**: 条件 1 つ / 否定の形を持つ条件の `not` / `and`・`or` の下に条件か否定の形を持つ条件の `not` が並ぶ形だけです(入れ子とグループの `not` は 422 `invalid_experiment_targeting`)。否定の形を持つ条件は次のとおりです: 端末・ブラウザ・OS、リファラーの含む・空、閲覧(回数なし)、目標、オーディエンス。入れ子が要るときはオーディエンスで作ります
+- **オーディエンスの `definition`** は、入れ子を一番外側の中に 4 段まで使えます。`{ "audience": … }`(オーディエンスの中のオーディエンス)と、ページの URL・ホスト・パス・パラメータの条件は使えません(422 `invalid_audience_definition`。ページの条件はエクスペリエンスの対象 URL に書く)。配信条件で参照したオーディエンスは公開のときに参照のたびに展開され、サイト全体で「オーディエンスの条件の数 × 参照の数」の合計が 20,000 を超えると公開が `ok: false`(`audience_expansion_too_large`)になります
 - **保存時の正規化**: 子が 1 つのグループの畳み込み、`not(not(x))`、`min: 1` と `part: "url"` の省略をします。応答の値が送った値と違うことがあります
 - **削除と参照**: 参照されているオーディエンス(409 `audience_in_use`)と、オーディエンスから参照されている目標(409 `goal_in_use`)は削除できません。存在しないオーディエンス・目標の参照は、保存が 422、公開は `ok: false` です(`unknown_audience` / `unknown_goal`)
 - **保存期間(`retentionDays`)を短くする PATCH** は、期間がそれを超える条件(保存済みの定義と公開中の設定)があると 422 `within_days_exceeds_retention` です(`conflicts` に一覧を返します)。先に条件の期間を直して公開してください

@@ -27,7 +27,8 @@ import type { Db, ExperimentRow, SiteRow, VariantRow } from "../db";
 import { ApiError, notFound, validationFailed } from "../errors";
 import { edgeOrigin } from "../capabilities";
 import { errorResponses } from "../openapi";
-import { buildCompileInput, describeCompileFailure, loadActiveConfig } from "../publish";
+import { buildCompileInput, describeCompileFailure, loadActiveConfig, type StoredCompileInput } from "../publish";
+import { assertNoRemovedPageCondition } from "../validation";
 import { analyticsRecipe } from "../recipe";
 import { loadSite } from "../roles";
 import { siteToSettings } from "../site-settings";
@@ -45,7 +46,7 @@ const HistoryPages = z
   .max(500)
   .describe("閲覧したページごとの回数と最後の閲覧。配信条件の閲覧の条件と同じページの一致で書く(パターン ID は書かない)");
 const EvaluateBody = z.strictObject({
-  url: z.string().min(1).max(2048).describe("評価する URL(絶対 URL。query・ホスト・パスは URL から導出する)"),
+  url: z.string().min(1).max(2048).describe("評価する URL(絶対 URL。対象 URL のホスト・パス・パラメータは、この URL から読む)"),
   device: z.enum(DEVICES).optional().describe("省略時は userAgent から判定する。device を省略して userAgent も無ければ、端末の条件は判定できない(input_missing)"),
   userAgent: z.string().max(1024).optional().describe("端末・ブラウザ・OS を判定する User-Agent。browser / os を省略して userAgent も無ければ、ブラウザ・OS の条件は判定できない(input_missing)"),
   browser: z.enum(BROWSERS).optional().describe("userAgent からの判定の代わりに直接指定する"),
@@ -60,7 +61,6 @@ const EvaluateBody = z.strictObject({
     .optional()
     .describe("初回の訪問時刻(epoch ミリ秒)。null = 発行時刻が不明(古い訪問者として扱う)。省略したら初回の訪問からの経過の条件は判定できない(input_missing)"),
   referrer: z.string().max(2048).default(""),
-  query: z.record(z.string(), z.string()).optional().describe("URL から導出したクエリの上書き(省略時は url の searchParams)"),
   visitorId: z.string().min(1).max(128).optional().describe("省略時は reason / weights まで。指定時は traffic 判定と variantId まで"),
   history: z
     .strictObject({ goals: HistoryGoals.optional(), pages: HistoryPages.optional() })
@@ -136,6 +136,14 @@ function draftCompileError(e: CompileError): ApiError {
 }
 
 /**
+ * B69(spec §4・§6.2.1): 下書きの compile の前に、外したページの条件(配信条件と参照するオーディエンスの定義)を探し、
+ * 見つけたら compile の失敗(invalid_draft)ではなく、保存と同じ文言の 422 invalid_experiment_targeting にする(D1 は読まない)
+ */
+function assertNoMovedPageConditions(input: StoredCompileInput): void {
+  for (const e of input.experiments) assertNoRemovedPageCondition(e.targeting, input.audiences, e.id);
+}
+
+/**
  * 評価対象の組み立て(決定 39 (7))。**下書きも配信中も同じ `buildCompileInput` → `compile` の経路**を通す
  * (Publish と同じ形の Experiment を評価するため)。返す `status` は常に **Desired Status**(D1 `experiments.status`)で、
  * 「いま配っているか」は公開 config(`publishes.config_json`)に載っているかどうか = `published` で別に返す。
@@ -153,6 +161,7 @@ async function loadTargets(
   let config: CompiledConfig | null = active;
   if (draft) {
     const input = await buildCompileInput(db, site, site.active_version ?? 1, rows, { statuses: ["draft", "running", "paused"] });
+    assertNoMovedPageConditions(input);
     try {
       config = compile(input);
     } catch (e) {
@@ -199,16 +208,10 @@ agentRoutes.post(
   async (c) => {
     const { site } = await loadSite(c, c.req.param("sid"), "viewer");
     const body = c.req.valid("json");
-    let derivedQuery: Record<string, string> = {};
-    try {
-      derivedQuery = Object.fromEntries(new URL(body.url).searchParams);
-    } catch {
-      derivedQuery = {}; // 相対 URL ではクエリを復元できない。ホスト・パスの条件は input_missing になる(クエリ・参照元などそれ以外の条件は評価できる)
-    }
     const ua = body.userAgent;
+    // B69: 対象 URL のパラメータは url から読む(クエリの上書きは受けない。対象 URL の照合と別のクエリで判定する経路を作らないため)
     const ctx: PageContext = {
       url: body.url,
-      query: (body.query as Record<string, string> | undefined) ?? derivedQuery,
       referrer: body.referrer,
       now: body.now ?? Date.now(),
     };
@@ -239,6 +242,7 @@ async function compileSingleExperiment(db: Db, site: SiteRow, eid: string): Prom
     statuses: ["draft", "running", "paused", "archived"], // status を無視して 1 件だけ入れる = compile 上は running 扱い
     experimentIds: [eid],
   });
+  assertNoMovedPageConditions(input);
   try {
     return compile(input);
   } catch (e) {

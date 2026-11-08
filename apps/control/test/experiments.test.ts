@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
-import { call, json, setupOwner, inviteAndJoin, createSite, createExperiment, expectEnvelope, failingD1Insert, TEXT_CHANGE } from "./helpers";
+import { z } from "zod";
+import {
+  PAGE_CONDITION_MOVED_AUDIENCE_HINT,
+  PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE,
+  PAGE_CONDITION_MOVED_HINT,
+  PAGE_CONDITION_MOVED_MESSAGE,
+} from "@wtt/core";
+import { AudienceJsonSchema } from "../src/routes/audiences";
+import { ExperimentDetailJsonSchema, ExperimentJsonSchema } from "../src/routes/experiments";
+import { call, json, setupOwner, inviteAndJoin, createSite, createExperiment, experimentRow, expectEnvelope, failingD1Insert, TEXT_CHANGE } from "./helpers";
 
 describe("experiments / variants", () => {
   it("creates a draft with two default variants and rejects id changes", async () => {
@@ -16,7 +25,7 @@ describe("experiments / variants", () => {
     const statusPatch = await call("PATCH", `/sites/${sid}/experiments/${id}`, { token, body: { status: "running" } });
     expect(statusPatch.status).toBe(422);
     expect((await json(statusPatch)).error).toBe("validation_failed");
-    const dup = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_hero", name: "dup", urlMatch: { op: "contains", value: "/" } } });
+    const dup = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_hero", name: "dup", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     expect(dup.status).toBe(409);
     const dupBody = await json(dup);
     expect(dupBody.error).toBe("id_taken");
@@ -28,11 +37,11 @@ describe("experiments / variants", () => {
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);
     const { id } = await createExperiment(token, sid);
-    const first = await call("PATCH", `/sites/${sid}/experiments/${id}`, { token, body: { trafficPercentage: 40, persistAssignment: true, urlMatch: { op: "startsWith", value: "/lp" } } });
+    const first = await call("PATCH", `/sites/${sid}/experiments/${id}`, { token, body: { trafficPercentage: 40, persistAssignment: true, urlMatch: { include: [{ page: { op: "startsWith", value: "/lp" } }] } } });
     expect(first.status).toBe(200);
     // 別のフィールドだけを送った PATCH が既定値(100 / false)に戻さない
     const patched = await json(await call("PATCH", `/sites/${sid}/experiments/${id}`, { token, body: { name: "Hero 2" } }));
-    expect(patched).toMatchObject({ name: "Hero 2", trafficPercentage: 40, persistAssignment: true, urlMatch: { op: "startsWith", value: "/lp" }, status: "draft" });
+    expect(patched).toMatchObject({ name: "Hero 2", trafficPercentage: 40, persistAssignment: true, urlMatch: { include: [{ page: { op: "startsWith", value: "/lp" } }] }, status: "draft" });
     // status / published_status / started_at は Task 6 / 7 の帳簿列。PATCH は触らない
     const row = await env.DB.prepare("select status, published_status, started_at from experiments where id = ?").bind(id).first();
     expect(row).toEqual({ status: "draft", published_status: null, started_at: null });
@@ -231,7 +240,7 @@ describe("experiments / variants", () => {
     const { id } = await createExperiment(token, sid, { id: "exp_recreate" });
     expect((await call("PUT", `/sites/${sid}/experiments/${id}/variants/b/changes`, { token, body: [TEXT_CHANGE()] })).status).toBe(200);
     expect((await call("DELETE", `/sites/${sid}/experiments/${id}`, { token })).status).toBe(204);
-    expect((await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_recreate", name: "Hero", urlMatch: { op: "contains", value: "/" } } })).status).toBe(201);
+    expect((await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_recreate", name: "Hero", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } })).status).toBe(201);
     const exp = await json(await call("GET", `/sites/${sid}/experiments/exp_recreate`, { token }));
     expect(exp.variants.map((v: any) => v.id)).toEqual(["a", "b"]); // 既定の Variant だけ
     expect(exp.variants.flatMap((v: any) => v.changes)).toEqual([]); // 旧 Change は CASCADE で消えている
@@ -289,7 +298,7 @@ describe("experiment kind (決定 51、設計書 §3.1)", () => {
     const t = await json(await call("GET", `/sites/${sid}/experiments/${tid}`, { token }));
     expect(t.kind).toBe("test");
     expect(t.variants.map((v: any) => [v.id, v.weight])).toEqual([["a", 50], ["b", 50]]);
-    const created = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { op: "contains", value: "/" } } });
+    const created = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     expect(created.status).toBe(201);
     expect((await json(created)).kind).toBe("single");
     const s = await json(await call("GET", `/sites/${sid}/experiments/exp_s`, { token }));
@@ -301,7 +310,7 @@ describe("experiment kind (決定 51、設計書 §3.1)", () => {
   it("variant count follows the kind", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);
-    await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { op: "contains", value: "/" } } });
+    await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     const two = await call("PUT", `/sites/${sid}/experiments/exp_s/variants`, { token, body: [{ id: "a", name: "A", weight: 50 }, { id: "b", name: "B", weight: 50 }] });
     expect(two.status).toBe(422);
     const body = await expectEnvelope(two);
@@ -324,18 +333,137 @@ describe("experiment kind (決定 51、設計書 §3.1)", () => {
   it("rejects an unknown kind", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);
-    const res = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_x", name: "X", kind: "personalize", urlMatch: { op: "contains", value: "/" } } });
+    const res = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_x", name: "X", kind: "personalize", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     expect(res.status).toBe(422);
   });
 
   it("single_start_publishes_one_variant", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);
-    await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { op: "contains", value: "/" } } });
+    await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     await call("PUT", `/sites/${sid}/experiments/exp_s/variants/a/changes`, { token, body: [TEXT_CHANGE()] });
     const started = await json(await call("POST", `/sites/${sid}/experiments/exp_s/status`, { token, body: { status: "running" } }));
     expect(started.publish.ok).toBe(true);
     const detail = await json(await call("GET", `/sites/${sid}/publishes/${started.publish.version}`, { token }));
     expect(detail.config.experiments[0].variants.map((v: any) => [v.id, v.weight])).toEqual([["a", 100]]);
+  });
+});
+
+// B69(spec §2.1・§4・§6.2.1・§9): 対象 URL の行の形と、配信条件・オーディエンスから外したページの条件
+describe("対象 URL の行と外したページの条件(B69)", () => {
+  const QUERY = { ctx: "query", name: "a", op: "exists" };
+  const DEVICE = { ctx: "device", op: "in", value: ["mobile"] };
+  const ROW = { page: { part: "path", op: "startsWith", value: "/lp/" } };
+  async function site() {
+    const owner = await setupOwner();
+    const { id: sid } = await createSite(owner.token, owner.workspaceId);
+    return { owner, sid };
+  }
+  /** 保存の検査を通らない古い条件を D1 に直接書く(更新の前に保存された行の形) */
+  const writeLegacyTargeting = (sid: string, eid: string, targeting: unknown) =>
+    env.DB.prepare("update experiments set targeting_json = ? where site_id = ? and id = ?").bind(JSON.stringify(targeting), sid, eid).run();
+  const writeLegacyAudience = (sid: string, aid: string, definition: unknown) =>
+    env.DB.prepare("insert into audiences (site_id, id, name, definition_json, created_at, updated_at) values (?, ?, ?, ?, 1, 1)").bind(sid, aid, aid, JSON.stringify(definition)).run();
+
+  it("old_url_match_shape_is_422", async () => {
+    const { owner, sid } = await site();
+    for (const old of [{ op: "contains", value: "/" }, { part: "path", op: "startsWith", value: "/lp/" }]) {
+      const res = await call("POST", `/sites/${sid}/experiments`, { token: owner.token, body: { id: "exp_old", name: "Old", urlMatch: old } });
+      expect(res.status).toBe(422);
+      const body = await json<{ error: string; path: unknown; hint: string }>(res);
+      expect(body).toMatchObject({ error: "invalid_input", path: ["urlMatch"] });
+      expect(body.hint).toContain('"include"');
+    }
+    const { id: eid } = await createExperiment(owner.token, sid);
+    const patched = await call("PATCH", `/sites/${sid}/experiments/${eid}`, { token: owner.token, body: { urlMatch: { op: "contains", value: "/" } } });
+    expect(patched.status).toBe(422);
+    expect(await json(patched)).toMatchObject({ error: "invalid_input", path: ["urlMatch"] });
+  });
+
+  it("url_match_limits_are_422", async () => {
+    const { owner, sid } = await site();
+    const post = (urlMatch: unknown) => call("POST", `/sites/${sid}/experiments`, { token: owner.token, body: { id: "exp_lim", name: "L", urlMatch } });
+    // 含める行は 1〜10 行・除く行は 10 行まで・パラメータは 1 行 5 個まで(どの欄かを path で)
+    expect(await json(await post({ include: Array.from({ length: 11 }, () => ROW) }))).toMatchObject({ error: "validation_failed", path: ["urlMatch", "include"] });
+    expect(await json(await post({ include: [] }))).toMatchObject({ error: "validation_failed", path: ["urlMatch", "include"] });
+    expect(await json(await post({ include: [ROW], exclude: Array.from({ length: 11 }, () => ROW) }))).toMatchObject({ error: "validation_failed", path: ["urlMatch", "exclude"] });
+    const params = Array.from({ length: 6 }, (_, i) => ({ name: `p${i}`, op: "exists" }));
+    expect(await json(await post({ include: [{ ...ROW, params }] }))).toMatchObject({ error: "validation_failed", path: ["urlMatch", "include", 0, "params"] });
+    // 全行の正規表現の命令数の合計が 500 を超えると早く断る(1 つは 198 命令。3 行で 594)
+    const big = (k: number) => ({ page: { part: "path", op: "regex", value: `^/${k}.{0,97}` } });
+    const total = await post({ include: [big(1), big(2)], exclude: [big(3)] });
+    expect(total.status).toBe(422);
+    expect(await json(total)).toMatchObject({ error: "url_match_too_large", path: ["urlMatch"] });
+    // 範囲の中なら保存する(空の exclude・params は省く。行とパラメータの順は入力のまま)
+    const kept = [{ ...ROW, params: [{ name: "b", op: "exists" }, { name: "a", op: "equals", value: "" }] }, { page: { op: "contains", value: "/x" }, params: [] }];
+    const ok = await post({ include: kept, exclude: [] });
+    expect(ok.status).toBe(201);
+    expect((await json(ok)).urlMatch).toEqual({ include: [kept[0], { page: { op: "contains", value: "/x" } }] });
+  });
+
+  it("moved_page_condition_is_422", async () => {
+    const { owner, sid } = await site();
+    const post = (targeting: unknown) => call("POST", `/sites/${sid}/experiments`, { token: owner.token, body: { id: "exp_q", name: "Q", urlMatch: { include: [ROW] }, targeting } });
+    const direct = await post(QUERY);
+    expect(direct.status).toBe(422);
+    expect(await json(direct)).toMatchObject({ error: "invalid_experiment_targeting", path: ["targeting"], message: PAGE_CONDITION_MOVED_MESSAGE, hint: PAGE_CONDITION_MOVED_HINT });
+    const nested = await post({ and: [DEVICE, { not: { ctx: "path", op: "startsWith", value: "/lp/" } }] });
+    expect(await json(nested)).toMatchObject({ error: "invalid_experiment_targeting", path: ["targeting", "and", 1, "not"], message: PAGE_CONDITION_MOVED_MESSAGE });
+    const { id: eid } = await createExperiment(owner.token, sid);
+    const patched = await call("PATCH", `/sites/${sid}/experiments/${eid}`, { token: owner.token, body: { targeting: { ctx: "host", op: "equals", value: "example.com" } } });
+    expect(await json(patched)).toMatchObject({ error: "invalid_experiment_targeting", message: PAGE_CONDITION_MOVED_MESSAGE });
+    // オーディエンスの保存(作成・更新)
+    const aud = await call("POST", `/sites/${sid}/audiences`, { token: owner.token, body: { id: "aud_q", name: "Q", definition: { or: [DEVICE, { ctx: "url", op: "contains", value: "/lp/" }] } } });
+    expect(aud.status).toBe(422);
+    expect(await json(aud)).toMatchObject({ error: "invalid_audience_definition", path: ["definition", "or", 1], message: PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE, hint: PAGE_CONDITION_MOVED_AUDIENCE_HINT });
+    expect((await call("POST", `/sites/${sid}/audiences`, { token: owner.token, body: { id: "aud_ok", name: "OK", definition: DEVICE } })).status).toBe(201);
+    const audPatch = await call("PATCH", `/sites/${sid}/audiences/aud_ok`, { token: owner.token, body: { definition: QUERY } });
+    expect(await json(audPatch)).toMatchObject({ error: "invalid_audience_definition", path: ["definition"], message: PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE });
+  });
+
+  it("get_returns_legacy_targeting", async () => {
+    const { owner, sid } = await site();
+    const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_legacy" });
+    const legacy = { and: [DEVICE, QUERY, { not: { ctx: "path", op: "regex", value: "^/a" } }] };
+    await writeLegacyTargeting(sid, eid, legacy);
+    await writeLegacyAudience(sid, "aud_legacy", { or: [DEVICE, { ctx: "host", op: "endsWith", value: "example.com" }] });
+    const one = await call("GET", `/sites/${sid}/experiments/${eid}`, { token: owner.token });
+    expect(one.status).toBe(200);
+    const body = await json(one);
+    expect(body.targeting).toEqual(legacy);
+    // 応答は OpenAPI の応答の schema に合う(読み取りの schema は古い条件も表せる)
+    expect(ExperimentDetailJsonSchema.safeParse(body).success).toBe(true);
+    const list = await json(await call("GET", `/sites/${sid}/experiments`, { token: owner.token }));
+    expect(z.array(ExperimentJsonSchema).safeParse(list).success).toBe(true);
+    const aud = await call("GET", `/sites/${sid}/audiences/aud_legacy`, { token: owner.token });
+    expect(aud.status).toBe(200);
+    expect(AudienceJsonSchema.safeParse(await json(aud)).success).toBe(true);
+    expect(z.array(AudienceJsonSchema).safeParse(await json(await call("GET", `/sites/${sid}/audiences`, { token: owner.token }))).success).toBe(true);
+    // 同じ値の保存は案内付きの 422
+    const resave = await call("PATCH", `/sites/${sid}/experiments/${eid}`, { token: owner.token, body: { targeting: body.targeting } });
+    expect(await json(resave)).toMatchObject({ error: "invalid_experiment_targeting", path: ["targeting", "and", 1], hint: PAGE_CONDITION_MOVED_HINT });
+  });
+
+  it("patch_without_targeting_passes_on_legacy_row", async () => {
+    const { owner, sid } = await site();
+    const { id: eid } = await createExperiment(owner.token, sid);
+    await writeLegacyTargeting(sid, eid, QUERY);
+    const res = await call("PATCH", `/sites/${sid}/experiments/${eid}`, { token: owner.token, body: { name: "改名", trafficPercentage: 50, urlMatch: { include: [ROW] } } });
+    expect(res.status).toBe(200);
+    const row = await experimentRow(sid, eid);
+    expect(JSON.parse(row.targeting_json!)).toEqual(QUERY); // 古い条件はそのまま残る(片付けを止めない)
+    expect(row.name).toBe("改名");
+    expect(JSON.parse(row.url_match_json)).toEqual({ include: [ROW] });
+  });
+
+  it("duplicate_copies_legacy_row", async () => {
+    const { owner, sid } = await site();
+    const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_src" });
+    await writeLegacyTargeting(sid, eid, { and: [DEVICE, QUERY] });
+    const res = await call("POST", `/sites/${sid}/experiments/${eid}/duplicate`, { token: owner.token, body: { mode: "same" } });
+    expect(res.status).toBe(201);
+    const copy = await json<{ id: string; targeting: unknown }>(res);
+    expect(copy.targeting).toEqual({ and: [DEVICE, QUERY] });
+    expect(JSON.parse((await experimentRow(sid, copy.id)).targeting_json!)).toEqual({ and: [DEVICE, QUERY] });
   });
 });

@@ -825,7 +825,8 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await nav.getByRole("link", { name: "エクスペリエンス" }).click();
     await createExperiment(page, { id: "exp_page_match", name: "Page match" });
     await nav.getByRole("link", { name: "エクスペリエンス" }).click();
-    await expect(page.getByText("パス が「/」で始まる")).toBeVisible();
+    // B69: 編集画面にも対象 URL の要約(動かすページ・配信する相手)が同じ文で出るので、一覧の行で確かめる
+    await expect(page.getByTestId("experiment-row-exp_page_match")).toContainText("パス が「/」で始まる");
   });
 
   test("regex_input_replaces_yen_and_notifies", async ({ page }) => {

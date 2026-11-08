@@ -5,8 +5,10 @@ import type { CompiledConfig, Experiment, DslNode } from "../src/schema";
 import { compileRegex } from "../src/regex-compile";
 import { pageOf } from "../src/page";
 import { evaluateWhatIf } from "../src/what-if";
+import { detectBrowser, detectDevice, detectOs } from "../src/ua";
+import { PARITY_CASES, PARITY_CONFIG } from "./fixtures/parity-v2";
 
-const ctx = { url: "https://example.com/pricing/?utm_source=google", query: { utm_source: "google" }, device: "mobile" as const, referrer: "" };
+const ctx = { url: "https://example.com/pricing/?utm_source=google", device: "mobile" as const, referrer: "" };
 
 describe("matchesUrl", () => {
   it.each([
@@ -22,8 +24,21 @@ describe("evaluateDsl", () => {
   const profile = { goals: { g_lead: { count: 1 } }, pages: { p_pricing: { count: 3 } } };
   it("evaluates ctx conditions", () => {
     expect(evaluateDsl({ ctx: "device", op: "in", value: ["mobile"] }, ctx, null)).toBe(true);
-    expect(evaluateDsl({ ctx: "query", name: "utm_source", op: "equals", value: "google" }, ctx, null)).toBe(true);
     expect(evaluateDsl({ ctx: "referrer", op: "isEmpty" }, ctx, null)).toBe(true);
+  });
+  it("removed_page_ctx_is_null(B69: 版 3 の評価器はページの条件を評価しない。schema を迂回して来ても判定できない = 対象外。not の下でも広がらない)", () => {
+    const removed = [
+      { ctx: "url", op: "contains", value: "/pricing/" },
+      { ctx: "host", op: "endsWith", value: "example.com" },
+      { ctx: "path", op: "startsWith", value: "/pricing/" },
+      { ctx: "query", name: "utm_source", op: "equals", value: "google" },
+      { ctx: "query", name: "utm_source", op: "exists" },
+    ] as unknown as DslNode[];
+    for (const node of removed) {
+      expect(evaluateDsl(node, ctx, null)).toBeNull();
+      expect(evaluateDsl({ not: node }, ctx, null)).toBeNull();
+      expect(evaluateDsl({ or: [{ ctx: "device", op: "in", value: ["mobile"] }, node] }, ctx, null)).toBeNull();
+    }
   });
   it("evaluates hist conditions against profile", () => {
     expect(evaluateDsl({ hist: "converted", goal: "g_lead" }, ctx, profile)).toBe(true);
@@ -37,25 +52,25 @@ describe("evaluateDsl", () => {
   });
   it("and/or combine", () => {
     const empty = { goals: {}, pages: {} };
-    expect(evaluateDsl({ and: [{ ctx: "device", op: "in", value: ["mobile"] }, { or: [{ hist: "visited", pattern: "p_x" }, { ctx: "url", op: "contains", value: "/pricing/" }] }] }, ctx, empty)).toBe(true);
+    expect(evaluateDsl({ and: [{ ctx: "device", op: "in", value: ["mobile"] }, { or: [{ hist: "visited", pattern: "p_x" }, { ctx: "referrer", op: "isEmpty" }] }] }, ctx, empty)).toBe(true);
   });
 });
 
 describe("dslNeedsProfile", () => {
   it("detects hist anywhere in the tree", () => {
-    expect(dslNeedsProfile({ ctx: "url", op: "contains", value: "/a" })).toBe(false);
-    expect(dslNeedsProfile({ and: [{ ctx: "url", op: "contains", value: "/a" }, { not: { hist: "visited", pattern: "p" } }] })).toBe(true);
+    expect(dslNeedsProfile({ ctx: "device", op: "in", value: ["mobile"] })).toBe(false);
+    expect(dslNeedsProfile({ and: [{ ctx: "device", op: "in", value: ["mobile"] }, { not: { hist: "visited", pattern: "p" } }] })).toBe(true);
   });
 });
 
 function twoVariantExp(overrides: Partial<Experiment> = {}): Experiment {
   return {
-    id: "exp_001", name: "hero",
-    urlMatch: { op: "contains", value: "/pricing/" },
+    id: "exp_001",
+    urlMatch: { include: [{ page: { op: "contains", value: "/pricing/" } }] },
     trafficPercentage: 100, persistAssignment: false,
     variants: [
-      { id: "vA", name: "A", weight: 50, changes: [] },
-      { id: "vB", name: "B", weight: 50, changes: [] },
+      { id: "vA", weight: 50, changes: [] },
+      { id: "vB", weight: 50, changes: [] },
     ],
     ...overrides,
   } as Experiment;
@@ -77,52 +92,52 @@ describe("pickVariant / decide", () => {
   });
   it("weight 0 variant is never picked", () => {
     const exp = twoVariantExp({ variants: [
-      { id: "vA", name: "A", weight: 100, changes: [] },
-      { id: "vB", name: "B", weight: 0, changes: [] },
+      { id: "vA", weight: 100, changes: [] },
+      { id: "vB", weight: 0, changes: [] },
     ]});
     for (let i = 0; i < 500; i++) expect(pickVariant(exp, `v-${i}`.padEnd(22, "0"))).toBe("vA");
   });
   it("decide returns [] when url does not match", () => {
-    const config: CompiledConfig = { schemaVersion: 2, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [twoVariantExp({ urlMatch: { op: "contains", value: "/checkout/" } })] };
+    const config: CompiledConfig = { schemaVersion: 3, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [twoVariantExp({ urlMatch: { include: [{ page: { op: "contains", value: "/checkout/" } }] } })] };
     expect(decide(config, ctx, "A".repeat(22), null)).toEqual([]);
   });
   it("persist_true_reuses_valid_assignment", () => {
-    const config: CompiledConfig = { schemaVersion: 2, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: true, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [twoVariantExp({ persistAssignment: true })] };
+    const config: CompiledConfig = { schemaVersion: 3, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: true, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [twoVariantExp({ persistAssignment: true })] };
     const out = decide(config, ctx, "A".repeat(22), { goals: {}, pages: {} }, { exp_001: "vB" });
     expect(out).toEqual([{ experimentId: "exp_001", variantId: "vB" }]);
   });
   it("persist_true_deleted_variant_reassigns", () => {
-    const config: CompiledConfig = { schemaVersion: 2, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: true, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [twoVariantExp({ persistAssignment: true })] };
+    const config: CompiledConfig = { schemaVersion: 3, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: true, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [twoVariantExp({ persistAssignment: true })] };
     const out = decide(config, ctx, "A".repeat(22), { goals: {}, pages: {} }, { exp_001: "vGone" });
     expect(["vA", "vB"]).toContain(out[0]!.variantId);
   });
   it("persist_false_ignores_stored_assignment", () => {
     const exp = twoVariantExp();
-    const config: CompiledConfig = { schemaVersion: 2, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
+    const config: CompiledConfig = { schemaVersion: 3, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
     const vid = "A".repeat(22);
     const hashPick = pickVariant(exp, vid);
     const out = decide(config, ctx, vid, null, { exp_001: hashPick === "vA" ? "vB" : "vA" });
     expect(out).toEqual([{ experimentId: "exp_001", variantId: hashPick }]);
   });
   it("persistent_assignment_with_unavailable_profile_returns_empty", () => {
-    const config: CompiledConfig = { schemaVersion: 2, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: true, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [twoVariantExp({ persistAssignment: true })] };
+    const config: CompiledConfig = { schemaVersion: 3, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: true, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [twoVariantExp({ persistAssignment: true })] };
     expect(decide(config, ctx, "A".repeat(22), null)).toEqual([]);
   });
   it("decide_malformed_targeting_never_qualifies: schema を迂回した不正 node では対象にならない", () => {
-    const exp = twoVariantExp({ targeting: { ctx: "query", name: "x", op: "equals" } as never });
-    const config: CompiledConfig = { schemaVersion: 2, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
+    const exp = twoVariantExp({ targeting: { ctx: "referrer", op: "equals" } as never });
+    const config: CompiledConfig = { schemaVersion: 3, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: false, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
     expect(decide(config, ctx, "A".repeat(22), null)).toEqual([]);
   });
   it("not_history_with_unavailable_profile_is_ineligible", () => {
     const exp = twoVariantExp({ targeting: { not: { hist: "converted", goal: "g_lead" } } });
-    const config: CompiledConfig = { schemaVersion: 2, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: true, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
+    const config: CompiledConfig = { schemaVersion: 3, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: true, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
     expect(decide(config, ctx, "A".repeat(22), null)).toEqual([]);
     const fresh = { goals: {}, pages: {} };
     expect(decide(config, ctx, "A".repeat(22), fresh)).toHaveLength(1);
   });
   it("persisted_assignment_overrides_traffic_reduction(決定 28)", () => {
     const exp = twoVariantExp({ persistAssignment: true, trafficPercentage: 1 });
-    const config: CompiledConfig = { schemaVersion: 2, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: true, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
+    const config: CompiledConfig = { schemaVersion: 3, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: true, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
     let excluded = "";
     for (let i = 0; i < 500 && !excluded; i++) {
       const v = `visitor-${i}`.padEnd(22, "0");
@@ -137,7 +152,7 @@ describe("pickVariant / decide", () => {
   });
   it("stale_persisted_variant_does_not_bypass_traffic(決定 28: 削除済み Variant への割当は未割当扱い)", () => {
     const exp = twoVariantExp({ persistAssignment: true, trafficPercentage: 1 });
-    const config: CompiledConfig = { schemaVersion: 2, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: true, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
+    const config: CompiledConfig = { schemaVersion: 3, version: 1, siteId: "s1", siteSalt: "salt_test", needsProfile: true, patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [exp] };
     let excluded = "";
     for (let i = 0; i < 500 && !excluded; i++) {
       const v = `visitor-${i}`.padEnd(22, "0");
@@ -148,7 +163,7 @@ describe("pickVariant / decide", () => {
   it("device node with non-array value is fail-closed (Plan 1 review carryover)", () => {
     // schema を迂回した不正 node(value が文字列)でも throw せず null(判定できない = 対象外)
     const node = { ctx: "device", op: "in", value: "mobile" } as unknown as DslNode;
-    const ctx = { url: "https://x.test/", query: {}, device: "mobile" as const, referrer: "" };
+    const ctx = { url: "https://x.test/", device: "mobile" as const, referrer: "" };
     expect(evaluateDsl(node, ctx, null)).toBeNull();
     expect(evaluateDsl({ not: node }, ctx, null)).toBeNull();
   });
@@ -156,11 +171,11 @@ describe("pickVariant / decide", () => {
 
 describe("experimentsForUrl / patternsForUrl (spec §7.4 ③: edge が DO に渡す部分集合)", () => {
   const exp = (id: string, value: string) => ({
-    id, name: id, urlMatch: { op: "contains" as const, value }, trafficPercentage: 100, persistAssignment: false,
-    variants: [{ id: "vA", name: "A", weight: 50, changes: [] }, { id: "vB", name: "B", weight: 50, changes: [] }],
+    id, urlMatch: { include: [{ page: { op: "contains" as const, value } }] }, trafficPercentage: 100, persistAssignment: false,
+    variants: [{ id: "vA", weight: 50, changes: [] }, { id: "vB", weight: 50, changes: [] }],
   });
   const config = {
-    schemaVersion: 2 as const, version: 1, siteId: "s", siteSalt: "x", needsProfile: true,
+    schemaVersion: 3 as const, version: 1, siteId: "s", siteSalt: "x", needsProfile: true,
     patterns: { p_pricing: { op: "contains" as const, value: "/pricing" }, p_docs: { op: "startsWith" as const, value: "https://a/docs" } },
     prehide: {}, exposureSelectors: {}, goals: [],
     experiments: [exp("e_lp", "/lp"), exp("e_all", "/")],
@@ -175,7 +190,7 @@ describe("experimentsForUrl / patternsForUrl (spec §7.4 ③: edge が DO に渡
     expect(patternsForUrl(config, "https://b/other")).toEqual([]);
   });
   it("decide は needsProfile / experiments だけの部分集合でも動く(DO が config 全体を持たないため)", () => {
-    const out = decide({ needsProfile: true, experiments: [exp("e_lp", "/lp")] }, { url: "https://a/lp", query: {}, device: "desktop", referrer: "" }, "B".repeat(43), { goals: {}, pages: {} });
+    const out = decide({ needsProfile: true, experiments: [exp("e_lp", "/lp")] }, { url: "https://a/lp", device: "desktop", referrer: "" }, "B".repeat(43), { goals: {}, pages: {} });
     expect(out).toHaveLength(1);
     expect(out[0]!.experimentId).toBe("e_lp");
   });
@@ -190,7 +205,7 @@ describe("experimentsForUrl / patternsForUrl (spec §7.4 ③: edge が DO に渡
     const subset = experimentsForUrl(broken, "https://a/lp");
     expect(subset.map((e) => e.id)).toEqual(["Y"]);
     // 空の Profile(p を一度も数えていない)でも X は配信されない
-    const out = decide({ needsProfile: true, experiments: subset }, { url: "https://a/lp", query: {}, device: "desktop", referrer: "" }, "B".repeat(43), { goals: {}, pages: {} });
+    const out = decide({ needsProfile: true, experiments: subset }, { url: "https://a/lp", device: "desktop", referrer: "" }, "B".repeat(43), { goals: {}, pages: {} });
     expect(out.map((r) => r.experimentId)).toEqual(["Y"]);
   });
   it("このページで判定できないパターン(256 字を超えるパスでのパスの正規表現)を参照する Experiment は対象外(plan ② P12)", () => {
@@ -214,50 +229,59 @@ describe("experimentsForUrl / patternsForUrl (spec §7.4 ③: edge が DO に渡
     if (!r.ok) throw new Error(r.issue.code);
     const patterns = { p: { part: "path" as const, op: "regex" as const, value: "^/pricing", prog: r.prog } };
     const x = { ...exp("X", "/"), targeting: { not: { hist: "visited" as const, pattern: "p" } } };
-    const long = { url: `https://a.example/${"x".repeat(300)}`, query: {}, device: "desktop" as const, referrer: "" };
+    const long = { url: `https://a.example/${"x".repeat(300)}`, device: "desktop" as const, referrer: "" };
     const [res] = evaluateWhatIf([{ experiment: x, status: "running", published: true }], long, { patterns, history: { goals: {}, pages: {} } });
     expect(res!.reason).toBe("input_missing");
   });
 });
 
 describe("決定 49: 新しい条件(設計書 §3 / §8 / §11)", () => {
-  const base = { url: "https://shop.example.com/pricing/plan?utm=mail", query: { utm: "mail" }, device: "mobile" as const, referrer: "" };
+  const base = { url: "https://shop.example.com/pricing/plan?utm=mail", device: "mobile" as const, referrer: "" };
   const TUE_10_JST = Date.UTC(2026, 9, 6, 1, 0); // 2026-10-06(火)10:00 JST
   const p = (src: string) => {
     const r = compileRegex(src);
     if (!r.ok) throw new Error(r.issue.code);
     return r.prog;
   };
+  /** decide がその対象 URL(B69: 含める・除くの行)でこの URL を対象にするか。照合そのものの細かい規則は page.test.ts */
+  const targets = (urlMatch: Experiment["urlMatch"], url: string = base.url): boolean =>
+    decide({ needsProfile: false, experiments: [twoVariantExp({ urlMatch })] }, { ...base, url }, "A".repeat(22), null).length === 1;
+  const inc = (page: Experiment["urlMatch"]["include"][number]["page"], params?: Experiment["urlMatch"]["include"][number]["params"]) => ({ include: [{ page, ...(params ? { params } : {}) }] });
 
-  it("ホスト・パス(文字列の一致・で終わるはラベル境界・正規表現)", () => {
-    expect(evaluateDsl({ ctx: "host", op: "endsWith", value: "example.com" }, base, null)).toBe(true);
-    expect(evaluateDsl({ ctx: "host", op: "endsWith", value: "ample.com" }, base, null)).toBe(false); // ラベル境界
-    expect(evaluateDsl({ ctx: "path", op: "startsWith", value: "/pricing/" }, base, null)).toBe(true);
-    expect(evaluateDsl({ ctx: "path", op: "regex", value: "^/pricing/[a-z]+$", prog: p("^/pricing/[a-z]+$") }, base, null)).toBe(true);
-    expect(evaluateDsl({ ctx: "host", op: "regex", value: "^shop\\.", prog: p("^shop\\.") }, base, null)).toBe(true);
+  it("decide は対象 URL の行で判定する: ホスト・パス(で終わるはラベル境界・正規表現)", () => {
+    expect(targets(inc({ part: "host", op: "endsWith", value: "example.com" }))).toBe(true);
+    expect(targets(inc({ part: "host", op: "endsWith", value: "ample.com" }))).toBe(false); // ラベル境界
+    expect(targets(inc({ part: "path", op: "startsWith", value: "/pricing/" }))).toBe(true);
+    expect(targets(inc({ part: "path", op: "regex", value: "^/pricing/[a-z]+$", prog: p("^/pricing/[a-z]+$") }))).toBe(true);
+    expect(targets(inc({ part: "host", op: "regex", value: "^shop\\.", prog: p("^shop\\.") }))).toBe(true);
   });
-  it("URL を解析できなければホスト・パスは判定できない(null)", () => {
-    expect(evaluateDsl({ ctx: "path", op: "contains", value: "/" }, { ...base, url: "not a url" }, null)).toBeNull();
-    expect(evaluateDsl({ ctx: "url", op: "contains", value: "not" }, { ...base, url: "not a url" }, null)).toBe(true); // URL は文字列のまま
+  it("decide は除くの行とパラメータの条件も見る(B69)", () => {
+    const lp = { part: "path" as const, op: "startsWith" as const, value: "/pricing/" };
+    expect(targets(inc(lp, [{ name: "utm", op: "contains", value: "ai" }]))).toBe(true);
+    expect(targets(inc(lp, [{ name: "none", op: "exists" }]))).toBe(false);
+    expect(targets({ include: [{ page: lp }], exclude: [{ page: lp, params: [{ name: "utm", op: "equals", value: "mail" }] }] })).toBe(false); // 除くに一致
+    expect(targets({ include: [{ page: lp }], exclude: [{ page: lp, params: [{ name: "utm", op: "equals", value: "x" }] }] })).toBe(true);
   });
-  it("long_path_skips_regex_condition: パスが 256 字を超えたらパスの正規表現は判定しない(not の下でも広がらない)", () => {
-    const at = (len: number) => ({ ...base, url: `https://a.example/${"x".repeat(len - 1)}` }); // pathname の長さ = len
-    const node = { ctx: "path", op: "regex", value: "x$", prog: p("x$") } as const;
-    expect(evaluateDsl(node, at(256), null)).toBe(true);
-    expect(evaluateDsl(node, at(257), null)).toBeNull();
-    expect(evaluateDsl({ not: node }, at(257), null)).toBeNull();
+  it("URL を解析できなければホスト・パスの行は判定できない(含めるなら一致しない)。URL の行は文字列のまま", () => {
+    expect(targets(inc({ part: "path", op: "contains", value: "/" }), "not a url")).toBe(false);
+    expect(targets(inc({ op: "contains", value: "not" }), "not a url")).toBe(true);
+  });
+  it("long_path_skips_regex_condition: パスが 256 字を超えたらパスの正規表現は判定しない(除くの行なら対象外 = 広がらない)", () => {
+    const at = (len: number) => `https://a.example/${"x".repeat(len - 1)}`; // pathname の長さ = len
+    const node = { part: "path" as const, op: "regex" as const, value: "x$", prog: p("x$") };
+    expect(targets(inc(node), at(256))).toBe(true);
+    expect(targets(inc(node), at(257))).toBe(false);
+    expect(targets({ include: [{ page: { op: "contains", value: "/" } }], exclude: [{ page: node }] }, at(257))).toBe(false);
     // 文字列の一致は長さの上限を持たない
-    expect(evaluateDsl({ ctx: "path", op: "contains", value: "x" }, at(1000), null)).toBe(true);
+    expect(targets(inc({ part: "path", op: "contains", value: "x" }), at(1000))).toBe(true);
   });
   it("命令列が不正なら判定しない(regex_program_invalid_is_failclosed)", () => {
-    const bad: DslNode = { ctx: "path", op: "regex", value: "x", prog: { v: 1, sets: [], code: [0, 3, 0, 5, 0, 0] } };
-    expect(evaluateDsl(bad, base, null)).toBeNull();
-    expect(evaluateDsl({ not: bad }, base, null)).toBeNull();
+    const bad = { part: "path" as const, op: "regex" as const, value: "x", prog: { v: 1, sets: [], code: [0, 3, 0, 5, 0, 0] } };
+    expect(targets(inc(bad))).toBe(false);
+    expect(targets({ include: [{ page: { op: "contains", value: "/" } }], exclude: [{ page: bad }] })).toBe(false);
   });
-  it("クエリの含む", () => {
-    expect(evaluateDsl({ ctx: "query", name: "utm", op: "contains", value: "ai" }, base, null)).toBe(true);
-    expect(evaluateDsl({ ctx: "query", name: "none", op: "contains", value: "ai" }, base, null)).toBe(false);
-    expect(evaluateDsl({ not: { ctx: "query", name: "none", op: "equals", value: "x" } }, base, null)).toBe(true); // 否定は値が無いと真
+  it("形の合わない対象 URL(版 2 の 1 つのページの一致のまま)は対象外にし、例外を投げない", () => {
+    expect(targets({ op: "contains", value: "/" } as unknown as Experiment["urlMatch"])).toBe(false);
   });
   it("ブラウザ・OS(欠けていれば null)", () => {
     expect(evaluateDsl({ ctx: "browser", op: "in", value: ["safari"] }, { ...base, browser: "safari" }, null)).toBe(true);
@@ -326,7 +350,7 @@ describe("決定 49: 新しい条件(設計書 §3 / §8 / §11)", () => {
   it("対象 URL・パターンのパス / ホストの一致", () => {
     const config = {
       patterns: { p_path: { part: "path" as const, op: "regex" as const, value: "^/p/\\d+$", prog: p("^/p/\\d+$") }, p_host: { part: "host" as const, op: "equals" as const, value: "a.example" } },
-      experiments: [twoVariantExp({ id: "e_host", urlMatch: { part: "host", op: "endsWith", value: "example" } })],
+      experiments: [twoVariantExp({ id: "e_host", urlMatch: { include: [{ page: { part: "host", op: "endsWith", value: "example" } }] } })],
     };
     expect(patternsForUrl(config, "https://a.example/p/12")).toEqual(["p_path", "p_host"]);
     expect(patternsForUrl(config, "https://a.example/p/12x")).toEqual(["p_host"]);
@@ -336,44 +360,30 @@ describe("決定 49: 新しい条件(設計書 §3 / §8 / §11)", () => {
 
 describe("B135: 条件の名前・ID が prototype にある名前(constructor・toString・__proto__ など)でも、自分のキーだけを引く", () => {
   const PROTO_NAMES = ["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"];
-  const noQuery = { url: "https://a.example/", query: {}, device: "desktop" as const, referrer: "" };
-  // runtime・edge・control と同じく URL から Object.fromEntries で作る(`__proto__` も自分のキーになる)
-  const withQuery = (name: string, value: string) => {
-    const url = `https://a.example/?${name}=${value}`;
-    return { ...noQuery, url, query: Object.fromEntries(new URL(url).searchParams) };
-  };
   // JSON から読んだ Profile と同じ形(`__proto__` も自分のキーになる)
   const ownHistory = (id: string, lastAt: number) =>
     JSON.parse(`{"goals":{${JSON.stringify(id)}:{"count":1,"lastAt":${lastAt}}},"pages":{${JSON.stringify(id)}:{"count":2,"lastAt":${lastAt}}}}`) as {
       goals: Record<string, { count: number; lastAt: number }>;
       pages: Record<string, { count: number; lastAt: number }>;
     };
+  // B69: クエリの条件は対象 URL のパラメータに移した。URL の searchParams で照合するので prototype の名前を拾わないことを回帰として残す
+  const withParam = (param: { name: string; op: "exists" } | { name: string; op: "equals" | "contains"; value: string }) =>
+    twoVariantExp({ id: `e_${param.op}`, urlMatch: { include: [{ page: { op: "contains", value: "/" }, params: [param] }] } });
+  const hit = (param: Parameters<typeof withParam>[0], url: string) => decide({ needsProfile: false, experiments: [withParam(param)] }, { ...ctx, url }, "A".repeat(22), null).length === 1;
 
-  it.each(PROTO_NAMES)("query_condition_named_%s_does_not_match_prototype_when_absent (B135)", (name) => {
-    expect(evaluateDsl({ ctx: "query", name, op: "exists" }, noQuery, null)).toBe(false); // 直す前は常に true
-    expect(evaluateDsl({ not: { ctx: "query", name, op: "exists" } }, noQuery, null)).toBe(true);
-    expect(evaluateDsl({ ctx: "query", name, op: "equals", value: "x" }, noQuery, null)).toBe(false);
-    expect(evaluateDsl({ ctx: "query", name, op: "contains", value: "x" }, noQuery, null)).toBe(false); // 直す前は TypeError
+  it.each(PROTO_NAMES)("param_named_%s_does_not_match_prototype_when_absent (B135 → B69)", (name) => {
+    const url = "https://a.example/";
+    expect(hit({ name, op: "exists" }, url)).toBe(false);
+    expect(hit({ name, op: "equals", value: "x" }, url)).toBe(false);
+    expect(hit({ name, op: "contains", value: "x" }, url)).toBe(false);
   });
-  it.each(PROTO_NAMES)("query_condition_named_%s_matches_own_value_when_present (B135)", (name) => {
-    const c = withQuery(name, "xyz");
-    expect(Object.prototype.hasOwnProperty.call(c.query, name)).toBe(true);
-    expect(evaluateDsl({ ctx: "query", name, op: "exists" }, c, null)).toBe(true);
-    expect(evaluateDsl({ ctx: "query", name, op: "equals", value: "xyz" }, c, null)).toBe(true);
-    expect(evaluateDsl({ ctx: "query", name, op: "equals", value: "x" }, c, null)).toBe(false);
-    expect(evaluateDsl({ ctx: "query", name, op: "contains", value: "y" }, c, null)).toBe(true);
-    expect(evaluateDsl({ ctx: "query", name, op: "contains", value: "q" }, c, null)).toBe(false);
-  });
-  it("decide_with_query_named_constructor_or_toString_does_not_throw_or_match_when_absent (B135)", () => {
-    const config = {
-      needsProfile: false,
-      experiments: [
-        twoVariantExp({ id: "e_ctor", targeting: { ctx: "query", name: "constructor", op: "exists" } }),
-        twoVariantExp({ id: "e_tostr", targeting: { ctx: "query", name: "toString", op: "contains", value: "x" } }),
-        twoVariantExp({ id: "e_plain", targeting: { ctx: "query", name: "utm_source", op: "exists" } }),
-      ],
-    };
-    expect(decide(config, ctx, "A".repeat(22), null).map((r) => r.experimentId)).toEqual(["e_plain"]);
+  it.each(PROTO_NAMES)("param_named_%s_matches_own_value_when_present (B135 → B69)", (name) => {
+    const url = `https://a.example/?${name}=xyz`;
+    expect(hit({ name, op: "exists" }, url)).toBe(true);
+    expect(hit({ name, op: "equals", value: "xyz" }, url)).toBe(true);
+    expect(hit({ name, op: "equals", value: "x" }, url)).toBe(false);
+    expect(hit({ name, op: "contains", value: "y" }, url)).toBe(true);
+    expect(hit({ name, op: "contains", value: "q" }, url)).toBe(false);
   });
   it.each(PROTO_NAMES)("hist_condition_with_id_%s_reads_only_own_history (B135)", (id) => {
     const empty = { goals: {}, pages: {} };
@@ -394,5 +404,16 @@ describe("B135: 条件の名前・ID が prototype にある名前(constructor�
     expect(decide(config, c, vid, { goals: {}, pages: {} }, {})).toEqual([{ experimentId: "constructor", variantId: pickVariant(exp, vid) }]);
     const other = pickVariant(exp, vid) === "vA" ? "vB" : "vA";
     expect(decide(config, c, vid, { goals: {}, pages: {} }, { constructor: other })).toEqual([{ experimentId: "constructor", variantId: other }]);
+  });
+});
+
+describe("parity の共通の入力(B69 で対象 URL の行に移した後も期待値は同じ)", () => {
+  // edge・runtime の parity テストと同じ入力を core の decide で確かめる(ページの条件を対象 URL に移しても期待値を変えない)
+  it.each(PARITY_CASES)("parity_case_holds_in_core: $name", (c) => {
+    const pc = {
+      url: c.url, referrer: "", device: detectDevice(c.userAgent), browser: detectBrowser(c.userAgent), os: detectOs(c.userAgent),
+      ...(c.hasViewportMeta ? { viewportWidth: c.width } : {}), now: c.now, firstVisitAt: c.firstVisitAt,
+    };
+    expect(decide(PARITY_CONFIG, pc, "A".repeat(43), null).map((d) => d.experimentId)).toEqual(c.expected);
   });
 });

@@ -12,7 +12,7 @@
   "experiments": [
     {
       "id": "exp_results_dlite", "name": "Results D-lite hero",
-      "urlMatch": { "op": "contains", "value": "/results-dlite.html" },
+      "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/results-dlite.html" } }] },
       "trafficPercentage": 100, "persistAssignment": false,
       "variants": [
         { "id": "vA", "name": "A", "weight": 50, "changes": [] },

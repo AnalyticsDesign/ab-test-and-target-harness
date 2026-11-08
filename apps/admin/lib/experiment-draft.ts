@@ -1,5 +1,5 @@
 import type { Experiment, Status, Variant } from "@/lib/types";
-import type { PageMatchValue } from "./page-match";
+import { urlMatchKey, type UrlMatchValue } from "./url-match";
 import { analyticsValueErrors, type AnalyticsValueError } from "./analytics-values";
 import { experimentFormFromDsl, experimentFormToDsl, type ExperimentForm } from "./targeting-tree";
 
@@ -16,7 +16,7 @@ export type Draft = {
   name: string;
   /** メモ(B77。保存は description だけの PATCH で送り、未公開の印を付けない) */
   description: string;
-  urlMatch: PageMatchValue;
+  urlMatch: UrlMatchValue;
   targeting: TargetingDraft;
   traffic: number;
   persist: boolean;
@@ -81,7 +81,7 @@ export type SaveSteps = {
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 /** PATCH に載るエクスペリエンスの欄(名前・対象 URL・配信条件・配信率・割当の固定・外部計測)。メモは載せない */
-const experimentFields = (d: Draft) => [d.name, d.urlMatch, d.targeting, d.traffic, d.persist, d.expName, d.extra];
+const experimentFields = (d: Draft) => [d.name, urlMatchKey(d.urlMatch), d.targeting, d.traffic, d.persist, d.expName, d.extra];
 /** PUT …/variants に載るパターンの集合(並び・ID・名前・重み・オリジナル・外部計測)。メモと変更は別の段 */
 const variantSet = (d: Draft) => d.variants.map((v) => [v.id, v.name, v.weight, v.original, v.analytics]);
 
@@ -129,7 +129,8 @@ export function isTrafficSent(initial: Draft, current: Draft): boolean {
 export function experimentPatchBody(initial: Draft, current: Draft): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   if (initial.name !== current.name) body.name = current.name;
-  if (!same(initial.urlMatch, current.urlMatch)) body.urlMatch = current.urlMatch;
+  // 対象 URL は正規の形で比べる(行・パラメータの順だけを変えた保存では送らない。B69 spec §2.3)
+  if (urlMatchKey(initial.urlMatch) !== urlMatchKey(current.urlMatch)) body.urlMatch = current.urlMatch;
   if (!same(initial.targeting, current.targeting)) Object.assign(body, targetingBody(current.targeting));
   if (isTrafficSent(initial, current)) body.trafficPercentage = current.traffic;
   if (initial.persist !== current.persist) body.persistAssignment = current.persist;

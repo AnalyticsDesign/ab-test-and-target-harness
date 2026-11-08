@@ -17,7 +17,7 @@ import {
 import type { Experiment, Status } from "@/lib/types";
 
 const EXP = {
-  id: "exp_a", siteId: "s", name: "Hero", kind: "test", status: "running", publishedStatus: "running", urlMatch: { op: "equals", value: "/" }, targeting: null,
+  id: "exp_a", siteId: "s", name: "Hero", kind: "test", status: "running", publishedStatus: "running", urlMatch: { include: [{ page: { op: "equals", value: "/" } }] }, targeting: null,
   trafficPercentage: 50, persistAssignment: false, analytics: null, createdBy: "u", updatedBy: "u", createdAt: 1, updatedAt: 2, unpublished: false, runId: "r1", description: "",
   variants: [
     { id: "a", name: "A", weight: 50, original: true, description: "", analytics: null, changes: [] },
@@ -68,7 +68,7 @@ describe("save confirmation for running tests (設計書 §5.5)", () => {
   it("lockedFieldChanges: Change・対象 URL・配信条件の変更だけを拾う(名前・配信率・メモは拾わない)", () => {
     const initial = draftOf(EXP);
     expect(lockedFieldChanges(initial, { ...initial, name: "Hero 2", traffic: 80, description: "メモ" })).toEqual([]);
-    expect(lockedFieldChanges(initial, { ...initial, urlMatch: { op: "equals", value: "/lp" } })).toEqual(["urlMatch"]);
+    expect(lockedFieldChanges(initial, { ...initial, urlMatch: { include: [{ page: { op: "equals", value: "/lp" } }] } })).toEqual(["urlMatch"]);
     expect(lockedFieldChanges(initial, { ...initial, targeting: { kind: "form", form: { logic: "and", rows: [{ id: "r1", kind: "cond", type: "device", neg: false, values: ["mobile"] }] } } })).toEqual(["targeting"]);
     const changed = { ...initial, variants: initial.variants.map((v) => (v.id === "b" ? { ...v, changes: [] } : v)) };
     expect(lockedFieldChanges(initial, changed)).toEqual(["changes"]);
@@ -111,7 +111,7 @@ describe("preSaveLockProblem (B173 stage 1 final review FR-Medium-1)", () => {
   const base = draftOf(EXP); // 開いたときの値(配信率 50)
   const withRow = (d: Draft): Draft => {
     if (d.targeting.kind !== "form") throw new Error("form expected");
-    return { ...d, targeting: { kind: "form", form: { ...d.targeting.form, rows: [defaultCond("url", {}, "row1")] } } };
+    return { ...d, targeting: { kind: "form", form: { ...d.targeting.form, rows: [defaultCond("referrer", {}, "row1")] } } };
   };
 
   it("does not check the traffic when the PATCH does not send trafficPercentage", () => {
@@ -128,6 +128,13 @@ describe("preSaveLockProblem (B173 stage 1 final review FR-Medium-1)", () => {
     expect(preSaveLockProblem(running75, experimentPatchBody(base, up), up, 30)).toBeNull();
   });
 
+  it("checks the target URL rows only when the PATCH sends urlMatch (B69 spec §7.2)", () => {
+    const empty = { ...base, urlMatch: { include: [base.urlMatch.include[0]!, { page: { part: "path" as const, op: "startsWith", value: "" } }] } };
+    expect(preSaveLockProblem(at("draft"), experimentPatchBody(base, empty), empty, 30)).toBe("対象 URL(含める 2 行目): 値を入力してください");
+    const renamed = { ...empty, name: "renamed" };
+    expect(preSaveLockProblem(at("draft"), experimentPatchBody(empty, renamed), renamed, 30)).toBeNull();
+  });
+
   it("checks the targeting rows only when the PATCH sends targeting", () => {
     // 保存済みの配信条件に入力漏れがあっても、配信条件を送らない保存は止めない
     const savedRow = withRow(base);
@@ -135,6 +142,6 @@ describe("preSaveLockProblem (B173 stage 1 final review FR-Medium-1)", () => {
     expect(preSaveLockProblem(at("draft"), experimentPatchBody(savedRow, renamed), renamed, 30)).toBeNull();
     // 画面で足した入力漏れの行は、配信条件を送るので止める
     const added = withRow(base);
-    expect(preSaveLockProblem(at("draft"), experimentPatchBody(base, added), added, 30)).toBe("「ページの URL」の条件: 値を入力してください");
+    expect(preSaveLockProblem(at("draft"), experimentPatchBody(base, added), added, 30)).toBe("「リファラー」の条件: 値を入力してください");
   });
 });

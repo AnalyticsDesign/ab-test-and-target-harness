@@ -20,7 +20,7 @@ describe("パターンのオリジナル(B77 K8)", () => {
     const { token, sid, eid } = await siteAndTest();
     const t = await detail(token, sid, eid);
     expect(t.variants.map((v: any) => [v.id, v.name, v.original, v.weight, v.description])).toEqual([["a", "A", true, 50, ""], ["b", "B", false, 50, ""]]);
-    const created = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { op: "contains", value: "/" } } });
+    const created = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     expect(created.status).toBe(201);
     const s = await detail(token, sid, "exp_s");
     expect(s.variants.map((v: any) => [v.id, v.name, v.original, v.weight])).toEqual([["a", "A", false, 100]]);
@@ -80,7 +80,7 @@ describe("パターンのオリジナル(B77 K8)", () => {
 
   it("single_rejects_original", async () => {
     const { token, sid } = await siteAndTest();
-    await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { op: "contains", value: "/" } } });
+    await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_s", name: "S", kind: "single", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     const res = await call("PUT", `/sites/${sid}/experiments/exp_s/variants`, { token, body: [{ id: "a", name: "A", weight: 100, original: true }] });
     expect(res.status).toBe(422);
     expect(await expectEnvelope(res)).toMatchObject({ error: "original_not_allowed", path: ["variants", "a", "original"] });
@@ -170,7 +170,7 @@ describe("メモ(B77 K9)", () => {
       { res: await call("PATCH", `/sites/${sid}/experiments/${eid}`, { token, body: { description: long } }), path: ["description"] },
       { res: await call("PATCH", `/sites/${sid}/experiments/${eid}/variants/a`, { token, body: { description: long } }), path: ["description"] },
       { res: await call("PUT", `/sites/${sid}/experiments/${eid}/variants`, { token, body: [{ id: "a", name: "A", weight: 50 }, { id: "b", name: "B", weight: 50, description: long }] }), path: ["variants", "b", "description"] },
-      { res: await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_long", name: "L", urlMatch: { op: "contains", value: "/" }, description: long } }), path: ["description"] },
+      { res: await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_long", name: "L", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, description: long } }), path: ["description"] },
     ];
     for (const { res, path } of cases) {
       expect(res.status).toBe(422);
@@ -178,7 +178,7 @@ describe("メモ(B77 K9)", () => {
     }
     // 1,000 字までは受ける。作成のメモは保存される
     expect((await call("PATCH", `/sites/${sid}/experiments/${eid}/variants/a`, { token, body: { description: "あ".repeat(1000) } })).status).toBe(200);
-    const created = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_memo", name: "M", urlMatch: { op: "contains", value: "/" }, description: "作成時のメモ" } });
+    const created = await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "exp_memo", name: "M", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] }, description: "作成時のメモ" } });
     expect(created.status).toBe(201);
     expect((await json(created)).description).toBe("作成時のメモ");
   });

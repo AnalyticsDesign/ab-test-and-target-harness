@@ -1,0 +1,12 @@
+/* 基本設定のタブの「配信条件」のカード(B69 spec §7.1): 番号付きの小見出しの段・割当の固定の畳んだ行・要約の 1 文 */
+.step { display: flex; align-items: baseline; gap: 8px; }
+.firstStep { margin-top: 4px; }
+.num { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.stepHint { color: var(--muted); font-weight: 400; }
+.stepNote { margin: -4px 0 8px; font-size: 12.5px; }
+.sep { border: 0; border-top: 1px solid var(--border); margin: 18px 0 0; }
+.fold { border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; }
+.fold > summary { cursor: pointer; }
+.foldBody { padding: 8px 0 2px; }
+.foldBody :global(.field) { margin-bottom: 0; }
+.summary { margin: 18px 0 0; padding: 10px 12px; border-radius: var(--radius); background: var(--sunken); border: 1px solid var(--border); }

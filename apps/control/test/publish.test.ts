@@ -298,6 +298,25 @@ describe("publish (spec §13.6)", () => {
     expect(r.hint).toContain("オーディエンスで作って配信条件で選んでください");
   });
 
+  // B69(spec §6.2): 通常の経路では起きない(開始・再開で断り、マイグレーションで一時停止する)が、running のまま残った古いページの条件は
+  // compile が止め、Publish の hint に場所と直し方を出す
+  it("publish_reports_page_condition_moved_with_hint", async () => {
+    const { owner, sid, eid } = await siteWithRunning();
+    await getDb(env).updateTable("experiments").set({ targeting_json: JSON.stringify({ ctx: "query", name: "utm", op: "exists" }) }).where("site_id", "=", sid).where("id", "=", eid).execute();
+    const r = await json(await publishRes(owner.token, sid));
+    expect(r).toMatchObject({ ok: false, error: "page_condition_moved", message: "配信条件・オーディエンスに、使えなくなったページの条件があります" });
+    expect(r.hint).toContain(`エクスペリエンス ${eid} の配信条件`);
+    expect(r.hint).toContain("対象 URL(urlMatch)で指定してください");
+  });
+
+  it("publish_records_experiment_ids_of_the_config", async () => {
+    const { owner, sid, eid } = await siteWithRunning();
+    const r = await json(await publishRes(owner.token, sid));
+    expect(r.ok).toBe(true);
+    const row = await getDb(env).selectFrom("publishes").select("experiment_ids_json").where("site_id", "=", sid).where("version", "=", r.version).executeTakeFirstOrThrow();
+    expect(JSON.parse(row.experiment_ids_json!)).toEqual([eid]);
+  });
+
   it("active put is retried once and succeeds on the second attempt", async () => {
     const { owner, sid } = await siteWithRunning();
     const res = await publishRes(owner.token, sid, { CONFIG_KV: failingKv(/:active$/, "put", 1) });
@@ -453,7 +472,7 @@ describe("publish orders experiments by priority (決定 51、設計書 §3.2・
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);
     const mk = async (id: string, kind: "test" | "single") => {
-      expect((await call("POST", `/sites/${sid}/experiments`, { token, body: { id, name: id, kind, urlMatch: { op: "contains", value: "/" } } })).status).toBe(201);
+      expect((await call("POST", `/sites/${sid}/experiments`, { token, body: { id, name: id, kind, urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } })).status).toBe(201);
       const vid = kind === "single" ? "a" : "b";
       await call("PUT", `/sites/${sid}/experiments/${id}/variants/${vid}/changes`, { token, body: [TEXT_CHANGE()] });
     };
@@ -476,7 +495,7 @@ describe("publish orders experiments by priority (決定 51、設計書 §3.2・
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);
     for (const id of ["t1", "t2"]) {
-      await call("POST", `/sites/${sid}/experiments`, { token, body: { id, name: id, urlMatch: { op: "contains", value: "/" } } });
+      await call("POST", `/sites/${sid}/experiments`, { token, body: { id, name: id, urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
       await call("PUT", `/sites/${sid}/experiments/${id}/variants/b/changes`, { token, body: [TEXT_CHANGE()] });
     }
     const status = (id: string, to: string) => call("POST", `/sites/${sid}/experiments/${id}/status`, { token, body: { status: to } }).then((r) => json(r));
@@ -497,7 +516,7 @@ describe("overlap warnings (決定 51、設計書 §3.3)", () => {
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);
     for (const [id, started] of [["t1", 1_000], ["t2", 5_000]] as const) {
-      await call("POST", `/sites/${sid}/experiments`, { token, body: { id, name: id.toUpperCase(), urlMatch: { op: "contains", value: "/" } } });
+      await call("POST", `/sites/${sid}/experiments`, { token, body: { id, name: id.toUpperCase(), urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
       await call("PUT", `/sites/${sid}/experiments/${id}/variants/b/changes`, { token, body: [TEXT_CHANGE()] });
       await env.DB.prepare("update experiments set status = 'running', last_started_at = ? where site_id = ? and id = ?").bind(started, sid, id).run();
     }
@@ -515,7 +534,7 @@ describe("overlap warnings (決定 51、設計書 §3.3)", () => {
     const { token, sid } = await siteWithTwoTests();
     const preview = await json<any>(await call("GET", `/sites/${sid}/publish-preview`, { token }));
     expect(preview.overlaps).toEqual([expect.objectContaining({ path: "experiments.t2", experimentIds: ["t2", "t1"] })]);
-    await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "t3", name: "T3", urlMatch: { op: "contains", value: "/" } } });
+    await call("POST", `/sites/${sid}/experiments`, { token, body: { id: "t3", name: "T3", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } });
     await call("PUT", `/sites/${sid}/experiments/t3/variants/b/changes`, { token, body: [TEXT_CHANGE()] });
     const starting = await json<any>(await call("GET", `/sites/${sid}/publish-preview?starting=t3`, { token }));
     // t3 は今開始した = テストの中で優先が最も低い。t3 を含む組だけを返す
@@ -568,7 +587,7 @@ describe("dataLayer names are baked into payloads (B77)", () => {
         `insert into sites (id, workspace_id, name, domain, site_salt, content_updated_at, created_at, updated_at) values ('s1', 'w1', 'S', 'example.com', 'salt', ?1, ?1, ?1)`,
       ).bind(t),
       env.DB.prepare(
-        `insert into experiments (site_id, id, name, status, url_match_json, analytics_json, started_at, created_by, updated_by, created_at, updated_at) values ('s1', 'e_run', '購入ボタンのテスト', 'running', '{"op":"contains","value":"/"}', null, ?1, 'u', 'u', ?1, ?1)`,
+        `insert into experiments (site_id, id, name, status, url_match_json, analytics_json, started_at, created_by, updated_by, created_at, updated_at) values ('s1', 'e_run', '購入ボタンのテスト', 'running', '{"include":[{"page":{"op":"contains","value":"/"}}]}', null, ?1, 'u', 'u', ?1, ?1)`,
       ).bind(t),
       env.DB.prepare(insertVar).bind("a", "元のボタン", 0, null),
       env.DB.prepare(insertVar).bind("b", "赤いボタン", 1, JSON.stringify({ overrides: { variantName: "red" } })),

@@ -42,7 +42,7 @@ type History = { events: EventJson[]; nextCursor: string | null; createdBy: Pers
 type Page = { events: EventJson[]; nextCursor: string | null };
 
 const DAY = 86_400_000;
-const urlMatch = { op: "contains", value: "/" };
+const urlMatch = { include: [{ page: { op: "contains", value: "/" } }] };
 
 const historyPath = (sid: string, eid: string, q = "") => `/sites/${sid}/experiments/${eid}/history${q}`;
 const getJson = async <T>(path: string, token: string, status = 200): Promise<T> => {

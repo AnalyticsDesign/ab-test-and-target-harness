@@ -71,11 +71,12 @@ export const assetGuardEnabled = (env: Env): boolean => imageStore(env) !== null
 
 /**
  * 公開の手順 4(設定の記録)の条件。`?ids` の画像がすべて、このサイトの `assets` に印の無い行としてある(空なら常に真)。
- * 止める操作の公開は `[]` を渡す(SQL を 2 つに分けない)
+ * 止める操作の公開は `[]` を渡す(SQL を 2 つに分けない)。B69: `experimentIds` = その版の配る設定に入ったエクスペリエンスの ID
+ * (`experiment_ids_json`。配信の確かめが、エクスペリエンスの入っていない版を証拠にしないため)。同じ文で書くので往復は増えない
  */
-export function configRecordUpdate(db: Db, rowId: string, siteId: string, hash: string, body: string, needsProfile: boolean, ids: readonly string[]) {
+export function configRecordUpdate(db: Db, rowId: string, siteId: string, hash: string, body: string, needsProfile: boolean, ids: readonly string[], experimentIds: readonly string[]) {
   const q = sql`
-    UPDATE publishes SET config_hash = ${hash}, config_json = ${body}, needs_profile = ${needsProfile ? 1 : 0}
+    UPDATE publishes SET config_hash = ${hash}, config_json = ${body}, needs_profile = ${needsProfile ? 1 : 0}, experiment_ids_json = ${JSON.stringify(experimentIds)}
     WHERE id = ${rowId}
       AND NOT EXISTS (SELECT 1 FROM json_each(${JSON.stringify(ids)}) j
                       WHERE NOT EXISTS (SELECT 1 FROM assets a

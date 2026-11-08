@@ -3,6 +3,7 @@
  * `{ part?, op, value }`(part 省略 = URL)。見た目をそろえたプルダウン部品と日本語の表記の見直しは別の作業(B34 の plan ② / B35)
  */
 import { normalizeRegexInput } from "@wtt/core";
+import type { UrlMatchValue } from "./url-match";
 
 export type PagePart = "url" | "path" | "host";
 export type PageMatchValue = { part?: PagePart; op: string; value: string };
@@ -48,15 +49,33 @@ export function describePageMatch(m: PageMatchValue): string {
   return `${PAGE_PART_LABELS[part]} が「${m.value}」${label}`;
 }
 
-/**
- * プレビューを開くページの URL(編集画面の「このページで確認」)。パスかURL の「完全一致 / で始まる」のときだけ組み立てられる。
- * パスは Site のドメインに付け、URL はそのまま使う(http(s) のときだけ)
- */
-export function previewPageUrl(domain: string, m: PageMatchValue): string | null {
+/** 1 つのページの一致から組み立てる URL。パスかURL の「完全一致 / で始まる」のときだけ(パスは Site のドメインに付け、URL は http(s) のときだけそのまま) */
+function pageUrlOf(domain: string, m: PageMatchValue): string | null {
   if (m.op !== "equals" && m.op !== "startsWith") return null;
   const part = partOf(m);
   if (part === "path") return m.value.startsWith("/") ? `https://${domain}${m.value}` : null;
   if (part === "url") return /^https?:\/\//.test(m.value) ? m.value : null;
+  return null;
+}
+
+/**
+ * プレビューを開くページの URL(編集画面の「このページで確認」)。対象 URL の含めるの行のうち、最初に組み立てられる行から作り、
+ * その行のパラメータの「次に一致」をクエリに足す(B69。「を含む」「がある」は値が決まらないので足さない)。除くの行は見ない
+ */
+export function previewPageUrl(domain: string, m: UrlMatchValue): string | null {
+  for (const row of m.include) {
+    const base = pageUrlOf(domain, row.page);
+    if (base === null) continue;
+    const equals = (row.params ?? []).filter((p) => p.op === "equals");
+    if (equals.length === 0) return base;
+    try {
+      const u = new URL(base);
+      for (const p of equals) u.searchParams.append(p.name, p.value);
+      return u.toString();
+    } catch {
+      return base; // URL として読めない値はクエリを足さずにそのまま(画面を落とさない)
+    }
+  }
   return null;
 }
 

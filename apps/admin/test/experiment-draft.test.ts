@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { EDITOR_TABS, draftOf, tabsFor, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, acceptSavedDraft, reconcileServerUpdate, saveSteps, targetingBody, discardTarget, savedAfter, type Draft } from "@/lib/experiment-draft";
+import { lockedFieldChanges } from "@/lib/test-locks";
+import type { UrlMatchValue } from "@/lib/url-match";
 import type { Experiment } from "@/lib/types";
 
 const EXP = {
-  id: "exp_a", siteId: "s", name: "Hero", kind: "test", status: "draft", publishedStatus: null, urlMatch: { op: "equals", value: "/" }, targeting: { ctx: "device", op: "in", value: ["mobile"] },
+  id: "exp_a", siteId: "s", name: "Hero", kind: "test", status: "draft", publishedStatus: null, urlMatch: { include: [{ page: { op: "equals", value: "/" } }] }, targeting: { ctx: "device", op: "in", value: ["mobile"] },
   trafficPercentage: 100, persistAssignment: false, analytics: { overrides: { experimentName: "hero_test" }, extra: { team: "growth" } },
   createdBy: "u", updatedBy: "u", createdAt: 1, updatedAt: 2, unpublished: true, runId: null, description: "仮説: 無料体験を前に出す",
   variants: [
@@ -91,7 +93,7 @@ describe("saveSteps(B77 K17。保存の段を差分で決める)", () => {
     expect(saveSteps(initial, { ...initial, extra: {} }, "running").patchExperiment).toBe(true);
     expect(saveSteps(initial, { ...initial, traffic: 50 }, "paused").patchExperiment).toBe(true);
     expect(saveSteps(initial, { ...initial, persist: true }, "draft").patchExperiment).toBe(true);
-    expect(saveSteps(initial, { ...initial, urlMatch: { op: "equals", value: "/x" } } as Draft, "draft").patchExperiment).toBe(true);
+    expect(saveSteps(initial, { ...initial, urlMatch: { include: [{ page: { op: "equals", value: "/x" } }] } }, "draft").patchExperiment).toBe(true);
   });
   it("オリジナルの切り替えだけでも、下書きなら putVariants", () => {
     expect(saveSteps(initial, withVariant(initial, "a", { original: false }), "draft")).toEqual({ ...NONE, putVariants: true });
@@ -157,7 +159,7 @@ describe("B173 第 1 段 Task 7: 変えた欄だけを送る・評価計画を�
   });
   it("each body field maps to its PATCH key", () => {
     const a = draftOf(EXP);
-    expect(experimentPatchBody(a, { ...a, urlMatch: { op: "equals", value: "/x" } })).toEqual({ urlMatch: { op: "equals", value: "/x" } });
+    expect(experimentPatchBody(a, { ...a, urlMatch: { include: [{ page: { op: "equals", value: "/x" } }] } })).toEqual({ urlMatch: { include: [{ page: { op: "equals", value: "/x" } }] } });
     expect(experimentPatchBody(a, { ...a, persist: true })).toEqual({ persistAssignment: true });
     expect(experimentPatchBody(a, { ...a, targeting: { kind: "form", form: { logic: "and", rows: [] } } })).toEqual({ targeting: null });
     expect(experimentPatchBody(a, a)).toEqual({}); // 変えていなければ空
@@ -281,5 +283,45 @@ describe("保存の途中に届いた下書きの変更(I2)", () => {
     const after = acceptSavedDraft(sent, sent);
     expect(after).toEqual({ base: sent, draft: sent });
     expect(isDirty(after.base, after.draft)).toBe(false);
+  });
+});
+
+// B69(spec §2.3): 行・パラメータの順だけを変えた保存は、変更として扱わない(正規の形で比べる)
+describe("target URL rows reorder", () => {
+  const rows: UrlMatchValue = {
+    include: [
+      { page: { part: "path" as const, op: "startsWith", value: "/lp/" }, params: [{ name: "a", op: "exists" as const }, { name: "b", op: "equals" as const, value: "x" }] },
+      { page: { part: "host" as const, op: "equals", value: "shop.example.com" } },
+    ],
+    exclude: [{ page: { part: "path" as const, op: "contains", value: "/old/" } }],
+  };
+  const running = { ...EXP, status: "running", urlMatch: rows } as Experiment;
+  const reordered = {
+    include: [rows.include[1]!, { ...rows.include[0]!, params: [...rows.include[0]!.params!].reverse() }],
+    exclude: rows.exclude,
+  };
+  it("reorder_only_is_not_a_locked_change: 実行中のテストで行の順だけ変えた下書きは lockedFieldChanges が空", () => {
+    const initial = draftOf(running);
+    expect(lockedFieldChanges(initial, { ...initial, urlMatch: reordered })).toEqual([]);
+    expect(lockedFieldChanges(initial, { ...initial, urlMatch: { ...reordered, exclude: [] } })).toEqual(["urlMatch"]);
+  });
+  it("reorder_only_sends_no_url_match: 行の順だけ変えた下書きは PATCH に urlMatch が無く、saveSteps も保存を求めない", () => {
+    const initial = draftOf(running);
+    const current = { ...initial, urlMatch: reordered };
+    expect(experimentPatchBody(initial, current)).toEqual({});
+    expect(saveSteps(initial, current, "running").patchExperiment).toBe(false);
+    expect(hasSteps(saveSteps(initial, current, "running"))).toBe(false);
+    // 空の exclude・params は無いのと同じ
+    const empties = { ...initial, urlMatch: { include: rows.include.map((r) => ({ ...r, params: r.params ?? [] })), exclude: rows.exclude } };
+    expect(experimentPatchBody(initial, empties)).toEqual({});
+  });
+  it("explicit_url_part_is_not_a_change (B69 final review FR-Medium-1): URL 欄を元の文字列に戻して part: \"url\" が付いても変更にしない", () => {
+    // 保存値は part を省いた形。PageMatchField は編集すると part: "url" を付ける
+    const saved = { ...EXP, status: "running", urlMatch: { include: [{ page: { op: "contains", value: "/lp/" } }] } } as Experiment;
+    const initial = draftOf(saved);
+    const current = { ...initial, urlMatch: { include: [{ page: { part: "url" as const, op: "contains", value: "/lp/" } }] } };
+    expect(experimentPatchBody(initial, current)).toEqual({});
+    expect(lockedFieldChanges(initial, current)).toEqual([]);
+    expect(saveSteps(initial, current, "running").patchExperiment).toBe(false);
   });
 });

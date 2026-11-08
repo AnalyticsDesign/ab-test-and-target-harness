@@ -6,7 +6,7 @@ import workerImpl, { Deployer } from "../src/index";
 import { cfApiConfigOf } from "../src/queue-do";
 
 const CONFIG: CompiledConfig = {
-  schemaVersion: 2, version: 1, siteId: "site_a", siteSalt: "s", needsProfile: false,
+  schemaVersion: 3, version: 1, siteId: "site_a", siteSalt: "s", needsProfile: false,
   patterns: {}, prehide: {}, exposureSelectors: {}, goals: [], experiments: [], exposurePayloads: {},
 };
 const req = { protocol: 1 as const, siteId: "site_a", generation: { epoch: 10, seq: 1 }, config: CONFIG, settings: { settingsVersion: 1, siteId: "site_a" }, apiBase: null };
