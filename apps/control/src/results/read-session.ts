@@ -67,12 +67,14 @@ function cachedParticipants(resultJson: string): number | null {
 }
 
 /**
- * 読み取りの見込み(K13)= 前回までに測った rows_read(保存した速報)、無ければ前回までに数えた参加者数 × (2 + ほかの目標の数)、
- * どちらも無ければ 10,000 行
+ * 読み取りの見込み(K13)= 前回までに測った rows_read(保存した速報)と、前回までに数えた参加者数 × (2 + ほかの目標の数)の大きい方。
+ * 片方しか無ければある方、どちらも無ければ 10,000 行。
+ * 7n(G30 (a)): 前回の rows_read を優先すると、目標を増やした直後の読み(目標ごとに読む行が増える)を小さく見込んでしまうので、大きい方を取る
  */
 export function readEstimate(cache: { rows_read: number; result_json: string } | undefined, otherGoals: number): number {
-  if (cache && cache.rows_read > 0) return cache.rows_read;
+  const measured = cache && cache.rows_read > 0 ? cache.rows_read : 0;
   const n = cache ? cachedParticipants(cache.result_json) : null;
-  if (n !== null && n > 0) return n * (2 + otherGoals);
-  return DEFAULT_READ_ESTIMATE;
+  const byParticipants = n !== null && n > 0 ? n * (2 + otherGoals) : 0;
+  const estimate = Math.max(measured, byParticipants);
+  return estimate > 0 ? estimate : DEFAULT_READ_ESTIMATE;
 }

@@ -9,7 +9,7 @@ import {
 } from "@wtt/core";
 import { AudienceJsonSchema } from "../src/routes/audiences";
 import { ExperimentDetailJsonSchema, ExperimentJsonSchema } from "../src/routes/experiments";
-import { call, json, setupOwner, inviteAndJoin, createSite, createExperiment, experimentRow, expectEnvelope, failingD1Insert, TEXT_CHANGE } from "./helpers";
+import { beforeD1Batch, call, json, setupOwner, inviteAndJoin, createSite, createExperiment, experimentRow, expectEnvelope, failingD1Insert, TEXT_CHANGE } from "./helpers";
 
 describe("experiments / variants", () => {
   it("creates a draft with two default variants and rejects id changes", async () => {
@@ -218,6 +218,48 @@ describe("experiments / variants", () => {
     expect((await call("PUT", `/sites/${sid}/experiments/${id}/variants/b/changes`, { token: v.token, body: [TEXT_CHANGE()] })).status).toBe(403);
     expect((await call("GET", `/sites/${sid}/experiments`, { token: v.token })).status).toBe(200);
     expect((await call("DELETE", `/sites/${sid}/experiments/${id}`, { token: ed.token })).status).toBe(204);
+  });
+
+  // 7n(G31 (b)): 終了の公開が失敗している間(status は archived、published_status は running / paused のまま)は削除できない
+  it("delete_refuses_experiments_still_published_7n", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    const setRow = (id: string, status: string, published: string | null) =>
+      env.DB.prepare("update experiments set status = ?, published_status = ? where site_id = ? and id = ?").bind(status, published, sid, id).run();
+    for (const published of ["running", "paused"]) {
+      const { id } = await createExperiment(token, sid, { id: `exp_pub_${published}` });
+      await setRow(id, "archived", published);
+      const res = await call("DELETE", `/sites/${sid}/experiments/${id}`, { token });
+      expect(res.status).toBe(409);
+      expect(await expectEnvelope(res)).toMatchObject({ error: "experiment_active", message: "終了の公開が済んでいないため、まだ配信中です", hint: "もう一度公開して、終了を配り終えてから削除してください" });
+      expect((await experimentRow(sid, id)).status).toBe("archived");
+    }
+    // 一度も公開していない下書き(published_status は NULL)と、終了を公開し終えたものは今までどおり消せる
+    const { id: draft } = await createExperiment(token, sid, { id: "exp_never" });
+    expect((await experimentRow(sid, draft)).published_status).toBeNull();
+    expect((await call("DELETE", `/sites/${sid}/experiments/${draft}`, { token })).status).toBe(204);
+    const { id: done } = await createExperiment(token, sid, { id: "exp_done_pub" });
+    await setRow(done, "archived", "archived");
+    expect((await call("DELETE", `/sites/${sid}/experiments/${done}`, { token })).status).toBe(204);
+  });
+
+  it("delete_refuses_when_published_status_turns_running_after_the_read_7n", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    const { id } = await createExperiment(token, sid, { id: "exp_race_pub" });
+    await env.DB.prepare("update experiments set status = 'archived', published_status = 'archived', started_at = 1, run_id = 'run_race_pub' where site_id = ? and id = ?").bind(sid, id).run();
+    // 削除の要求が読んだ後・削除の batch の前に、配信中の状態の写しが running になった(並行する公開が書いた)
+    const racing = beforeD1Batch(env.DB, async () => {
+      await env.DB.prepare("update experiments set published_status = 'running' where site_id = ? and id = ?").bind(sid, id).run();
+    });
+    const res = await call("DELETE", `/sites/${sid}/experiments/${id}`, { token, envOverride: { DB: racing } });
+    expect(res.status).toBe(409);
+    expect(await expectEnvelope(res)).toMatchObject({ error: "experiment_active", message: "終了の公開が済んでいないため、まだ配信中です", hint: "もう一度公開して、終了を配り終えてから削除してください" });
+    expect((await experimentRow(sid, id)).published_status).toBe("running");
+    // 退役・削除待ち・締め切りの印も書かない
+    expect(await env.DB.prepare("select count(*) as n from retired_experiment_ids where site_id = ?").bind(sid).first("n")).toBe(0);
+    expect(await env.DB.prepare("select count(*) as n from results_purge_queue where site_id = ?").bind(sid).first("n")).toBe(0);
+    expect(await env.DB.prepare("select collect_until_dirty as d from sites where id = ?").bind(sid).first("d")).toBe(0);
   });
 
   it("hides experiments of other workspaces behind 404", async () => {

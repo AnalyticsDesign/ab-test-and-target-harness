@@ -138,6 +138,11 @@ const PATCH_FIELDS = [
 const experimentActive = () =>
   new ApiError(409, "experiment_active", { message: "配信中のエクスペリエンスは削除できません", hint: "終了(archived)してから削除してください" });
 
+/** 7n: 望む状態は下書きか終了でも、終了の公開が済まず published_status が running / paused のまま(まだ配っている)。code は同じ */
+const experimentStillPublished = () =>
+  new ApiError(409, "experiment_active", { message: "終了の公開が済んでいないため、まだ配信中です", hint: "もう一度公開して、終了を配り終えてから削除してください" });
+const isLive = (s: string | null | undefined) => s === "running" || s === "paused";
+
 /** パターンの集合の全置換は下書きだけ(終了したテストは別のコード experiment_archived_readonly。D9 ③ の K10) */
 const variantsLocked = () =>
   new ApiError(409, "experiment_active", {
@@ -755,7 +760,7 @@ experimentRoutes.delete(
   describeRoute({
     tags: ["experiments"],
     summary:
-      "エクスペリエンスを削除(編集者以上)。draft / archived のみ。一度開始したエクスペリエンスの ID は、削除した後もこのサイトでは作成・複製に使えない。テストの結果の記録・採用・評価計画の変更の履歴も消え、計測用のデータベースの参加者ごとの記録は削除の直後から順に消す(大きなテストは数日かかる)",
+      "エクスペリエンスを削除(編集者以上)。draft / archived のみ(archived にしても、終了の公開が済まず publishedStatus が running / paused の間は 409 experiment_active)。一度開始したエクスペリエンスの ID は、削除した後もこのサイトでは作成・複製に使えない。テストの結果の記録・採用・評価計画の変更の履歴も消え、計測用のデータベースの参加者ごとの記録は削除の直後から順に消す(大きなテストは数日かかる)",
     security: [{ bearer: [] }],
     responses: { 204: { description: "削除した" }, ...errorResponses(401, 403, 404, 409) },
   }),
@@ -764,7 +769,10 @@ experimentRoutes.delete(
     const { site } = await loadSite(c, c.req.param("sid"), "editor");
     const db = c.get("db");
     const exp = await loadExperiment(db, site.id, c.req.param("eid"));
-    if (exp.status === "running" || exp.status === "paused") throw experimentActive();
+    // 7n(G31 (b)): 望む状態(status)が下書きか終了でも、配信中の状態の写し(published_status)が running / paused なら消さない
+    // (終了の公開が失敗している間は、まだ訪問者に配っている)。published_status は一度も公開していないと NULL
+    if (isLive(exp.status)) throw experimentActive();
+    if (isLive(exp.published_status)) throw experimentStillPublished();
     // D9 ②(設計書 §6.3、K16): 一度開始した(started_at がある)ものは ID を退役させる。読んだ行ではなく D1 の中の行で判定し、
     // 削除と同じ batch = 1 トランザクションで書く(退役の記録だけ・削除だけが残らない)。
     // D9 ③(K6 (1)): 削除の DELETE の前に、run_id を持つものを計測用 D1 の削除待ち(results_purge_queue)に積む。
@@ -772,7 +780,10 @@ experimentRoutes.delete(
     // B129: 4 文の前に experiment.delete を記録する(条件は削除の文と同じ deletableRow。名前と世代は消える前の行から読む)
     const now = Date.now();
     const deletable = ["draft", "archived"] as const;
-    const deletableRow = (eb: ExpressionBuilder<Tables, "experiments">) => eb.and([thisExperiment(site.id, exp.id)(eb), eb("experiments.status", "in", deletable)]);
+    // 7n(G31 (b)): batch の各文も「配っていない」を条件にする。`not in` だけだと NULL(一度も公開していない)の行が消せなくなる
+    const notPublished = (eb: ExpressionBuilder<Tables, "experiments">) =>
+      eb.or([eb("experiments.published_status", "is", null), eb("experiments.published_status", "not in", ["running", "paused"])]);
+    const deletableRow = (eb: ExpressionBuilder<Tables, "experiments">) => eb.and([thisExperiment(site.id, exp.id)(eb), eb("experiments.status", "in", deletable), notPublished(eb)]);
     const [, , , , deleted] = await c.env.DB.batch([
       experimentAudit(c, site, exp.id, { action: "experiment.delete", target: { type: "experiment" }, targetFrom: experimentTarget(deletableRow), detail: {} }, { now }),
       toStatement(
@@ -787,6 +798,7 @@ experimentRoutes.delete(
               .where("site_id", "=", site.id)
               .where("id", "=", exp.id)
               .where("status", "in", deletable)
+              .where(notPublished)
               .where("started_at", "is not", null),
           )
           .onConflict((oc) => oc.doNothing()),
@@ -802,7 +814,7 @@ experimentRoutes.delete(
           .where("id", "=", site.id)
           .where((w) =>
             w.exists(
-              w.selectFrom("experiments").select("experiments.id").where("experiments.site_id", "=", site.id).where("experiments.id", "=", exp.id).where("experiments.status", "in", deletable).where("experiments.run_id", "is not", null),
+              w.selectFrom("experiments").select("experiments.id").where("experiments.site_id", "=", site.id).where("experiments.id", "=", exp.id).where("experiments.status", "in", deletable).where(notPublished).where("experiments.run_id", "is not", null),
             ),
           ),
       ),
@@ -810,8 +822,9 @@ experimentRoutes.delete(
     ]);
     if ((deleted?.meta.changes ?? 0) === 0) {
       // 読んだ後に別の要求が開始した(または先に削除した)
-      const fresh = await db.selectFrom("experiments").select("status").where("site_id", "=", site.id).where("id", "=", exp.id).executeTakeFirst();
+      const fresh = await db.selectFrom("experiments").select(["status", "published_status"]).where("site_id", "=", site.id).where("id", "=", exp.id).executeTakeFirst();
       if (!fresh) throw notFound();
+      if (!isLive(fresh.status) && isLive(fresh.published_status)) throw experimentStillPublished();
       throw experimentActive();
     }
     // K6・K12: 応答の後に 1 回だけ個票を消し始める(残り・枠の無い日・停止中は Cron が queue から消す)

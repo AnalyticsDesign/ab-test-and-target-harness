@@ -417,7 +417,8 @@ describe("results purge queue and forget (D9 ③ K6・K12)", () => {
     });
     const res = await call("DELETE", `/sites/${sid}/experiments/exp_race`, { token: owner.token, envOverride: { ...RESULTS_STORE, DB: racing } });
     expect(res.status).toBe(409);
-    expect((await expectEnvelope(res)).error).toBe("experiment_active");
+    // 7n: 開始された(status が running)ときは今までの文(公開が済んでいない方の文ではない)
+    expect(await expectEnvelope(res)).toMatchObject({ error: "experiment_active", message: "配信中のエクスペリエンスは削除できません", hint: "終了(archived)してから削除してください" });
     const row = await experimentRow(sid, "exp_race");
     expect(row.status).toBe("running");
     expect(row.run_id).toBe("run_race");

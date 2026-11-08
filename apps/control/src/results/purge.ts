@@ -131,8 +131,12 @@ export function enqueuePurgeQuery(db: Db, scope: PurgeScope, now: number) {
         .where("experiments.run_id", "is not", null);
       switch (scope.kind) {
         case "experiment":
-          // エクスペリエンスの削除の DELETE と同じ: その ID で、下書きか終了のときだけ
-          return base.where("experiments.site_id", "=", scope.siteId).where("experiments.id", "=", scope.experimentId).where("experiments.status", "in", ["draft", "archived"]);
+          // エクスペリエンスの削除の DELETE と同じ: その ID で、下書きか終了で、配信中の状態の写しが running / paused でないときだけ(7n。NULL = 未公開も含む)
+          return base
+            .where("experiments.site_id", "=", scope.siteId)
+            .where("experiments.id", "=", scope.experimentId)
+            .where("experiments.status", "in", ["draft", "archived"])
+            .where((w) => w.or([w("experiments.published_status", "is", null), w("experiments.published_status", "not in", ["running", "paused"])]));
         case "site":
           // Site の削除の DELETE と同じ: Site の削除の印(static_removing)がまだ自分の token のときだけ
           return base

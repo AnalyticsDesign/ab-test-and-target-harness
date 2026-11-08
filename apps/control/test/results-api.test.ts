@@ -5,6 +5,7 @@ import { getDb } from "../src/db";
 import type { Env } from "../src/env";
 import { rewriteCollectUntil } from "../src/results/collect-until";
 import { apiGuard } from "../src/results/guard";
+import { readEstimate } from "../src/results/read-session";
 import { hourOf } from "../src/results/time";
 import {
   beforeD1Batch,
@@ -110,6 +111,25 @@ type Report = {
 };
 const variantOf = (r: Report, id: string) => r.variants.find((v) => v.id === id)!;
 const noteKeys = (r: Report) => r.notes.map((n) => n.key);
+
+// 7n(G30 (a)): 見込み = max(前回の rows_read, 前回の参加者数 × (2 + ほかの目標の数))。片方だけならある方、両方無ければ 10,000
+describe("readEstimate_7n", () => {
+  const cache = (rowsRead: number, ns: number[] | null) => ({ rows_read: rowsRead, result_json: JSON.stringify(ns === null ? {} : { variants: ns.map((n) => ({ n })) }) });
+  test("参加者数 × (2 + 目標) の方が大きければそれ", () => {
+    expect(readEstimate(cache(100, [300, 200]), 3)).toBe(2500); // 500 × 5
+  });
+  test("rows_read の方が大きければそれ", () => {
+    expect(readEstimate(cache(9000, [300, 200]), 1)).toBe(9000); // 500 × 3 = 1500
+  });
+  test("片方だけならある方", () => {
+    expect(readEstimate(cache(0, [300, 200]), 0)).toBe(1000);
+    expect(readEstimate(cache(700, null), 4)).toBe(700);
+  });
+  test("両方無ければ 10,000", () => {
+    expect(readEstimate(cache(0, null), 2)).toBe(10_000);
+    expect(readEstimate(undefined, 2)).toBe(10_000);
+  });
+});
 
 describe("結果の API(速報)", () => {
   test("下書き = 409 results_not_started、single = 404 results_not_applicable、run_id なし = 200 not_recorded、RESULTS_DB なし = 200 store_missing", async () => {

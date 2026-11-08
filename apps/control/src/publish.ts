@@ -235,6 +235,8 @@ const FAILURE_MESSAGES: Record<string, { message: string; hint?: string }> = {
   kv_put_failed: { message: "config を KV に書き込めませんでした", hint: RETRY_HINT },
   kv_verify_failed: { message: "書き込んだ config の読み戻し検証に失敗しました", hint: RETRY_HINT },
   kv_rate_limited: { message: "KV への active の書き込みが制限されました", hint: RETRY_HINT },
+  // 7n(B48): activation の直前に、この公開の予約行が無くなっていた(D1 を以前の時点に戻した後など)。この版は有効にしていない
+  publish_record_missing: { message: "公開の記録が見つからないため、この版を有効にしませんでした", hint: "データベースを以前の時点に戻した後などに起きます。もう一度公開してください" },
   invalid_regex: { message: "配信できない正規表現があります" },
   regex_too_large: { message: "大きすぎる正規表現があります" },
   regex_budget_exceeded: { message: "正規表現の合計が大きすぎます(サイト全体で 500 命令まで)" },
@@ -406,10 +408,44 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserAc
   let prev: number | null = null;
   let prevActivatedAt: number | null = null;
   let activated = false;
+  let recordMissing = false;
+  // 7n レビュー: 同じ版の番号の行が(rowId を問わず)あるか。D1 を戻した後に別の公開が同じ版を取り直していれば、KV の config/v<N> はその行のもの
+  let versionTaken = false;
+  // 7n(B48): この公開の予約行(publishes の rowId の行)がまだあること。D1 を Time Travel で戻した後に、戻す前から続いていた公開などで
+  // 行が消えていたら、公開の履歴に無い版を active にしない。CAS の条件と、読み直しの列の両方に使う(読み直しの SELECT の中の副問い合わせなので往復は増えない)
+  const reserved = (eb: ExpressionBuilder<Tables, "sites">) =>
+    eb.exists(eb.selectFrom("publishes").select("publishes.id").where("publishes.id", "=", rowId).where("publishes.site_id", "=", site.id).where("publishes.version", "=", version));
+  const taken = (eb: ExpressionBuilder<Tables, "sites">) =>
+    eb.exists(eb.selectFrom("publishes").select("publishes.id").where("publishes.site_id", "=", site.id).where("publishes.version", "=", version));
+  /**
+   * 予約行が無いときの KV の config/v<N> の後始末。公開の履歴から辿れず古い版の掃除が拾えないので消すが、同じ版の番号の行がほかにあれば
+   * (戻した後の公開し直し。compile は時刻を含まないので bytes も同じになりうる)そのキーは今の行のものなので消さない。
+   * 無ければ、中身が自分の書いたもの(hash が一致)のときだけ消す
+   */
+  const dropOrphanConfig = async (versionIsTaken: boolean): Promise<void> => {
+    if (versionIsTaken) return;
+    try {
+      const cur = await env.CONFIG_KV.get(key);
+      if (cur !== null && (await sha256Hex(cur)) === hash) await env.CONFIG_KV.delete(key);
+    } catch (e) {
+      console.error("orphan config delete failed", key, e);
+    }
+  };
+  const recordMissingFailure = () => failure("publish_record_missing", version, `publish record ${rowId} (version ${version}) is gone before activation`);
   for (let attempt = 0; attempt < CAS_ATTEMPTS && !activated; attempt++) {
-    const cur = await db.selectFrom("sites").select(["active_version", "last_activated_at"]).where("id", "=", site.id).executeTakeFirstOrThrow();
+    const cur = await db
+      .selectFrom("sites")
+      .select((eb) => ["active_version", "last_activated_at", reserved(eb).as("reserved"), taken(eb).as("taken")])
+      .where("id", "=", site.id)
+      .executeTakeFirstOrThrow();
     prev = cur.active_version;
     prevActivatedAt = cur.last_activated_at;
+    // 予約行が無い = 追い越しではない(superseded の UPDATE は当たる行が無い)。下で KV の config を消して失敗にする
+    if (!Number(cur.reserved)) {
+      recordMissing = true;
+      versionTaken = Boolean(Number(cur.taken));
+      break;
+    }
     if (prev !== null && prev >= version) break; // 自分より新しい version が先に active になった
     const cas = db
       .updateTable("sites")
@@ -417,7 +453,9 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserAc
       // GET の自己修復が拾う。activation で seq を進めるので、それより前の依頼の結果が印を下ろさない
       .set({ active_version: version, last_activated_at: nowMs, static_seq: sql<number>`static_seq + 1`, static_stale: 1 })
       .where("id", "=", site.id)
-      .where((eb) => (prev === null ? eb("active_version", "is", null) : eb("active_version", "=", prev)));
+      .where((eb) => (prev === null ? eb("active_version", "is", null) : eb("active_version", "=", prev)))
+      // 7n(B48): 予約行がまだあるときだけ。0 行なら同じ batch の後ろの文(「この版が active」が guard)も何も書かない。次の読み直しで行の有無を見分ける
+      .where(reserved);
     // D9 ③(K14): 届く定義の行は CAS と同じ batch(1 トランザクション)で、「この版が active」を条件に足す。
     // 行がある ⇔ この版を activation した(記録の取りこぼし・並行する Publish との順の入れ替わり・出し直しの待ちの間の確認で前の行に当たる、が起きない)。
     // 世代は出し直しの後に入れる(それまでは NULL)
@@ -433,13 +471,26 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserAc
     ]);
     activated = (upd?.meta.changes ?? 0) > 0;
   }
+  if (recordMissing) {
+    // 7n(B48): 予約行が無い。activation していないので D1 の配信中の状態は変わっていない(公開の記録も書かない)。
+    // markFailed は当たる行が無いので呼ばない。KV の config は dropOrphanConfig の条件で消す
+    await dropOrphanConfig(versionTaken);
+    return recordMissingFailure();
+  }
   if (!activated) {
     // 追い越された(または CAS が競り負け続けた)。KV は触らず履歴だけ残す(次の Publish が最新を活性化する)
     // B129: 追い越しの文と同じ batch に記録(無条件。1 文の execute を 2 文の batch にした)
-    await env.DB.batch([
+    // 7n レビュー: 最後の読み直しの後(CAS の直前)に予約行が消えていると UPDATE は 0 行。その記録は予約行があるときだけ書き(偽の superseded を残さない)、
+    // 同じ batch で同じ版の番号の行の有無も読む(往復は増えない)。0 行なら予約行が無いときと同じ扱い
+    const [marked, , takenRow] = await env.DB.batch([
       toStatement(env, db.updateTable("publishes").set({ status: "superseded" }).where("id", "=", rowId)),
-      publishAudit(env, actor, site, { version, superseded: true }, { now: nowMs }),
+      publishAudit(env, actor, site, { version, superseded: true }, { guard: sql<SqlBool>`exists (select 1 from publishes where id = ${rowId})`, now: nowMs }),
+      toStatement(env, db.selectNoFrom((eb) => eb.exists(eb.selectFrom("publishes").select("publishes.id").where("publishes.site_id", "=", site.id).where("publishes.version", "=", version)).as("taken"))),
     ]);
+    if ((marked?.meta.changes ?? 0) === 0) {
+      await dropOrphanConfig(Boolean(Number((takenRow?.results?.[0] as { taken?: unknown } | undefined)?.taken)));
+      return recordMissingFailure();
+    }
     return { ok: true, version, needsProfile: config.needsProfile, superseded: true, staticDeploy: "skipped", warnings };
   }
   // KV `active` の put(書く値は D1 最新版。review r2 CX-High-4)
@@ -460,11 +511,24 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserAc
   // 自己修復: 書いた後に D1 がさらに進んでいたら stale を立てる(次回 Publish の冒頭、または次の GET /sites/:sid の
   // reconcile で最新版を再 put。Task 8 で両方に配線済み)。失敗を黙って捨てない。
   // 「読んで比べて書く」ではなく 1 文の条件式にして、比較と更新の間に別の activation が挟まる窓を無くす(rulings §4 CX-High-3)
-  await db
+  const marked = await db
     .updateTable("sites")
     .set({ active_kv_stale: sql<number>`case when active_version = ${written} then 0 else 1 end` })
     .where("id", "=", site.id)
-    .execute();
+    .returning("active_version")
+    .executeTakeFirst();
+  // 7n(G04 (d)): 「食い違いなし」の印を付けたときは、KV の active を読み直して D1 と比べる。並行する公開の古い版の put が自分の put の後に
+  // 着いていると、印は 0 なのに KV は古い版のまま止まる(GET の自己修復は stale = 1 のときだけ動く)。違う・読めないときは stale = 1 にして
+  // 自己修復に任せる。D1 の値は印の UPDATE の returning から取る(往復を増やさない)。増えるのは KV の get 1 回(食い違いのときだけ D1 の書き込み 1 回)
+  if (marked && marked.active_version !== null && marked.active_version === written) {
+    let kvActive: string | null;
+    try {
+      kvActive = await env.CONFIG_KV.get(kvKeys.active(site.id));
+    } catch {
+      kvActive = null;
+    }
+    if (kvActive !== String(marked.active_version)) await db.updateTable("sites").set({ active_kv_stale: 1 }).where("id", "=", site.id).execute();
+  }
 
   await db.updateTable("publishes").set({ status: "active", activated_at: nowMs }).where("id", "=", rowId).execute();
   // published_status を Desired Status に追いつかせる(spec §13.8)。ここで live の status 列を再読みしない —
@@ -601,16 +665,25 @@ export async function cleanupOldVersions(env: Env, db: Db, siteId: string, writt
     queries++; // 確かめの読み取り 1 件
     await beforeDelete();
   }
-  for (const r of doomed) await env.CONFIG_KV.delete(kvKeys.config(siteId, r.version)).catch(() => {});
+  // 7n(G04 (b)): 印を付けるのは KV の削除が成功した版だけ。失敗した版は kv_deleted = 0 のまま残し、次の掃除で消し直す
+  const deleted: typeof doomed = [];
+  for (const r of doomed) {
+    try {
+      await env.CONFIG_KV.delete(kvKeys.config(siteId, r.version));
+      deleted.push(r);
+    } catch (e) {
+      console.error("config kv delete failed (retried by the next cleanup)", siteId, r.version, e);
+    }
+  }
   // 消した印は D1 の 1 文にまとめる(Cron の D1 の予算を版の数に比例させない)。D1 のバインド変数の上限に収まるよう CHUNK ずつ。
   // KV の削除より後に印を付けるので、途中で止まっても印の無い版は次の掃除でもう一度消される(冪等)
-  for (let i = 0; i < doomed.length; i += MARK_CHUNK) {
+  for (let i = 0; i < deleted.length; i += MARK_CHUNK) {
     queries++;
     // wtt-control への書き込みなので、凍結の印が無いことを条件に入れる(確かめと書き込みの間に凍結が入っても書かない。0 行 = 次の掃除がやり直す)
     await db
       .updateTable("publishes")
       .set({ kv_deleted: 1 })
-      .where("id", "in", doomed.slice(i, i + MARK_CHUNK).map((r) => r.id))
+      .where("id", "in", deleted.slice(i, i + MARK_CHUNK).map((r) => r.id))
       .where(sql<boolean>`${sql.raw(NOT_FROZEN_SQL)}`)
       .execute();
   }

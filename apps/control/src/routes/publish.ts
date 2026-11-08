@@ -50,7 +50,7 @@ export const PublishResultSchema = z.union([
   z.object({
     ok: z.literal(false),
     version: z.number().int().nullable(),
-    error: z.string().describe("機械可読コード(kv_put_failed / kv_verify_failed / kv_rate_limited / legacy_targeting / unknown_audience / within_days_exceeds_retention / asset_missing / asset_other_site …)"),
+    error: z.string().describe("機械可読コード(kv_put_failed / kv_verify_failed / kv_rate_limited / publish_record_missing / legacy_targeting / unknown_audience / within_days_exceeds_retention / asset_missing / asset_other_site …)"),
     message: z.string(),
     hint: z.string().optional(),
     assetProblems: z

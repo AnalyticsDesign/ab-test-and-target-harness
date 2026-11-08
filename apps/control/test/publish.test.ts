@@ -4,6 +4,7 @@ import { env } from "cloudflare:workers";
 import { compile, kvKeys, parseCompiledConfig } from "@wtt/core";
 import {
   active,
+  beforeD1BatchMatching,
   call,
   createExperiment,
   createSite,
@@ -443,6 +444,159 @@ describe("publish (spec §13.6)", () => {
     expect(await active(sid)).toBe("1"); // KV の active は触らない
     const row = await db.selectFrom("publishes").select("status").where("site_id", "=", sid).where("version", "=", 2).executeTakeFirstOrThrow();
     expect(row.status).toBe("superseded");
+  });
+
+  // 7n(B48): 予約行が途中で消えた公開(D1 を Time Travel で戻した後に、戻す前から続いていた公開など)は activation しない
+  it("publish_fails_without_activation_when_reserved_row_is_gone_7n", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const db = getDb(env);
+    expect((await publishSite(deployEnv(), db, await siteRow(sid), userActor(owner.userId))).ok).toBe(true); // v1
+    // 手順 4(設定の記録)の後、activation の CAS の batch の直前に v2 の予約行を消す
+    const hooked = beforeD1BatchMatching(env.DB, /update "sites" set "active_version"/i, async () => {
+      await env.DB.prepare("delete from publishes where site_id = ? and version = 2").bind(sid).run();
+    });
+    const e = deployEnv({ DB: hooked.db });
+    const r = await publishSite(e, getDb(e), await siteRow(sid), userActor(owner.userId));
+    expect(hooked.ran()).toBe(true);
+    expect(r).toMatchObject({ ok: false, version: 2, error: "publish_record_missing" });
+    expect((await siteRow(sid)).active_version).toBe(1);
+    expect(await env.CONFIG_KV.get(kvKeys.config(sid, 2))).toBeNull(); // 置いた config は消す
+    expect(await active(sid)).toBe("1");
+    // CAS の batch の後ろの文(届く定義の行)も書かれない
+    const delivered = await db.selectFrom("experiment_delivered_definitions").select("publish_version").where("site_id", "=", sid).where("publish_version", "=", 2).execute();
+    expect(delivered).toEqual([]);
+  });
+
+  it("publish_record_missing_keeps_a_config_another_publish_wrote_under_the_same_version_7n", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const db = getDb(env);
+    expect((await publishSite(deployEnv(), db, await siteRow(sid), userActor(owner.userId))).ok).toBe(true); // v1
+    // 戻した後の公開し直しが同じ版の番号(2)を取り直し、同じキーに別の config を書いた
+    const hooked = beforeD1BatchMatching(env.DB, /update "sites" set "active_version"/i, async () => {
+      await env.DB.prepare("delete from publishes where site_id = ? and version = 2").bind(sid).run();
+      await env.CONFIG_KV.put(kvKeys.config(sid, 2), "{\"other\":true}");
+    });
+    const e = deployEnv({ DB: hooked.db });
+    expect(await publishSite(e, getDb(e), await siteRow(sid), userActor(owner.userId))).toMatchObject({ ok: false, error: "publish_record_missing" });
+    expect(await env.CONFIG_KV.get(kvKeys.config(sid, 2))).toBe("{\"other\":true}");
+  });
+
+  // 7n レビュー: 戻した後に別の公開が同じ版の番号を取り直していれば(行の id は問わない)、同じ bytes でも KV の config を消さない
+  it("publish_record_missing_keeps_the_config_when_the_version_is_taken_by_another_row_7n", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const db = getDb(env);
+    expect((await publishSite(deployEnv(), db, await siteRow(sid), userActor(owner.userId))).ok).toBe(true); // v1
+    let bytes: string | null = null;
+    const hooked = beforeD1BatchMatching(env.DB, /update "sites" set "active_version"/i, async () => {
+      bytes = await env.CONFIG_KV.get(kvKeys.config(sid, 2)); // 自分(A)が置いた bytes = B が置く bytes と同じ
+      await env.DB.prepare("delete from publishes where site_id = ? and version = 2").bind(sid).run();
+      await env.DB.prepare("insert into publishes (id, site_id, version, status, published_by, created_at) values ('pub_other', ?, 2, 'active', ?, ?)").bind(sid, owner.userId, Date.now()).run();
+    });
+    const e = deployEnv({ DB: hooked.db });
+    expect(await publishSite(e, getDb(e), await siteRow(sid), userActor(owner.userId))).toMatchObject({ ok: false, error: "publish_record_missing" });
+    expect(bytes).not.toBeNull();
+    expect(await env.CONFIG_KV.get(kvKeys.config(sid, 2))).toBe(bytes);
+  });
+
+  // 7n レビュー: 読み直しを使い切った最後の CAS の直前に予約行が消えたら、superseded(と偽の公開の記録)にせず publish_record_missing
+  it("reserved_row_gone_before_the_last_cas_is_not_recorded_as_superseded_7n", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const db = getDb(env);
+    expect((await publishSite(deployEnv(), db, await siteRow(sid), userActor(owner.userId))).ok).toBe(true); // v1
+    // CAS の batch の直前に毎回 active_version を 1 ⇄ null で入れ替えて CAS を外させ、5 回目の前に v2 の予約行も消す
+    const sqlOf = new WeakMap<object, string>();
+    let casBatches = 0;
+    const racing = new Proxy(env.DB, {
+      get(t, p) {
+        const v = Reflect.get(t, p);
+        if (p === "prepare")
+          return (q: string) => {
+            const remember = (s: D1PreparedStatement): D1PreparedStatement => {
+              sqlOf.set(s, q);
+              const bind = s.bind.bind(s);
+              return Object.assign(s, { bind: (...a: unknown[]) => remember(bind(...a)) });
+            };
+            return remember(t.prepare(q));
+          };
+        if (p === "batch")
+          return async (stmts: D1PreparedStatement[]) => {
+            if (stmts.some((s) => /update "sites" set "active_version"/i.test(sqlOf.get(s) ?? ""))) {
+              casBatches++;
+              await t.prepare("update sites set active_version = case when active_version is null then 1 else null end where id = ?").bind(sid).run();
+              if (casBatches === 5) await t.prepare("delete from publishes where site_id = ? and version = 2").bind(sid).run();
+            }
+            return t.batch(stmts);
+          };
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    }) as D1Database;
+    const e = deployEnv({ DB: racing });
+    const r = await publishSite(e, getDb(e), await siteRow(sid), userActor(owner.userId));
+    expect(casBatches).toBe(5);
+    expect(r).toMatchObject({ ok: false, version: 2, error: "publish_record_missing" });
+    expect(await env.CONFIG_KV.get(kvKeys.config(sid, 2))).toBeNull();
+    const audits = await env.DB.prepare("select detail_json from audit_events where site_id = ? and action = 'publish.publish'").bind(sid).all<{ detail_json: string }>();
+    expect(audits.results.map((a) => JSON.parse(a.detail_json))).toEqual([{ version: 1, superseded: false }]);
+  });
+
+  // 7n(G04 (b)): KV の削除に失敗した版には「消した」の印を付けない(次の掃除で拾う)
+  it("cleanup_marks_only_versions_whose_kv_delete_succeeded_7n", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const db = getDb(env);
+    const t0 = 1_800_000_000_000;
+    for (let i = 0; i < 4; i++) expect((await publishSite(deployEnv(), db, await siteRow(sid), userActor(owner.userId), t0 + i * 1000)).ok).toBe(true);
+    const failingDelete = new Proxy(env.CONFIG_KV, {
+      get(t, p) {
+        const v = Reflect.get(t, p);
+        if (p === "delete")
+          return async (k: string) => {
+            if (k === kvKeys.config(sid, 2)) throw new Error("injected kv delete failure");
+            return t.delete(k);
+          };
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    }) as KVNamespace;
+    await cleanupOldVersions(deployEnv({ CONFIG_KV: failingDelete }), db, sid, 4, t0 + 6 * 60_000);
+    const marks = await db.selectFrom("publishes").select(["version", "kv_deleted"]).where("site_id", "=", sid).orderBy("version").execute();
+    expect(marks).toEqual([
+      { version: 1, kv_deleted: 1 },
+      { version: 2, kv_deleted: 0 },
+      { version: 3, kv_deleted: 1 },
+      { version: 4, kv_deleted: 0 },
+    ]);
+    expect(await config(sid, 2)).not.toBeNull();
+    // 次の掃除で消えて印が付く
+    await cleanupOldVersions(deployEnv(), db, sid, 4, t0 + 7 * 60_000);
+    expect(await config(sid, 2)).toBeNull();
+    expect((await db.selectFrom("publishes").select("kv_deleted").where("site_id", "=", sid).where("version", "=", 2).executeTakeFirstOrThrow()).kv_deleted).toBe(1);
+  });
+
+  // 7n(G04 (d)): 古い公開の active の put が、新しい公開の put の後・印の前に着いたとき、KV は古い版なのに「食い違いなし」で止まらない
+  it("stale_flag_stays_when_an_older_active_put_lands_last_7n", async () => {
+    const { owner, sid } = await siteWithRunning();
+    expect((await json<PublishResult>(await publishRes(owner.token, sid))).ok).toBe(true); // v1
+    // v2 の公開(B)が active = 2 を書いた直後に、v1 を読んでいた公開(A)の put(1)が遅れて着く
+    const lateOlderPut = new Proxy(env.CONFIG_KV, {
+      get(t, p) {
+        const v = Reflect.get(t, p);
+        if (p === "put")
+          return async (k: string, ...rest: unknown[]) => {
+            const out = await (t.put as (...a: unknown[]) => Promise<void>).apply(t, [k, ...rest]);
+            if (/:active$/.test(k)) await t.put(k, "1");
+            return out;
+          };
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    }) as KVNamespace;
+    const r = await json<PublishResult>(await publishRes(owner.token, sid, { CONFIG_KV: lateOlderPut }));
+    expect(r).toMatchObject({ ok: true, version: 2, superseded: false });
+    expect(await active(sid)).toBe("1");
+    expect((await siteRow(sid)).active_version).toBe(2);
+    expect((await siteRow(sid)).active_kv_stale).toBe(1);
+    // 次の GET /sites/:sid の自己修復が KV を D1 に揃える
+    expect((await call("GET", `/sites/${sid}`, { token: owner.token })).status).toBe(200);
+    expect(await active(sid)).toBe("2");
+    expect((await siteRow(sid)).active_kv_stale).toBe(0);
   });
 
   it("site with a running experiment cannot be deleted until the stop is published", async () => {
