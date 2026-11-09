@@ -32,6 +32,8 @@ Workers Paid で支出が上限に達したときに自動停止する機能は�
 
 人が手で既定の構成(0.1 の表)を導入するための、いちばん短い手順。コマンドはすべて 0〜5 節にあるものと同じで、`pnpm docs:check` が一致を検査する。ここには確認を 1 行ずつと、期待と違ったときに読む先だけを添えた。AI エージェントに任せる場合、エージェントはここを使わず 0 節から読む(README のプロンプトのとおり)。
 
+Windows の Git Bash で確認コマンドの出力が期待と違う場合は、[引数のパスの書き換えの確認と対処](#git-bash-で確認コマンドの出力が期待と違うとき)も読んでください。
+
 ここで動かす構成と、外れるときに読む先:
 
 - 設置サイトのドメインが Cloudflare のゾーンにあり、DNS がプロキシ(オレンジの雲)になっている。edge と設置タグはそのゾーンの Workers Route で公開する(`<設置ホスト>/v1/*`・`/s/*`)。別のドメインに置く構成と `*.workers.dev` の構成で読む先は、上の 2 つの箇条
@@ -573,6 +575,24 @@ openssl version            # 乱数の生成に使う
 - `openssl: command not found`、または `bash` が無い(Windows)→ Git for Windows を入れ、その Git Bash で実行する。原因は、Git for Windows ではない Git を使っていること。エージェントの実行環境に同梱された最小構成の Git などが当たる。この文書の bash ブロックは `openssl`・`sleep`・`date` を使う
 
 以下、`wrangler …` は `pnpm -C apps/control exec wrangler …`(control 系)/ `pnpm -C apps/edge exec wrangler …`(edge 系)の意味。`login` / `whoami` / `kv namespace create` はどちらから実行してもよい。
+
+#### Git Bash で確認コマンドの出力が期待と違うとき
+
+Git Bash は、Windows のプログラムに渡す `/s/...` のような引数を、Windows のファイルのパスに書き換えることがあります。この文書の curl の URL は `https://` から始まる形のまま使ってください。HTTP コードや本文が期待と違う場合は、その結果だけで導入が成功したと判断せず、`type -a curl` と `curl --version` で使っている curl を確認してください。URL のパスなどが書き換わっていた場合は、そのコマンドだけに `MSYS_NO_PATHCONV=1` を付けて確認し直してください。ファイルの入出力先も引数に含まれるときは、そのパスも確認してください。
+
+```bash
+# Git Bash でパスの書き換えが確認されたときだけ使う例
+MSYS_NO_PATHCONV=1 curl -sSI "https://<設置タグのホスト>/s/<siteId>.js"
+```
+
+Windows の curl で HTTP コードだけを確かめるときは、次のようにします。`-o /dev/null` の引数も書き換えが止まるため、Windows の curl の出力先には `NUL` を使います。シェルが処理する `>/dev/null` はそのままにし、`>NUL` には変えないでください。
+
+```bash
+# Windows の curl で HTTP コードだけを確かめる例
+MSYS_NO_PATHCONV=1 curl -sS -o NUL -w '%{http_code}\n' "https://<設置タグのホスト>/s/<siteId>.js"
+```
+
+書き換えを止めるのは、影響が確認されたコマンドだけにしてください。`export MSYS_NO_PATHCONV=1` で以後の全コマンドの書き換えを止めると、ローカルファイルのパスを Windows のプログラムに渡す処理まで変わります。コマンドを引用符で囲むだけ、または `.sh` ファイルに保存するだけでは、この書き換えを避けられません。
 
 #### アカウントを作る(`cloudflare_account: none / separate` のとき)
 
