@@ -338,4 +338,23 @@ describe("evaluate / draft-bootstrap と外したページの条件(B69)", () =>
     const miss = await evaluate(owner.token, sid, { url: "https://www.example.com/lp/?utm_source=ads" });
     expect(of(miss.items, "exp_param")).toMatchObject({ eligible: false, reason: "url_mismatch" });
   });
+
+  it("what_if_uses_and", async () => {
+    const { owner, sid } = await publishedSite();
+    // 「かつ」の条件つきの行: /lp/ を含み、かつホストが www.example.com、かつパスが ^/lp/$(B69 and)
+    const { id: eid } = await createExperiment(owner.token, sid, {
+      id: "exp_and",
+      urlMatch: { include: [{ page: { part: "path", op: "contains", value: "/lp/" }, and: [{ part: "host", op: "equals", value: "www.example.com" }, { part: "path", op: "regex", value: "^/lp/$" }] }] },
+    });
+    await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
+    expect((await call("POST", `/sites/${sid}/experiments/${eid}/status`, { token: owner.token, body: { status: "running" } })).status).toBe(200);
+    const hit = await evaluate(owner.token, sid, { url: "https://www.example.com/lp/" });
+    expect(of(hit.items, "exp_and")).toMatchObject({ eligible: true });
+    // page には合うが and のホストに合わない
+    const hostMiss = await evaluate(owner.token, sid, { url: "https://other.example.com/lp/" });
+    expect(of(hostMiss.items, "exp_and")).toMatchObject({ eligible: false, reason: "url_mismatch" });
+    // page には合うが and の正規表現に合わない
+    const rxMiss = await evaluate(owner.token, sid, { url: "https://www.example.com/lp/x" });
+    expect(of(rxMiss.items, "exp_and")).toMatchObject({ eligible: false, reason: "url_mismatch" });
+  });
 });

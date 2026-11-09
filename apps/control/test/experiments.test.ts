@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import {
+  kvKeys,
+  parseCompiledConfig,
   PAGE_CONDITION_MOVED_AUDIENCE_HINT,
   PAGE_CONDITION_MOVED_AUDIENCE_MESSAGE,
   PAGE_CONDITION_MOVED_HINT,
@@ -441,6 +443,99 @@ describe("対象 URL の行と外したページの条件(B69)", () => {
     const ok = await post({ include: kept, exclude: [] });
     expect(ok.status).toBe(201);
     expect((await json(ok)).urlMatch).toEqual({ include: [kept[0], { page: { op: "contains", value: "/x" } }] });
+  });
+
+  // B69 追補: 行の「かつ」の条件(and)
+  const AND_HOST = { part: "host", op: "equals", value: "www.example.com" };
+  const AND_REGEX = { part: "path", op: "regex", value: "^/[a-z]+/$" };
+
+  it("save_and_round_trip", async () => {
+    const { owner, sid } = await site();
+    // 入力の順のまま保存・正規化(part 省略 = url の contains は正規化で part: "url" になる)。空の and は省く
+    const sent = { include: [{ page: { part: "path", op: "startsWith", value: "/lp/" }, and: [AND_HOST, { part: "path", op: "contains", value: "x" }, AND_REGEX] }, { page: { op: "contains", value: "/y" }, and: [] }] };
+    const stored = { include: [{ page: sent.include[0]!.page, and: sent.include[0]!.and }, { page: { part: "url", op: "contains", value: "/y" } }] };
+    const post = await call("POST", `/sites/${sid}/experiments`, { token: owner.token, body: { id: "exp_and", name: "And", urlMatch: sent } });
+    expect(post.status).toBe(201);
+    const posted = (await json(post)).urlMatch;
+    expect(posted.include[0]).toEqual(stored.include[0]);
+    expect(posted.include[1].and).toBeUndefined();
+    const got = await json(await call("GET", `/sites/${sid}/experiments/exp_and`, { token: owner.token }));
+    expect(got.urlMatch).toEqual(posted);
+    // PATCH で and を入れ替える(順は入力のまま)
+    const next = { include: [{ page: { part: "host", op: "equals", value: "a.example.com" }, and: [AND_REGEX, AND_HOST] }] };
+    const patch = await call("PATCH", `/sites/${sid}/experiments/exp_and`, { token: owner.token, body: { urlMatch: next } });
+    expect(patch.status).toBe(200);
+    expect((await json(patch)).urlMatch).toEqual(next);
+    expect((await json(await call("GET", `/sites/${sid}/experiments/exp_and`, { token: owner.token }))).urlMatch).toEqual(next);
+  });
+
+  it("save_and_limit_422", async () => {
+    const { owner, sid } = await site();
+    const and6 = Array.from({ length: 6 }, () => AND_HOST);
+    const res = await call("POST", `/sites/${sid}/experiments`, { token: owner.token, body: { id: "exp_and6", name: "A6", urlMatch: { include: [{ ...ROW, and: and6 }] } } });
+    expect(res.status).toBe(422);
+    const body = await json<{ error: string; path: unknown[] }>(res);
+    expect(body.error).toBe("validation_failed");
+    expect(body.path).toEqual(["urlMatch", "include", 0, "and"]);
+    // 5 個までは保存できる
+    expect((await call("POST", `/sites/${sid}/experiments`, { token: owner.token, body: { id: "exp_and5", name: "A5", urlMatch: { include: [{ ...ROW, and: and6.slice(0, 5) }] } } })).status).toBe(201);
+  });
+
+  it("save_and_regex_error_has_index_length", async () => {
+    const { owner, sid } = await site();
+    const { id: eid } = await createExperiment(owner.token, sid);
+    const patch = (urlMatch: unknown) => call("PATCH", `/sites/${sid}/experiments/${eid}`, { token: owner.token, body: { urlMatch } });
+    // URL 全体の正規表現の and は 422(page と同じ)
+    const urlWide = await patch({ include: [{ ...ROW, and: [{ op: "regex", value: "^/a" }] }] });
+    expect(urlWide.status).toBe(422);
+    expect(await json(urlWide)).toMatchObject({ error: "regex_not_allowed_on_url", path: ["urlMatch", "include", 0, "and", 0, "value"], index: expect.any(Number), length: expect.any(Number) });
+    // 対象 URL の保存だけが、ホストを絞るときの and の案内を足す
+    expect((await json<{ message: string }>(await patch({ include: [{ ...ROW, and: [{ op: "regex", value: "^/a" }] }] }))).message).toContain("かつ");
+    // 式の誤りは位置(index / length)と書き換えの例つき。2 行目・exclude の and の path も正しい
+    const bad = await patch({ include: [ROW, { ...ROW, and: [AND_HOST, { part: "path", op: "regex", value: "^/a(?=b)" }] }], exclude: [{ ...ROW, and: [AND_REGEX] }] });
+    expect(bad.status).toBe(422);
+    const body = await json<{ error: string; path: unknown[]; index: number; length: number; message: string }>(bad);
+    expect(body.path).toEqual(["urlMatch", "include", 1, "and", 1, "value"]);
+    expect(typeof body.index).toBe("number");
+    expect(typeof body.length).toBe("number");
+    expect(body.message.length).toBeGreaterThan(0);
+    // page の誤りの封筒と同じ形(error・path 以外のキーが同じ)
+    const pageBad = await json<Record<string, unknown>>(await patch({ include: [{ page: { part: "path", op: "regex", value: "^/a(?=b)" } }] }));
+    expect(Object.keys(pageBad).sort()).toEqual(Object.keys(body).sort());
+    expect(pageBad).toMatchObject({ error: body.error, path: ["urlMatch", "include", 0, "page", "value"], index: body.index, length: body.length });
+    // exclude の and
+    const ex = await json(await patch({ include: [ROW], exclude: [{ ...ROW, and: [{ part: "path", op: "regex", value: "^/a(?=b)" }] }] }));
+    expect(ex).toMatchObject({ path: ["urlMatch", "exclude", 0, "and", 0, "value"] });
+  });
+
+  it("save_and_instructions_422", async () => {
+    const { owner, sid } = await site();
+    const { id: eid } = await createExperiment(owner.token, sid);
+    const big = (k: number) => ({ part: "path", op: "regex", value: `^/${k}.{0,97}` }); // 198 命令
+    // page が 198 + and が 198 + 198 = 594 > 500(and だけの追加で超える)
+    const res = await call("PATCH", `/sites/${sid}/experiments/${eid}`, { token: owner.token, body: { urlMatch: { include: [{ page: big(1), and: [big(2), big(3)] }] } } });
+    expect(res.status).toBe(422);
+    const body = await json<{ error: string; path: unknown[]; hint: string; index?: number }>(res);
+    expect(body).toMatchObject({ error: "url_match_too_large", path: ["urlMatch"] });
+    expect(body.hint).toContain("かつ");
+    expect(body.index).toBeUndefined();
+    // 2 つ(396)なら保存できる
+    expect((await call("PATCH", `/sites/${sid}/experiments/${eid}`, { token: owner.token, body: { urlMatch: { include: [{ page: big(1), and: [big(2)] }] } } })).status).toBe(200);
+  });
+
+  it("publish_compiles_and", async () => {
+    const { owner, sid } = await site();
+    const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_pub", urlMatch: { include: [{ page: { part: "path", op: "startsWith", value: "/lp/" }, and: [AND_HOST, AND_REGEX] }] } });
+    await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
+    expect((await call("POST", `/sites/${sid}/experiments/${eid}/status`, { token: owner.token, body: { status: "running" } })).status).toBe(200);
+    const version = Number(await env.CONFIG_KV.get(kvKeys.active(sid)));
+    const cfg = parseCompiledConfig(JSON.parse((await env.CONFIG_KV.get(kvKeys.config(sid, version)))!))!;
+    const row = cfg.experiments.find((e) => e.id === eid)!.urlMatch.include[0]!;
+    expect(row.and).toHaveLength(2);
+    expect(row.and![0]).toEqual({ part: "host", op: "equals", value: "www.example.com" }); // 正規表現でなければ prog は付かない
+    expect(row.and![1]).toMatchObject({ part: "path", op: "regex", value: "^/[a-z]+/$" });
+    expect(row.and![1]).toHaveProperty("prog"); // 正規表現の and にはコンパイル済みの prog
+    expect(row.page).not.toHaveProperty("prog");
   });
 
   it("moved_page_condition_is_422", async () => {

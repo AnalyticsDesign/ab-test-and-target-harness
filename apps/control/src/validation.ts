@@ -265,15 +265,23 @@ export function normalizedPageMatch(m: PageMatchInput, path: Array<string | numb
 }
 
 /**
- * B69(spec §2.1): 対象 URL の正規化と検査。各行の page は対象 URL・目標と同じ normalizedPageMatch(正規表現の 422 は index / length 付き。
- * `path` = [...path, "include" | "exclude", 行, "page", "value"])、その後に全行の命令数の合計の上限(url_match_too_large)。
+ * B69(spec §2.1・追 §5): 対象 URL の正規化と検査。検査は core の urlMatchIssue の 1 回の走査だけ
+ * (page と and の各要素の正規表現を 1 回ずつコンパイルし、命令数の合計が上限を超えたら止める。行ごとに normalizedPageMatch を呼ばない)。
+ * 正規表現の 422 は他の欄と同じ封筒(regexIssueError と同じ path・message・hint・index・length。
+ * `path` = [...path, "include" | "exclude", 行, "page" | "and", (and の位置,) "value"])、全行の命令数の合計の上限は url_match_too_large(path は urlMatch)。
  * 保存する値は正規化した後のもの(行とパラメータの順は入力のまま)
  */
 export function normalizedUrlMatch(m: UrlMatchInput, path: Path): UrlMatchInput {
   const n = normalizeUrlMatch(m);
-  for (const key of ["include", "exclude"] as const) for (const [i, r] of (n[key] ?? []).entries()) normalizedPageMatch(r.page, [...path, key, i, "page"]);
   const issue = urlMatchIssue(n);
-  if (issue) throw new ApiError(422, issue.code, { path: [...path, ...issue.path], message: issue.message, ...(issue.hint ? { hint: issue.hint } : {}) });
+  if (issue)
+    throw new ApiError(422, issue.code, {
+      path: [...path, ...issue.path],
+      message: issue.message,
+      ...(issue.hint !== undefined ? { hint: issue.hint } : {}),
+      ...(issue.index !== undefined ? { index: issue.index } : {}),
+      ...(issue.length !== undefined ? { length: issue.length } : {}),
+    });
   return n;
 }
 

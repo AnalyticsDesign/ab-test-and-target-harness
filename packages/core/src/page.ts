@@ -67,15 +67,16 @@ export function matchesUrl(url: string, m: PageMatch): boolean {
 
 /** パラメータの条件(対象 URL の行。値は URL の searchParams と同じ文字列で照合する) */
 export type ParamMatch = { name: string; op: "equals"; value: string } | { name: string; op: "contains"; value: string } | { name: string; op: "exists" };
-/** 対象 URL の 1 行 = ページの一致 AND すべてのパラメータの条件 */
-export type UrlRow<P = PageMatch> = { page: P; params?: ParamMatch[] };
+/** 対象 URL の 1 行 = ページの一致(page と、あれば and のすべて)AND すべてのパラメータの条件 */
+export type UrlRow<P = PageMatch> = { page: P; and?: P[]; params?: ParamMatch[] };
 /** 対象 URL = 含める行のどれかに一致し、除く行のどれにも一致しない */
 export type UrlMatch<P = PageMatch> = { include: UrlRow<P>[]; exclude?: UrlRow<P>[] };
 
 /**
- * 対象 URL の照合(true = 対象)。行の結果は 3 値で、page とすべてのパラメータを短絡せず評価し、どれかが null なら null。
+ * 対象 URL の照合(true = 対象)。行の結果は 3 値で、page・and のすべて・すべてのパラメータを短絡せず評価し、どれかが null なら null。
  * 除くの行が null なら対象外(判定できないページで配信先を広げない)、含めるの行が null なら一致しない。
- * 形の合わない入力(null・include が配列でない・page の無い行・版 2 の PageMatch・配列でない params)は例外を投げず false。
+ * 形の合わない入力(null・include が配列でない・page の無い行・版 2 の PageMatch・配列でない params / and)は例外を投げず false。
+ * params / and の偽の値(null・false・0・"")は無いのと同じ(配列でない真の値だけが false)。
  * 配列でない exclude は、偽の値なら無いのと同じ、page を持たない値なら false。ただし page を持つオブジェクト(配列に包んでいない 1 行)は
  * 例外になる(schema が保存・配る形で止める入力で、ここでは守らない)
  */
@@ -83,11 +84,11 @@ export function matchTargetUrl(m: unknown, page: PageView): boolean {
   const { include, exclude } = (m || {}) as Partial<UrlMatch>;
   if (!Array.isArray(include)) return false;
   const rows = include.concat(exclude || []);
-  if (rows.some((r) => !r || !r.page || (r.params && !Array.isArray(r.params)))) return false;
-  // 行の結果。同じ名前のパラメータが複数あれば、どれか 1 つが条件を満たせば一致
-  const row = ({ page: pm, params }: UrlRow): boolean | null => {
-    const rs = [matchPage(pm, page)].concat(
-      (params || []).map((p) => {
+  if (rows.some((r) => !r || !r.page || !Array.isArray(r.params || []) || !Array.isArray(r.and || []))) return false;
+  // 行の結果。page と and は同じ型の条件で、全部を AND する。同じ名前のパラメータが複数あれば、どれか 1 つが条件を満たせば一致
+  const row = (r: UrlRow): boolean | null => {
+    const rs = [r.page].concat(r.and || []).map((x) => matchPage(x, page)).concat(
+      (r.params || []).map((p) => {
         const vs = page.params && page.params.getAll(p.name);
         return vs && (p.op === "exists" ? vs.length > 0 : vs.some((v) => (p.op === "equals" ? v === p.value : v.includes(p.value))));
       }),

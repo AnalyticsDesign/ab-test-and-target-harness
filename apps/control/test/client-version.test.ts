@@ -59,7 +59,7 @@ describe("client version guard (plan12 K4/K5)", () => {
 
   it("the real guard is built from MIN_CLIENT_VERSION", () => {
     expect(clientVersionGuard).toBeTypeOf("function");
-    expect(MIN_CLIENT_VERSION).toBe(5);
+    expect(MIN_CLIENT_VERSION).toBe(6);
   });
 
   it("freeze 503 wins over 426 in the real app", async () => {

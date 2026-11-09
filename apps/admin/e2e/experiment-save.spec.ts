@@ -175,7 +175,7 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
     await expect(saveState()).toHaveText(SAVED);
     // 2 回目は配信条件の行も足す(画面で足した行の id と、サーバーの値から作った行の id が違っても注記にならない)
     await nameInput().fill("E2E save 3");
-    await page.getByRole("button", { name: "+ 条件" }).click();
+    await page.getByRole("button", { name: "+ 条件", exact: true }).click();
     const row = page.getByTestId("condition-row").first();
     await row.getByRole("combobox", { name: "条件の種類" }).click();
     await row.getByRole("option", { name: "端末", exact: true }).click();

@@ -16,6 +16,15 @@ describe("public strings carry no private design references", () => {
     noPrivateRef("/llms.txt", await (await call("GET", "/llms.txt")).text());
   });
 
+  it("openapi_url_match_describes_and", async () => {
+    // B69 追補(追 §9): 契約の基準(contract-snapshot)は description を除くので、urlMatch の説明に and と上限を書いたことをここで見る
+    const text = await (await call("GET", "/openapi.json")).text();
+    const desc = /対象 URL。含める行[^"]*/u.exec(text)?.[0] ?? "";
+    expect(desc).toContain("and");
+    expect(desc).toMatch(/and。0〜5 個/u);
+    noPrivateRef("urlMatch description", desc);
+  });
+
   it("analytics_recipe_response", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);

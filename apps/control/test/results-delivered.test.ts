@@ -1,13 +1,13 @@
 import { env } from "cloudflare:workers";
 import { sql } from "kysely";
 import { describe, expect, it, vi } from "vitest";
-import { staticInputDigest, type StaticDeployHistoryEntry, type StaticGeneration } from "@wtt/core";
+import { canonicalUrlMatch, staticInputDigest, type StaticDeployHistoryEntry, type StaticGeneration } from "@wtt/core";
 import { resultsDeliveryJob } from "../src/cron/results-jobs";
 import { runCron } from "../src/cron/runner";
 import { getDb } from "../src/db";
 import type { Env } from "../src/env";
 import { publishSite } from "../src/publish";
-import { changedParts, confirmDeliveries, deliveredAt, recordDeliveredDefinitions, sitesNeedingDeliveryConfirmation, type DeliveredDefinition } from "../src/results/delivered";
+import { changedParts, confirmDeliveries, definitionHash, deliveredAt, recordDeliveredDefinitions, sitesNeedingDeliveryConfirmation, type DeliveredDefinition } from "../src/results/delivered";
 import type { WriteGuard } from "../src/results/guard";
 import { genOf, reconcileStatic } from "../src/static-delivery";
 import {
@@ -165,7 +165,7 @@ describe("届く定義(D9 ③ K14)", () => {
     expect(rs[0]).toMatchObject({ experiment_id: "exp_t", run_id: runId, delivered_from: null, settled: null });
     const d = JSON.parse(rs[0]!.definition_json) as DeliveredDefinition;
     expect(d).toEqual({
-      variants: [{ id: "a", changes: [] }, { id: "b", changes: [TEXT_CHANGE()] }],
+      variants: [{ id: "a", changes: [] }, { id: "b", changes: [{ id: "c_text", type: "TEXT", selector: ".hero-title", payload: { text: "Hello" } }] }],
       urlMatch: { include: [{ page: { op: "contains", value: "/" } }] },
       targeting: null,
       primaryGoal: { id: "g_primary", config: {} },
@@ -1007,5 +1007,33 @@ describe("対象 URL の行と配信の確かめ(B69)", () => {
     const b = def("x", { urlMatch: { include: [rows2[1]!, { ...rows2[0]!, params: [...rows2[0]!.params!].reverse() }], exclude: [] } });
     expect(changedParts(a, b)).toEqual([]);
     expect(changedParts(a, def("x", { urlMatch: { include: rows2, exclude: [{ page }] } }))).toEqual(["urlMatch"]);
+  });
+
+  it("delivered_definition_without_and_is_not_a_change", async () => {
+    // and の無い定義は、and を足す前と同じ正規の形・同じ hash(固定値。hash の計算 = delivered.ts の canonicalJson / definitionHash はこの変更で触れていない。
+    // 正規の形は core 側のテストも「and の無い行の文字列は and を足す前と同じ」を守る)。変更の内容は helper に依らないよう直接書く
+    expect(canonicalUrlMatch({ include: [{ page: { op: "contains", value: "/" } }] })).toBe('{"include":[{"page":{"op":"contains","value":"/"}}]}');
+    const urlMatch = {
+      include: [{ page: { part: "path", op: "startsWith", value: "/lp/" }, params: [{ name: "b", op: "exists" }, { name: "a", op: "equals", value: "x" }] }],
+      exclude: [{ page: { part: "host", op: "equals", value: "www.example.com" } }],
+    };
+    expect(canonicalUrlMatch(urlMatch)).toBe(
+      '{"exclude":[{"page":{"op":"equals","part":"host","value":"www.example.com"}}],"include":[{"page":{"op":"startsWith","part":"path","value":"/lp/"},"params":[{"name":"a","op":"equals","value":"x"},{"name":"b","op":"exists"}]}]}',
+    );
+    const d: DeliveredDefinition = {
+      variants: [{ id: "a", changes: [] }, { id: "b", changes: [{ id: "c_text", type: "TEXT", selector: ".hero-title", payload: { text: "Hello" } }] }],
+      urlMatch,
+      targeting: null,
+      primaryGoal: { id: "g_primary", config: {} },
+    };
+    expect(await definitionHash(d)).toBe("e547b16a6ddb1d90687043e569c92fd9e3fc845acbc36b23d95619470d3b3189");
+    // and の順だけが違う定義は変更ではない・and の有無は変更(空の and は無いのと同じ)
+    const page = { part: "path", op: "startsWith", value: "/lp/" };
+    const A = { part: "host", op: "equals", value: "www.example.com" };
+    const B = { part: "path", op: "contains", value: "x" };
+    const withAnd = (and: unknown[]) => def("x", { urlMatch: { include: [{ page, and }] } });
+    expect(changedParts(withAnd([A, B]), withAnd([B, A]))).toEqual([]);
+    expect(changedParts(withAnd([]), def("x", { urlMatch: { include: [{ page }] } }))).toEqual([]);
+    expect(changedParts(withAnd([A]), def("x", { urlMatch: { include: [{ page }] } }))).toEqual(["urlMatch"]);
   });
 });

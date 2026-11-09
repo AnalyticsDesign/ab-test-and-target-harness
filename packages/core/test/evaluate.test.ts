@@ -184,6 +184,14 @@ describe("experimentsForUrl / patternsForUrl (spec §7.4 ③: edge が DO に渡
     expect(experimentsForUrl(config, "https://a/lp/x").map((e) => e.id)).toEqual(["e_lp", "e_all"]);
     expect(experimentsForUrl(config, "https://a/pricing").map((e) => e.id)).toEqual(["e_all"]);
   });
+  it("experiments_for_url_uses_and: and の条件に合わない URL では部分集合に入らない(B69 and)", () => {
+    const host = { part: "host" as const, op: "equals" as const, value: "shop.example.com" };
+    const sale = { part: "path" as const, op: "contains" as const, value: "/sale/" };
+    const cfg = { ...config, experiments: [{ ...exp("e_and", "/"), urlMatch: { include: [{ page: host, and: [sale] }] } }, exp("e_all", "/")] };
+    expect(experimentsForUrl(cfg, "https://shop.example.com/a/sale/b").map((e) => e.id)).toEqual(["e_and", "e_all"]);
+    expect(experimentsForUrl(cfg, "https://shop.example.com/new/").map((e) => e.id)).toEqual(["e_all"]);
+    expect(experimentsForUrl(cfg, "https://www.example.com/sale/").map((e) => e.id)).toEqual(["e_all"]);
+  });
   it("URL に一致するパターン ID を返す(不一致は空)", () => {
     expect(patternsForUrl(config, "https://a/pricing?x=1")).toEqual(["p_pricing"]);
     expect(patternsForUrl(config, "https://a/docs/intro")).toEqual(["p_docs"]);

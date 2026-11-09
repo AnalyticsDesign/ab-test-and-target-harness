@@ -45,7 +45,7 @@ export function pageMatchIssue(m: PageMatchInput): RegexIssue | null {
   if ((m.part ?? "url") === "url")
     return {
       code: "regex_not_allowed_on_url",
-      message: "URL 全体には正規表現を使えません。まず URL の startsWith(で始まる)か equals(と等しい)で書けるかを確かめてください。ホストも絞る必要があるときは、パスだけの条件に置き換えないでください(1 つのページの一致はホストかパスの一方しか見ません)",
+      message: "URL 全体には正規表現を使えません。まず URL の startsWith(で始まる)か equals(と等しい)で書けるかを確かめてください",
       index: 0,
       length: 0,
       example: '{ "part": "path", "op": "regex", "value": "^/products/\\\\d+$" }',

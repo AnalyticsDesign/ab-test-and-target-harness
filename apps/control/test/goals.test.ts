@@ -3,6 +3,25 @@ import { describe, it, expect } from "vitest";
 import { call, json, setupOwner, inviteAndJoin, createSite } from "./helpers";
 
 describe("goals", () => {
+  // B69 and: and を持てない目標には「かつ(and)」の案内を返さない(対象 URL の保存だけが案内する)
+  it("pageview goal url regex 422 does not suggest and", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    const create = await call("POST", `/sites/${sid}/goals`, { token, body: { id: "g_re", name: "R", type: "PAGEVIEW", config: { page: { op: "regex", value: "^/a" } } } });
+    expect(create.status).toBe(422);
+    const body = await json<{ error: string; message: string }>(create);
+    expect(body.error).toBe("regex_not_allowed_on_url");
+    expect(body.message).toContain("で始まる");
+    expect(body.message).not.toContain("かつ");
+    expect(body.message).not.toContain("and");
+    await call("POST", `/sites/${sid}/goals`, { token, body: { id: "g_ok", name: "O", type: "PAGEVIEW", config: { page: { op: "contains", value: "/a" } } } });
+    const patch = await call("PATCH", `/sites/${sid}/goals/g_ok`, { token, body: { config: { page: { op: "regex", value: "^/a" } } } });
+    expect(patch.status).toBe(422);
+    const pbody = await json<{ error: string; message: string }>(patch);
+    expect(pbody.error).toBe("regex_not_allowed_on_url");
+    expect(pbody.message).not.toContain("かつ");
+  });
+
   it("goals validate type-specific config and enforce 100 char names", async () => {
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);

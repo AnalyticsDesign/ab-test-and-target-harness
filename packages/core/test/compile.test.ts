@@ -341,6 +341,30 @@ describe("compile: 版 3(決定 49・B69)", () => {
     expect(CompiledConfigSchema.safeParse(two).success).toBe(true);
   });
 
+  it("compile_and_prog(B69 追補: and の正規表現に命令列を付け、regexInstructionTotal が数える。場所の文言は「かつ N つ目」)", () => {
+    const reAnd = "^/sale/\\d+$";
+    const urlMatch = {
+      include: [{ page: { part: "host", op: "equals", value: "Shop.Example.com" }, and: [{ part: "path", op: "regex", value: reAnd }, { part: "url", op: "contains", value: "/x" }], params: [{ name: "a", op: "exists" }] }],
+      exclude: [{ page: { op: "contains", value: "/ng/" }, and: [] }],
+    };
+    const cfg = compile({ ...base, experiments: [withTargeting(undefined, urlMatch)] });
+    const m = cfg.experiments[0]!.urlMatch;
+    expect(m.include[0]!.page).toEqual({ part: "host", op: "equals", value: "shop.example.com" });
+    expect(m.include[0]!.and![0]).toMatchObject({ part: "path", op: "regex", value: reAnd, prog: { v: 1 } });
+    expect(m.include[0]!.and![1]).toEqual({ op: "contains", value: "/x" }); // 正規化(part: "url" は省く)
+    expect(m.include[0]!.params).toEqual([{ name: "a", op: "exists" }]);
+    expect(m.exclude![0]).toEqual({ page: { op: "contains", value: "/ng/" } }); // 空の and は省く
+    const n = compileRegex(reAnd);
+    if (!n.ok) throw new Error("regex");
+    expect(regexInstructionTotal(cfg)).toBe(n.instructions);
+    expect(CompiledConfigSchema.safeParse(cfg).success).toBe(true);
+    // 誤りの場所の文言
+    const bad = { include: [{ page: { op: "contains", value: "/" }, and: [{ part: "path", op: "regex", value: "(?=a)" }] }] };
+    expect(() => compile({ ...base, experiments: [withTargeting(undefined, bad)] })).toThrowError(
+      expect.objectContaining({ code: "invalid_regex", message: expect.stringContaining("エクスペリエンス exp_001 の対象 URL(含める 1 行目のかつ 1 つ目)") }),
+    );
+  });
+
   it("compile_rejects_moved_page_condition(配信条件・参照するオーディエンスのページの条件は page_condition_moved)", () => {
     const err = (input: Record<string, unknown>): CompileError => {
       try {

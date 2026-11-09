@@ -49,6 +49,31 @@ it("prehide_excludes_on_null_exclude_row: 除くの行が判定できない(257 
   expect(prehideSelectors(config, `https://site.test${longPath}`)).toEqual([]);
 });
 
+// 配る形の schema に and が入るのは別の Task なので、CompiledConfig の型には載せずに渡す
+const withUrlMatch = (urlMatch: unknown): CompiledConfig =>
+  ({ ...baseConfig, prehide: { exp_hero: [".hero-title"] }, experiments: [{ ...baseConfig.experiments[0]!, urlMatch }] }) as unknown as CompiledConfig;
+
+it("prehide_follows_and: and に合わないページでは隠さない(B69 and)", () => {
+  const config = withUrlMatch({ include: [{ page: { part: "host", op: "equals", value: "site.test" }, and: [{ part: "path", op: "contains", value: "/sale/" }] }] });
+  expect(prehideSelectors(config, "https://site.test/a/sale/b")).toEqual([".hero-title"]);
+  expect(prehideSelectors(config, "https://site.test/new/")).toEqual([]);
+  expect(prehideSelectors(config, "https://other.test/sale/")).toEqual([]);
+});
+
+it("prehide_excludes_on_null_and_in_exclude_row: 除くの行の and が判定できない(257 字のパスでパスの正規表現)なら隠さない(B69 and)", () => {
+  const prog = compileRegex("^/lp/");
+  if (!prog.ok) throw new Error("fixture regex");
+  const config = withUrlMatch({
+    include: [{ page: { op: "contains", value: "/" } }],
+    exclude: [{ page: { part: "host", op: "equals", value: "site.test" }, and: [{ part: "path", op: "regex", value: "^/lp/", prog: prog.prog }] }],
+  });
+  expect(prehideSelectors(config, "https://site.test/other/")).toEqual([".hero-title"]); // 除くの and が false なら対象
+  expect(prehideSelectors(config, "https://site.test/lp/")).toEqual([]); // 除くの行が true なら対象外
+  const longPath = "/x/" + "a".repeat(254);
+  expect(longPath.length).toBe(257);
+  expect(prehideSelectors(config, `https://site.test${longPath}`)).toEqual([]); // null は対象外の側
+});
+
 it("injects opacity:0 !important style and removes it by id (spec §10.3)", () => {
   injectPrehide(document, [".hero-title"], null);
   const style = document.getElementById("__ab_prehide");

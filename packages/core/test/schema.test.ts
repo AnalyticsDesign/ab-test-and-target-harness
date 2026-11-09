@@ -451,3 +451,25 @@ describe("attributeChangeIssue", () => {
     expect(attributeChangeIssue({ name: "data-x", value: "1" })).toBeNull();
   });
 });
+
+describe("対象 URL の行の and(B69 追補)", () => {
+  const page = { part: "host", op: "equals", value: "shop.example.com" } as const;
+  const and = (n: number) => Array.from({ length: n }, (_, i) => ({ part: "path", op: "contains", value: `/s${i}/` }));
+  it("schema_accepts_and", () => {
+    expect(LIMITS.urlAndMax).toBe(5);
+    expect(UrlMatchInputSchema.safeParse({ include: [{ page, and: and(5), params: [{ name: "a", op: "exists" }] }] }).success).toBe(true);
+    expect(UrlMatchInputSchema.safeParse({ include: [{ page, and: [] }], exclude: [{ page, and: and(1) }] }).success).toBe(true);
+    const c = compileRegex("^/a$");
+    if (!c.ok) throw new Error("compile");
+    expect(CompiledUrlMatchSchema.safeParse({ include: [{ page, and: [{ part: "path", op: "regex", value: "^/a$", prog: c.prog }] }] }).success).toBe(true);
+    // 配る形の and の正規表現は prog が要る
+    expect(CompiledUrlMatchSchema.safeParse({ include: [{ page, and: [{ part: "path", op: "regex", value: "^/a$" }] }] }).success).toBe(false);
+  });
+  it("schema_rejects_six_and", () => {
+    const r = UrlMatchInputSchema.safeParse({ include: [{ page, and: and(6) }] });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues[0]?.path).toEqual(["include", 0, "and"]);
+    expect(UrlMatchInputSchema.safeParse({ include: [{ page, and: [{ part: "path", op: "contains", value: "/a", extra: 1 }] }] }).success).toBe(false); // 要素も strict
+    expect(UrlMatchInputSchema.safeParse({ include: [{ page, and: page }] }).success).toBe(false); // 配列でない
+  });
+});

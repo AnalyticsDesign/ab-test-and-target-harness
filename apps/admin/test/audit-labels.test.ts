@@ -89,7 +89,12 @@ describe("audit detail line", () => {
     expect(auditDetailLine(ev("experiment.update", { fields: ["urlMatch"], urlMatch: { from: { part: "path", op: "startsWith", value: "/lp/" }, to: newShape } }))).toBe(
       '対象 URL {"part":"path","op":"startsWith","value":"/lp/"} → パス が「/lp/」で始まる(ただし パス が「/old/」を含む を除く)',
     );
-    for (const from of [{ op: "equals" }, { part: "zzz", op: "equals", value: "/" }, null, "x", { include: [] }])
+    // B69 追補(and): row_text_with_and。行の and も「かつ」でつなぐ
+    const andShape = { include: [{ page: { part: "host", op: "equals", value: "shop.example.com" }, and: [{ part: "path", op: "contains", value: "/sale/" }], params: [{ name: "utm_source", op: "equals", value: "news" }] }] };
+    expect(auditDetailLine(ev("experiment.update", { fields: ["urlMatch"], urlMatch: { from: newShape, to: andShape } }))).toBe(
+      "対象 URL パス が「/lp/」で始まる(ただし パス が「/old/」を含む を除く) → ホスト が「shop.example.com」と完全一致 かつ パス が「/sale/」を含む かつ パラメータ utm_source が「news」に一致",
+    );
+    for (const from of [{ op: "equals" },{ part: "zzz", op: "equals", value: "/" }, null, "x", { include: [] }])
       expect(() => auditDetailLine(ev("experiment.update", { fields: ["urlMatch"], urlMatch: { from, to: newShape } }))).not.toThrow();
     expect(auditDetailLine(ev("experiment.update", { fields: ["persistAssignment"], persistAssignment: { from: false, to: true } }))).toBe("割当の固定 オフ → オン");
     // 記録は値が変わった欄だけを持つ(R64)。変わった欄が無い保存は fields: []

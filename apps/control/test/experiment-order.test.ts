@@ -83,6 +83,19 @@ describe("overlapWarnings (決定 51、設計書 §3.3)", () => {
     ]);
   });
 
+  it("overlap_uses_canonical_and", () => {
+    // and の順だけが違う 2 つ(and は AND なので順は意味を変えない)は同じ対象 URL = 重なりの組
+    const page = { part: "path", op: "startsWith", value: "/lp/" };
+    const A = { part: "host", op: "equals", value: "www.example.com" };
+    const B = { part: "path", op: "contains", value: "x" };
+    expect(overlapWarnings([exp("a", "test", ["#cta"], { include: [{ page, and: [A, B] }] }), exp("b", "test", ["#cta"], { include: [{ page, and: [B, A] }] })])).toEqual([
+      expect.objectContaining({ path: "experiments.a", experimentIds: ["a", "b"] }),
+    ]);
+    // and の有無・中身が違えば別の対象 URL。空の and は無いのと同じ
+    expect(overlapWarnings([exp("a", "test", ["#cta"], { include: [{ page, and: [A] }] }), exp("b", "test", ["#cta"], { include: [{ page }] })])).toEqual([]);
+    expect(overlapWarnings([exp("a", "test", ["#cta"], { include: [{ page, and: [] }] }), exp("b", "test", ["#cta"], { include: [{ page }] })])).toHaveLength(1);
+  });
+
   it("lists up to three selectors and counts the rest", () => {
     const sels = ["#a", "#b", "#c", "#d", "#e"];
     const [w] = overlapWarnings([exp("t2", "test", sels), exp("t1", "test", sels)]);

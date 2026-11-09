@@ -1,6 +1,6 @@
 "use client";
-import { useState } from "react";
-import { checkRegex, sampleValue, testRegex } from "@/lib/regex-assist";
+import { useMemo, useState } from "react";
+import { compileAssist, sampleValue, testCompiled } from "@/lib/regex-assist";
 import styles from "./Targeting.module.css";
 
 const RESULT = { match: "✓ 一致します", nomatch: "✗ 一致しません", skipped: "— 判定されません(256 字を超えるパス・URL として読めない値)", invalid: "(正規表現を直すと試せます)" } as const;
@@ -12,9 +12,12 @@ const RESULT = { match: "✓ 一致します", nomatch: "✗ 一致しません"
 export function RegexAssist({ value, part, replaced, onApply }: { value: string; part: "path" | "host"; replaced: boolean; onApply: (v: string) => void }) {
   const [help, setHelp] = useState(false);
   const [sample, setSample] = useState(part === "host" ? "www.example.com" : "/products/123");
-  const check = value ? checkRegex(value) : null;
+  // 式を 1 回だけコンパイルし、構文の案内と試す欄で使う(B69 追補 §4)。コンパイルは式だけで決まる(part・試す値には依らない)ので、
+  // 試す値の変更・親の再描画ではコンパイルし直さない。対象 URL の 20 行 × 6 個 = 120 個が Worker の最初の描画でも走るため
+  const compiled = useMemo(() => (value ? compileAssist(value) : null), [value]);
+  const check = compiled?.check ?? null;
   const name = part === "host" ? "ホスト" : "パス";
-  const result = value ? testRegex(value, part, sample) : "invalid";
+  const result = compiled ? testCompiled(compiled, part, sample) : "invalid";
   const normalized = sampleValue(part, sample); // 本番と同じ形にした試す値(照合はこの値で行う)
   return (
     <div className={styles.assist}>

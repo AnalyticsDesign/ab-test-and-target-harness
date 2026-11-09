@@ -155,6 +155,46 @@ describe("matchTargetUrl: 対象 URL の行(含める / 除く + パラメータ
   });
 });
 
+describe("matchTargetUrl and: 1 行の中の「かつ」の条件(B69 and)", () => {
+  const host = { part: "host", op: "equals", value: "shop.example.com" } as const;
+  const sale = { part: "path", op: "contains", value: "/sale/" } as const;
+  const nullMatch = { part: "path", op: "regex", value: "x" } as never; // 命令列(prog)の無いパスの正規表現 = 判定できない(null)
+  const u = (url: string) => pageOf(url);
+
+  it("and_all_true", () => {
+    const m = { include: [{ page: host, and: [sale] }] };
+    expect(matchTargetUrl(m, u("https://shop.example.com/a/sale/b"))).toBe(true);
+    expect(matchTargetUrl(m, u("https://www.example.com/sale/"))).toBe(false);
+    expect(matchTargetUrl(m, u("https://shop.example.com/new/"))).toBe(false);
+  });
+  it("and_one_false_with_null_is_null", () => {
+    const url = u("https://shop.example.com/new/"); // sale は false、nullMatch は null → 行は null
+    expect(matchTargetUrl({ include: [{ page: host, and: [sale, nullMatch] }] }, url)).toBe(false); // 含めるの null は一致しない
+    expect(matchTargetUrl({ include: [{ page: host }], exclude: [{ page: host, and: [sale, nullMatch] }] }, url)).toBe(false); // 除くの null は対象外
+  });
+  it("and_null_in_exclude_row_is_excluded", () => {
+    const path257 = u(`https://shop.example.com/${"a".repeat(256)}`);
+    const re = { part: "path" as const, op: "regex" as const, value: "^/a", prog: prog("^/a") };
+    expect(matchTargetUrl({ include: [{ page: host }], exclude: [{ page: host, and: [re] }] }, path257)).toBe(false);
+  });
+  it("and_truthy_non_array_is_false", () => {
+    const url = u("https://shop.example.com/sale/");
+    expect(matchTargetUrl({ include: [{ page: host, and: sale }] }, url)).toBe(false);
+    expect(matchTargetUrl({ include: [{ page: host, and: "x" }] }, url)).toBe(false);
+    expect(matchTargetUrl({ include: [{ page: host }], exclude: [{ page: host, and: "x" }] }, url)).toBe(false);
+  });
+  it("and_falsy_is_absent", () => {
+    const url = u("https://shop.example.com/new/"); // sale には合わないが、and が無いのと同じなら host だけで true
+    for (const and of [null, false, 0, ""]) expect(matchTargetUrl({ include: [{ page: host, and }] }, url)).toBe(true);
+  });
+  it("and_combines_with_params", () => {
+    const row = { page: host, and: [sale], params: [{ name: "a", op: "exists" }] };
+    expect(matchTargetUrl({ include: [row] }, u("https://shop.example.com/sale/?a=1"))).toBe(true);
+    expect(matchTargetUrl({ include: [row] }, u("https://shop.example.com/sale/"))).toBe(false);
+    expect(matchTargetUrl({ include: [row] }, u("https://shop.example.com/new/?a=1"))).toBe(false);
+  });
+});
+
 describe("matchesTargetUrl", () => {
   it("文字列の URL に対する対象 URL の照合", () => {
     const m = { include: [{ page: { part: "path", op: "startsWith", value: "/lp/" }, params: [{ name: "a", op: "exists" }] }] };

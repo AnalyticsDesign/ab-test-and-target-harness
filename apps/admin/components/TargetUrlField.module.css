@@ -12,6 +12,11 @@
 .param { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-left: 22px; }
 .and { font-size: 11.5px; color: var(--muted); width: 26px; }
 .paramText { width: 140px; max-width: 100%; }
+.andText { width: 220px; max-width: 100%; }
+/* and の正規表現の案内は条件の行の下に全幅で出す */
+.assist { flex-basis: 100%; padding-left: 34px; min-width: 0; }
+/* 「+ 条件(かつ)」(左)と「この行を消す」(右) */
+.actions { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding-left: 22px; }
 .iconX { flex: none; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 15px; width: 28px; height: 28px; border-radius: var(--radius); }
 .iconX:hover { background: var(--sunken); color: var(--danger); }
 .link { border: 0; background: none; padding: 0; font: inherit; font-size: 12.5px; color: var(--accent-text); cursor: pointer; }
@@ -20,4 +25,4 @@
 .summary b { font-weight: 600; }
 .json summary { font-size: 12.5px; color: var(--muted); cursor: pointer; }
 .json pre { margin: 6px 0 0; padding: 8px 10px; background: var(--code-bg); border-radius: var(--radius); font-family: var(--font-mono); font-size: 12px; overflow-x: auto; }
-@media (max-width: 760px) { .param { padding-left: 8px; } }
+@media (max-width: 760px) { .param, .actions { padding-left: 8px; } .assist { padding-left: 0; } }

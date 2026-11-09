@@ -131,5 +131,8 @@ export default defineConfig({
     // B68: サイトの画像のライブラリ(一覧のアップロード・ドロップ・名前・削除・選ぶ窓・IMAGE の欄・開始の 409 の一覧・表示の後の一覧の取得の回数)。
     // 専用のサイトを作り、閲覧者を 1 人招待する。ファイル名まで絞る(作業ディレクトリの名前に「image」が入ることがあるため)
     { name: "images-flow", testMatch: /images-flow\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    // B69 and: 対象 URL の「かつ」の条件(足す・繰り上げ・値を空にする・空の保存の止め・行の削除・保存と再読み込み)。専用のサイトを作る。
+    // ファイル名まで絞る(リポジトリのディレクトリ名に「and」が入るため)
+    { name: "and-conditions", testMatch: /and-conditions\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
   ],
 });

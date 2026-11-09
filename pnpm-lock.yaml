@@ -72,6 +72,9 @@ importers:
       '@wtt/stats':
         specifier: workspace:*
         version: link:../../packages/stats
+      happy-dom:
+        specifier: ^20.0.11
+        version: 20.12.0
       typescript:
         specifier: ^7.0.2
         version: 7.0.2

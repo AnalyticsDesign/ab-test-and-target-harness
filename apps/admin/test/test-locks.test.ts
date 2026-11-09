@@ -130,7 +130,7 @@ describe("preSaveLockProblem (B173 stage 1 final review FR-Medium-1)", () => {
 
   it("checks the target URL rows only when the PATCH sends urlMatch (B69 spec §7.2)", () => {
     const empty = { ...base, urlMatch: { include: [base.urlMatch.include[0]!, { page: { part: "path" as const, op: "startsWith", value: "" } }] } };
-    expect(preSaveLockProblem(at("draft"), experimentPatchBody(base, empty), empty, 30)).toBe("対象 URL(含める 2 行目): 値を入力してください");
+    expect(preSaveLockProblem(at("draft"), experimentPatchBody(base, empty), empty, 30)).toBe("対象 URL(含める 2 行目): ページの条件を入れてください(すべてのページなら『パスが / で始まる』)");
     const renamed = { ...empty, name: "renamed" };
     expect(preSaveLockProblem(at("draft"), experimentPatchBody(empty, renamed), renamed, 30)).toBeNull();
   });

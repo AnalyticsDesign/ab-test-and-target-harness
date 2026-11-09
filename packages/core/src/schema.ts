@@ -26,10 +26,11 @@ export const LIMITS = {
    * (2 万ノードで約 420 KB。一番小さい形でも、上限ちょうどの展開が 512 KB の内に収まる)
    */
   audienceExpansionMax: 20_000,
-  /** 対象 URL(urlMatch)の行数・パラメータの個数・名前の長さ・全行の正規表現の命令数の合計(B69) */
+  /** 対象 URL(urlMatch)の行数・パラメータの個数・名前の長さ・全行の正規表現の命令数の合計(B69)、1 行の「かつ」のページの一致(and)の個数(B69 追補) */
   urlIncludeMax: 10,
   urlExcludeMax: 10,
   urlParamsMax: 5,
+  urlAndMax: 5,
   urlParamNameMax: 256,
   urlInstructionsMax: 500,
 } as const;
@@ -220,8 +221,9 @@ const ParamMatchSchema = z.union([
   z.strictObject({ name: z.string().min(1).max(LIMITS.urlParamNameMax), op: z.literal("exists") }),
 ]);
 
+/** 行 = ページの一致(page)+「かつ」のページの一致(and。B69 追補。page と同じ型、0〜5 個)+ パラメータの条件(params) */
 const urlMatchSchemaOf = <P extends z.ZodType>(page: P) => {
-  const row = z.strictObject({ page, params: z.array(ParamMatchSchema).max(LIMITS.urlParamsMax).optional() });
+  const row = z.strictObject({ page, and: z.array(page).max(LIMITS.urlAndMax).optional(), params: z.array(ParamMatchSchema).max(LIMITS.urlParamsMax).optional() });
   return z.strictObject({ include: z.array(row).min(1).max(LIMITS.urlIncludeMax), exclude: z.array(row).max(LIMITS.urlExcludeMax).optional() });
 };
 
@@ -403,12 +405,16 @@ export function refineConversionPayloads(
 /** 命令列の命令数(1 命令 = 3 要素)。版 2 の読み取り(schema-v2.ts)も使う */
 export const programSize = (p?: RegexProgram): number => (p && Array.isArray(p.code) ? p.code.length / 3 : 0);
 
-/** 配る設定に入るすべての命令列の命令数(対象 URL の全行・パターン・目標)。版 3 の配信条件は命令列を持たない(ページの条件は対象 URL に移した) */
+/** 配る設定に入るすべての命令列の命令数(対象 URL の全行の page と and・パターン・目標)。版 3 の配信条件は命令列を持たない(ページの条件は対象 URL に移した) */
 export function regexInstructionTotal(c: { patterns: Record<string, { prog?: RegexProgram }>; goals: Goal[]; experiments: Array<{ urlMatch: UrlMatch }> }): number {
   let total = 0;
   for (const p of Object.values(c.patterns)) total += programSize(p.prog);
   for (const g of c.goals) if (g.type === "PAGEVIEW") total += programSize(g.config.page.prog);
-  for (const e of c.experiments) for (const r of e.urlMatch.include.concat(e.urlMatch.exclude ?? [])) total += programSize(r.page.prog);
+  for (const e of c.experiments)
+    for (const r of e.urlMatch.include.concat(e.urlMatch.exclude ?? [])) {
+      total += programSize(r.page.prog);
+      for (const p of r.and ?? []) total += programSize(p.prog);
+    }
   return total;
 }
 

@@ -242,7 +242,7 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     await combo.click();
     await combo.fill("Pricing");
     await page.getByRole("option", { name: /^Pricing visitors/ }).click();
-    await page.getByRole("button", { name: "+ 条件" }).click();
+    await page.getByRole("button", { name: "+ 条件", exact: true }).click();
     await choose(rows(page).nth(1), "条件の種類", "端末");
     // B69 Q358: 配信条件のカードの要約は最後の 1 文だけ(②の段の「配信する訪問者」の行は無い)
     await expect(page.getByTestId("targeting-summary")).toHaveCount(0);
@@ -296,22 +296,22 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     await nav(page).getByRole("link", { name: "エクスペリエンス" }).click();
     await createExperiment(page, EXP_C1);
     // 閲覧の回数・30 日の期間
-    await page.getByRole("button", { name: "+ 条件" }).click();
+    await page.getByRole("button", { name: "+ 条件", exact: true }).click();
     await choose(rows(page).nth(0), "条件の種類", "閲覧したページ");
     await rows(page).nth(0).getByLabel("値").fill("/pricing/");
     await rows(page).nth(0).getByLabel("回数").fill("2");
     await choose(rows(page).nth(0), "期間", "最後の閲覧が");
     await expect(rows(page).nth(0).getByLabel("日数")).toHaveValue("30");
     // 目標の未達成(候補の先頭 = 資料請求)
-    await page.getByRole("button", { name: "+ 条件" }).click();
+    await page.getByRole("button", { name: "+ 条件", exact: true }).click();
     await choose(rows(page).nth(1), "条件の種類", "目標・コンバージョン");
     await choose(rows(page).nth(1), "達成", "が未達成");
     // 平日 9〜18 時・iOS・Safari(種類を選んだときの初期値)
-    await page.getByRole("button", { name: "+ 条件" }).click();
+    await page.getByRole("button", { name: "+ 条件", exact: true }).click();
     await choose(rows(page).nth(2), "条件の種類", "曜日・時間帯");
-    await page.getByRole("button", { name: "+ 条件" }).click();
+    await page.getByRole("button", { name: "+ 条件", exact: true }).click();
     await choose(rows(page).nth(3), "条件の種類", "OS");
-    await page.getByRole("button", { name: "+ 条件" }).click();
+    await page.getByRole("button", { name: "+ 条件", exact: true }).click();
     await choose(rows(page).nth(4), "条件の種類", "ブラウザ");
     const summary = "パスが「/pricing/」で始まるページを 2 回以上閲覧(最後の閲覧が 30 日以内) かつ 目標「資料請求」が未達成 かつ 月〜金 の 09:00〜18:00 かつ OSが iOS かつ ブラウザが Safari";
     await expect(page.getByTestId("delivery-summary")).toContainText(`${summary} の訪問者のうち`);
@@ -334,7 +334,7 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     await openSite(page, SITE_AUD.name);
     await nav(page).getByRole("link", { name: "エクスペリエンス" }).click();
     await createExperiment(page, EXP_VP);
-    await page.getByRole("button", { name: "+ 条件" }).click();
+    await page.getByRole("button", { name: "+ 条件", exact: true }).click();
     await choose(rows(page).nth(0), "条件の種類", "画面の幅");
     const saved = page.waitForResponse((r) => r.url().includes(`/api/control/sites/${SITE_AUD.id}/experiments/${EXP_VP.id}`) && r.request().method() === "PATCH");
     await page.getByRole("button", { name: "保存(下書き)" }).click();

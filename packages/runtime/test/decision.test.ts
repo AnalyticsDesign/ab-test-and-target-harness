@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { decideLocally, needsRemoteDecision, onEdgePath, requestDecision } from "../src/decision";
+import type { CompiledConfig } from "@wtt/core";
 import { baseConfig, baseSettings, remoteConfig } from "./fixtures";
 
 const CTX = { url: "https://site.test/pricing", device: "desktop" as const, referrer: "" };
@@ -48,6 +49,20 @@ it("needs_remote_decision_uses_target_url_rows: 要求を出すかもパラメ�
   expect(needsRemoteDecision(false, cfg, "https://site.test/lp/?utm_source=news")).toBe(true);
   expect(needsRemoteDecision(false, cfg, "https://site.test/lp/")).toBe(false);
   expect(needsRemoteDecision(false, cfg, "https://site.test/lp/old/?utm_source=news")).toBe(false);
+});
+
+it("decision_skips_request_when_and_false: and に合わないページでは要求を出さない(B69 and)", () => {
+  // 配る形の schema に and が入るのは別の Task なので、型には載せずに渡す
+  const cfg = {
+    ...remoteConfig,
+    experiments: [{
+      ...remoteConfig.experiments[0]!,
+      urlMatch: { include: [{ page: { part: "host", op: "equals", value: "site.test" }, and: [{ part: "path", op: "startsWith", value: "/lp/" }] }] },
+    }],
+  } as unknown as CompiledConfig;
+  expect(needsRemoteDecision(false, cfg, "https://site.test/lp/x")).toBe(true);
+  expect(needsRemoteDecision(false, cfg, "https://site.test/other/")).toBe(false);
+  expect(needsRemoteDecision(false, cfg, "https://other.test/lp/x")).toBe(false);
 });
 
 /** 実 Response に依存しない最小スタブ(requestDecision が使うのは ok と json() だけ。r1 CL-Medium-4) */

@@ -276,7 +276,8 @@ function ExperimentEditorBody({
     if (key === "variants" && emptyHtml && emptyHtmlIndex(value as Draft["variants"], emptyHtml) === null) setEmptyHtml(null);
   };
   const { urlMatch, variants } = draft;
-  const pageUrl = previewPageUrl(site.domain, urlMatch);
+  // プレビューの URL は and を持つ行で正規表現のコンパイルと照合をするので、対象 URL とドメインが変わったときだけ計算する(B69 追補 §4)
+  const pageUrl = useMemo(() => previewPageUrl(site.domain, urlMatch), [site.domain, urlMatch]);
   const weightSum = variants.reduce((a, v) => a + v.weight, 0);
   // control の `PUT …/variants` は draft の Experiment にしか使えない(409 experiment_active)。
   // 非 draft ではパターンの集合を編集できなくし、保存でもこのエンドポイントを叩かない(saveSteps が決める)

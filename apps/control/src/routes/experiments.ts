@@ -168,7 +168,7 @@ const TargetingRead = TargetingReadSchema.nullable().describe(
   `${TARGETING_DESCRIPTION}。応答には、今は保存できないページの条件(ctx が url / host / path / query)が残っていることがあり、そのままでは保存・開始・再開できません。対象 URL に移してから保存してください`,
 );
 const UrlMatch = UrlMatchInputSchema.describe(
-  "対象 URL。含める行(include。1〜10 行)のどれかに一致し、除く行(exclude。0〜10 行)のどれにも一致しないページが対象。行 = ページの一致(page)と、URL のパラメータの条件(params。0〜5 個。すべてを満たすと一致)。除く行が判定できないページは対象外",
+  "対象 URL。含める行(include。1〜10 行)のどれかに一致し、除く行(exclude。0〜10 行)のどれにも一致しないページが対象。行 = ページの一致(page)と、同じ行の「かつ」のページの一致(and。0〜5 個。page と同じ形)と、URL のパラメータの条件(params。0〜5 個)。行の条件をすべて満たすと一致。除く行が判定できないページは対象外。GET で読んだ行を書き戻すときは and ごと送る(落とすと条件が外れ、対象が広がる)",
 );
 const Traffic = z.number().int().min(1).max(100).describe("1〜100。0 は paused で表現する");
 /** B77(K12): 受け口は値を文字列として受けるだけ(値の検査は assertAnalyticsValues)。応答は保存する形 */

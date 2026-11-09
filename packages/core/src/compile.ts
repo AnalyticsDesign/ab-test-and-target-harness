@@ -229,10 +229,17 @@ export function compile(input: unknown): CompiledConfig {
     return node as DslNode; // ctx の条件(端末・時刻など)は保存形と配る形が同じ
   };
 
-  /** 対象 URL の各行の page を配る形にする(行ごとに場所の文言を付ける)。params はそのまま、空の exclude・params は省く */
+  /** 対象 URL の各行の page と and の各要素を配る形にする(要素ごとに場所の文言を付ける)。params はそのまま、空の exclude・and・params は省く */
   const compileUrlMatch = (m: UrlMatchInput, eid: string): UrlMatch => {
     const rows = (rs: UrlMatchInput["include"], label: string) =>
-      rs.map((r, i) => ({ page: compileMatch(r.page, `エクスペリエンス ${eid} の対象 URL(${label} ${i + 1} 行目)`, budget), ...(r.params?.length ? { params: r.params } : {}) }));
+      rs.map((r, i) => {
+        const where = `エクスペリエンス ${eid} の対象 URL(${label} ${i + 1} 行目`;
+        return {
+          page: compileMatch(r.page, `${where})`, budget),
+          ...(r.and?.length ? { and: r.and.map((p, j) => compileMatch(p, `${where}のかつ ${j + 1} つ目)`, budget)) } : {}),
+          ...(r.params?.length ? { params: r.params } : {}),
+        };
+      });
     return { include: rows(m.include, "含める"), ...(m.exclude?.length ? { exclude: rows(m.exclude, "除く") } : {}) };
   };
 
