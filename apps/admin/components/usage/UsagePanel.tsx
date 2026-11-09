@@ -81,13 +81,15 @@ function UsageSettingsForm({ settings }: { settings: UsageSettings }) {
         <label><input type="radio" name="cloudflarePlan" checked={form.cloudflarePlan === "paid"} onChange={() => set({ ...form, cloudflarePlan: "paid" })} /> Paid(Workers Paid。日次の上限はありません)</label>
         <p className="muted">プランは自動では判定しません。契約に合わせて選んでください。実際は Free なのに Paid を選ぶと、止まる前の警告が出なくなります。</p>
       </fieldset>
-      <fieldset className={styles.field} disabled={form.cloudflarePlan !== "paid"}>
-        <legend>Paid の比較</legend>
-        <label>
-          <input type="checkbox" checked={form.showPaidReference} onChange={(e) => set({ ...form, showPaidReference: e.target.checked })} /> 月額 $5 に含まれる量と比べる(日次の行は 30 日で割った 1 日分)
-        </label>
-        {form.cloudflarePlan !== "paid" ? <p className="muted">Free は日次の上限を表示します</p> : null}
-      </fieldset>
+      {/* Free の間も showPaidReference は保持し、Paid に戻したら以前の選択を使う */}
+      {form.cloudflarePlan === "paid" ? (
+        <fieldset className={styles.field}>
+          <legend>Paid の比較</legend>
+          <label>
+            <input type="checkbox" checked={form.showPaidReference} onChange={(e) => set({ ...form, showPaidReference: e.target.checked })} /> 月額 $5 に含まれる量と比べる(日次の行は 30 日で割った 1 日分)
+          </label>
+        </fieldset>
+      ) : null}
       <ErrorBox message={notice.error} />
       {notice.status ? <p role="status">{notice.status}</p> : null}
       <SubmitButton busy={false} disabled={!dirty}>保存</SubmitButton>

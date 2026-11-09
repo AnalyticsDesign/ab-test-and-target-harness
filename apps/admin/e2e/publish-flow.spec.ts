@@ -63,19 +63,46 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await summary.getByRole("link", { name: "変更" }).click();
     await expect(page).toHaveURL(/\/w\/me\/usage$/);
     await waitForHydration(page);
-    // Paid に変えて「月額 $5 に含まれる量と比べる」を外し、保存 → 再読み込み後も残る → Free に戻す
+    // B186: Free では見出しごと隠す。入力中・保存後とも、Paid に戻すと以前の比較の値を使う。
+    // 既存のログイン済みの流れで true/false を確かめ、新しい sign-in は増やさない。
     const settings = page.getByTestId("usage-settings");
-    await settings.getByRole("radio", { name: /^Paid/ }).check();
-    await settings.getByRole("checkbox", { name: /月額 \$5 に含まれる量と比べる/ }).uncheck();
-    await settings.getByRole("button", { name: "保存" }).click();
-    await expect(settings.getByRole("status")).toHaveText("保存しました");
-    await page.reload();
-    await expect(page.getByTestId("usage-settings").getByRole("radio", { name: /^Paid/ })).toBeChecked();
-    await expect(page.getByTestId("usage-settings").getByRole("checkbox", { name: /月額 \$5 に含まれる量と比べる/ })).not.toBeChecked();
-    await waitForHydration(page);
-    await page.getByTestId("usage-settings").getByRole("radio", { name: /^Free/ }).check();
-    await page.getByTestId("usage-settings").getByRole("button", { name: "保存" }).click();
-    await expect(page.getByTestId("usage-settings").getByRole("status")).toHaveText("保存しました");
+    const comparison = settings.getByRole("checkbox", { name: /月額 \$5 に含まれる量と比べる/ });
+    const expectFree = async () => {
+      await expect(settings.getByRole("radio", { name: /^Free/ })).toBeChecked();
+      await expect(settings.getByText("Paid の比較", { exact: true })).toHaveCount(0);
+      await expect(comparison).toHaveCount(0);
+    };
+    await expectFree();
+    for (const checked of [false, true]) {
+      await test.step(`Paid の比較を ${checked} にして Free でも保持する`, async () => {
+        await settings.getByRole("radio", { name: /^Paid/ }).check();
+        await expect(comparison).toBeEnabled();
+        await comparison.setChecked(checked);
+        // 保存前の往復でも選択を失わない。
+        await settings.getByRole("radio", { name: /^Free/ }).check();
+        await expectFree();
+        await settings.getByRole("radio", { name: /^Paid/ }).check();
+        await expect(comparison).toBeChecked({ checked });
+        await settings.getByRole("button", { name: "保存" }).click();
+        await expect(settings.getByRole("status")).toHaveText("保存しました");
+        await page.reload();
+        await waitForHydration(page);
+        await expect(comparison).toBeChecked({ checked });
+
+        await settings.getByRole("radio", { name: /^Free/ }).check();
+        const sent = page.waitForRequest((r) => r.method() === "PATCH" && new URL(r.url()).pathname === "/api/control/usage/settings");
+        await settings.getByRole("button", { name: "保存" }).click();
+        expect((await sent).postDataJSON()).toEqual({ usageVisibility: "members", cloudflarePlan: "free", showPaidReference: checked });
+        await expect(settings.getByRole("status")).toHaveText("保存しました");
+        await page.reload();
+        await waitForHydration(page);
+        await expectFree();
+        await settings.getByRole("radio", { name: /^Paid/ }).check();
+        await expect(comparison).toBeChecked({ checked });
+        await settings.getByRole("radio", { name: /^Free/ }).check();
+        await expectFree();
+      });
+    }
     await expect(page.getByTestId("usage-unavailable")).toContainText("CF_USAGE_TOKEN");
     await page.goto("/w");
     await openWorkspace(page);
