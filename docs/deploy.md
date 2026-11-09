@@ -1971,6 +1971,16 @@ pnpm install
 BACKUP="$PWD/deploy-backups/wtt-control-$(date -u +%Y%m%dT%H%M%SZ).sql" && mkdir -p "$PWD/deploy-backups" && chmod 700 "$PWD/deploy-backups" && WRANGLER_WRITE_LOGS=false pnpm -C apps/control exec wrangler d1 export wtt-control --remote --output "$BACKUP" >/dev/null && test -s "$BACKUP" && echo "控え: $BACKUP" || unset BACKUP
 ```
 
+手順 0 で「控え: <ファイル名>」と表示され、今回作ったファイルが存在して空でないことを確認してから、手順 1 以降へ進んでください。export が失敗した場合、ファイルが無い場合、または空の場合は、手順 4 の管理画面のデプロイも含めて更新を中止し、凍結を外さずに原因を調べ、手順 0 からやり直してください。
+
+```bash
+if test -s "${BACKUP:-}"; then
+  ls -l "$BACKUP"   # 期待: 今回の控えのファイルがあり、サイズが 0 でない
+else
+  echo "控えがありません。更新を中止し、手順 0 をやり直してください"
+fi
+```
+
 ```bash
 # 1〜3。0 の控えのファイルが空でないときだけ動き、途中の手順が失敗したらそこで止まる
 if test -s "${BACKUP:-}"; then
@@ -2117,6 +2127,8 @@ runtime を作り直したら control と deployer も必ず再デプロイす�
 
 - API キーはそのまま使える。更新の後、エージェントの鍵で `GET /me` が 200 を返すことを確かめる
 - API の契約の版は変わらない(開いたままの管理画面のタブが、この更新で 426 になることは無い)
+
+手順 0 の控えと手順 1〜3 がすべて成功した場合だけ、次の管理画面の更新を実行してください。途中で失敗した場合は、管理画面の更新に進まず、失敗した手順の原因を解消してください。
 
 ```bash
 pnpm -C apps/admin build && pnpm -C apps/admin deploy:cf   # 4. admin
