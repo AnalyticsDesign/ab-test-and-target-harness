@@ -1,9 +1,10 @@
-// docs-check.mjs — README.md + CONTEXT.md + docs/*.md + docs/dev の生きている文書(あれば)+ apps/{edge,control}/README.md の
+// docs-check.mjs — README.md + CONTEXT.md + docs/*.md + docs/dev の生きている文書(あれば)+ apps/*/README.md の
 // 相対リンク / アンカー / リポジトリ相対パス / pnpm スクリプト名を検査する
 // 使い方: リポジトリのルートで `pnpm docs:check`(引数にファイルを渡すとそれだけを検査)
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { parseHelp } from "../apps/admin/scripts/help-lib.mjs";
+import { appReadmes, changelogReleaseProblems, versionWordingProblems } from "./docs-check-rules.mjs";
 
 const root = process.cwd();
 const defaultFiles = [
@@ -11,7 +12,8 @@ const defaultFiles = [
   ...["CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", ".github/pull_request_template.md"].filter((f) => existsSync(join(root, f))),
   ...readdirSync(join(root, "docs")).filter((f) => f.endsWith(".md")).sort().map((f) => `docs/${f}`),
   ...["docs/dev/README.md", "docs/dev/backlog.md", "docs/dev/release.md"].filter((f) => existsSync(join(root, f))),
-  "apps/edge/README.md", "apps/control/README.md",
+  // apps/ の下で README.md を持つものすべて(公開物の apps/ に入る)
+  ...appReadmes(readdirSync(join(root, "apps")).filter((n) => existsSync(join(root, "apps", n, "README.md")))),
 ];
 const rootScripts = new Set(Object.keys(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {}));
 const pkgScriptsCache = new Map();
@@ -222,6 +224,15 @@ if (files.includes(HELP_MANUSCRIPT)) {
   const { entries, problems: helpProblems } = parseHelp(readFileSync(join(root, HELP_MANUSCRIPT), "utf8"));
   for (const p of helpProblems) problems.push(`${HELP_MANUSCRIPT}:${p.line} help-marker: ${p.message}`);
   if (entries.length === 0) problems.push(`${HELP_MANUSCRIPT}:0 help-marker: 印(<!-- help: <key> -->)が 1 つも無い`);
+}
+
+// (9) CHANGELOG のこれから公開する節(未リリースと一番上の版)の相対リンクと、版の付いた予定の書き方。Release の本文はこの節を写す
+if (files.includes("CHANGELOG.md")) {
+  for (const p of changelogReleaseProblems(readFileSync(join(root, "CHANGELOG.md"), "utf8"))) problems.push(`CHANGELOG.md:${p.line} ${p.kind}: ${p.text}`);
+}
+// (10) どの版か分からない言い方(「この更新の前に」など)。公開文書のうち CHANGELOG(版の節の「この版」はその節の版)と docs/dev/ を除く
+for (const rel of files.filter((f) => f !== "CHANGELOG.md" && !f.startsWith("docs/dev/"))) {
+  for (const p of versionWordingProblems(rel, readFileSync(join(root, rel), "utf8"))) problems.push(`${rel}:${p.line} ${p.kind}: ${p.text}`);
 }
 
 if (problems.length) { console.error(problems.join("\n")); process.exit(1); }
