@@ -1,0 +1,21 @@
+.filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+/* .btn の hover より優先し、選択の見た目をマウスの有無で変えない */
+.filterButton[aria-pressed="false"],
+.filterButton[aria-pressed="false"]:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.filterButton[aria-pressed="true"],
+.filterButton[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--nav-active);
+  border-color: var(--border-strong);
+}

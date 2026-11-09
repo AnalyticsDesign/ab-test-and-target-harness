@@ -3,12 +3,13 @@ import { urlMatchListText } from "@/lib/url-match";
 import { useState } from "react";
 import { AppLink } from "@/components/ui/AppLink";
 import type { Experiment } from "@/lib/types";
-import { FILTER_JA, STATUS_FILTERS, STATUS_JA, STATUS_TONE, countByFilter, filterExperiments, type StatusFilter } from "@/lib/experiment-filter";
+import { DEFAULT_STATUS_FILTER, FILTER_JA, STATUS_FILTERS, STATUS_JA, STATUS_TONE, countByFilter, filterExperiments, type StatusFilter } from "@/lib/experiment-filter";
 import { KIND_JA } from "@/lib/experiment-kind";
 import { replaceParam } from "@/lib/url-state";
 import { adoptionListText } from "@/lib/stop-dialog";
 import { LocalTime } from "./LocalTime";
 import { StatusPill } from "./ui/StatusPill";
+import styles from "./ExperimentList.module.css";
 
 /** 状態の pill = Desired(status)。「本番」列 = Published(publishedStatus)との差。initialFilter はサーバーが ?status= から読んで渡す */
 export function ExperimentList({ wid, sid, experiments, canPublish, initialFilter }: { wid: string; sid: string; experiments: Experiment[]; canPublish: boolean; initialFilter: StatusFilter }) {
@@ -28,18 +29,17 @@ export function ExperimentList({ wid, sid, experiments, canPublish, initialFilte
   const shown = filterExperiments(experiments, filter);
   return (
     <>
-      <div role="group" aria-label="状態で絞り込む" className="row" style={{ gap: 4, marginBottom: 12 }}>
+      <div role="group" aria-label="状態で絞り込む" className={styles.filters}>
         {STATUS_FILTERS.map((f) => (
           <button
             key={f}
             type="button"
-            className="btn"
+            className={`btn ${styles.filterButton}`}
             aria-pressed={filter === f}
             data-testid={`filter-${f}`}
-            style={filter === f ? { background: "var(--nav-active)", borderColor: "var(--border-strong)" } : { background: "transparent", borderColor: "transparent", color: "var(--muted)" }}
             onClick={() => {
               setFilter(f);
-              replaceParam("status", f === "all" ? null : f);
+              replaceParam("status", f === DEFAULT_STATUS_FILTER ? null : f);
             }}
           >
             {FILTER_JA[f]} <span className="muted">{counts[f]}</span>

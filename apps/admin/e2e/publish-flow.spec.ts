@@ -723,12 +723,72 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
   test("attribute_not_allowed shows a Japanese message and the HTML switch hint", async ({ page }) => {
     await login(page);
     await openSite(page, SITE.name);
-    // 状態の絞り込み: 取得済みの一覧を画面の中で絞るだけ(再読み込みしない)
-    await page.getByTestId("filter-draft").click();
-    await expect(page.getByTestId(`experiment-row-${EXPERIMENT.id}`)).toHaveCount(0);
-    await expect(page).toHaveURL(/\?status=draft$/);
-    await page.getByTestId("filter-running").click();
-    await expect(page.getByTestId(`experiment-row-${EXPERIMENT.id}`)).toBeVisible();
+    // B188: 既存のログイン済みの流れに相乗りし、URL の復元と再取得なしを確かめる。
+    await test.step("一覧の既定と明示したすべてを URL から復元する", async () => {
+      await expect(page).toHaveURL(new RegExp(`/sites/${SITE.id}$`));
+      await waitForHydration(page);
+      await expect(page.getByTestId("filter-not_archived")).toHaveAttribute("aria-pressed", "true");
+      const listUrl = new URL(page.url());
+      await page.getByTestId("filter-all").click();
+      await expect(page).toHaveURL(`${listUrl.href}?status=all`);
+      await page.reload();
+      await waitForHydration(page);
+      await expect(page.getByTestId("filter-all")).toHaveAttribute("aria-pressed", "true");
+      for (const status of ["not_archived", "unknown"]) {
+        await page.goto(`${listUrl.href}?status=${status}&extra=keep#list`);
+        await waitForHydration(page);
+        await expect(page.getByTestId("filter-not_archived")).toHaveAttribute("aria-pressed", "true");
+      }
+
+      // 切替に伴う HTML / RSC / 一覧の取得は 0 件。共通の帯の polling はこの操作の取得と分ける。
+      const requests: string[] = [];
+      const onRequest = (request: Request) => {
+        const u = new URL(request.url());
+        if (request.isNavigationRequest() || u.searchParams.has("_rsc") || u.pathname.endsWith(`/sites/${SITE.id}/experiments`)) requests.push(request.url());
+      };
+      page.on("request", onRequest);
+      try {
+        for (const status of ["all", "draft", "running", "paused", "archived", "not_archived"]) {
+          await page.getByTestId(`filter-${status}`).click();
+          await expect(page.getByTestId(`filter-${status}`)).toHaveAttribute("aria-pressed", "true");
+          await expect(page.getByRole("group", { name: "状態で絞り込む" }).locator('[aria-pressed="true"]')).toHaveCount(1);
+          // replaceParam は既存の query/hash を残す（status は既存の先頭位置を保つ）。
+          await expect.poll(() => new URL(page.url()).searchParams.get("status")).toBe(status === "not_archived" ? null : status);
+          expect(new URL(page.url()).searchParams.get("extra")).toBe("keep");
+          expect(new URL(page.url()).hash).toBe("#list");
+          await expect(page.getByTestId(`experiment-row-${EXPERIMENT.id}`)).toHaveCount(["all", "running", "not_archived"].includes(status) ? 1 : 0);
+        }
+        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        expect(requests).toEqual([]);
+      } finally {
+        page.off("request", onRequest);
+      }
+      // A21: ライト/ダークで、hover しても選択の色と固定の余白を保つ。
+      const previousTheme = await page.getAttribute("html", "data-theme");
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate((value) => document.documentElement.dataset.theme = value, theme);
+        const selected = page.getByTestId("filter-not_archived");
+        await selected.focus();
+        await selected.hover();
+        // テーマ・選択の切替直後は .btn の背景色が遷移中なので、最終色を待つ。
+        await expect.poll(() => selected.evaluate((button) => {
+          const style = getComputedStyle(button);
+          const probe = document.createElement("span");
+          probe.style.backgroundColor = "var(--nav-active)";
+          button.append(probe);
+          const expected = getComputedStyle(probe).backgroundColor;
+          probe.remove();
+          return style.backgroundColor === expected;
+        })).toBe(true);
+        const group = page.getByRole("group", { name: "状態で絞り込む" });
+        expect(await group.evaluate((el) => ({ gap: getComputedStyle(el).gap, margin: getComputedStyle(el).marginBottom }))).toEqual({ gap: "4px", margin: "12px" });
+        await test.info().attach(`experience-filters-${theme}`, { body: await group.screenshot(), contentType: "image/png" });
+      }
+      await page.evaluate((value) => {
+        if (value === null) delete document.documentElement.dataset.theme;
+        else document.documentElement.dataset.theme = value;
+      }, previousTheme);
+    });
     await page.getByRole("link", { name: EXPERIMENT.name }).click();
     // B77: a はオリジナル(変更を持てない)なので、変更のある b で確かめる。b には保存済みの TEXT が 1 件あるので、足した方(最後)を変える
     await openVariant(page, "b");

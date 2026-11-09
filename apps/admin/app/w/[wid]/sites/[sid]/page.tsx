@@ -2,7 +2,7 @@ import { AppLink } from "@/components/ui/AppLink";
 import { controlFetch, requireUser } from "@/lib/control";
 import { allInOrder, loadSite, loadWorkspaces } from "@/lib/loaders";
 import type { Experiment, PublishRow } from "@/lib/types";
-import { STATUS_FILTERS } from "@/lib/experiment-filter";
+import { DEFAULT_STATUS_FILTER, STATUS_FILTERS } from "@/lib/experiment-filter";
 import { pickParam } from "@/lib/url-state";
 import { ExperimentList } from "@/components/ExperimentList";
 import { LocalTime } from "@/components/LocalTime";
@@ -28,7 +28,7 @@ export default async function SitePage({ params, searchParams }: { params: Promi
   const canEdit = ws?.role !== "viewer";
   const canPublish = ws?.role === "owner" || ws?.role === "admin";
   const search = await searchParams;
-  const initialFilter = pickParam(search.status, STATUS_FILTERS, "all");
+  const initialFilter = pickParam(search.status, STATUS_FILTERS, DEFAULT_STATUS_FILTER);
   // publishes の行は activate に成功した記録として `active` のまま残り続ける(status では絞れない。review 指摘)。
   // 「いま配信中」の行は site.activeVersion と version が一致する 1 行だけ
   const latest = publishes.find((p) => p.version === site.activeVersion);
