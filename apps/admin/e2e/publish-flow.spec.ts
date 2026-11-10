@@ -960,6 +960,216 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await expect(page.getByRole("status").filter({ hasText: "一致しません" })).toBeVisible();
   });
 
+  async function digestPublishSite(page: Page, id: string) {
+    await login(page);
+    await createSite(page, { id, name: id });
+    await createExperiment(page, { id: "digest_exp", name: "Digest experience" });
+    const res = await page.request.post(`/api/control/sites/${id}/experiments/digest_exp/status`, { headers: controlHeaders(), data: { status: "running" } });
+    expect(res.status()).toBe(200);
+    return page.url().replace(/\/experiments\/digest_exp$/, "");
+  }
+
+  test("publish sends the preview digest", async ({ page }) => {
+    const sid = "site_digest_publish";
+    const base = await digestPublishSite(page, sid);
+    const preview = await (await page.request.get(`/api/control/sites/${sid}/publish-preview`)).json();
+    await page.goto(`${base}/publish`);
+    const sent = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith(`/sites/${sid}/publish`));
+    await page.getByRole("button", { name: /^公開する/ }).click();
+    expect((await sent).postDataJSON()).toEqual({ expectDigest: preview.digest });
+  });
+
+  test("publish shows stale_preview and reloads", async ({ page }) => {
+    const sid = "site_digest_stale";
+    const base = await digestPublishSite(page, sid);
+    await page.goto(`${base}/publish`);
+    await waitForHydration(page);
+    const saved = await page.request.patch(`/api/control/sites/${sid}/experiments/digest_exp`, { headers: controlHeaders(), data: { name: "Saved after preview" } });
+    expect(saved.status()).toBe(200);
+    await page.getByRole("button", { name: /^公開する/ }).click();
+    await expect(page.getByTestId("publish-result")).toContainText("確認した後に、公開する内容が変わりました");
+    await expect(page.getByTestId("publish-exp-digest_exp")).toContainText("Saved after preview");
+  });
+
+  test("external url mark is shown", async ({ page }) => {
+    const sid = "site_digest_external";
+    const base = await digestPublishSite(page, sid);
+    const res = await page.request.put(`/api/control/sites/${sid}/experiments/digest_exp/variants/b/changes`, { headers: controlHeaders(), data: [{ id: "href", type: "ATTRIBUTE", selector: "a", payload: { name: "href", value: "https://external.example/path" } }] });
+    expect(res.status()).toBe(200);
+    await page.goto(`${base}/publish`);
+    await expect(page.getByTestId("publish-exp-digest_exp")).toContainText("外部の URL を含む");
+  });
+
+  async function statusPair(page: Page, sid: string) {
+    const base = await digestPublishSite(page, sid);
+    expect((await page.request.post(`/api/control/sites/${sid}/experiments`, { headers: controlHeaders(), data: { id: "other", name: "Other experience", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } })).status()).toBe(201);
+    expect((await page.request.post(`/api/control/sites/${sid}/experiments/other/status`, { headers: controlHeaders(), data: { status: "running" } })).status()).toBe(200);
+    await page.goto(`${base}/experiments/other`);
+    await waitForHydration(page);
+    return base;
+  }
+  async function saveOtherCode(page: Page, sid: string) {
+    expect((await page.request.put(`/api/control/sites/${sid}/experiments/digest_exp/variants/b/changes`, { headers: controlHeaders(), data: [{ id: "js", type: "CUSTOM_JS", selector: "body", payload: { code: "window.concurrent = true" } }] })).status()).toBe(200);
+  }
+  const pauseDialog = (page: Page) => page.getByRole("alertdialog", { name: "一時停止しますか?" });
+  const stopDialog = (page: Page) => page.getByRole("alertdialog", { name: "終了して結果を記録します" });
+
+  test("pause lists other unpublished changes and sends the digest", async ({ page }) => {
+    const sid = "site_digest_pause";
+    await statusPair(page, sid);
+    await saveOtherCode(page, sid);
+    const preview = page.waitForResponse((r) => r.url().includes(`/sites/${sid}/publish-preview?transition=other:paused`));
+    await page.getByRole("button", { name: "一時停止", exact: true }).click();
+    const digest = (await (await preview).json()).transitionDigest;
+    await expect(pauseDialog(page)).toContainText("Digest experience");
+    await expect(pauseDialog(page)).toContainText("コードを含む");
+    const sent = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith(`/experiments/other/status`));
+    await pauseDialog(page).getByRole("button", { name: "一時停止する" }).press("Enter");
+    expect((await sent).postDataJSON()).toEqual({ status: "paused", expectDigest: digest });
+  });
+
+  test("pause after a concurrent save asks again", async ({ page }) => {
+    const sid = "site_digest_pause_stale";
+    await statusPair(page, sid);
+    let posts = 0, previews = 0;
+    page.on("request", (r) => {
+      if (r.url().includes(`/sites/${sid}/publish-preview`)) previews++;
+      if (r.method() === "POST" && r.url().endsWith("/experiments/other/status")) posts++;
+    });
+    await page.getByRole("button", { name: "一時停止", exact: true }).click();
+    await expect(pauseDialog(page)).toBeVisible();
+    await saveOtherCode(page, sid);
+    const rejected = page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith("/experiments/other/status"));
+    await pauseDialog(page).getByRole("button", { name: "一時停止する" }).press("Enter");
+    expect((await rejected).status()).toBe(409);
+    await expect(pauseDialog(page)).toContainText("確認の後に内容が変わりました。一覧を確かめて、もう一度押してください");
+    await expect(pauseDialog(page)).toContainText("コードを含む");
+    await pauseDialog(page).getByRole("button", { name: "一時停止する" }).press("Enter");
+    await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "paused");
+    expect(posts).toBe(2); expect(previews).toBe(2);
+  });
+
+  test("stop after a concurrent save keeps the adoption input", async ({ page }) => {
+    const sid = "site_digest_stop_stale";
+    await statusPair(page, sid);
+    await page.getByRole("button", { name: "終了して結果を記録", exact: true }).click();
+    const dialog = stopDialog(page);
+    await expect(dialog.getByTestId("stop-options")).toBeVisible();
+    await dialog.getByRole("radio", { name: /^B を採用/ }).check();
+    await dialog.getByLabel("メモ(任意)").fill("keep this note");
+    await saveOtherCode(page, sid);
+    const rejected = page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith("/experiments/other/status"));
+    await dialog.getByRole("button", { name: "終了して記録" }).press("Enter");
+    expect((await rejected).status()).toBe(409);
+    await expect(dialog).toContainText("確認の後に内容が変わりました");
+    await expect(dialog.getByRole("radio", { name: /^B を採用/ })).toBeChecked();
+    await expect(dialog.getByLabel("メモ(任意)")).toHaveValue("keep this note");
+    await expect(dialog).toContainText("コードを含む");
+    await dialog.getByRole("button", { name: "終了して記録" }).press("Enter");
+    await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "archived");
+  });
+
+  test("status race shows not published banner", async ({ page }) => {
+    const sid = "site_digest_status_race";
+    const base = await statusPair(page, sid);
+    await page.route("**/api/control/sites/*/experiments/other/status", async (route) => {
+      const res = await route.fetch(); const body = await res.json();
+      body.publish = { ok: false, version: null, error: "stale_preview", message: "確認した後に、公開する内容が変わりました" };
+      await route.fulfill({ response: res, json: body });
+    });
+    await page.getByRole("button", { name: "一時停止", exact: true }).click();
+    await pauseDialog(page).getByRole("button", { name: "一時停止する" }).press("Enter");
+    const result = page.getByTestId("status-result");
+    await expect(result).toContainText("状態は変わりましたが、確認の後に内容が変わったため公開していません");
+    await expect(result.getByRole("link")).toHaveAttribute("href", `${new URL(base).pathname}/publish`);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  });
+
+  test("status change refuses to send without preview", async ({ page }) => {
+    const sid = "site_digest_status_block";
+    await statusPair(page, sid);
+    let posts = 0;
+    page.on("request", (r) => { if (r.method() === "POST" && r.url().endsWith("/experiments/other/status")) posts++; });
+    await page.route("**/api/control/sites/*/publish-preview*", (route) => route.fulfill({ status: 500, json: {} }));
+    await page.getByRole("button", { name: "一時停止", exact: true }).click();
+    await expect(page.getByTestId("status-result")).toContainText("公開の確認を読み込めませんでした");
+    expect(posts).toBe(0);
+  });
+
+  for (const from of ["header", "results tab"] as const) {
+    test(`stop from the ${from} sends the digest`, async ({ page }) => {
+      const sid = from === "header" ? "site_digest_stop_header" : "site_digest_stop_results";
+      await statusPair(page, sid);
+      if (from === "results tab") {
+        await page.route("**/api/control/sites/*/experiments/other/results", async (route) => {
+          const res = await route.fetch(); const body = await res.json();
+          Object.assign(body, { phase: "fixed", collection: "enabled", quality: "ok", notes: [], variants: ["a", "b"].map((id) => ({ id, name: id.toUpperCase(), original: id === "a", weight: 50, n: 100, y: 10, cvr: 0.1, cvrCi95: [0, 1], diff: null, state: null, probBest: null, applyFailed: 0, applyRecovered: 0, minCountMet: null })) });
+          await route.fulfill({ response: res, json: body });
+        });
+        await page.getByRole("tab", { name: /^結果/ }).click();
+        await expect(page.getByTestId("results-tab")).toBeVisible();
+      }
+      let previews = 0;
+      page.on("request", (r) => { if (r.url().includes(`/sites/${sid}/publish-preview`)) previews++; });
+      if (from === "header") await page.getByRole("button", { name: "終了して結果を記録", exact: true }).click();
+      else await page.getByRole("button", { name: "採用なしで終了", exact: true }).click();
+      const dialog = stopDialog(page);
+      await expect(dialog.getByRole("button", { name: "終了して記録" })).toBeEnabled();
+      const sent = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/experiments/other/status"));
+      await dialog.getByRole("button", { name: "終了して記録" }).press("Enter");
+      expect((await sent).postDataJSON().expectDigest).toMatch(/^[0-9a-f]{64}$/);
+      expect(previews).toBe(1);
+      await expect(dialog).toHaveCount(0);
+      // 採用だけを変更するときは公開の確認を読まない。
+      await page.getByRole("tab", { name: /^結果/ }).click();
+      const adopt = page.getByTestId("results-adopt");
+      await expect(adopt).toBeVisible();
+      previews = 0;
+      await adopt.click();
+      const adoptionDialog = page.getByRole("alertdialog", { name: "採用を記録します" });
+      await expect(adoptionDialog).toBeVisible();
+      const adopted = page.waitForResponse((r) => r.request().method() === "PUT" && r.url().endsWith("/experiments/other/adoption"));
+      await adoptionDialog.getByRole("button", { name: "採用を記録", exact: true }).press("Enter");
+      expect((await adopted).status()).toBe(200);
+      await expect(adoptionDialog).toHaveCount(0);
+      expect(previews).toBe(0);
+      await page.unrouteAll({ behavior: "wait" });
+    });
+  }
+  test("a start without an initial confirmation asks again after stale preview", async ({ page }) => {
+    const sid = "site_digest_force_start";
+    await login(page);
+    await createSite(page, { id: sid, name: sid });
+    const base = page.url();
+    expect((await page.request.post(`/api/control/sites/${sid}/experiments`, { headers: controlHeaders(), data: { id: "solo", name: "Solo", kind: "single", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } } })).status()).toBe(201);
+    expect((await page.request.post(`/api/control/sites/${sid}/publish`, { headers: controlHeaders(), data: {} })).status()).toBe(200);
+    await page.goto(`${base}/experiments/solo`);
+    await waitForHydration(page);
+    let posts = 0;
+    await page.route(`**/api/control/sites/${sid}/experiments/solo/status`, async (route) => {
+      posts++;
+      if (posts === 1) await route.fulfill({ status: 409, json: { error: "stale_preview", message: "確認した後に、公開する内容が変わりました" } });
+      else await route.continue();
+    });
+    await page.getByRole("button", { name: /^開始/ }).click();
+    const dialog = page.getByRole("alertdialog", { name: "開始しますか?" });
+    await expect(dialog).toContainText("確認の後に内容が変わりました");
+    await dialog.getByRole("button", { name: "開始する", exact: true }).press("Enter");
+    await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "running");
+    expect(posts).toBe(2);
+    await page.unrouteAll({ behavior: "wait" });
+  });
+
+  test("stop refuses to send without preview", async ({ page }) => {
+    const sid = "site_digest_stop_block";
+    await statusPair(page, sid);
+    await page.route("**/api/control/sites/*/publish-preview*", (route) => route.fulfill({ status: 500, json: {} }));
+    await page.getByRole("button", { name: "終了して結果を記録", exact: true }).click();
+    const dialog = stopDialog(page);
+    await expect(dialog).toContainText("公開の確認を読み込めませんでした");
+    await expect(dialog.getByRole("button", { name: "終了して記録" })).toBeDisabled();
+  });
+
   test("logout revokes the control session, not just the browser cookie", async ({ page, context }) => {
     await login(page);
     markSessionsAsGoogle(); // B112: 下でキーを発行する(パスワードのセッションからは発行できない)

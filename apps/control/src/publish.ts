@@ -1,3 +1,4 @@
+import { TRANSITIONS } from "./experiment-status";
 import { expressionBuilder, sql, type ExpressionBuilder, type RawBuilder, type SqlBool } from "kysely";
 import {
   analyticsWarnings,
@@ -19,7 +20,7 @@ import { configRecordUpdate, guardAssets, type AssetProblem } from "./asset-guar
 import { auditStatement, type AuditDetail, type AuditStatementOpts, type UserActor } from "./audit";
 import { edgeOrigin } from "./capabilities";
 import { ASSET_GUARD_HINTS } from "./errors";
-import { toStatement, type Db, type ExperimentRow, type SiteRow, type Tables } from "./db";
+import { toStatement, type Db, type VariantRow, type ChangeRow, type GoalRow, type ExperimentRow, type SiteRow, type Tables } from "./db";
 import type { Env } from "./env";
 import { orderForCompile, overlapWarnings } from "./experiment-order";
 import { newId } from "./ids";
@@ -70,6 +71,18 @@ export type StoredCompileInput = {
   experiments: StoredExperimentInput[];
 };
 
+/** 公開の版番号を除き、同じ入力をキーの挿入順に依存しない値にする。配列の順は配信の優先順なので保つ。 */
+export async function compileInputDigest(input: StoredCompileInput): Promise<string> {
+  const { version: _version, ...content } = input;
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value !== null && typeof value === "object")
+      return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => [key, canonical(item)]));
+    return value;
+  };
+  return sha256Hex(JSON.stringify(canonical(content)));
+}
+
 export async function buildCompileInput(
   db: Db,
   site: SiteRow,
@@ -77,14 +90,52 @@ export async function buildCompileInput(
   experiments?: ExperimentRow[],
   scope: CompileInputScope = {},
 ): Promise<StoredCompileInput> {
-  const statuses = scope.statuses ?? (["running"] as const);
   const all = experiments ?? (await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute());
-  // 決定 51(設計書 §3.2・§9.3): 並べる順 = 優先の順。compile は入力の順を保つ
-  const exps = orderForCompile(all.filter((e) => statuses.includes(e.status) && (!scope.experimentIds || scope.experimentIds.includes(e.id))));
   const variants = await db.selectFrom("variants").selectAll().where("site_id", "=", site.id).orderBy("position").execute();
   const changes = await db.selectFrom("changes").selectAll().where("site_id", "=", site.id).orderBy("position").execute();
-  const goals = await db.selectFrom("goals").selectAll().where("site_id", "=", site.id).execute();
-  const audiences = await db.selectFrom("audiences").select(["id", "definition_json"]).where("site_id", "=", site.id).execute();
+  const goals = await db.selectFrom("goals").selectAll().where("site_id", "=", site.id).orderBy("id").execute();
+  const audiences = await db.selectFrom("audiences").select(["id", "definition_json"]).where("site_id", "=", site.id).orderBy("id").execute();
+  return buildCompileInputFromRows(site, version, { experiments: all, variants, changes, goals, audiences }, scope);
+}
+
+export type CompileRows = {
+  experiments: ExperimentRow[]; variants: VariantRow[]; changes: ChangeRow[]; goals: GoalRow[];
+  audiences: Array<{ id: string; definition_json: string }>;
+};
+
+/** 同じ時点の compile 入力を batch で読む。公開の従来の読み方は変えない。 */
+export function compileRowStatements(env: Env, db: Db, siteId: string): D1PreparedStatement[] {
+  return [
+    toStatement(env, db.selectFrom("experiments").selectAll().where("site_id", "=", siteId).orderBy("created_at")),
+    toStatement(env, db.selectFrom("variants").selectAll().where("site_id", "=", siteId).orderBy("position")),
+    toStatement(env, db.selectFrom("changes").selectAll().where("site_id", "=", siteId).orderBy("position")),
+    toStatement(env, db.selectFrom("goals").selectAll().where("site_id", "=", siteId).orderBy("id")),
+    toStatement(env, db.selectFrom("audiences").selectAll().where("site_id", "=", siteId).orderBy("id")),
+  ];
+}
+
+export function parseCompileRows(results: D1Result[]): CompileRows {
+  return {
+    experiments: results[0]!.results as ExperimentRow[], variants: results[1]!.results as VariantRow[],
+    changes: results[2]!.results as ChangeRow[], goals: results[3]!.results as GoalRow[],
+    audiences: results[4]!.results as CompileRows["audiences"],
+  };
+}
+
+export async function loadCompileRows(env: Env, db: Db, siteId: string): Promise<CompileRows> {
+  return parseCompileRows(await env.DB.batch(compileRowStatements(env, db, siteId)));
+}
+
+export function applyTransitionToRows(rows: CompileRows, experimentId: string, to: "running" | "paused" | "archived", nowMs: number): CompileRows | null {
+  const exp = rows.experiments.find((e) => e.id === experimentId);
+  if (!exp || !TRANSITIONS[exp.status].includes(to)) return null;
+  return { ...rows, experiments: rows.experiments.map((e) => e.id === experimentId ? { ...e, status: to, ...(to === "running" ? { last_started_at: nowMs } : {}) } : e) };
+}
+
+export function buildCompileInputFromRows(site: SiteRow, version: number, rows: CompileRows, scope: CompileInputScope = {}): StoredCompileInput {
+  const { variants, changes, goals, audiences } = rows;
+  const statuses = scope.statuses ?? (["running"] as const);
+  const exps = orderForCompile(rows.experiments.filter((e) => statuses.includes(e.status) && (!scope.experimentIds || scope.experimentIds.includes(e.id))));
   return {
     siteId: site.id,
     siteSalt: site.site_salt,
@@ -220,6 +271,7 @@ async function markFailed(db: Db, rowId: string, code: string, message: string, 
  */
 const RETRY_HINT = "数秒後にもう一度公開してください";
 const FAILURE_MESSAGES: Record<string, { message: string; hint?: string }> = {
+  stale_preview: { message: "確認した後に、公開する内容が変わりました", hint: "公開の確認をもう一度開き、変わった内容を確かめてから公開してください" },
   version_reservation_failed: { message: "公開 version の予約に失敗しました", hint: RETRY_HINT },
   unknown_goal: { message: "参照している目標が見つかりません" },
   legacy_targeting: { message: "古い書式の配信条件があります" },
@@ -285,7 +337,7 @@ function publishAudit(env: Env, actor: UserActor, site: SiteRow, detail: AuditDe
  * 「取り出した画像がすべて印の無い行としてある」を条件にした 1 文にする。`opts.skipAssetGuard` は状態を変える口の止める操作
  * (一時停止・終了)だけが渡す(Q266): 取り出しを飛ばし、同じ文に空の ID の並びを渡す(条件は常に真)
  */
-export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserActor, nowMs = Date.now(), opts: { skipAssetGuard?: boolean } = {}): Promise<PublishResult> {
+export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserActor, nowMs = Date.now(), opts: { skipAssetGuard?: boolean; expectDigest?: string } = {}): Promise<PublishResult> {
   const userId = actor.userId;
   await reconcileActive(env, db, site.id);
   // 手順 2: version を予約(UNIQUE(site_id, version) で競合を検出して取り直す)
@@ -321,6 +373,10 @@ export async function publishSite(env: Env, db: Db, site: SiteRow, actor: UserAc
     const experiments = await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute();
     statusSnapshot = experiments.map((e) => ({ id: e.id, status: e.status }));
     input = await buildCompileInput(db, site, version, experiments);
+    if (opts.expectDigest !== undefined && await compileInputDigest(input) !== opts.expectDigest) {
+      await markFailed(db, rowId, "stale_preview", "compile input changed since preview");
+      return failure("stale_preview", version, "compile input changed since preview");
+    }
     // D9 ②(K15): results は Publish の経路だけで足す(写しと同じ SELECT の行から作る)。③ K6: 削除待ちの個票があれば forget を出し続ける
     const results = resultsForCompile(site, experiments, await hasPendingPurge(db, site.id));
     config = compile(results ? { ...input, results } : input);

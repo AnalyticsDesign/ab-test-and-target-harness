@@ -18,7 +18,7 @@ const BANNED: Array<{ re: RegExp; use: string }> = [
   { re: /パターン ?[A-Z](?![A-Za-z])/, use: "A パターン / B パターン" },
   { re: /導入パターン/, use: "導入構成(「パターン」は variant だけに使う)" },
   { re: /1 つだけ表示/, use: "パーソナライズ" },
-  { re: /未公開の変更/, use: "未公開の編集あり" },
+  { re: /未公開の変更(?!も一緒に本番に出ます)/, use: "未公開の編集あり" },
   { re: /権限の上限/, use: "権限" },
   { re: /フル[(（の]/, use: "すべてのワークスペース" }, // 半角・全角の括弧の両方
   { re: /\b(?:OWNER|ADMIN|EDITOR|VIEWER)\b/, use: "roleLabel(オーナー / 管理者 / 編集者 / 閲覧者)" },
@@ -193,6 +193,7 @@ describe("screen strings follow the glossary (backlog B35)", () => {
     ];
     for (const line of bad) expect(bannedIn(line), line).not.toEqual([]);
     const good = [
+      "次の未公開の変更も一緒に本番に出ます", // B56: 一覧の導入文。未公開の印の旧名とは区別する
       "<p>この サイト</p>",
       "<p>サイト ID をコピーします</p>",
       "<code>variantId</code> を指定します",

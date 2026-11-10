@@ -28,6 +28,8 @@ import {
   runDirect,
   RESULTS_STORE,
   countingD1,
+  beforeD1BatchMatching,
+  seedAssetRow,
 } from "./helpers";
 
 const setStatus = (token: string, sid: string, eid: string, status: string, envOverride?: Record<string, unknown>) =>
@@ -521,5 +523,109 @@ describe("開始・再開の前の、外したページの条件の検査(B69)",
       expect((await json(res)).publish.ok, eid).toBe(true);
       expect((await experimentRow(sid, eid)).status).toBe("archived");
     }
+  });
+});
+
+describe("status bound to preview", () => {
+  async function pair() {
+    const { owner, sid, eid } = await base();
+    await runDirect(sid, eid);
+    const { id: other } = await createExperiment(owner.token, sid, { id: "other" });
+    await runDirect(sid, other);
+    await publishRes(owner.token, sid);
+    return { owner, sid, eid, other };
+  }
+  const preview = async (token: string, sid: string, eid: string, to = "paused") => json(await call("GET", `/sites/${sid}/publish-preview?transition=${eid}:${to}`, { token }));
+  const save = async (token: string, sid: string, eid: string) => {
+    expect((await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token, body: [{ id: "code", type: "CUSTOM_JS", selector: "body", payload: { code: "window.changed = true" } }] })).status).toBe(200);
+  };
+  const count = async (table: "publishes" | "audit_events", sid: string) => (await getDb(env).selectFrom(table).selectAll().where("site_id", "=", sid).execute()).length;
+
+  it("status_with_transition_digest_publishes", async () => {
+    const { owner, sid, other } = await pair();
+    const p = await preview(owner.token, sid, other);
+    const result = await json(await call("POST", `/sites/${sid}/experiments/${other}/status`, { token: owner.token, body: { status: "paused", expectDigest: p.transitionDigest } }));
+    expect(result.publish.ok).toBe(true);
+    expect((await activeConfig(sid))!.experiments.map((e) => e.id)).not.toContain(other);
+  });
+  for (const to of ["paused", "archived"] as const) {
+    it(`status_${to}_with_stale_digest_is_rejected_before_cas`, async () => {
+      const { owner, sid, eid, other } = await pair();
+      const p = await preview(owner.token, sid, other, to);
+      const editor = await inviteAndJoin(owner.token, owner.workspaceId, "editor");
+      await save(editor.token, sid, eid);
+      const before = { pubs: await count("publishes", sid), audits: await count("audit_events", sid), version: (await siteRow(sid)).active_version, kv: await active(sid) };
+      const res = await call("POST", `/sites/${sid}/experiments/${other}/status`, { token: owner.token, body: { status: to, expectDigest: p.transitionDigest } });
+      expect(res.status).toBe(409);
+      expect(await json(res)).toMatchObject({ error: "stale_preview", message: "確認した後に、公開する内容が変わりました", hint: "公開の確認をもう一度開き、変わった内容を確かめてから公開してください" });
+      expect((await experimentRow(sid, other)).status).toBe("running");
+      expect(await count("publishes", sid)).toBe(before.pubs);
+      expect(await count("audit_events", sid)).toBe(before.audits);
+      expect((await siteRow(sid)).active_version).toBe(before.version);
+      expect(await active(sid)).toBe(before.kv);
+    });
+  }
+  it("status_pause_retry_with_fresh_digest_passes_despite_broken_images", async () => {
+    const { owner, sid, eid, other } = await pair();
+    const p = await preview(owner.token, sid, other);
+    const url = await seedAssetRow(sid, { id: "asset_digestaaaa", purgeMarkedAt: 2 });
+    await getDb(env).updateTable("changes").set({ type: "HTML", payload_json: JSON.stringify({ html: `<img src="${url}">`, position: "append", runScripts: false }) }).where("site_id", "=", sid).where("experiment_id", "=", eid).execute();
+    const send = (expectDigest: string) => call("POST", `/sites/${sid}/experiments/${other}/status`, { token: owner.token, body: { status: "paused", expectDigest } });
+    expect((await send(p.transitionDigest)).status).toBe(409);
+    const fresh = await preview(owner.token, sid, other);
+    expect(await json(await send(fresh.transitionDigest))).toMatchObject({ publish: { ok: true }, experiment: { status: "paused" } });
+  });
+  it("status_start_with_stale_digest_issues_nothing", async () => {
+    const owner = await setupOwner();
+    const made = await call("POST", `/workspaces/${owner.workspaceId}/sites`, { token: owner.token, body: { name: "Store", domains: ["www.example.com"] }, envOverride: RESULTS_STORE });
+    const { id: sid } = await json(made);
+    const { id: eid } = await createExperiment(owner.token, sid);
+    await choosePrimaryGoal(owner.token, sid, eid);
+    const p = await preview(owner.token, sid, eid, "running");
+    await save(owner.token, sid, eid);
+    const planBefore = await getDb(env).selectFrom("evaluation_plans").selectAll().where("site_id", "=", sid).execute();
+    const res = await call("POST", `/sites/${sid}/experiments/${eid}/status`, { token: owner.token, body: { status: "running", expectDigest: p.transitionDigest }, envOverride: RESULTS_STORE });
+    expect(res.status).toBe(409);
+    expect(await experimentRow(sid, eid)).toMatchObject({ status: "draft", run_id: null, started_at: null });
+    expect(await getDb(env).selectFrom("evaluation_plans").selectAll().where("site_id", "=", sid).execute()).toEqual(planBefore);
+  });
+  for (const broken of [false, true]) {
+    it(broken ? "status_race_stop_with_broken_images_needs_image_fix" : "status_race_after_precheck_reports_publish_stale", async () => {
+      const { owner, sid, eid, other } = await pair();
+      if (broken) {
+        const url = await seedAssetRow(sid, { id: "asset_digestaaaa", purgeMarkedAt: 2 });
+        await getDb(env).updateTable("changes").set({ type: "HTML", payload_json: JSON.stringify({ html: `<img src="${url}">`, position: "append", runScripts: false }) }).where("site_id", "=", sid).where("experiment_id", "=", eid).execute();
+      }
+      const p = await preview(owner.token, sid, other);
+      const hook = beforeD1BatchMatching(env.DB, /update "experiments" set "status"/i, () => getDb(env).updateTable("experiments").set({ name: "Saved during CAS" }).where("site_id", "=", sid).where("id", "=", eid).execute());
+      const res = await call("POST", `/sites/${sid}/experiments/${other}/status`, { token: owner.token, body: { status: "paused", expectDigest: p.transitionDigest }, envOverride: { DB: hook.db } });
+      expect(hook.ran()).toBe(true);
+      expect(res.status).toBe(200);
+      expect(await json(res)).toMatchObject({ experiment: { status: "paused" }, publish: { ok: false, error: "stale_preview" } });
+      expect(await active(sid)).toBe("1");
+      if (broken) {
+        expect(await json(await publishRes(owner.token, sid))).toMatchObject({ ok: false, error: "asset_missing" });
+        await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
+        expect(await json(await publishRes(owner.token, sid))).toMatchObject({ ok: true });
+      }
+    });
+  }
+  it("status_precheck_uses_one_batch", async () => {
+    const { owner, sid, other } = await pair();
+    const p = await preview(owner.token, sid, other);
+    const counter = countingD1(env.DB);
+    const res = await call("POST", `/sites/${sid}/experiments/${other}/status`, { token: owner.token, body: { status: "paused", expectDigest: p.transitionDigest }, envOverride: { DB: counter.db } });
+    expect(res.status).toBe(200);
+    expect(counter.counts().batchSql.filter((ss) => ss.length === 5 && ss.every((s) => /^select/i.test(s)))).toHaveLength(1);
+  });
+  it("status_without_digest_keeps_working", async () => {
+    const { owner, sid, other } = await pair();
+    expect(await json(await setStatus(owner.token, sid, other, "paused"))).toMatchObject({ publish: { ok: true } });
+  });
+  it("status_start_with_digest", async () => {
+    const { owner, sid, eid } = await base();
+    const p = await preview(owner.token, sid, eid, "running");
+    expect(p.transitionDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(await json(await call("POST", `/sites/${sid}/experiments/${eid}/status`, { token: owner.token, body: { status: "running", expectDigest: p.transitionDigest } }))).toMatchObject({ publish: { ok: true } });
   });
 });

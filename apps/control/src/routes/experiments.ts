@@ -1,3 +1,4 @@
+import { TRANSITIONS } from "../experiment-status";
 import { Hono, type Context } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
 import { expressionBuilder, sql, type Expression, type ExpressionBuilder, type RawBuilder, type SqlBool } from "kysely";
@@ -47,7 +48,7 @@ import { ApiError, assetGuardRejected, notFound, validationFailed } from "../err
 import { assertStartable, capacityWarning, fixPlanStatement, loadPlan, type LoadedPlan } from "../evaluation-plan";
 import { isReservedId, reservedIdMessage, SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
-import { buildCompileInput, publicPublishResult, publishSite, type PublishResult } from "../publish";
+import { loadCompileRows, applyTransitionToRows, buildCompileInputFromRows, compileInputDigest, buildCompileInput, publicPublishResult, publishSite, type PublishResult } from "../publish";
 import { rewriteCollectUntil } from "../results/collect-until";
 import { adoptionNotAllowed, AdoptionInputSchema, AdoptionJsonSchema, adoptionSummary, resolveAdoptedVariant } from "../results/adoption";
 import { deliveredAt } from "../results/delivered";
@@ -405,13 +406,6 @@ async function assertNoMovedPageConditions(db: Db, site: SiteRow, exp: Experimen
   assertNoRemovedPageCondition(targeting, Object.fromEntries(rows.map((r) => [r.id, JSON.parse(r.definition_json) as unknown])));
 }
 
-/** spec §13.8: draft → running、running ↔ paused、running | paused → archived(復帰不可)。表外は 409 invalid_transition */
-const TRANSITIONS: Record<ExperimentRow["status"], Array<ExperimentRow["status"]>> = {
-  draft: ["running"],
-  running: ["paused", "archived"],
-  paused: ["running", "archived"],
-  archived: [],
-};
 const DuplicateBody = z
   .strictObject({
     mode: z.enum(["same", "variant"]).describe(
@@ -423,6 +417,7 @@ const DuplicateBody = z
   })
   .refine((b) => b.mode !== "variant" || b.variantId !== undefined, { message: "variantId is required when mode is variant", path: ["variantId"] });
 const StatusBody = z.strictObject({
+  expectDigest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   status: z.enum(["running", "paused", "archived"]),
   adoption: AdoptionInputSchema.optional().describe("テストを終了する(archived)ときだけ: 採用の記録。パーソナライズと、終了以外の遷移には付けられない(422 adoption_not_allowed)"),
 });
@@ -1170,6 +1165,7 @@ experimentRoutes.post(
     tags: ["experiments"],
     summary:
       "エクスペリエンスの status を遷移する(管理者以上)。成功した遷移は必ずサイトを自動公開する。結果を記録するサイトでテストの下書きを開始するときは、判定に使う目標が無い・基準の重みが 0 なら 422 evaluation_plan_incomplete で、通れば評価計画を固定する。結果を記録しないテストを開始したときは warnings で知らせる。テストの終了(archived)には採用(adoption)を付けられ、配信を止める公開の後に結果と採用を記録する(応答の results.recorded)。開始・再開は、画像の確かめに通らなければ(遷移の後に配信する内容に、見つからない画像・別のサイトの画像がある)状態を変えずに 409 asset_missing / asset_other_site を返す(封筒の assetProblems に画像の URL とそれを含む変更)。一時停止・終了は画像を確かめずに状態を変えて公開する。開始・再開は、配信条件か参照するオーディエンスに、今は使えないページの条件(URL・ホスト・パス・パラメータ)が残っていれば、状態を変えずに 422 invalid_experiment_targeting を返す(対象 URL に移してから開始する)",
+    description: "expectDigest(確認画面の transitionDigest)を付けると、確認画面で見た内容のときだけ状態を変えて公開する。違えば 409 stale_preview で何も変えない。確認画面を読み直して送り直す。確かめと状態の変更の間に保存が割り込んだときだけ、状態は変わり publish.error が stale_preview になる",
     security: [{ bearer: [] }],
     responses: {
       200: {
@@ -1303,6 +1299,12 @@ experimentRoutes.post(
       toStatement(c.env, cas),
     ];
     if (plan && runId) stmts.push(fixPlanStatement(c.env, { siteId: site.id, experimentId: exp.id, plan: plan.plan, runId, userId: c.get("user").id, now }));
+    if (body.expectDigest !== undefined) {
+      const rows = await loadCompileRows(c.env, db, site.id);
+      const after = applyTransitionToRows(rows, exp.id, body.status, now);
+      if (!after || await compileInputDigest(buildCompileInputFromRows(site, (site.active_version ?? 0) + 1, after)) !== body.expectDigest)
+        throw new ApiError(409, "stale_preview", { hint: "公開の確認をもう一度開き、変わった内容を確かめてから公開してください" });
+    }
     const [, casResult] = await c.env.DB.batch(stmts);
     if ((casResult?.meta.changes ?? 0) === 0) {
       const fresh = await loadExperiment(db, site.id, exp.id);
@@ -1347,7 +1349,7 @@ experimentRoutes.post(
     let freshSite: Pick<SiteRow, "last_activated_at">;
     try {
       // B129: 自動の公開の publish.publish の行は状態を変えた人
-      publish = await publishSite(c.env, db, site, auditActor(c), undefined, { skipAssetGuard: body.status !== "running" });
+      publish = await publishSite(c.env, db, site, auditActor(c), undefined, { skipAssetGuard: body.status !== "running", expectDigest: body.expectDigest });
       fresh = await loadExperiment(db, site.id, exp.id);
       freshSite = await db.selectFrom("sites").select("last_activated_at").where("id", "=", site.id).executeTakeFirstOrThrow();
     } catch (e) {

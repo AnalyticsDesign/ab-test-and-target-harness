@@ -1,17 +1,19 @@
+import { diffCompiledConfigs } from "../config-diff";
+import { reviewMarkOf } from "../review-marks";
 import { Hono } from "hono";
 import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
 import { guardAssets } from "../asset-guard";
 import { auditActor, auditStatement } from "../audit";
-import { toStatement, type ExperimentRow } from "../db";
-import { notFound, validationFailed } from "../errors";
+import { toStatement, type AudienceRow, type ChangeRow, type ExperimentRow } from "../db";
+import { ApiError, notFound, validationFailed } from "../errors";
 import { overlapWarnings } from "../experiment-order";
 import { SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
 import { canReadRawPublishError, loadSite } from "../roles";
-import { compile, CompileError, usesCondition, type CompiledConfig } from "@wtt/core";
-import { buildCompileInput, describeCompileFailure, type StoredCompileInput, loadActiveConfig, publicPublishResult, publishErrorCode, publishSite } from "../publish";
+import { compile, CompileError, usesCondition, type CompiledConfig, parseCompiledConfig } from "@wtt/core";
+import { compileRowStatements, parseCompileRows, buildCompileInputFromRows, compileInputDigest, applyTransitionToRows, buildCompileInput, describeCompileFailure, type StoredCompileInput, loadActiveConfig, publicPublishResult, publishErrorCode, publishSite } from "../publish";
 import { requestStaticDeploy } from "../static-delivery";
 import { audienceUsage } from "./audiences";
 
@@ -50,7 +52,7 @@ export const PublishResultSchema = z.union([
   z.object({
     ok: z.literal(false),
     version: z.number().int().nullable(),
-    error: z.string().describe("機械可読コード(kv_put_failed / kv_verify_failed / kv_rate_limited / publish_record_missing / legacy_targeting / unknown_audience / within_days_exceeds_retention / asset_missing / asset_other_site …)"),
+    error: z.string().describe("機械可読コード(kv_put_failed / kv_verify_failed / kv_rate_limited / publish_record_missing / stale_preview / legacy_targeting / unknown_audience / within_days_exceeds_retention / asset_missing / asset_other_site …)"),
     message: z.string(),
     hint: z.string().optional(),
     assetProblems: z
@@ -87,21 +89,26 @@ const ChangedChangeSchema = z.object({
   variantId: z.string(),
   id: z.string(),
   type: z.enum(["TEXT", "IMAGE", "HIDE", "ATTRIBUTE", "HTML", "CSS", "CUSTOM_JS"]),
+  reviewMark: z.enum(["code", "external_url"]).nullable().describe("コード、または外部の URL を含む可能性がある変更の印"),
   updatedAt: z.number().int().describe("epoch ミリ秒"),
   updatedBy: ActorSchema,
 });
 const PublishPreviewExperimentSchema = z.object({
+  detectedBy: z.enum(["time", "config"]).describe("更新時刻、または公開中の設定との比較で見つかった変更"),
   id: z.string(),
   name: z.string(),
   status: z.enum(["draft", "running", "paused", "archived"]),
   publishedStatus: z.enum(["draft", "running", "paused", "archived"]).nullable(),
   updatedAt: z.number().int().describe("epoch ミリ秒"),
   updatedBy: ActorSchema,
-  hasCodeChange: z.boolean().describe("HTML / CSS / CUSTOM_JS の変更を含むか(コードレビューを促す印)"),
+  hasCodeChange: z.boolean().describe("HTML / CSS / CUSTOM_JS、または <style> などの要素に当たりうる TEXT / ATTRIBUTE を含むか"),
+  hasExternalUrl: z.boolean().describe("外部の URL を含む ATTRIBUTE があるか"),
   changedChanges: z.array(ChangedChangeSchema),
 });
 const RefSchema = z.object({ id: z.string(), name: z.string() });
 const PublishPreviewSchema = z.object({
+  digest: z.string().nullable().describe("現在の公開入力の sha256。公開の expectDigest に送る"),
+  transitionDigest: z.string().nullable().describe("指定した状態に変更した後の公開入力の sha256。状態の変更の expectDigest に送る。遷移できない場合は null"),
   experiments: z.array(PublishPreviewExperimentSchema),
   siteLevelChanged: z.boolean().describe("目標 / オーディエンス / タイムゾーンなどサイト直下の設定が前回 activation より後に変わったか"),
   lastActivatedAt: z.number().int().nullable().describe("epoch ミリ秒"),
@@ -126,28 +133,35 @@ const PublishPreviewSchema = z.object({
     ),
 });
 
-/** HTML / CSS / CUSTOM_JS はコードレビューが要る Change(spec §13.9 の「Code Change の印」) */
-const CODE_CHANGE_TYPES = new Set(["HTML", "CSS", "CUSTOM_JS"]);
-
 /** 公開履歴の本体は version 単位。`:version` は 10 進の整数だけを受ける */
 const VersionParam = z.object({ sid: z.string(), version: z.string().regex(/^\d+$/, "version must be a positive integer") });
 
-/** spec §13.2 / §13.6: Publish は ADMIN 以上。body は取らないので validator は付けない(POST …/reset-link と同じ形) */
+export const PublishBodySchema = z.strictObject({ expectDigest: z.string().regex(/^[0-9a-f]{64}$/).optional() });
+
+/** 空の本文も受けるが、読めない JSON や未知のキーで束縛が外れないようにする。 */
 publishRoutes.post(
   "/sites/:sid/publish",
   describeRoute({
     tags: ["publish"],
-    summary: "サイトを公開(管理者以上)。失敗も 200 + ok:false で返す",
+    summary: "サイトを公開(管理者以上)。expectDigest を付けると、確認画面で見た内容のときだけ公開する。失敗も 200 + ok:false で返す",
+    requestBody: { required: false, content: { "application/json": { schema: z.toJSONSchema(PublishBodySchema) as Record<string, unknown> } } },
     security: [{ bearer: [] }],
     responses: {
       200: { description: "公開の結果(成功 / 失敗の両方)", content: { "application/json": { schema: resolver(PublishResultSchema) } } },
-      ...errorResponses(401, 403, 404),
+      ...errorResponses(400, 401, 403, 404, 422),
     },
   }),
   requireSession,
   async (c) => {
     const { site } = await loadSite(c, c.req.param("sid"), "admin");
-    return c.json(publicPublishResult(await publishSite(c.env, c.get("db"), site, auditActor(c))));
+    const text = await c.req.text();
+    let raw: unknown = {};
+    if (text !== "") {
+      try { raw = JSON.parse(text); } catch { throw new ApiError(400, "bad_request"); }
+    }
+    const parsed = PublishBodySchema.safeParse(raw);
+    if (!parsed.success) throw validationFailed(parsed.error);
+    return c.json(publicPublishResult(await publishSite(c.env, c.get("db"), site, auditActor(c), undefined, parsed.data)));
   },
 );
 
@@ -271,19 +285,20 @@ publishRoutes.get(
     security: [{ bearer: [] }],
     responses: {
       200: { description: "未公開の編集サマリ", content: { "application/json": { schema: resolver(PublishPreviewSchema) } } },
-      ...errorResponses(401, 403, 404),
+      ...errorResponses(401, 403, 404, 422),
     },
   }),
   requireSession,
   validator(
     "query",
     z.object({
+      transition: z.string().regex(new RegExp(`^${SLUG_RE.source.replace(/^\^|\$$/g, "")}:(running|paused|archived)$`)).optional().describe("対象のエクスペリエンス ID と変更先の状態。transitionDigest を状態の変更の expectDigest に送る"),
       starting: z
         .string()
         .regex(SLUG_RE)
         .optional()
-        .describe("下書きまたは一時停止中のエクスペリエンス ID を指定すると、それを今開始・再開したとして重なり(overlaps)だけを計算する。ほかの項目には効かない"),
-    }),
+        .describe("下書きまたは一時停止中のエクスペリエンス ID を指定すると、それを今開始・再開したとして重なり(overlaps)だけを計算する。transition=<id>:running の別名"),
+    }).refine((v) => !(v.transition && v.starting), { message: "transition と starting は同時に指定できません" }),
     (r) => {
       if (!r.success) throw validationFailed(r.error);
     },
@@ -292,41 +307,34 @@ publishRoutes.get(
     const { site } = await loadSite(c, c.req.param("sid"), "viewer");
     const db = c.get("db");
     const since = site.last_activated_at ?? 0;
-    const exps = await db
-      .selectFrom("experiments")
-      .leftJoin("user", "user.id", "experiments.updated_by")
-      .selectAll("experiments")
-      .select("user.name as updated_by_name")
-      .where("experiments.site_id", "=", site.id)
-      .where("experiments.updated_at", ">", since)
-      .orderBy("experiments.updated_at", "desc")
-      .execute();
-    const changes = await db
-      .selectFrom("changes")
-      .leftJoin("user", "user.id", "changes.updated_by")
-      .selectAll("changes")
-      .select("user.name as updated_by_name")
-      .where("changes.site_id", "=", site.id)
-      .where("changes.updated_at", ">", since)
-      .execute();
-    // 決定 49: オーディエンスの変更と、いまの下書きを compile した結果(公開中の設定と比べる。設計書 §5.3・§11)
-    const changedAudiences = await db
-      .selectFrom("audiences")
-      .select(["id", "name", "updated_at"])
-      .where("site_id", "=", site.id)
-      .where("updated_at", ">", since)
-      .orderBy("updated_at", "desc")
-      .execute();
+    const batch = await c.env.DB.batch([
+      ...compileRowStatements(c.env, db, site.id),
+      toStatement(c.env, db.selectFrom("experiments").leftJoin("user", "user.id", "experiments.updated_by").selectAll("experiments").select("user.name as updated_by_name").where("experiments.site_id", "=", site.id).orderBy("experiments.updated_at", "desc")),
+      toStatement(c.env, db.selectFrom("changes").leftJoin("user", "user.id", "changes.updated_by").selectAll("changes").select("user.name as updated_by_name").where("changes.site_id", "=", site.id)),
+      toStatement(c.env, db.selectFrom("publishes").select("config_json").where("site_id", "=", site.id).where("version", "=", site.active_version ?? 0)),
+    ]);
+    const rows = parseCompileRows(batch);
+    const allExps = batch[5]!.results as Array<ExperimentRow & { updated_by_name: string | null }>;
+    const exps = allExps.filter((e) => e.updated_at > since);
+    const changes = (batch[6]!.results as Array<ChangeRow & { updated_by_name: string | null }>).filter((ch) => ch.updated_at > since);
+    const changedAudiences = (batch[4]!.results as AudienceRow[]).filter((a) => a.updated_at > since).sort((a, b) => b.updated_at - a.updated_at);
     const usage = await audienceUsage(db, site.id);
-    const startingId = c.req.valid("query").starting ?? null;
+    const query = c.req.valid("query");
+    const transition = query.transition ?? (query.starting ? `${query.starting}:running` : null);
+    const [transitionId, transitionTo] = transition?.split(":") ?? [];
+    let digest: string | null = null;
+    let transitionDigest: string | null = null;
+    let transitionInput: StoredCompileInput | null = null;
+    let transitionNext: CompiledConfig | null = null;
     let next: CompiledConfig | null = null;
     let compileError: { error: string; message: string; hint?: string } | null = null;
     let overlaps: ReturnType<typeof overlapWarnings> = [];
     let input: StoredCompileInput | null = null;
     try {
-      input = await buildCompileInput(db, site, (site.active_version ?? 0) + 1);
+      input = buildCompileInputFromRows(site, (site.active_version ?? 0) + 1, rows);
+      digest = await compileInputDigest(input);
       // compile の前の入力から出す(compile に失敗しても重なりは見せる)
-      if (startingId === null) overlaps = overlapWarnings(input.experiments);
+      if (transition === null) overlaps = overlapWarnings(input.experiments);
       next = compile(input);
     } catch (e) {
       const code = e instanceof CompileError ? e.code : "compile_failed";
@@ -334,23 +342,24 @@ publishRoutes.get(
       if (!(e instanceof CompileError)) console.error("publish-preview failed (compile_failed)", e);
       compileError = { error: code, ...describeCompileFailure(code, e instanceof Error ? e.message : String(e)) };
     }
-    if (startingId !== null) {
-      // 決定 51(K7): その下書き・一時停止中のテストを「今開始・再開した」として並べた入力から、重なりだけを出す(ほかの項目は今の下書きのまま)
+    if (transitionId && transitionTo) {
       try {
-        const rows = (await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute()).map(
-          (r): ExperimentRow => (r.id === startingId && (r.status === "draft" || r.status === "paused") ? { ...r, status: "running", last_started_at: Date.now() } : r),
-        );
-        const hypo = await buildCompileInput(db, site, (site.active_version ?? 0) + 1, rows);
-        overlaps = overlapWarnings(hypo.experiments).filter((o) => o.experimentIds.includes(startingId));
-      } catch (e) {
-        console.error("publish-preview overlaps for starting failed", e); // 警告だけなので空で返す
-      }
+        const hypothetical = applyTransitionToRows(rows, transitionId, transitionTo as "running" | "paused" | "archived", Date.now());
+        if (hypothetical) {
+          transitionInput = buildCompileInputFromRows(site, (site.active_version ?? 0) + 1, hypothetical);
+          transitionDigest = await compileInputDigest(transitionInput);
+          overlaps = transitionTo === "running" ? overlapWarnings(transitionInput.experiments).filter((o) => o.experimentIds.includes(transitionId)) : [];
+          transitionNext = compile(transitionInput);
+        }
+      } catch (e) { console.error("publish-preview transition failed", e); }
     }
     // B68(spec §22.5): 公開と同じ画像の確かめ。管理する画像の URL があるときだけ D1 を 1 回読む。別のサイトの URL は読まずに other_site。
     // compile に失敗したときは出さない(公開は compile で止まる)。starting の仮の入力には当てない
     const assetGuard = next && input ? await guardAssets(c.env, db, site, input, JSON.stringify(next), { readD1: true }) : null;
     const assetProblems = assetGuard && !assetGuard.ok ? assetGuard.assetProblems : [];
-    const active = await loadActiveConfig(db, site);
+    let active: CompiledConfig | null = null;
+    const activeJson = (batch[7]!.results[0] as { config_json: string | null } | undefined)?.config_json;
+    if (activeJson) { try { active = parseCompiledConfig(JSON.parse(activeJson)); } catch { /* 読めない過去の版は比較しない */ } }
     const nextPatterns = next?.patterns;
     const droppedPageConditions =
       nextPatterns && active
@@ -361,11 +370,21 @@ publishRoutes.get(
     // B77: compiled config は名前を持たないので、名前は D1 の行から ID で引く(無ければ ID)。
     // exps は前回の activation 以降に変わった行だけなので使えず(変えずに running のままのエクスペリエンスが漏れる)、サイトの行を読む
     const viewport = (next?.experiments ?? []).filter((e) => usesCondition(e.targeting, "viewport")).map((e) => e.id);
-    const viewportNames =
-      viewport.length > 0
-        ? new Map((await db.selectFrom("experiments").select(["id", "name"]).where("site_id", "=", site.id).execute()).map((r) => [r.id, r.name] as const))
-        : new Map<string, string>();
+    const viewportNames = new Map(allExps.map((e) => [e.id, e.name]));
+    const comparisonNext = transition ? transitionNext : next;
+    const comparisonInput = transition ? transitionInput : input;
+    const diff = comparisonNext && active ? diffCompiledConfigs(comparisonNext, active) : { experimentIds: [], siteLevel: false };
+    const configIds = new Set(diff.experimentIds);
+    const timeIds = new Set(exps.map((e) => e.id));
+    let siteLevelChanged = site.content_updated_at > since || diff.siteLevel;
+    for (const id of configIds) {
+      if (timeIds.has(id)) continue;
+      const row = allExps.find((e) => e.id === id);
+      if (row) exps.push(row);
+      else siteLevelChanged = true;
+    }
     return c.json({
+      digest, transitionDigest,
       audienceChanges: changedAudiences.map((a) => ({
         id: a.id,
         name: a.name,
@@ -378,21 +397,27 @@ publishRoutes.get(
       assetProblems,
       overlaps,
       lastActivatedAt: site.last_activated_at,
-      siteLevelChanged: site.content_updated_at > since,
+      siteLevelChanged,
       experiments: exps.map((e) => {
-        const mine = changes.filter((ch) => ch.experiment_id === e.id);
+        const mine = timeIds.has(e.id) ? changes.filter((ch) => ch.experiment_id === e.id) : [];
+        const marks = configIds.has(e.id)
+          ? (comparisonInput?.experiments.find((x) => x.id === e.id)?.variants.flatMap((v) => v.changes) ?? []).map(reviewMarkOf)
+          : mine.map((ch) => reviewMarkOf({ ...ch, payload: JSON.parse(ch.payload_json) }));
         return {
+          detectedBy: timeIds.has(e.id) ? "time" : "config",
           id: e.id,
           name: e.name,
           status: e.status,
           publishedStatus: e.published_status,
           updatedAt: e.updated_at,
           updatedBy: { id: e.updated_by, name: e.updated_by_name ?? "(削除済み)" },
-          hasCodeChange: mine.some((ch) => CODE_CHANGE_TYPES.has(ch.type)),
+          hasCodeChange: marks.includes("code"),
+          hasExternalUrl: marks.includes("external_url"),
           changedChanges: mine.map((ch) => ({
             variantId: ch.variant_id,
             id: ch.id,
             type: ch.type,
+            reviewMark: reviewMarkOf({ ...ch, payload: JSON.parse(ch.payload_json) }),
             updatedAt: ch.updated_at,
             updatedBy: { id: ch.updated_by, name: ch.updated_by_name ?? "(削除済み)" },
           })),

@@ -336,6 +336,7 @@ test.describe.serial("results flow (D9 ③)", () => {
     // 一覧の採用の要約
     await page.goto(siteUrl); // サイトの画面 = エクスペリエンスの一覧
     await expect(page.getByTestId(`experiment-row-${createdId}`)).toContainText("B だけを表示"); // 作った下書き(名前は「<元の名前>(B だけを表示)」)
+    await page.getByRole("group", { name: "状態で絞り込む" }).getByRole("button", { name: /^すべて / }).click();
     await expect(page.getByTestId(`experiment-adoption-${EXP.id}`)).toHaveText(/^採用: B\(.+上回る確率 .+\)$/);
   });
 
@@ -374,6 +375,7 @@ test.describe.serial("results flow (D9 ③)", () => {
     await expect(dialog).toBeHidden();
     await expect(page.getByTestId("results-adoption")).toContainText("今回は見送る");
     await page.goto(siteUrl); // サイトの画面 = エクスペリエンスの一覧
+    await page.getByRole("group", { name: "状態で絞り込む" }).getByRole("button", { name: /^すべて / }).click();
     await expect(page.getByTestId(`experiment-adoption-${EXP.id}`)).toHaveText("採用なし");
   });
 });

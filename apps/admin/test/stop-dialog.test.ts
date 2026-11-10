@@ -162,13 +162,13 @@ describe("stopDuplicateOption(設計書 §8.2 のチェック)", () => {
 
 describe("submitStop / stopView(設計書 §8.2: 複製が失敗しても終了は取り消さない)", () => {
   const ok: StatusResult = { experiment: { ...EXP, status: "archived" } as Experiment, publish: { ok: true, version: 7, needsProfile: false, superseded: false, staticDeploy: "deployed", warnings: [] }, warnings: [], results: { recorded: true } };
-  const input = { siteId: "s", experimentId: "exp_buy", adoption: { variantId: "b", note: " メモ " }, duplicate: { variantId: "b", name: "購入ボタンの文言テスト(B(CTA 文言) だけを表示)" } };
+  const input = { expectDigest: "a".repeat(64), siteId: "s", experimentId: "exp_buy", adoption: { variantId: "b", note: " メモ " }, duplicate: { variantId: "b", name: "購入ボタンの文言テスト(B(CTA 文言) だけを表示)" } };
 
   it("calls the status API with the adoption, then the duplicate API", async () => {
     const call = vi.fn(async (_m: string, p: string, _b?: unknown) => (p.endsWith("/status") ? ok : { id: "exp_buy-copy" }));
     const out = await submitStop(call, input);
     expect(call.mock.calls).toEqual([
-      ["POST", "/sites/s/experiments/exp_buy/status", { status: "archived", adoption: { variantId: "b", note: "メモ" } }],
+      ["POST", "/sites/s/experiments/exp_buy/status", { status: "archived", expectDigest: "a".repeat(64), adoption: { variantId: "b", note: "メモ" } }],
       ["POST", "/sites/s/experiments/exp_buy/duplicate", { mode: "variant", variantId: "b", name: "購入ボタンの文言テスト(B(CTA 文言) だけを表示)" }],
     ]);
     expect(out.duplicate).toEqual({ kind: "created", id: "exp_buy-copy" });
@@ -186,7 +186,7 @@ describe("submitStop / stopView(設計書 §8.2: 複製が失敗しても終了�
     });
     const out = await submitStop(call, { ...input, adoption: { variantId: "b", note: "" } });
     expect(call).toHaveBeenCalledTimes(2);
-    expect(call.mock.calls[0]![2]).toEqual({ status: "archived", adoption: { variantId: "b" } });
+    expect(call.mock.calls[0]![2]).toEqual({ status: "archived", expectDigest: "a".repeat(64), adoption: { variantId: "b" } });
     expect(out.result).toBe(ok);
     expect(out.duplicate.kind).toBe("failed");
     const v = stopView(out, "/w/w/sites/s/experiments");
@@ -274,4 +274,11 @@ describe("capacityWarning(plan ③ K18: 80% で警告・95% で停止)", () => {
       text: "計測用のデータベースの使用量が上限の 95% 以上になったため、参加と CV の記録を止めています(約 480 MB / 500 MB)。保持期間を短くするか、不要になったテストを削除してください。期限を過ぎた記録の削除は毎日 UTC 23 時台に行い、空きができれば記録を再開します",
     });
   });
+});
+
+it("stop stale publish closes confirmation and links to publishing", () => {
+  const result = { experiment: { status: "archived" }, publish: { ok: false, version: 2, error: "stale_preview", message: "changed" }, warnings: [] } as unknown as StatusResult;
+  const view = stopView({ result, duplicate: { kind: "none" } }, "/w/w/sites/s/experiments");
+  expect(view.messages[0]).toMatchObject({ tone: "error", text: "状態は変わりましたが、確認の後に内容が変わったため公開していません", publishHref: "/w/w/sites/s/publish" });
+  expect(view.navigate).toBe(false);
 });

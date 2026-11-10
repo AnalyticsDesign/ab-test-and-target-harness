@@ -2,14 +2,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useConfirmHold, type ConfirmHold, type ConfirmOptions } from "@/components/ConfirmProvider";
 import { useStatusChangeGuard } from "@/lib/status-guard";
-import { api, describeError } from "@/lib/client";
+import { ApiClientError, api, describeError } from "@/lib/client";
 import { REFRESH_TIMEOUT, WRITE_UNKNOWN } from "@/lib/busy-notice";
 import type { BusyOutcome } from "@/lib/run-busy";
 import { STATUS_JA } from "@/lib/experiment-filter";
 import { comparisonsOf, type PlanView } from "@/lib/evaluation-plan";
-import { loadStartPreview, pauseConfirm, SITE_PUBLISH_NOTE, startBlocker, startConfirmFor, startWarnings, type StartConfirm, type StartPlan } from "@/lib/start-confirm";
+import { loadTransitionPreview, othersListItems, OTHER_PUBLISH_NOTE, STALE_PREVIEW_RETRY, PREVIEW_LOAD_FAILED, pauseConfirm, SITE_PUBLISH_NOTE, startBlocker, startConfirmFor, startWarnings, type StartConfirm, type StartPlan } from "@/lib/start-confirm";
 import type { StopMessage } from "@/lib/stop-dialog";
 import type { Experiment, Goal, PublishPreview, Status, StatusResult } from "@/lib/types";
+import { AppLink } from "./ui/AppLink";
 import { StopDialog, StopNotices } from "./experiment/StopDialog";
 import { BusyScope, useBusyAction } from "./ui/BusyScope";
 import { AssetProblemList } from "./images/AssetProblemList";
@@ -124,7 +125,7 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
   // 未保存の変更があれば、状態の変更の確認・終了のモーダルの前に止める(B173 第 1 段)
   const statusGuard = useStatusChangeGuard();
   // problems = 公開できない画像の一覧(B68。開始・再開の 409 と、状態を変えた後の公開の失敗)
-  const [msg, setMsg] = useState<{ text: string; error: boolean; problems?: AssetProblemRow[] } | null>(null);
+  const [msg, setMsg] = useState<{ text: string; error: boolean; problems?: AssetProblemRow[]; publishHref?: string } | null>(null);
   // リンクの名前は、開いているエクスペリエンスとそのパターンだけ手元にある(ほかは ID。読みは足さない)
   const rowsOf = (problems: AssetProblem[]) =>
     assetProblemRows(problems, {
@@ -165,71 +166,43 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
   };
 
   /**
-   * 最後に出す確認の中身。null = 確認を出さない(開始・再開で startConfirmFor が null)。false = 前の段で止めた・取り消した・範囲が消えた。
+   * 最後に出す確認と、それに対応する digest。options が null なら確認を出さない。false は前の段で止めた・取り消した・範囲が消えた。
    * 前の段の確認(今は無い)・事前の GET はここ。各段の待ちの後に範囲が生きているかを見る
    */
-  async function finalConfirm(n: { to: Status }): Promise<ConfirmOptions | null | false> {
-    // 実行中・一時停止中の終了(パーソナライズ。テストは StopDialog)
-    if (n.to === "archived") {
-      return {
-        title: "エクスペリエンスを終了しますか?",
-        body: (
-          <>
-            <p>終了したエクスペリエンスは再開できません。もう一度行うときは複製して作ります</p>
-            <p className="muted">{SITE_PUBLISH_NOTE}</p>
-          </>
-        ),
-        confirmLabel: "終了する",
-        tone: "danger",
-      };
-    }
-    // B107: 一時停止は押し間違えると配信がすぐ止まるので確認する(再開できるので主ボタンの色)
-    if (n.to === "paused") {
-      const c = pauseConfirm();
-      return {
-        title: c.title,
-        body: (
-          <>
-            <p>{c.lead}</p>
-            <p className="muted">{c.sitePublish}</p>
-          </>
-        ),
-        confirmLabel: c.confirmLabel,
-        tone: "primary",
-      };
-    }
-    // 決定 51(設計書 §3.3): 下書きの開始・一時停止中の再開で、同じ要素を変える配信中のエクスペリエンスがあれば、どちらが優先されるかを確認に出す。
-    // 取得に失敗したら確認なしで進める(警告は開始・再開を止めない)。
-    // B77 K20: 下書きの開始では、保存済みのパターンのうち重み 0 のものも同じ確認に入れる(開始後は重みを直せない。再開では出さない)
-    // D9 ③(設計書 §5.2・§10): 下書きのテストの開始では、固定する評価計画の一覧(結果を記録しないサイトでは記録しない文)も同じ確認に入れ、
-    // 判定に使う目標が無ければ確認の前に止める(control の 422 と同じ案内)
-    const starting = experiment.status === "draft";
-    // B66 b: 下見で、ほかに未公開の変更があるか(状態の変更で一緒に本番に出る)も見る。あれば確認を出してそのことを言う
-    const [{ overlaps, othersUnpublished }, start] = await Promise.all([
-      loadStartPreview(experiment.id, () => api<PublishPreview>("GET", `/sites/${siteId}/publish-preview?starting=${encodeURIComponent(experiment.id)}`)),
+  async function finalConfirm(n: { to: Status }, retry: boolean): Promise<{ options: ConfirmOptions | null; digest: string } | false> {
+    const starting = n.to === "running" && experiment.status === "draft";
+    const [preview, start] = await Promise.all([
+      loadTransitionPreview(siteId, experiment.id, n.to, (path) => api<PublishPreview>("GET", path)),
       starting && experiment.kind === "test" ? loadStartPlan(siteId, experiment, recording, goals) : Promise.resolve(undefined),
     ]);
     if (!mounted.current) return false;
-    const blocked = start ? startBlocker(start) : null;
-    if (blocked) {
-      setMsg({ text: blocked, error: true });
-      return false;
+    if (!preview.ok) { setMsg({ text: PREVIEW_LOAD_FAILED, error: true }); return false; }
+    const items = othersListItems(preview.others);
+    const sitePublish = items.length ? OTHER_PUBLISH_NOTE : SITE_PUBLISH_NOTE;
+    const done = (options: ConfirmOptions | null) => ({ options, digest: preview.digest });
+    const body = (c: StartConfirm) => <>{retry ? <p role="alert">{STALE_PREVIEW_RETRY}</p> : null}{startConfirmBody(c)}</>;
+    if (n.to === "archived") return done({
+      title: "エクスペリエンスを終了しますか?",
+      body: body({ title: "", lead: "終了したエクスペリエンスは再開できません。もう一度行うときは複製して作ります", items, sitePublish, confirmLabel: "終了する" }),
+      confirmLabel: "終了する", tone: "danger",
+    });
+    if (n.to === "paused") {
+      const c = pauseConfirm();
+      return done({ title: c.title, body: body({ ...c, items, sitePublish }), confirmLabel: c.confirmLabel, tone: "primary" });
     }
-    const confirm = startConfirmFor(
-      overlaps,
-      starting ? "開始" : "再開",
-      starting ? (experiment.variants ?? []).filter((v) => v.weight === 0).map((v) => v.name) : [],
-      start,
-      othersUnpublished,
-    );
-    if (!confirm) return null;
-    return { title: confirm.title, body: startConfirmBody(confirm), confirmLabel: confirm.confirmLabel, tone: "primary" };
+    const blocked = start ? startBlocker(start) : null;
+    if (blocked) { setMsg({ text: blocked, error: true }); return false; }
+    const confirm = startConfirmFor(preview.overlaps, starting ? "開始" : "再開", starting ? (experiment.variants ?? []).filter((v) => v.weight === 0).map((v) => v.name) : [], start, items, retry);
+    if (!confirm) return done(null);
+    return done({ title: confirm.title, body: body(confirm), confirmLabel: confirm.confirmLabel, tone: "primary" });
   }
 
   async function change(n: { to: Status }) {
     const label = busyLabelOf(experiment.status, n.to);
     /** 最後の確認の口。確認の無い経路・最後の確認の前に止めたときは null(close・fail を呼ばず、結果はボタンの並びに出す) */
     let hold: ConfirmHold | null = null;
+    let digest: string | null = null;
+    let retryPreview = false;
     const attempt = () =>
       run<StatusResult>({
         label,
@@ -241,15 +214,19 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
           if (!mounted.current) return false;
           setStopNotices(null);
           clear();
-          const final = await finalConfirm(n);
+          const final = await finalConfirm(n, retryPreview);
           if (final === false || !mounted.current) return false;
-          if (final === null) return true; // 確認を足さない。覆いはボタンの並び(S2-7)
-          const r = await askHold({ ...final, busyLabel: label });
+          digest = final.digest;
+          if (final.options === null) return true; // 確認を足さない。覆いはボタンの並び(S2-7)
+          const r = await askHold({ ...final.options, busyLabel: label });
           if (!r.confirmed) return false;
           hold = r.hold;
           return true;
         },
-        write: (signal) => api<StatusResult>("POST", `/sites/${siteId}/experiments/${experiment.id}/status`, { status: n.to }, { signal }),
+        write: (signal) => {
+          if (!digest) throw new Error(PREVIEW_LOAD_FAILED);
+          return api<StatusResult>("POST", `/sites/${siteId}/experiments/${experiment.id}/status`, { status: n.to, expectDigest: digest }, { signal });
+        },
         after: "refresh",
       });
 
@@ -258,7 +235,13 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
     // 確認を閉じて、ボタンの近くに理由と画像の一覧を出す(一時停止・終了はこの分岐に入らない)
     const rejected = () => (outcome.kind === "failed" ? assetGuardRejection(outcome.error, n.to) : null);
     // 失敗・30 秒は確認の中に出し、もう一度の確定で同じ形の run を送り直す(取り消しで閉じたら何もしない。状態は変わっていない)
-    while ((outcome.kind === "failed" || outcome.kind === "unknown") && hold && !rejected()) {
+    while (outcome.kind === "failed" || outcome.kind === "unknown") {
+      if (outcome.kind === "failed" && outcome.error instanceof ApiClientError && outcome.error.code === "stale_preview") {
+        (hold as ConfirmHold | null)?.close(); hold = null; digest = null; retryPreview = true;
+        outcome = await attempt();
+        continue;
+      }
+      if (!hold || rejected()) break;
       const again = await (hold as ConfirmHold).fail(outcome.kind === "failed" ? describeError(outcome.error) : WRITE_UNKNOWN);
       if (!again) return;
       outcome = await attempt();
@@ -270,7 +253,9 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
       setMsg(
         r.publish.ok
           ? { text: `公開 v${r.publish.version} を反映しました(訪問者のブラウザには 1 分ほどで届きます)`, error: false }
-          : {
+          : r.publish.error === "stale_preview"
+            ? { text: "状態は変わりましたが、確認の後に内容が変わったため公開していません", error: true, publishHref: `/w/${wid}/sites/${siteId}/publish` }
+            : {
               text: `状態は ${STATUS_JA[n.to]} に変わりましたが、公開に失敗しました(${r.publish.error}: ${r.publish.message})。上部の「公開」から再試行してください`,
               error: true,
               problems: rowsOf(publishFailureProblems(r.publish)),
@@ -320,7 +305,7 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
           </div>
         ) : msg.error ? (
           <span className="error-box" role="alert" data-testid="status-result">
-            {msg.text}
+            {msg.text}{msg.publishHref ? <> <AppLink href={msg.publishHref}>公開の確認へ</AppLink></> : null}
           </span>
         ) : (
           <span className="muted" role="status" data-testid="status-result">

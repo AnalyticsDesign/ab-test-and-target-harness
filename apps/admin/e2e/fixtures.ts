@@ -132,6 +132,7 @@ export const HERO_TEXT = "E2E から書き換え";
  */
 export async function login(page: Page, email = OWNER_EMAIL, password = PASSWORD): Promise<void> {
   await page.goto("/login");
+  await waitForHydration(page);
   await page.fill('input[name="email"]', email);
   await page.fill('input[name="password"]', password);
   await page.click('button[type="submit"]');

@@ -1,10 +1,11 @@
 "use client";
-import { useEffect, useState } from "react";
-import { api, describeError } from "@/lib/client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ApiClientError, api, describeError } from "@/lib/client";
 import type { ResultsResponse } from "@/lib/results-view";
-import { SITE_PUBLISH_NOTE } from "@/lib/start-confirm";
+import { loadTransitionPreview, othersListItems, OTHER_PUBLISH_NOTE, PREVIEW_LOAD_FAILED, STALE_PREVIEW_RETRY, SITE_PUBLISH_NOTE } from "@/lib/start-confirm";
 import { ADOPTION_NOTE_MAX, selectionNotes, stopDialogState, stopDuplicateName, stopDuplicateOption, stopView, submitStop, type StopMessage, type StopMode, type StopOutcome } from "@/lib/stop-dialog";
-import type { Experiment } from "@/lib/types";
+import { AppLink } from "../ui/AppLink";
+import type { Experiment, PublishPreview } from "@/lib/types";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ErrorBox } from "../ErrorBox";
 import { useNow } from "../LocalTime";
@@ -50,7 +51,21 @@ type Props = {
  * それ以外の終了は画面の読み直しの反映まで開いたまま覆い、反映の後に閉じて知らせを呼ぶ側に渡す。
  * 範囲(BusyScope)はダイアログを包むが、モーダルの <dialog> は外側の inert から外れるので、見える覆いは ConfirmDialog の busyLabel
  */
+type TransitionPreview = Awaited<ReturnType<typeof loadTransitionPreview>>;
+
 export function StopDialog(p: Props) {
+  const [transition, setTransition] = useState<TransitionPreview | null>(null);
+  const alive = useRef(true);
+  const reloadTransition = useCallback(async () => {
+    setTransition(null);
+    const next = await loadTransitionPreview(p.siteId, p.experiment.id, "archived", (path) => api<PublishPreview>("GET", path));
+    if (alive.current) setTransition(next);
+  }, [p.siteId, p.experiment.id]);
+  useEffect(() => {
+    alive.current = true;
+    if (p.mode === "stop") void reloadTransition();
+    return () => { alive.current = false; };
+  }, [p.mode, reloadTransition]);
   // 結果は見出しから開いたときだけ読む(結果のタブは読んだものを渡す)
   const [report, setReport] = useState<ResultsResponse | null | undefined>(p.report);
   const url = `/sites/${p.siteId}/experiments/${p.experiment.id}/results`;
@@ -76,7 +91,7 @@ export function StopDialog(p: Props) {
   }
   return (
     <BusyScope id="stop-dialog">
-      <StopForm {...p} report={report} />
+      <StopForm {...p} report={report} transition={transition} reloadTransition={reloadTransition} />
     </BusyScope>
   );
 }
@@ -84,7 +99,7 @@ export function StopDialog(p: Props) {
 const titleOf = (mode: StopMode) => (mode === "stop" ? "終了して結果を記録します" : "採用を記録します");
 const confirmLabelOf = (mode: StopMode) => (mode === "stop" ? "終了して記録" : "採用を記録");
 
-function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVariantId, onClose, onDone }: Props & { report: ResultsResponse | null }) {
+function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVariantId, onClose, onDone, transition, reloadTransition }: Props & { report: ResultsResponse | null; transition: TransitionPreview | null; reloadTransition: () => Promise<void> }) {
   // 評価時点の前かは今の時刻で決める(評価時点の後でも前の速報が返ることがあるため)。マウント前は null
   const now = useNow();
   const state = stopDialogState(report, experiment, { timeZone, now, mode, ...(initialVariantId !== undefined ? { initialVariantId } : {}) });
@@ -95,10 +110,12 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
   const [error, setError] = useState<string | null>(null);
   const dup = stopDuplicateOption(experiment, selected);
   const notes = selectionNotes(state, experiment, selected);
+  const otherItems = transition?.ok ? othersListItems(transition.others) : [];
 
   const viewOf = (o: StopOutcome) => stopView(o, `/w/${wid}/sites/${siteId}/experiments`);
 
   async function send() {
+    if (mode === "stop" && !transition?.ok) return;
     setError(null);
     const outcome = await run<Sent>({
       label: "記録中…",
@@ -107,10 +124,12 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
           await api("PUT", `/sites/${siteId}/experiments/${experiment.id}/adoption`, { variantId: selected, ...(note.trim() ? { note: note.trim() } : {}) }, { signal });
           return { mode: "adopt" };
         }
+        if (!transition?.ok) throw new Error(PREVIEW_LOAD_FAILED);
         const stopped = await submitStop(
           (method, path, body) => api(method, path, body, { signal }),
           {
             siteId,
+            expectDigest: transition.digest,
             experimentId: experiment.id,
             adoption: { variantId: selected, note },
             duplicate: duplicate && dup.enabled && selected !== null ? { variantId: selected, name: stopDuplicateName(experiment, selected) } : null,
@@ -148,7 +167,10 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
         return;
       case "failed":
         // 状態の API(または採用の記録)の失敗。終了していないので、モーダルを開いたままエラーを出す
-        setError(describeError(outcome.error));
+        if (mode === "stop" && outcome.error instanceof ApiClientError && outcome.error.code === "stale_preview") {
+          setError(STALE_PREVIEW_RETRY);
+          await reloadTransition();
+        } else setError(describeError(outcome.error));
         return;
       case "unknown":
         setError(WRITE_UNKNOWN);
@@ -167,7 +189,7 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
       tone={mode === "stop" ? "danger" : "primary"}
       dismissOnBackdrop={false}
       busyLabel={busy ? "記録中…" : null}
-      confirmDisabled={busy}
+      confirmDisabled={busy || (mode === "stop" && !transition?.ok)}
       onCancel={() => {
         if (!busy) onClose();
       }}
@@ -214,7 +236,11 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
         </div>
       ) : null}
       {/* B66 b: 終了も状態の変更なので、サイト全体を公開する(採用を記録し直すだけのときは公開しない) */}
-      {mode === "stop" ? <p className="muted">{SITE_PUBLISH_NOTE}</p> : null}
+      {mode === "stop" ? <>
+        {transition === null ? <p className="muted">公開の確認を読み込んでいます…</p> : !transition.ok ? <p className="error-box" role="alert">{PREVIEW_LOAD_FAILED}</p> : null}
+        <p className="muted">{otherItems.length ? OTHER_PUBLISH_NOTE : SITE_PUBLISH_NOTE}</p>
+        {otherItems.length ? <ul>{otherItems.map((item) => <li key={item.key}>{item.message}</li>)}</ul> : null}
+      </> : null}
       <ErrorBox message={error} />
     </ConfirmDialog>
   );
@@ -226,7 +252,7 @@ export function StopNotices({ messages, created }: { messages: StopMessage[]; cr
     <>
       {messages.map((m) => (
         <span key={m.text} className={m.tone === "error" ? "error-box" : m.tone === "warn" ? "banner-warn" : "muted"} role={m.tone === "info" ? "status" : "alert"} data-testid="stop-notice">
-          {m.text}
+          {m.text}{m.publishHref ? <> <AppLink href={m.publishHref}>公開の確認へ</AppLink></> : null}
         </span>
       ))}
       {created ? (

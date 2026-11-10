@@ -144,6 +144,14 @@ export const SAVE_LIMITS = {
   // - writeRequests・writeControl・refreshRsc・refreshControl = 確定の後の窓(確定を押す直前から)の数。意味は上の第 1 段と同じ
   // 実測: prefetchControl 2(GET 2 本が 1 回ずつ)/ writeControl 1(POST 1 回)/ refreshControl 8 = REQUEST_LIMITS.experiment の遷移の実測 8
   statusStart: { prefetchControl: 3, writeRequests: 1, writeControl: 2, refreshRsc: 1, refreshControl: 9 },
+  // B56: 確認した内容に状態の変更を束縛するため、一時停止・終了でも publish-preview を1回読む。
+  // 新しい窓だけを追加し、既存の画面・保存・開始の上限は変えない。確認前(GET)と確定後(POST+refresh)を分ける。
+  // 実測(2026-11-09、単押し・二度押しで一致): 確認前のcontrolは一時停止1・パーソナライズ終了1・テスト終了2(results 1 + preview 1)。
+  // 確定後は各POST 1・refresh RSC 1。refreshのcontrolはテストの一時停止8・パーソナライズ終了7・テスト終了8。
+  // 上限は実測+1(writeRequests・refreshRscは1回ちょうど)。previewは別に1回ちょうどを表明する。
+  statusPause: { prefetchControl: 2, writeRequests: 1, writeControl: 2, refreshRsc: 1, refreshControl: 9 },
+  statusStopPersonalization: { prefetchControl: 2, writeRequests: 1, writeControl: 2, refreshRsc: 1, refreshControl: 8 },
+  statusStopTest: { prefetchControl: 3, writeRequests: 1, writeControl: 2, refreshRsc: 1, refreshControl: 9 },
 } as const;
 
 /**
@@ -982,4 +990,45 @@ test("stage 2 writes: an audience save, a goal edit, an experiment create and a 
     }
     expect.soft(results[1], "statusStart: 二度押しの数が 1 回押しと同じ").toEqual(results[0]);
   });
+  for (const operation of ["statusPause", "statusStopPersonalization", "statusStopTest"] as const) {
+    await test.step(`${operation}: preview and confirmed write windows`, async () => {
+      const limit = SAVE_LIMITS[operation];
+      const results: Array<{ prefetch: WindowResult; write: WindowResult }> = [];
+      for (const [i, how] of presses.entries()) {
+        const eid = `exp_b56_${operation.toLowerCase()}_${i}`;
+        const single = operation === "statusStopPersonalization";
+        expect(await api("POST", `/sites/${site.id}/experiments`, { id: eid, name: eid, kind: single ? "single" : "test", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } })).toBe(201);
+        expect(await api("POST", `/sites/${site.id}/experiments/${eid}/status`, { status: "running" })).toBe(200);
+        const detailPath = `${sitePath}/experiments/${eid}`;
+        const previewPath = `/api/control/sites/${site.id}/publish-preview`;
+        const resultPath = `/api/control/sites/${site.id}/experiments/${eid}/results`;
+        await open(detailPath);
+        const stopTest = operation === "statusStopTest";
+        const pause = operation === "statusPause";
+        const dialog = page.getByRole("alertdialog", { name: pause ? "一時停止しますか?" : stopTest ? "終了して結果を記録します" : "エクスペリエンスを終了しますか?" });
+        const pre = await windowOf(pressOf(page.getByRole("button", { name: pause ? "一時停止" : stopTest ? "終了して結果を記録" : "終了(元に戻せません)", exact: true }), how), async () => {
+          await expect(dialog).toBeVisible();
+          await expect(dialog.getByRole("button", { name: pause ? "一時停止する" : stopTest ? "終了して記録" : "終了する", exact: true })).toBeEnabled();
+        });
+        const prefetch: WindowResult = { publishPreview: pre.reqs.filter((r) => new URL(r.url).pathname === previewPath).length, prefetchControl: count(pre.reqs, wid).total };
+        await record(testInfo, `${operation}-${how}-prefetch`, { ...prefetch, requests: perRequest(pre.reqs, wid), limit });
+        expect.soft(prefetch.publishPreview).toBe(1);
+        expect.soft(prefetch.prefetchControl).toBeGreaterThan(0);
+        expect.soft(prefetch.prefetchControl).toBeLessThanOrEqual(limit.prefetchControl);
+        expect.soft(pre.reqs.filter((r) => ![previewPath, ...(stopTest ? [resultPath] : [])].includes(new URL(r.url).pathname))).toEqual([]);
+        const post = await windowOf(() => dialog.getByRole("button", { name: pause ? "一時停止する" : stopTest ? "終了して記録" : "終了する", exact: true }).press("Enter"), async () => {
+          await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", pause ? "paused" : "archived");
+          await expect(page.getByRole("alertdialog")).toHaveCount(0);
+        });
+        const write = await checkWriteWindow(testInfo, { name: `${operation}-${how}`, wid, ...post,
+          write: { method: "POST", path: `/api/control/sites/${site.id}/experiments/${eid}/status` },
+          refresh: { match: (u) => u.pathname === detailPath && u.searchParams.has("_rsc"), requests: "refreshRsc", control: "refreshControl" },
+          allowed: [], limit: { writeRequests: limit.writeRequests, writeControl: limit.writeControl, refreshRsc: limit.refreshRsc, refreshControl: limit.refreshControl },
+        });
+        results.push({ prefetch, write });
+      }
+      expect.soft(results[1], `${operation}: 二度押しが1回押しと同じ`).toEqual(results[0]);
+    });
+  }
+
 });

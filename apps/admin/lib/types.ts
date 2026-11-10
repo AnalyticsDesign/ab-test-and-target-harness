@@ -124,9 +124,11 @@ export type StatusResult = {
 };
 export type PublishRow = { version: number; status: "reserved" | "failed" | "active" | "superseded"; createdAt: number; activatedAt: number | null; needsProfile: boolean | null; error: string | null; publishedBy: { id: string; name: string } };
 export type PublishPreview = {
+  digest?: string | null;
+  transitionDigest?: string | null;
   lastActivatedAt: number | null;
   siteLevelChanged: boolean;
-  experiments: Array<{ id: string; name: string; status: Status; publishedStatus: Status | null; updatedAt: number; updatedBy: { id: string; name: string }; hasCodeChange: boolean; changedChanges: Array<{ variantId: string; id: string; type: ChangeType; updatedAt: number; updatedBy: { id: string; name: string } }> }>;
+  experiments: Array<{ id: string; name: string; status: Status; publishedStatus: Status | null; updatedAt: number; updatedBy: { id: string; name: string }; hasCodeChange: boolean; hasExternalUrl?: boolean; detectedBy?: "time" | "config"; changedChanges: Array<{ variantId: string; id: string; type: ChangeType; reviewMark?: "code" | "external_url" | null; updatedAt: number; updatedBy: { id: string; name: string } }> }>;
   /** 前回の公開より後に更新されたオーディエンスと、それを参照する実行中のエクスペリエンス(次の公開で配信対象が変わる) */
   audienceChanges: Array<{ id: string; name: string; updatedAt: number; experiments: Array<{ id: string; name: string }> }>;
   /** 公開中の設定にあり下書きに無いページの条件(次の公開で数えるのをやめる = これまでの閲覧回数が消える) */

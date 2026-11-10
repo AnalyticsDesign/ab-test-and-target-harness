@@ -72,6 +72,13 @@ describe("openapi (decision 34)", () => {
     expect(components?.schemas?.ErrorEnvelope).toBeDefined();
   });
 
+  it("publish_body_validation_errors_use_envelopes", async () => {
+    const doc = (await (await app.request("/openapi.json", {}, env)).json()) as Doc;
+    const op = doc.paths["/sites/{sid}/publish"]!.post!;
+    for (const status of ["400", "422"]) expect(op.responses?.[status]?.content?.["application/json"]?.schema?.$ref).toBe("#/components/schemas/ErrorEnvelope");
+    expect(op.requestBody?.content?.["application/json"]?.schema?.properties).toHaveProperty("expectDigest");
+  });
+
   it("zod-derived request bodies are published for the site write routes", async () => {
     // review r1 / r2 の持ち越し: Task 3 の 2 ルートが requestBody を本当に公開しているかの常設アサート
     const doc = (await (await app.request("/openapi.json", {}, env)).json()) as Doc;

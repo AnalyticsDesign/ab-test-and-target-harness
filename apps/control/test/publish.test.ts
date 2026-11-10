@@ -24,7 +24,7 @@ import {
 } from "./helpers";
 import { getDb } from "../src/db";
 import type { Env } from "../src/env";
-import { buildCompileInput, cleanupOldVersions, publishSite, sha256Hex, type PublishResult } from "../src/publish";
+import { buildCompileInput, compileInputDigest, cleanupOldVersions, publishSite, sha256Hex, type PublishResult } from "../src/publish";
 
 /**
  * `:active` の put の直前に D1 の `active_version` を別の版へ進める KV。
@@ -764,5 +764,52 @@ describe("dataLayer names are baked into payloads (B77)", () => {
       },
       conversion: { g_buy: { goalId: "g_buy", goalName: "購入" } },
     });
+  });
+});
+
+describe("publish expected preview digest", () => {
+  const digestFor = async (sid: string) => compileInputDigest(await buildCompileInput(getDb(env), await siteRow(sid), 1));
+
+  it("publish_without_body_keeps_working", async () => {
+    const { owner, sid } = await siteWithRunning();
+    expect(await json(await call("POST", `/sites/${sid}/publish`, { token: owner.token }))).toMatchObject({ ok: true });
+  });
+  it("publish_with_matching_digest_succeeds", async () => {
+    const { owner, sid } = await siteWithRunning();
+    expect(await json(await call("POST", `/sites/${sid}/publish`, { token: owner.token, body: { expectDigest: await digestFor(sid) } }))).toMatchObject({ ok: true });
+  });
+  it("publish_with_stale_digest_fails_and_keeps_active", async () => {
+    const { owner, sid, eid } = await siteWithRunning();
+    await publishRes(owner.token, sid);
+    const digest = await digestFor(sid);
+    const editor = await inviteAndJoin(owner.token, owner.workspaceId, "editor");
+    const saved = await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: editor.token, body: [{ ...TEXT_CHANGE(), payload: { text: "After preview" } }] });
+    expect(saved.status).toBe(200);
+    expect(await json(await call("POST", `/sites/${sid}/publish`, { token: owner.token, body: { expectDigest: digest } }))).toMatchObject({
+      ok: false, error: "stale_preview", message: "確認した後に、公開する内容が変わりました",
+    });
+    expect((await siteRow(sid)).active_version).toBe(1);
+    expect(await active(sid)).toBe("1");
+    expect(await getDb(env).selectFrom("publishes").select("status").where("site_id", "=", sid).where("version", "=", 2).executeTakeFirst()).toEqual({ status: "failed" });
+  });
+  it("publish_same_content_twice_with_same_digest_succeeds", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const expectDigest = await digestFor(sid);
+    for (const version of [1, 2]) expect(await json(await call("POST", `/sites/${sid}/publish`, { token: owner.token, body: { expectDigest } }))).toMatchObject({ ok: true, version });
+  });
+  it("publish_rejects_malformed_expect_digest", async () => {
+    const { owner, sid } = await siteWithRunning();
+    for (const body of [{ expectDigest: "x" }, { other: 1 }, null, []]) {
+      const res = await call("POST", `/sites/${sid}/publish`, { token: owner.token, body });
+      expect(res.status).toBe(422);
+      expect(await json(res)).toMatchObject({ error: "validation_failed" });
+    }
+    const res = await call("POST", `/sites/${sid}/publish`, { token: owner.token, raw: "{", headers: { "content-type": "application/json" } });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toMatchObject({ error: "bad_request" });
+  });
+  it("publish_accepts_empty_body_with_json_content_type", async () => {
+    const { owner, sid } = await siteWithRunning();
+    expect(await json(await call("POST", `/sites/${sid}/publish`, { token: owner.token, headers: { "content-type": "application/json" } }))).toMatchObject({ ok: true });
   });
 });

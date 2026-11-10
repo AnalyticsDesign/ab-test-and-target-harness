@@ -576,7 +576,14 @@ test.describe.serial("busy scopes and confirms (B173 stage 2)", () => {
   let site7Url: string;
   const statusApi = (id: string) => `/sites/${SITE7.id}/experiments/${id}/status`;
   const previewApi = `/sites/${SITE7.id}/publish-preview`;
-  const EMPTY_PREVIEW = { experiments: [], audienceChanges: [], siteLevelChanged: false, overlaps: [], droppedPageConditions: [], viewportExperiments: [], compileError: null, lastActivatedAt: null };
+  const EMPTY_PREVIEW = { digest: "a".repeat(64), transitionDigest: "a".repeat(64), experiments: [], audienceChanges: [], siteLevelChanged: false, overlaps: [], droppedPageConditions: [], viewportExperiments: [], compileError: null, lastActivatedAt: null };
+  // 一覧だけ空にする。実際の状態の API を呼ぶため digest は同じ仮の入力から取得する。
+  const emptyPreviewFor = async (id: string) => {
+    const res = await p.request.get(`${ADMIN_URL}/api/control${previewApi}?transition=${id}:running`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    return { ...EMPTY_PREVIEW, digest: body.digest, transitionDigest: body.transitionDigest };
+  };
   const WRITE_UNKNOWN_NOTE = "保存できたか分かりません。再読み込みして確かめてください";
   const statusRow = () => p.getByTestId("status-buttons");
   /** ボタンの並びの範囲の覆い(覆いは中身(inert)の外の兄弟なので、並びが inert になっていることと合わせて見る) */
@@ -754,7 +761,7 @@ test.describe.serial("busy scopes and confirms (B173 stage 2)", () => {
   test("a resume without a caution covers the buttons and a double click sends one POST", async () => {
     const ID = "exp_busy7_resume";
     await openExp7(ID);
-    const undos = [await holdApi(p, "GET", previewApi, { fulfill: { status: 200, body: EMPTY_PREVIEW } }), await holdApi(p, "POST", statusApi(ID), { delayMs: 1_000 })];
+    const undos = [await holdApi(p, "GET", previewApi, { fulfill: { status: 200, body: await emptyPreviewFor(ID) } }), await holdApi(p, "POST", statusApi(ID), { delayMs: 1_000 })];
     const posts = countStatusPosts(p, ID);
     try {
       await statusRow().getByRole("button", { name: "再開", exact: true }).dblclick();
@@ -793,7 +800,7 @@ test.describe.serial("busy scopes and confirms (B173 stage 2)", () => {
     // パーソナライズの開始(確認の無い経路): ボタンの並びに「開始中…」
     const PERS = "exp_busy7_pers";
     await openExp7(PERS);
-    const preview = await holdApi(p, "GET", previewApi, { fulfill: { status: 200, body: EMPTY_PREVIEW } });
+    const preview = await holdApi(p, "GET", previewApi, { fulfill: { status: 200, body: await emptyPreviewFor(PERS) } });
     undo = await holdApi(p, "POST", statusApi(PERS), { delayMs: 1_000 });
     posts = countStatusPosts(p, PERS);
     try {

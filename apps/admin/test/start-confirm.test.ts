@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PLAN, type EvaluationPlan } from "@wtt/stats";
-import { loadStartPreview, pauseConfirm, SITE_PUBLISH_NOTE, startBlocker, startConfirmFor, startWarnings } from "@/lib/start-confirm";
+import { loadTransitionPreview, othersListItems, pauseConfirm, SITE_PUBLISH_NOTE, startBlocker, startConfirmFor, startWarnings } from "@/lib/start-confirm";
 
 const OV = { path: "experiments.t2", message: "「T2」は「T1」と同じ要素(#cta)を変えます。「T1」(先に開始・再開)が優先され、「T2」の効果は薄まって見えます", experimentIds: ["t2", "t1"] };
 
@@ -19,20 +19,29 @@ describe("pause confirmation and the site-wide publish note (B107・B66 b)", () 
     expect(startConfirmFor([], "再開", ["C"])?.sitePublish).toBe(SITE_PUBLISH_NOTE);
     expect(SITE_PUBLISH_NOTE).toContain("ほかのエクスペリエンス");
   });
-  it("重なりも 0% も無い再開・パーソナライズの開始でも、ほかに未公開の編集があれば 1 文だけの確認を出す", () => {
-    expect(startConfirmFor([], "再開", [], undefined, false)).toBeNull();
-    expect(startConfirmFor([], "再開", [], undefined, true)).toEqual({ title: "再開しますか?", lead: "", items: [], confirmLabel: "再開する", sitePublish: SITE_PUBLISH_NOTE });
+  it("other unpublished changes force confirmation", () => {
+    expect(startConfirmFor([], "再開", [], undefined, [])).toBeNull();
+    expect(startConfirmFor([], "再開", [], undefined, [{ key: "other", message: "Other experience" }])?.items).toEqual([{ key: "other", message: "Other experience" }]);
   });
-  it("loadStartPreview: 自分以外の未公開の編集・オーディエンスの変更・サイト全体の変更を、ほかの未公開の変更として数える", async () => {
-    const base = { overlaps: [OV], experiments: [], audienceChanges: [], siteLevelChanged: false };
-    const self = { id: "t2" } as never;
-    const other = { id: "t9" } as never;
-    expect(await loadStartPreview("t2", () => Promise.resolve({ ...base, experiments: [self] } as never))).toEqual({ overlaps: [OV], othersUnpublished: false });
-    expect((await loadStartPreview("t2", () => Promise.resolve({ ...base, experiments: [self, other] } as never))).othersUnpublished).toBe(true);
-    expect((await loadStartPreview("t2", () => Promise.resolve({ ...base, audienceChanges: [{}] } as never))).othersUnpublished).toBe(true);
-    expect((await loadStartPreview("t2", () => Promise.resolve({ ...base, siteLevelChanged: true } as never))).othersUnpublished).toBe(true);
-    // 下見が取れなければ確認を出さずに進める(重なりの確認と同じ扱い)
-    expect(await loadStartPreview("t2", () => Promise.reject(new Error("network")))).toEqual({ overlaps: [], othersUnpublished: false });
+  it("loadTransitionPreview excludes self and returns digest", async () => {
+    const p = { overlaps: [OV], experiments: [{ id: "self", name: "Self", hasCodeChange: true }, { id: "other", name: "Other", hasCodeChange: true, hasExternalUrl: true }], audienceChanges: [{ id: "aud", name: "Audience" }], siteLevelChanged: true, transitionDigest: "a".repeat(64) };
+    let path = "";
+    const r = await loadTransitionPreview("site", "self", "paused", async (v) => { path = v; return p as never; });
+    expect(path).toBe("/sites/site/publish-preview?transition=self:paused");
+    expect(r).toEqual({ ok: true, overlaps: [OV], digest: "a".repeat(64), others: { experiments: [{ id: "other", name: "Other", marks: ["code", "external_url"] }], audiences: [{ id: "aud", name: "Audience" }], siteLevel: true } });
+  });
+  it("loadTransitionPreview refuses missing digest or failed preview", async () => {
+    expect(await loadTransitionPreview("site", "self", "running", async () => ({ transitionDigest: null } as never))).toEqual({ ok: false });
+    expect(await loadTransitionPreview("site", "self", "running", async () => { throw new Error("network"); })).toEqual({ ok: false });
+  });
+  it("othersListItems includes experience marks, audience and site settings", () => {
+    const items = othersListItems({ experiments: [{ id: "e", name: "Other", marks: ["code", "external_url"] }], audiences: [{ id: "a", name: "Audience" }], siteLevel: true });
+    expect(items).toHaveLength(3);
+    expect(items[0]!.message).toContain("Other");
+    expect(items[0]!.message).toContain("コードを含む");
+    expect(items[0]!.message).toContain("外部の URL を含む");
+    expect(items[1]!.message).toContain("Audience");
+    expect(items[2]!.message).toContain("サイト全体");
   });
 });
 
@@ -56,10 +65,7 @@ describe("start confirmation for overlaps (決定 51、設計書 §3.3)", () => 
     expect(c?.items.map((i) => i.message)).toEqual([OV.message, "C は重み 0% のため、誰にも表示されません", "D は重み 0% のため、誰にも表示されません"]);
     expect(new Set(c?.items.map((i) => i.key)).size).toBe(3);
   });
-  it("starts without asking when the preview cannot be read", async () => {
-    expect((await loadStartPreview("t2", () => Promise.reject(new Error("network")))).overlaps).toEqual([]);
-    expect((await loadStartPreview("t2", () => Promise.resolve({ overlaps: [OV] } as never))).overlaps).toEqual([OV]);
-  });
+
 });
 
 const PLAN: EvaluationPlan = { ...DEFAULT_PLAN, primaryGoalId: "g_buy", baselineVariantId: "a" };
@@ -140,4 +146,9 @@ describe("start confirmation with the evaluation plan (D9 ③ Task 14、設計�
       ]),
     ).toEqual([NOT_RECORDED, "計測用のデータベースの空きが少なくなります(見込み 約 420 MB)。保持期間を短くするか、終了したテストの記録を整理してください"]);
   });
+});
+
+it("forced reconfirmation retains the start or resume action", () => {
+  expect(startConfirmFor([], "開始", [], undefined, [], true)).toMatchObject({ title: "開始しますか?", confirmLabel: "開始する" });
+  expect(startConfirmFor([], "再開", [], undefined, [], true)).toMatchObject({ title: "再開しますか?", confirmLabel: "再開する" });
 });

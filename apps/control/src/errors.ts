@@ -26,6 +26,7 @@ export const DEFAULT_MESSAGES: Record<string, string> = {
   unsupported_media_type: "この Content-Type は扱えません",
   payload_too_large: "リクエストが大きすぎます",
   request_failed: "リクエストを処理できません",
+  stale_preview: "確認した後に、公開する内容が変わりました",
   invalid_transition: "その status には遷移できません",
   image_upload_disabled: "この導入では画像アップロードと IMAGE の変更は使えません",
   asset_quota_exceeded: "サイトの画像の上限に達しています",

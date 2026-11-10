@@ -6,6 +6,7 @@ import { REFRESH_TIMEOUT, noticeOf } from "@/lib/busy-notice";
 import { STATUS_JA, STATUS_TONE } from "@/lib/experiment-filter";
 import { describePageMatch } from "@/lib/page-match";
 import type { PublishPreview, PublishResult, Site, Status } from "@/lib/types";
+import { REVIEW_MARK_LABEL, REVIEW_MARK_TITLE } from "@/lib/review-marks";
 import { LocalTime } from "./LocalTime";
 import { PageHeader } from "./ui/PageHeader";
 import { StatusPill } from "./ui/StatusPill";
@@ -45,17 +46,18 @@ export function PublishPanel({ wid, site, preview, canPublish }: { wid: string; 
                   {e.name} <span className="muted mono">{e.id}</span>
                 </strong>
                 {e.hasCodeChange ? (
-                  <span className="badge badge-warn" title="HTML / CSS / CUSTOM_JS を含みます。訪問者のブラウザで任意のコードが実行されます。内容を確認してから公開してください">
-                    コードを含む
+                  <span className="badge badge-warn" title={REVIEW_MARK_TITLE.code}>
+                    {REVIEW_MARK_LABEL.code}
                   </span>
                 ) : null}
+                {e.hasExternalUrl ? <span className="badge badge-warn" title={REVIEW_MARK_TITLE.external_url}>{REVIEW_MARK_LABEL.external_url}</span> : null}
               </div>
               <div className="row" style={{ gap: 8, marginBottom: 8 }}>
                 {pill(e.publishedStatus)}
                 <Icon name="arrow" size={14} />
                 {pill(e.status)}
                 <span className="muted">
-                  {e.updatedBy.name} · <LocalTime at={e.updatedAt} />
+                  {e.detectedBy === "config" ? "変更あり(公開中の設定との比較で見つかりました)" : <>{e.updatedBy.name} · <LocalTime at={e.updatedAt} /></>}
                 </span>
               </div>
               {e.changedChanges.map((c) => (
@@ -196,10 +198,11 @@ function PublishAside({
   const hasCode = preview.experiments.some((e) => e.hasCodeChange);
   const next = (site.activeVersion ?? 0) + 1;
   async function publish() {
+    if (!preview.digest) return;
     onStart();
     const outcome = await run({
       label: "公開中…",
-      write: (signal) => api<PublishResult>("POST", `/sites/${site.id}/publish`, undefined, { signal }),
+      write: (signal) => api<PublishResult>("POST", `/sites/${site.id}/publish`, { expectDigest: preview.digest }, { signal }),
       onWritten: onResult,
       after: "refresh",
     });
@@ -252,13 +255,14 @@ function PublishAside({
       ) : null}
       {hasCode ? (
         <p className="banner-warn" style={{ display: "block" }}>
-          HTML / CSS / CUSTOM_JS を含む変更があります。配信前に下書きプレビューで表示を確認してください
+          コードを含む可能性のある変更があります。配信前に下書きプレビューで表示を確認してください
         </p>
       ) : null}
       {nothing ? <p className="muted">前回の公開以降の変更はありません(同じ内容で再試行はできます)</p> : null}
+      {!preview.digest ? <p role="alert" className="error-box">公開の確認を読み込めませんでした。画面を読み込み直してください</p> : null}
       {canPublish ? (
         <div className="row">
-          <button type="button" className={nothing ? "btn" : "btn btn-primary"} disabled={busy} onClick={publish}>
+          <button type="button" className={nothing ? "btn" : "btn btn-primary"} disabled={busy || !preview.digest} onClick={publish}>
             {nothing ? "公開する(変更なしでも再試行できます)" : "公開する"}
           </button>
           <AppLink className="btn" href={base}>

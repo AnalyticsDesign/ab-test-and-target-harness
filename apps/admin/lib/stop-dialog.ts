@@ -202,6 +202,7 @@ export const stopDuplicateName = (exp: Pick<Experiment, "name" | "variants">, va
 
 export type ApiCall = (method: string, path: string, body?: unknown) => Promise<unknown>;
 export type StopInput = {
+  expectDigest: string;
   siteId: string;
   experimentId: string;
   adoption: { variantId: string | null; note: string };
@@ -219,7 +220,7 @@ const errorText = (e: unknown): string => (e instanceof Error ? e.message : Stri
 export async function submitStop(call: ApiCall, input: StopInput, describe: (e: unknown) => string = errorText): Promise<StopOutcome> {
   const base = `/sites/${input.siteId}/experiments/${input.experimentId}`;
   const note = input.adoption.note.trim();
-  const result = (await call("POST", `${base}/status`, { status: "archived", adoption: { variantId: input.adoption.variantId, ...(note ? { note } : {}) } })) as StatusResult;
+  const result = (await call("POST", `${base}/status`, { status: "archived", expectDigest: input.expectDigest, adoption: { variantId: input.adoption.variantId, ...(note ? { note } : {}) } })) as StatusResult;
   if (!input.duplicate) return { result, duplicate: { kind: "none" } };
   try {
     const created = (await call("POST", `${base}/duplicate`, { mode: "variant", variantId: input.duplicate.variantId, name: input.duplicate.name })) as { id: string };
@@ -229,7 +230,7 @@ export async function submitStop(call: ApiCall, input: StopInput, describe: (e: 
   }
 }
 
-export type StopMessage = { tone: "info" | "warn" | "error"; text: string };
+export type StopMessage = { publishHref?: string; tone: "info" | "warn" | "error"; text: string };
 
 /**
  * 終了の後に出す知らせと、作った下書きへの移り方。下書きへそのまま移るのは、公開も記録も済んだときだけ
@@ -241,7 +242,9 @@ export function stopView(o: StopOutcome, experimentsPath: string): { messages: S
   const messages: StopMessage[] = [
     r.publish.ok
       ? { tone: "info", text: `終了しました。公開 v${r.publish.version} を反映しました(訪問者のブラウザには 1 分ほどで届きます)` }
-      : { tone: "error", text: `状態は 終了 に変わりましたが、公開に失敗しました(${r.publish.error}: ${r.publish.message})。上部の「公開」から再試行してください` },
+      : r.publish.error === "stale_preview"
+        ? { tone: "error", text: "状態は変わりましたが、確認の後に内容が変わったため公開していません", publishHref: `${experimentsPath.replace(/\/experiments$/, "")}/publish` }
+        : { tone: "error", text: `状態は 終了 に変わりましたが、公開に失敗しました(${r.publish.error}: ${r.publish.message})。上部の「公開」から再試行してください` },
   ];
   const notRecorded = r.results?.recorded === false;
   if (notRecorded) messages.push({ tone: "warn", text: "結果を記録できませんでした。自動で記録し直します。採用は記録されていないので、結果のタブから記録し直してください" });

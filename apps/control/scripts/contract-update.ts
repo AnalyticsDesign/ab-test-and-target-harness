@@ -17,7 +17,12 @@ import { normalizeContract, type Baseline, type OpenApiDoc } from "../test/contr
 
 /** 認証・DB を使う前に /openapi.json の文書だけが返る。getAuth が env.DB を WeakMap の鍵に使うので、DB だけはオブジェクトにする */
 const FAKE_ENV = {
-  DB: {},
+  DB: {
+    // Better Auth は D1 をこれらのメソッドで識別する。文書の生成で DB を読んだら失敗させる。
+    prepare() { throw new Error("contract generation must not query D1"); },
+    batch() { throw new Error("contract generation must not query D1"); },
+    exec() { throw new Error("contract generation must not query D1"); },
+  },
   BETTER_AUTH_SECRET: `${crypto.randomUUID()}${crypto.randomUUID()}`,
   AB_CONTROL_URL: "http://localhost:8788",
   AB_ADMIN_URL: "http://localhost:3000",

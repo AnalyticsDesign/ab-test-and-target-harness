@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { controlHeaders, createExperiment, createSite, login, openSite, waitForHydration } from "./fixtures";
+import { appAlert, controlHeaders, createExperiment, createSite, login, openSite, waitForHydration } from "./fixtures";
 
 /**
  * 決定 51(設計書 §3〜§4・§10、plan ① Task 9): 種別(パーソナライズ)の作成、複製の画面、開始・再開の重なりの確認、公開の確認画面の警告。
@@ -231,25 +231,18 @@ test.describe.serial("experiment kind and duplicate (決定 51)", () => {
     }
   });
 
-  test("start_proceeds_when_publish_preview_fails", async () => {
-    // 重なりの取得に失敗しても開始できる(警告は開始を止めない。K7)。D9 ③: 下書きのテストの開始は必ず確認を出すので、
-    // 確認は重なりの一覧なしで出る(結果を記録しないサイトなので、記録しない文)。開始の応答の警告(記録しない)も画面に出る
+  test("start_refuses_when_publish_preview_fails", async () => {
     expect(await control(page, "POST", `/sites/${SITE_KIND.id}/experiments`, { id: "exp_e2e_ov3", name: "exp_e2e_ov3", urlMatch: { include: [{ page: { op: "contains", value: "/" } }] } })).toBe(201);
     const preview = "**/api/control/sites/*/publish-preview*";
     await page.route(preview, (route) => route.fulfill({ status: 500, body: "{}" }));
+    let posts = 0;
+    const count = (r: import("@playwright/test").Request) => { if (r.method() === "POST" && r.url().includes("/experiments/exp_e2e_ov3/status")) posts++; };
+    page.on("request", count);
     try {
       await openExperiment("exp_e2e_ov3");
-      const done = page.waitForResponse((r) => r.url().includes("/experiments/exp_e2e_ov3/status") && r.request().method() === "POST");
       await page.getByRole("button", { name: "開始(公開して配信を始める)" }).click();
-      const dialog = page.getByRole("alertdialog", { name: "開始しますか?" });
-      await expect(dialog).toContainText("結果はツール上に残りません");
-      await expect(dialog.getByRole("listitem")).toHaveCount(0); // 重なりの一覧は出ない
-      await dialog.getByRole("button", { name: "開始する", exact: true }).press("Enter");
-      expect((await done).status()).toBe(200);
-      await expect(page.getByRole("alertdialog")).toHaveCount(0);
-      await expect(page.getByTestId("start-warning")).toContainText("結果はツール上に残りません。後から結果の記録を有効にしても、このテストの結果は記録されません");
-    } finally {
-      await page.unroute(preview);
-    }
+      await expect(appAlert(page)).toContainText("公開の確認を読み込めませんでした");
+      expect(posts).toBe(0);
+    } finally { page.off("request", count); await page.unroute(preview); }
   });
 });

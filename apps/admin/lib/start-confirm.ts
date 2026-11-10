@@ -1,6 +1,7 @@
 import type { EvaluationPlan } from "@wtt/stats";
 import { fmt, thresholdLabel } from "./evaluation-plan";
-import type { PublishPreview } from "./types";
+import { REVIEW_MARK_LABEL } from "./review-marks";
+import type { PublishPreview, Status } from "./types";
 
 /** 決定 51(設計書 §3.3・§10、plan ① K7): 下書きを開始するときの重なりの確認。重なりが無ければ確認しない */
 export type Overlap = PublishPreview["overlaps"][number];
@@ -79,12 +80,14 @@ export function startConfirmFor(
   verb: "開始" | "再開" = "開始",
   zeroWeight: string[] = [],
   start?: StartPlan,
-  /** B66 b: このエクスペリエンスのほかに未公開の変更がある(状態の変更で一緒に本番に出る)。あれば、ほかに理由が無くても 1 文だけの確認を出す */
-  othersUnpublished = false,
+  /** B66 b: このエクスペリエンスと一緒に本番へ出る未公開の変更の一覧。ほかに理由が無くても、一覧があれば確認を出す */
+  othersUnpublished: { key: string; message: string }[] = [],
+  force = false,
 ): StartConfirm | null {
   const ov = overlaps ?? [];
-  if (ov.length === 0 && zeroWeight.length === 0 && !start && !othersUnpublished) return null;
+  if (ov.length === 0 && zeroWeight.length === 0 && !start && othersUnpublished.length === 0 && !force) return null;
   const items = [
+    ...othersUnpublished,
     ...ov.map((o) => ({ key: o.experimentIds.join("|"), message: o.message })),
     // 名前は重なり得るので位置も key に入れる
     ...zeroWeight.map((name, i) => ({ key: `zero-weight:${i}:${name}`, message: `${name} は重み 0% のため、誰にも表示されません` })),
@@ -97,7 +100,7 @@ export function startConfirmFor(
     lead: ov.length > 0 ? "同じ要素を変える配信中のエクスペリエンスがあります。" : zeroWeight.length > 0 ? "重み 0% のパターンがあります。" : fallbackLead,
     items,
     confirmLabel: `${verb}する`,
-    sitePublish: SITE_PUBLISH_NOTE,
+    sitePublish: othersUnpublished.length ? OTHER_PUBLISH_NOTE : SITE_PUBLISH_NOTE,
     ...(fixing && start.plan
       ? { fixed: fixedItems(start.plan, start.goalName, start.baselineName, start.comparisons ?? 1), note: "開始後も期間と人数を延ばす変更はできますが、変更は記録され、結果の画面に表示されます。" }
       : {}),
@@ -121,17 +124,34 @@ export function startWarnings(warnings: ReadonlyArray<{ path: string; message: s
   return (warnings ?? []).map((w) => w.message);
 }
 
-/** 確認サマリの取得。失敗したら空(警告は開始を止めない) */
-/**
- * 開始・再開の前の下見(B66 b)。重なりと、このエクスペリエンスのほかに未公開の変更があるか(ほかのエクスペリエンスの編集・
- * オーディエンスの変更・サイト全体の設定の変更。状態の変更はサイト全体を公開するので一緒に本番に出る)。取れなければ確認を出さずに進める
- */
-export async function loadStartPreview(selfId: string, fetchPreview: () => Promise<PublishPreview>): Promise<{ overlaps: Overlap[]; othersUnpublished: boolean }> {
+export const OTHER_PUBLISH_NOTE = "次の未公開の変更も一緒に本番に出ます";
+export const STALE_PREVIEW_RETRY = "確認の後に内容が変わりました。一覧を確かめて、もう一度押してください";
+export const PREVIEW_LOAD_FAILED = "公開の確認を読み込めませんでした。もう一度お試しください";
+export type OtherUnpublished = {
+  experiments: Array<{ id: string; name: string; marks: Array<"code" | "external_url"> }>;
+  audiences: Array<{ id: string; name: string }>;
+  siteLevel: boolean;
+};
+
+/** 確認した内容を固定できなければ、状態の変更は送らない。 */
+export async function loadTransitionPreview(siteId: string, experimentId: string, to: Status, fetchPreview: (path: string) => Promise<PublishPreview>): Promise<{ ok: true; overlaps: Overlap[]; others: OtherUnpublished; digest: string } | { ok: false }> {
   try {
-    const p = await fetchPreview();
-    const othersUnpublished = (p.experiments ?? []).some((x) => x.id !== selfId) || (p.audienceChanges ?? []).length > 0 || p.siteLevelChanged === true;
-    return { overlaps: p.overlaps ?? [], othersUnpublished };
-  } catch {
-    return { overlaps: [], othersUnpublished: false };
-  }
+    const p = await fetchPreview(`/sites/${siteId}/publish-preview?transition=${encodeURIComponent(experimentId)}:${to}`);
+    if (!p.transitionDigest) return { ok: false };
+    return {
+      ok: true, overlaps: p.overlaps ?? [], digest: p.transitionDigest,
+      others: {
+        experiments: (p.experiments ?? []).filter((e) => e.id !== experimentId).map((e) => ({ id: e.id, name: e.name, marks: [...(e.hasCodeChange ? ["code" as const] : []), ...(e.hasExternalUrl ? ["external_url" as const] : [])] })),
+        audiences: (p.audienceChanges ?? []).map(({ id, name }) => ({ id, name })), siteLevel: p.siteLevelChanged === true,
+      },
+    };
+  } catch { return { ok: false }; }
+}
+
+export function othersListItems(others: OtherUnpublished): Array<{ key: string; message: string }> {
+  return [
+    ...others.experiments.map((e) => ({ key: `experiment:${e.id}`, message: `${e.name}${e.marks.length ? `(${e.marks.map((m) => REVIEW_MARK_LABEL[m]).join("・")})` : ""}` })),
+    ...others.audiences.map((a) => ({ key: `audience:${a.id}`, message: `オーディエンス: ${a.name}` })),
+    ...(others.siteLevel ? [{ key: "site", message: "サイト全体の設定・目標の変更" }] : []),
+  ];
 }

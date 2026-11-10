@@ -14,6 +14,8 @@ import {
   active,
   siteRow,
   failingD1Query,
+  countingD1,
+  seedAssetRow,
 } from "./helpers";
 
 describe("unpublished changes (spec §13.9)", () => {
@@ -174,5 +176,141 @@ describe("unpublished changes (spec §13.9)", () => {
     const broken = await preview();
     expect(broken.compileError).toMatchObject({ error: "unknown_goal", message: "参照している目標が見つかりません", hint: expect.stringContaining("g_x") });
     expect(broken.droppedPageConditions).toEqual([]); // compile できないときは比べない
+  });
+});
+
+describe("preview digest and transition", () => {
+  it("preview_returns_digest_matching_publish", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const preview = await json(await call("GET", `/sites/${sid}/publish-preview`, { token: owner.token }));
+    expect(preview.digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(preview.transitionDigest).toBeNull();
+    expect(await json(await call("POST", `/sites/${sid}/publish`, { token: owner.token, body: { expectDigest: preview.digest } }))).toMatchObject({ ok: true });
+  });
+  it("preview_digest_changes_after_editor_save", async () => {
+    const { owner, sid, eid } = await siteWithRunning();
+    const preview = async () => json(await callPreview());
+    const callPreview = () => call("GET", `/sites/${sid}/publish-preview`, { token: owner.token });
+    const before = await preview();
+    const editor = await inviteAndJoin(owner.token, owner.workspaceId, "editor");
+    expect((await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: editor.token, body: [{ ...TEXT_CHANGE(), payload: { text: "saved" } }] })).status).toBe(200);
+    expect((await preview()).digest).not.toBe(before.digest);
+  });
+  it("preview_digest_present_when_compile_fails", async () => {
+    const { owner, sid, eid } = await siteWithRunning();
+    await getDb(env).updateTable("experiments").set({ targeting_json: JSON.stringify({ hist: "converted", goal: "missing" }) }).where("site_id", "=", sid).where("id", "=", eid).execute();
+    const preview = await json(await call("GET", `/sites/${sid}/publish-preview`, { token: owner.token }));
+    expect(preview.digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(preview.compileError.error).toBe("unknown_goal");
+    const published = await call("POST", `/sites/${sid}/publish`, { token: owner.token, body: { expectDigest: preview.digest } });
+    expect(published.status).toBe(200);
+    expect(await json(published)).toMatchObject({ ok: false, error: "unknown_goal" });
+  });
+  it("preview_transition_digest_matches_status_publish", async () => {
+    const { owner, sid, eid } = await siteWithRunning();
+    const before = await json(await call("GET", `/sites/${sid}/publish-preview?transition=${eid}:paused`, { token: owner.token }));
+    expect(before.transitionDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(before.transitionDigest).not.toBe(before.digest);
+    await call("POST", `/sites/${sid}/experiments/${eid}/status`, { token: owner.token, body: { status: "paused" } });
+    const after = await json(await call("GET", `/sites/${sid}/publish-preview`, { token: owner.token }));
+    expect(before.transitionDigest).toBe(after.digest);
+  });
+  it("preview_starting_is_alias_of_transition_running", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const { id } = await createExperiment(owner.token, sid, { id: "draft" });
+    const a = await json(await call("GET", `/sites/${sid}/publish-preview?starting=${id}`, { token: owner.token }));
+    const b = await json(await call("GET", `/sites/${sid}/publish-preview?transition=${id}:running`, { token: owner.token }));
+    expect(a.overlaps).toEqual(b.overlaps);
+    expect(a.transitionDigest).toBe(b.transitionDigest);
+    for (const query of [`transition=${id}:draft`, `transition=${id}:running&starting=${id}`]) expect((await call("GET", `/sites/${sid}/publish-preview?${query}`, { token: owner.token })).status).toBe(422);
+  });
+  it("preview_marks_external_url_attribute", async () => {
+    const { owner, sid, eid } = await siteWithRunning();
+    await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [{ id: "href", type: "ATTRIBUTE", selector: "a", payload: { name: "href", value: "https://cdn.example/path" } }] });
+    const preview = await json(await call("GET", `/sites/${sid}/publish-preview`, { token: owner.token }));
+    expect(preview.experiments[0]).toMatchObject({ hasExternalUrl: true, hasCodeChange: false, changedChanges: [expect.objectContaining({ reviewMark: "external_url" })] });
+  });
+  it("preview_reads_rows_in_one_batch", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const counter = countingD1(env.DB);
+    const res = await call("GET", `/sites/${sid}/publish-preview`, { token: owner.token, envOverride: { DB: counter.db } });
+    expect(res.status).toBe(200);
+    expect(counter.counts().batches).toBe(1);
+    expect(counter.counts().batchSql[0]!.filter((s) => /^select/i.test(s))).toHaveLength(8);
+  });
+  it("preview_d1_round_trips", async () => {
+    const { owner, sid, eid } = await siteWithRunning();
+    for (const suffix of ["", `?transition=${eid}:paused`]) {
+      const counter = countingD1(env.DB);
+      const res = await call("GET", `/sites/${sid}/publish-preview${suffix}`, { token: owner.token, envOverride: { DB: counter.db } });
+      expect(res.status).toBe(200);
+      const calls = counter.counts();
+      expect(calls.batches).toBe(1);
+      // 認証と loadSite の読みを除く、batch 以外の業務の読みは audienceUsage だけ。
+      expect(calls.sql.filter((s) => /from "(?:changes|variants|goals|audiences|publishes)"/i.test(s))).toHaveLength(0);
+    }
+  });
+});
+
+it("preview_d1_round_trips_with_images", async () => {
+  const { owner, sid, eid } = await siteWithRunning();
+  const url = await seedAssetRow(sid, { id: "asset_previewaaa" });
+  expect((await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [{ id: "image", type: "IMAGE", selector: "img", payload: { src: url } }] })).status).toBe(200);
+  for (const query of ["", `?transition=${eid}:paused`]) {
+    const counter = countingD1(env.DB);
+    const result = await json(await call("GET", `/sites/${sid}/publish-preview${query}`, { token: owner.token, envOverride: { DB: counter.db } }));
+    expect(result.assetProblems).toEqual([]);
+    const counts = counter.counts();
+    expect(counts.batches).toBe(1);
+    expect(counts.sql.filter((s) => /from "?assets"?/i.test(s))).toHaveLength(1);
+  }
+});
+
+describe("preview comparison with active config", () => {
+  async function missed(type = "TEXT", payload: unknown = { text: "After" }) {
+    const { owner, sid, eid } = await siteWithRunning();
+    await publishRes(owner.token, sid);
+    const since = (await siteRow(sid)).last_activated_at!;
+    await getDb(env).updateTable("changes").set({ type, payload_json: JSON.stringify(payload), updated_at: since - 1 }).where("site_id", "=", sid).where("experiment_id", "=", eid).execute();
+    await getDb(env).updateTable("experiments").set({ updated_at: since - 1 }).where("site_id", "=", sid).where("id", "=", eid).execute();
+    return { owner, sid, eid };
+  }
+  const preview = async (token: string, sid: string, suffix = "") => json(await call("GET", `/sites/${sid}/publish-preview${suffix}`, { token }));
+  it("preview_lists_change_missed_by_timestamp", async () => {
+    const { owner, sid, eid } = await missed();
+    expect((await preview(owner.token, sid)).experiments).toEqual([expect.objectContaining({ id: eid, detectedBy: "config", changedChanges: [] })]);
+  });
+  it("preview_marks_time_detected_entries", async () => {
+    const { owner, sid, eid } = await siteWithRunning();
+    expect((await preview(owner.token, sid)).experiments).toEqual([expect.objectContaining({ id: eid, detectedBy: "time" })]);
+  });
+  it("preview_without_active_config_skips_diff", async () => {
+    const { owner, sid, eid } = await siteWithRunning();
+    await getDb(env).updateTable("experiments").set({ updated_at: 0 }).where("site_id", "=", sid).where("id", "=", eid).execute();
+    expect((await preview(owner.token, sid)).experiments).toEqual([]);
+  });
+  it("preview_transition_list_uses_hypothetical_compile", async () => {
+    const { owner, sid, eid } = await missed();
+    const { id: broken } = await createExperiment(owner.token, sid, { id: "broken" });
+    await getDb(env).updateTable("experiments").set({ status: "running", targeting_json: JSON.stringify({ hist: "converted", goal: "missing" }) }).where("site_id", "=", sid).where("id", "=", broken).execute();
+    const p = await preview(owner.token, sid, `?transition=${broken}:paused`);
+    expect(p.compileError).not.toBeNull();
+    expect(p.experiments).toContainEqual(expect.objectContaining({ id: eid, detectedBy: "config" }));
+  });
+  it("preview_d1_round_trips_with_config_detected_entry", async () => {
+    const { owner, sid, eid } = await missed();
+    const counter = countingD1(env.DB);
+    const p = await json(await call("GET", `/sites/${sid}/publish-preview`, { token: owner.token, envOverride: { DB: counter.db } }));
+    expect(p.experiments).toContainEqual(expect.objectContaining({ id: eid, detectedBy: "config" }));
+    expect(counter.counts().batches).toBe(1);
+    expect(counter.counts().sql.filter((s) => /from "(?:changes|variants|goals|audiences|publishes)"/i.test(s))).toHaveLength(0);
+  });
+  it("preview_marks_code_on_config_detected_entry", async () => {
+    const { owner, sid, eid } = await missed("CUSTOM_JS", { code: "window.changed = true" });
+    expect((await preview(owner.token, sid)).experiments).toContainEqual(expect.objectContaining({ id: eid, detectedBy: "config", hasCodeChange: true }));
+  });
+  it("preview_marks_external_url_on_config_detected_entry", async () => {
+    const { owner, sid, eid } = await missed("ATTRIBUTE", { name: "href", value: "https://external.example/path" });
+    expect((await preview(owner.token, sid)).experiments).toContainEqual(expect.objectContaining({ id: eid, detectedBy: "config", hasExternalUrl: true }));
   });
 });
