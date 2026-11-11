@@ -39,7 +39,6 @@ export function ChangeEditor({
   onChange,
   onRemove,
   disabled,
-  pageUrl,
   imageMode,
   error,
 }: {
@@ -97,19 +96,8 @@ export function ChangeEditor({
       {change.type !== "CSS" ? (
         <label className="field">
           <span className="field-label">セレクタ(500 字以内)</span>
-          <span className="row">
-            <input value={change.selector ?? ""} maxLength={500} disabled={disabled} style={{ flex: 1 }} onChange={(e) => onChange({ ...change, selector: e.target.value })} />
-            {/* ピッカー本体は Plan 7。それまでは disabled + 注記(要件どおり) */}
-            <a
-              className="btn"
-              aria-disabled="true"
-              title="セレクタピッカーはステップ 7 で入ります。それまではブラウザの DevTools で「Copy selector」を使ってください"
-              href={pageUrl ? `${pageUrl}#__ab_picker` : undefined}
-              onClick={(e) => e.preventDefault()}
-            >
-              要素を選ぶ(準備中)
-            </a>
-          </span>
+          <input value={change.selector ?? ""} maxLength={500} disabled={disabled} onChange={(e) => onChange({ ...change, selector: e.target.value })} />
+          <span className="muted">ブラウザの開発者ツールで要素を調べ、CSS セレクタを入力してください。</span>
         </label>
       ) : null}
       {change.type === "TEXT" ? (

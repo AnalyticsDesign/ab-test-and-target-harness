@@ -129,6 +129,9 @@ test.describe.serial("pattern UI (B77)", () => {
     let b = await pickVariant("b");
     await b.getByRole("button", { name: "変更を追加", exact: true }).click();
     const change = b.getByTestId("change-TEXT");
+    await expect(change.getByRole("link", { name: /要素を選ぶ/ })).toHaveCount(0);
+    await expect(change.getByRole("button", { name: /要素を選ぶ/ })).toHaveCount(0);
+    await expect(change.getByText("ブラウザの開発者ツールで要素を調べ、CSS セレクタを入力してください。")).toBeVisible();
     await change.locator('input[maxlength="500"]').fill(".hero-title");
     await change.locator("textarea").fill("B77 オリジナルの確認");
     expect((await save(isWrite("PUT", `${base(EXP_MAIN.id)}/variants/b/changes`))).status()).toBe(200);
