@@ -232,6 +232,7 @@ export async function acceptInvite(browser: Browser, url: string, name: string):
   await page.goto(url);
   // break-glass が開いているので非常用のパスワードフォームも出る。まず通常経路(Google)の導線を確認する
   await expect(page.getByRole("link", { name: "Google でログインして参加" })).toHaveAttribute("href", /\/api\/session\/google\?next=%2Finvite%2F/);
+  await waitForHydration(page);
   await page.fill('input[name="name"]', name);
   await page.fill('input[name="password"]', PASSWORD);
   await page.getByRole("button", { name: "参加する" }).click();

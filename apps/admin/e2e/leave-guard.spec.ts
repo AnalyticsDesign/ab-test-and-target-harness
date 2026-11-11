@@ -56,6 +56,20 @@ async function open(page: Page, path: string): Promise<void> {
   await waitForHydration(page);
 }
 
+async function openWithPopstateGuard(page: Page, path: string): Promise<void> {
+  // lateInstall は文書ごとに決まる。vinext が先に走った文書は開き直してから履歴を積む。
+  let lateInstall: boolean | null = true;
+  for (let attempt = 0; attempt < 5 && lateInstall === true; attempt++) {
+    if (attempt === 0) await page.goto(path);
+    else await page.reload();
+    lateInstall = await page.evaluate(() =>
+      (window as unknown as { __wttPopstateGuard?: { lateInstall: boolean } }).__wttPopstateGuard?.lateInstall ?? null,
+    );
+  }
+  expect(lateInstall, "the popstate guard must run before vinext within 5 document loads").toBe(false);
+  await waitForHydration(page);
+}
+
 const navLink = (page: Page, label: string) => page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: label, exact: true });
 const h1 = (page: Page, name: string) => page.getByRole("heading", { level: 1, name, exact: true });
 const nameInput = (page: Page) => page.getByRole("region", { name: "基本", exact: true }).getByLabel("名前(100 字以内)");
@@ -175,7 +189,7 @@ test("unsaved changes stop a sidebar click and logout", async () => {
 test("unsaved changes stop back, two-step back and forward without any request", async () => {
   const page = await ctx.newPage();
   // 目標 → 一覧 → 詳細(同じ文書の中に 3 つの項目)
-  await open(page, `${sitePath()}/goals`);
+  await openWithPopstateGuard(page, `${sitePath()}/goals`);
   await clickNav(page, "エクスペリエンス");
   await listToDetail(page, EXP);
   await nameInput(page).fill("E2E leave 2");
@@ -234,7 +248,7 @@ test("a load with slow CSS does not break the page, and back passes through with
 test("back is stopped after branching history", async () => {
   const page = await ctx.newPage();
   // A = 目標 → B = 一覧 → C = オーディエンス → B に戻る → D = 詳細(C が D に置き換わる。vinext の番号なら D は 3、実際の位置は 2)
-  await open(page, `${sitePath()}/goals`);
+  await openWithPopstateGuard(page, `${sitePath()}/goals`);
   await clickNav(page, "エクスペリエンス");
   await expect(h1(page, "エクスペリエンス")).toBeVisible();
   await clickNav(page, "オーディエンス");
@@ -254,7 +268,7 @@ test("back is stopped after branching history", async () => {
 
 test("choosing 移動する on back goes back", async () => {
   const page = await ctx.newPage();
-  await open(page, sitePath());
+  await openWithPopstateGuard(page, sitePath());
   await listToDetail(page, EXP);
   await nameInput(page).fill("E2E leave 5");
   await back(page);
@@ -314,7 +328,7 @@ test("a click during the post-save refresh: moving lands on the destination with
 
 test("back during a save, before the write returns: moving goes back with no extra refresh", async () => {
   const page = await ctx.newPage();
-  await open(page, sitePath());
+  await openWithPopstateGuard(page, sitePath());
   await listToDetail(page, EXP);
   await nameInput(page).fill("E2E leave 8");
   const undo = await holdApi(page, "PATCH", apiPath(EXP.id), 2_000);
@@ -342,7 +356,7 @@ test("back during a save, before the write returns: moving goes back with no ext
 
 test("back during the post-save refresh: moving lands on the previous page", async () => {
   const page = await ctx.newPage();
-  await open(page, sitePath());
+  await openWithPopstateGuard(page, sitePath());
   await listToDetail(page, EXP);
   await nameInput(page).fill("E2E leave 9");
   const held = await holdRsc(page, expPath(EXP.id), 1_500);
@@ -469,7 +483,7 @@ test("an issued key stops a sidebar click and back, and 戻って控える keeps
   markSessionsAsGoogle(); // B112: パスワードのセッションからは発行できない
   const page = await ctx.newPage();
   // 画面表示 → API キー(同じ文書の中に履歴を積む。戻るが守りに当たるように)
-  await open(page, "/w/me/display");
+  await openWithPopstateGuard(page, "/w/me/display");
   await clickNav(page, "API キー");
   await expect(page.getByRole("button", { name: "発行する" })).toBeVisible();
   await page.fill('input[name="name"]', "e2e-leave-guard-key");

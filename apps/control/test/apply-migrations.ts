@@ -28,9 +28,20 @@ export async function resetStorage(opts: { before?: string } = {}): Promise<void
   await applyD1Migrations(env.RESULTS_DB, env.TEST_RESULTS_MIGRATIONS);
 }
 
-beforeEach(async () => {
+let testOrder = 0;
+let previousTest = "(first test)";
+
+beforeEach(async ({ task }) => {
+  const order = ++testOrder;
+  const previous = previousTest;
+  previousTest = task.fullName;
   // B148: 判定の GET(/__ab/ping)は偽の edge が受ける(外へ出さない)。差し替えた応答は毎テストで空に戻す
   installFakeEdge();
   fakeEdgePing.clear();
   await resetStorage();
+  // B191: setupOwner() の UNIQUE 違反より前に、リセット後の行数と実行順を記録する。
+  const rows = await env.DB.prepare("select count(*) as count from setup_lock").first<number>("count");
+  if (rows !== 0) {
+    throw new Error(`setup_lock row count after reset: ${rows}; test #${order}: ${task.fullName}; previous: ${previous}`);
+  }
 });
