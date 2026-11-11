@@ -189,18 +189,6 @@ export function ConfirmDialog({
         ) : null}
         <ErrorBox message={error} />
         <div className="row" style={{ justifyContent: "flex-end" }}>
-          <button
-            ref={confirm}
-            type="button"
-            className={tone === "danger" ? "btn btn-danger" : "btn btn-primary"}
-            disabled={confirmDisabled}
-            onClick={(e) => {
-              if (ignored(e)) return;
-              onConfirm(checked);
-            }}
-          >
-            {checked && option?.checkedConfirmLabel ? option.checkedConfirmLabel : confirmLabel}
-          </button>
           {single ? null : (
             <button
               ref={cancel}
@@ -214,6 +202,18 @@ export function ConfirmDialog({
               {cancelLabel}
             </button>
           )}
+          <button
+            ref={confirm}
+            type="button"
+            className={tone === "danger" ? "btn btn-danger" : "btn btn-primary"}
+            disabled={confirmDisabled}
+            onClick={(e) => {
+              if (ignored(e)) return;
+              onConfirm(checked);
+            }}
+          >
+            {checked && option?.checkedConfirmLabel ? option.checkedConfirmLabel : confirmLabel}
+          </button>
         </div>
       </div>
       {/* 覆いは中身(inert)の外に置く(inert の中だと支援技術に「…中」が届かない。BusyScope と同じ) */}

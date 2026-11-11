@@ -171,7 +171,20 @@ test("unsaved changes stop a sidebar click and logout", async () => {
   await clickNav(page, "目標");
   await expect(leaveConfirm(page)).toBeVisible();
   await expect(leaveConfirm(page)).toContainText("移動すると変更は失われます");
-  await leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true }).press("Enter");
+  const stay = leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true });
+  const move = leaveConfirm(page).getByRole("button", { name: "移動する", exact: true });
+  // 初めは安全側。見た目と Tab の順をそろえ、Enter の押し間違いで移動しない(B196)。
+  await expect(stay).toBeFocused();
+  const stayBox = await stay.boundingBox();
+  const moveBox = await move.boundingBox();
+  expect(stayBox).not.toBeNull();
+  expect(moveBox).not.toBeNull();
+  expect(stayBox!.x + stayBox!.width).toBeLessThanOrEqual(moveBox!.x);
+  await page.keyboard.press("Tab");
+  await expect(move).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(stay).toBeFocused();
+  await page.keyboard.press("Enter");
   await expect(leaveConfirm(page)).toHaveCount(0);
   expect(pathname(page)).toBe(expPath(EXP.id));
   await expect(nameInput(page)).toHaveValue("E2E leave 1");
