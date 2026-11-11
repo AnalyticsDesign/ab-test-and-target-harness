@@ -1,4 +1,5 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Field } from "@/components/Field";
@@ -12,6 +13,7 @@ import { PageMark } from "@/components/ui/PageMark";
 export default function ResetPage() {
   const params = useSearchParams();
   const router = useRouter();
+  const hydrated = useHydrated();
   const token = params.get("token");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(params.get("error") ? "リンクが無効か期限切れです" : null);
@@ -41,14 +43,14 @@ export default function ResetPage() {
       </>
     );
   return (
-    <form onSubmit={onSubmit} className="card">
+    <form method="post" onSubmit={onSubmit} className="card">
       <PageMark />
       <h1>パスワードの再設定</h1>
       <Field label="新しいパスワード(8 文字以上)">
         <input name="password" type="password" minLength={8} required autoComplete="new-password" />
       </Field>
       <ErrorBox message={error} />
-      <SubmitButton busy={busy}>変更する</SubmitButton>
+      <SubmitButton busy={busy} disabled={!hydrated}>変更する</SubmitButton>
     </form>
   );
 }

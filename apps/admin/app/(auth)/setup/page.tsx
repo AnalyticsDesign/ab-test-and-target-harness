@@ -1,4 +1,5 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useState } from "react";
 import { Field } from "@/components/Field";
 import { ErrorBox } from "@/components/ErrorBox";
@@ -7,6 +8,7 @@ import { browserVersionHeaders } from "@/lib/client";
 import { PageMark } from "@/components/ui/PageMark";
 
 export default function SetupPage() {
+  const hydrated = useHydrated();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null); // 登録したメールアドレス
@@ -45,7 +47,7 @@ export default function SetupPage() {
     );
   }
   return (
-    <form onSubmit={onSubmit} className="card" style={{ maxWidth: 480 }}>
+    <form method="post" onSubmit={onSubmit} className="card" style={{ maxWidth: 480 }}>
       {/* クライアントのページは画面に反映された後に mount するので、印は window.location(= 移動先)から作る(PageMark には移動先を渡さない) */}
       <PageMark />
       <h1>初回セットアップ</h1>
@@ -76,7 +78,7 @@ export default function SetupPage() {
         <p className="muted">後から 設定 &gt; システム &gt; Cloudflare 使用状況 で変えられます</p>
       </fieldset>
       <ErrorBox message={error} />
-      <SubmitButton busy={busy}>オーナーを作成</SubmitButton>
+      <SubmitButton busy={busy} disabled={!hydrated}>オーナーを作成</SubmitButton>
     </form>
   );
 }

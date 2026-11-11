@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { CONTROL_URL, appAlert, login, openWorkspace } from "./fixtures";
+import { test, expect, type Browser, type BrowserContext } from "@playwright/test";
+import { ADMIN_URL, CONTROL_URL, appAlert, controlHeaders, issueInvite, login, openMembers, openWorkspace } from "./fixtures";
 
 /** Google の経路のうち、Google を呼ばずに確かめられる部分(入口の行き先・失敗の表示・交換の拒否) */
 test("the login screen leads to Google through the BFF and explains OAuth failures", async ({ page, request }) => {
@@ -45,13 +45,35 @@ test("the flow cookie is really gone from the browser after the return leg (same
   expect((await context.cookies()).some((c) => c.name === "wtt_oauth_flow")).toBe(false);
 });
 
-test("while the emergency door is open, the login screen shows the emergency form and every signed-in page shows the banner", async ({ page }) => {
+test("while the emergency door is open, the login screen shows the emergency form and every signed-in page shows the banner", async ({ page, browser }) => {
   await page.goto("/login");
   await expect(page.getByRole("heading", { name: "非常用: メールアドレスとパスワード" })).toBeVisible();
   await login(page);
   await expect(page.getByTestId("break-glass-banner")).toBeVisible();
   await openWorkspace(page);
   await expect(page.getByTestId("break-glass-banner")).toBeVisible();
+
+  // 既存のログインに相乗りし、認証の回数を増やさない。招待の作成だけ行い、受諾はしない。
+  await openMembers(page);
+  const membersPath = new URL(page.url()).pathname;
+  const inviteUrl = await issueInvite(page, "b202-invite@e2e.example", /^閲覧者/);
+  const invitationId = new URL(inviteUrl).pathname.split("/").at(-1)!;
+  const wid = membersPath.split("/")[2];
+  try {
+    await assertNativeFormSafety(browser, {
+      path: new URL(inviteUrl).pathname,
+      values: { name: "B202_NATIVE_NAME_f61a", password: "B202_NATIVE_PASSWORD_f61a" },
+    });
+    await assertNativeFormSafety(browser, {
+      path: membersPath,
+      selector: ".invite-section form",
+      values: { email: "b202-native-member-f61a@example.test" },
+      storageState: await page.context().storageState(),
+    });
+  } finally {
+    const removed = await page.request.delete(`/api/control/workspaces/${wid}/invitations/${invitationId}`, { headers: controlHeaders() });
+    expect(removed.status()).toBe(204);
+  }
 });
 
 // B157: 枠への埋め込みを禁じるヘッダー(next.config の headers())が、Workers で動く build の応答に実際に付くこと。
@@ -63,3 +85,68 @@ test("the HTML and the Route Handler responses forbid framing", async ({ request
     expect(res.headers()["x-frame-options"], path).toBe("DENY");
   }
 });
+
+// B202: 外部の JS を止め、SSR の form をブラウザそのもので送る。evaluate はアプリの hydration を起動しない。
+async function assertNativeFormSafety(browser: Browser, {
+  path, values, selector = "form", storageState,
+}: {
+  path: string;
+  values: Record<string, string>;
+  selector?: string;
+  storageState?: Awaited<ReturnType<BrowserContext["storageState"]>>;
+}) {
+  const context = await browser.newContext({ baseURL: ADMIN_URL, storageState });
+  try {
+    const page = await context.newPage();
+    await page.route("**/*", (route) => route.request().resourceType() === "script" ? route.abort() : route.continue());
+    await page.goto(path);
+    await expect(page.locator("html")).not.toHaveAttribute("data-hydrated", "1");
+    const form = page.locator(selector).first();
+    await expect(form).toBeVisible();
+    await expect(form).toHaveAttribute("method", "post");
+    const button = form.locator('button[type="submit"]');
+    await expect(button).toBeDisabled();
+    for (const [name, value] of Object.entries(values)) await form.locator(`input[name="${name}"]`).fill(value);
+
+    const before = page.url();
+    const navigations: Array<{ url: string; method: string }> = [];
+    page.on("request", (r) => {
+      if (r.isNavigationRequest() && r.frame() === page.mainFrame()) navigations.push({ url: r.url(), method: r.method() });
+    });
+    await form.locator("input").first().press("Enter");
+    await page.waitForLoadState("networkidle");
+    expect(page.url()).toBe(before);
+    expect(navigations).toEqual([]);
+
+    // disabled の抑止を迂回する submit() でも、email / password / token は query にならない。
+    const [response] = await Promise.all([
+      page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+      form.evaluate((node) => (node as HTMLFormElement).submit()),
+    ]);
+    expect(response?.status()).toBe(200);
+    expect(navigations).toEqual([{ url: before, method: "POST" }]);
+    expect(page.url()).toBe(before);
+    const body = await response!.text();
+    const headers = await response!.allHeaders();
+    expect(headers.location).toBeUndefined();
+    for (const value of Object.values(values)) {
+      expect(page.url()).not.toContain(value);
+      expect(page.url()).not.toContain(encodeURIComponent(value));
+      expect(body).not.toContain(value);
+      expect(body).not.toContain(encodeURIComponent(value));
+      expect(JSON.stringify(headers)).not.toContain(value);
+    }
+  } finally {
+    await context.close();
+  }
+}
+
+for (const [label, path, values] of [
+  ["login", "/login", { email: "b202-native-login-f61a@example.test", password: "B202_NATIVE_PASSWORD_f61a" }],
+  ["setup", "/setup", { setupToken: "B202_NATIVE_SETUP_TOKEN_f61a", workspaceName: "B202_NATIVE_WORKSPACE_f61a", name: "B202_NATIVE_NAME_f61a", email: "b202-native-setup-f61a@example.test" }],
+  ["reset", "/reset?token=b202-existing-link-token", { password: "B202_NATIVE_PASSWORD_f61a" }],
+] as const) {
+  test(`native credentials stay out of the URL before hydration: ${label}`, async ({ browser }) => {
+    await assertNativeFormSafety(browser, { path, values });
+  });
+}

@@ -1,4 +1,5 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Field } from "@/components/Field";
@@ -8,6 +9,7 @@ import { browserVersionHeaders } from "@/lib/client";
 
 export function PasswordLoginForm() {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -31,7 +33,7 @@ export function PasswordLoginForm() {
   }
   return (
     // 枠はこのフォームを載せるログイン画面の card が持つ(入れ子にしない)
-    <form onSubmit={onSubmit}>
+    <form method="post" onSubmit={onSubmit}>
       <h2>非常用: メールアドレスとパスワード</h2>
       <Field label="メールアドレス">
         <input name="email" type="email" required autoComplete="username" />
@@ -40,7 +42,7 @@ export function PasswordLoginForm() {
         <input name="password" type="password" required autoComplete="current-password" />
       </Field>
       <ErrorBox message={error} />
-      <SubmitButton busy={busy}>ログイン</SubmitButton>
+      <SubmitButton busy={busy} disabled={!hydrated}>ログイン</SubmitButton>
       <p className="muted">この欄は非常時だけ表示されます。用が済んだら control の非常用トークンを削除してください</p>
     </form>
   );

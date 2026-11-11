@@ -1,4 +1,5 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useState } from "react";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { api, fieldErrors } from "@/lib/client";
@@ -217,6 +218,7 @@ function MembersList({
  * 取り消しの結果は招待中の一覧のカードの先頭。どの操作も、始めたときに古い発行の箱を消す(失敗した操作が古い成功の結果を残さない)
  */
 function Invitations({ workspaceId, invitations }: { workspaceId: string; invitations: Invitation[] }) {
+  const hydrated = useHydrated();
   const ask = useConfirm();
   const { run } = useBusyAction();
   const form = useBusyNotice();
@@ -269,6 +271,7 @@ function Invitations({ workspaceId, invitations }: { workspaceId: string; invita
     <>
       <div className="invite-section">
         <form
+          method="post"
           className="card"
           onSubmit={(e) => {
             e.preventDefault();
@@ -293,7 +296,7 @@ function Invitations({ workspaceId, invitations }: { workspaceId: string; invita
               onChange={(v) => setInviteRole(v as Role)}
             />
           </Field>
-          <SubmitButton busy={false}>招待リンクを発行</SubmitButton>
+          <SubmitButton busy={false} disabled={!hydrated}>招待リンクを発行</SubmitButton>
         </form>
         <ErrorBox message={form.notice.error} />
         {form.notice.status ? <p role="status">{form.notice.status}</p> : null}

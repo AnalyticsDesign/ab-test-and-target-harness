@@ -1,4 +1,5 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CodeBlock } from "@/components/ui/CodeBlock";
@@ -25,6 +26,7 @@ export function AcceptInviteForm({
   signedInEmail: string | null;
 }) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 招待のリンク(メールが違うときに、ログアウトの前に控えてもらう)。origin はブラウザでしか分からないので描画の後に作る
@@ -66,6 +68,7 @@ export function AcceptInviteForm({
           </a>
           {view === "sign-in-or-password" ? (
             <form
+              method="post"
               onSubmit={(e) => {
                 e.preventDefault();
                 const fd = new FormData(e.currentTarget);
@@ -80,7 +83,7 @@ export function AcceptInviteForm({
                 <input name="password" type="password" minLength={8} required />
               </Field>
               <ErrorBox message={error} />
-              <SubmitButton busy={busy}>参加する</SubmitButton>
+              <SubmitButton busy={busy} disabled={!hydrated}>参加する</SubmitButton>
             </form>
           ) : null}
         </div>
