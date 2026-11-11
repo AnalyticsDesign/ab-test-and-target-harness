@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { applyD1Migrations, createExecutionContext, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
 import {
@@ -36,6 +36,12 @@ const RUN_P = "p".repeat(22); // 一時停止中のテスト(results.runs には
 const RUN_X = "x".repeat(22); // どの config にも無い run
 /** テストごとに別の UTC の日の正午(2026-11-n 12:00 UTC) */
 const day = (n: number): number => Date.UTC(2026, 10, n, 12);
+/**
+ * `app.fetch` を通るテスト(`send` ほか)は edge の中で `Date.now()` を読む。本物の時計のままだと、今日が `day(n)` と
+ * 重なったとき、その日に別のテストが残した予算の停止・使用量とぶつかって落ちる(B203)。
+ * そこで Date だけを、どの `day(n)` とも重ならない日に固定する(タイマーは本物のまま)
+ */
+const WALL_CLOCK = Date.UTC(2026, 9, 1, 12); // 2026-10-01 12:00 UTC
 
 const variants = (wA: number) => [
   { id: "vA", weight: wA, changes: [] },
@@ -96,7 +102,12 @@ const failingDb = (message: string): D1Database =>
   ({ prepare: (sql: string) => db().prepare(sql), batch: async () => { throw new Error(message); } }) as unknown as D1Database;
 
 beforeAll(async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(WALL_CLOCK);
   await applyD1Migrations(db(), env.TEST_RESULTS_MIGRATIONS);
+});
+afterAll(() => {
+  vi.useRealTimers();
 });
 beforeEach(async () => {
   __resetEdgeCaches();
