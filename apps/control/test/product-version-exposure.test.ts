@@ -17,6 +17,12 @@ it("product_version_is_not_exposed_on_unauthenticated_entries_b142", async () =>
   for (const [m, p] of [["GET", "/llms.txt"], ["GET", "/openapi.json"], ["GET", "/login-options"], ["GET", "/auth/google/start"], ["GET", "/capabilities"], ["POST", "/workspaces"]] as const) {
     expect(await leaks(await h.call(m, p)), `${m} ${p}`).toBe(false);
   }
+  // 不正な API キー・セッションの 401(鍵の作り直しの hint の枝)も見る
+  for (const token of ["wtt_invalid", "not-a-session"]) {
+    const res = await h.call("GET", "/capabilities", { token });
+    expect(res.status, token).toBe(401);
+    expect(await leaks(res), token).toBe(false);
+  }
 });
 it("product_version_reaches_a_signed_in_caller_with_the_sentinel_b142", async () => {
   const { token } = await h.setupOwner();

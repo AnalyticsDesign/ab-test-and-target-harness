@@ -27,12 +27,26 @@ describe("parseCapabilities productVersion", () => {
 });
 
 const ROOT = path.join(import.meta.dirname, "..");
+// admin の source 全体を歩く。Node で動くテスト・e2e、build の出力と依存は除く(client の JS に入りえない)
+const SKIP = new Set(["node_modules", "dist", ".next", ".wrangler", "test", "e2e", "test-results"]);
+const SOURCE = /\.(?:[cm]?[jt]sx?)$/;
 const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
   const p = path.join(dir, e.name);
-  return e.isDirectory() ? walk(p) : /\.(?:ts|tsx)$/.test(e.name) ? [p] : [];
+  if (e.isDirectory()) return SKIP.has(e.name) ? [] : walk(p);
+  return SOURCE.test(e.name) ? [p] : [];
 });
-const releaseImport = /(?:from\s*|import\s*\(\s*)["'](?:@\/|(?:\.\.?\/)+)generated\/release(?:\.ts)?["']/;
-const importers = () => ["app", "components", "lib"].flatMap((d) => walk(path.join(ROOT, d))).filter((f) => releaseImport.test(readFileSync(f, "utf8"))).map((f) => path.relative(ROOT, f)).sort();
+// 拡張子つき(.js・.ts など)の書き方も、generated/ の中の別の生成ファイルからの再 export(./release)も捕まえる
+const releaseImport = /(?:from\s*|import\s*\(\s*)["'](?:@\/|(?:\.\.?\/)+)generated\/release(?:\.[cm]?[jt]sx?)?["']/;
+const siblingImport = /(?:from\s*|import\s*\(\s*)["']\.\/release(?:\.[cm]?[jt]sx?)?["']/;
+const RELEASE_FILE = path.join("generated", "release.ts");
+const importers = () => walk(ROOT)
+  .map((f) => path.relative(ROOT, f))
+  .filter((f) => f !== RELEASE_FILE)
+  .filter((f) => {
+    const src = readFileSync(path.join(ROOT, f), "utf8");
+    return releaseImport.test(src) || (path.dirname(f) === "generated" && siblingImport.test(src));
+  })
+  .sort();
 
 describe("the release version never ships in client JS", () => {
   it("no client module imports generated/release", () => {

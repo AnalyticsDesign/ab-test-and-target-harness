@@ -2350,10 +2350,10 @@ curl -sS -o /dev/null -w '%{http_code}\n' "<AB_ADMIN_URL>/login"   # 期待: 200
 ```
 
 - **【人に依頼】**: 管理画面を再読み込みし、左のメニューの下の「設定」→「この導入について」(「個人」の見出しの下)で、製品の版が目標 tag(例 `v1.0`)と同じで、「版が違います」の注意が出ていないことを確かめてもらう
-- エージェントが API キーを持っていれば、次でも確かめる(期待: 目標 tag):
+- エージェントが 5.1 の `.env.agent` に API キーを持っていれば、次でも確かめる(鍵の値はコマンドに書かず、表示もしない):
 
   ```bash
-  curl -sS -H "Authorization: Bearer <API キー>" "<control URL>/capabilities" | jq -r '.productVersion'
+  curl -sS "$AB_CONTROL_URL/capabilities" -H "Authorization: Bearer $AB_API_KEY" | jq -r '.productVersion'   # 期待: 目標 tag。null なら control が版を返さない更新の前の版のまま
   ```
 
 版が期待と違うとき: 管理画面の版だけが古い → 6.3 の admin のデプロイを確かめる。control の版だけが古い → control のデプロイを確かめる。両方が古い → `git describe --tags --exact-match` が目標 tag か確かめる(6.2 に戻る)。

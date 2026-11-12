@@ -4,9 +4,13 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { PageMark } from "@/components/ui/PageMark";
 import { ProductVersion } from "@/components/settings-personal/ProductVersion";
 import { loadCapabilities } from "@/lib/loaders";
+import { requireUser } from "@/lib/control";
 import { RELEASE_VERSION } from "@/generated/release";
 
 export default async function AboutPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  // 守る値(管理画面の版)が手元の定数で、loadCapabilities は 401 でも既定値を返すので、/w の layout の守りだけに頼らずページでも確かめる。
+  // requireUser は React の cache 付きで、layout と同じ描画の中では /me を 1 回にまとめる(往復は増えない)
+  await requireUser();
   const caps = await loadCapabilities();
   return (
     <>

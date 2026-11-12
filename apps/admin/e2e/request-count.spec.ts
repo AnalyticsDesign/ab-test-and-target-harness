@@ -1,5 +1,7 @@
 import { test, expect, type Locator, type Page, type Request, type TestInfo } from "@playwright/test";
 import { ADMIN_URL, CONTROL_URL, WORKSPACE_NAME, controlHeaders, createExperiment, createSite, login, waitForHydration } from "./fixtures";
+// 版は決め打ちしない(公開の版ではリリースの作業が dev を版の文字列に書き換える)
+import { RELEASE_VERSION } from "../generated/release";
 
 /**
  * 管理画面の速さ: 主な画面を 1 回表示するたびに、admin から control への問い合わせ(lib/control.ts の controlRequest。E2E でも本番と同じ
@@ -70,8 +72,8 @@ type ScreenName =
  * 実測の値は各画面の添付(request-counts-*)と、最後の表(summary)に残る
  */
 export const REQUEST_LIMITS: Record<ScreenName, { direct: number; navigation: number }> = {
-  // B142: 新しい設定の画面。直接は外枠の /capabilities とまとめる。移動で読むのは /capabilities だけ。
-  // 実測 3 / 3(2026-11-12 の全件 e2e)。RSC でも外枠の /me・/workspaces/summary が出て計3本。既存画面の上限は変えない。
+  // B142: 新しい設定の画面。直接も移動も外枠の 3 本(/me・/workspaces/summary・/capabilities)だけ。ページの /capabilities と /me は cache で外枠と同じ 1 回。
+  // 実測 3 / 3(2026-11-12 の全件 e2e。plan の「移動では /capabilities 1 回」の見込みは外れ、RSC でも外枠を描き直す)。既存画面の上限は変えない。
   about: { direct: 4, navigation: 4 },
   // 実測(2026-10-30。直接 / 遷移)の後ろに書く。共通の 3〜4 回 = 外枠の /me・/workspaces/summary・/capabilities(+ サイトの下は /sites/:sid)
   home: { direct: 4, navigation: 4 }, // 実測 3 / 3(外枠だけ)
@@ -339,7 +341,7 @@ type Screen = {
 const SCREENS: Screen[] = [
   {
     name: "about", path: () => "/w/me/about",
-    ready: (p) => expect(p.getByTestId("product-version")).toHaveText("dev"),
+    ready: (p) => expect(p.getByTestId("product-version")).toHaveText(RELEASE_VERSION),
     from: () => "/w/me/display",
     link: (p) => navLink(p, "この導入について"),
   },
