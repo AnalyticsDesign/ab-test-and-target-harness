@@ -652,7 +652,6 @@ async function recordDelivery(env: Env, db: Db, siteId: string, version: number,
         { history: [{ generation, deployedAt: outcome.deployedAt, digest: outcome.digest }], historyFrom: null, partial: true },
         Date.now(),
         apiGuard(env),
-        edgeOrigin(env),
       );
   } catch (e) {
     console.error("delivered definition update failed (best-effort, confirmed later by cron)", e);

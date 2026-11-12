@@ -44,8 +44,7 @@ function pruneCandidates(db: Db, a: PruneArgs, limit: RawBuilder<number>) {
     .where("p.version", "<", db.selectFrom("sites").select("static_served_version").where("id", "=", a.siteId))
     .where("p.version", "<>", db.selectFrom("sites").select("active_version").where("id", "=", a.siteId))
     .where("p.version", "not in", sql<number>`(select value from json_each(${JSON.stringify(a.keep)}))`)
-    .where("p.version", "not in", db.selectFrom("experiment_delivered_definitions as u").select("u.publish_version").where("u.site_id", "=", a.siteId).where(needsDeliveryConfirmation("u")))
-    .where("p.version", "not in", db.selectFrom("static_deploy_requests as r").select("r.version").where("r.site_id", "=", a.siteId).where("r.input_digest", "is", null))
+    .where("p.version", "not in", db.selectFrom("experiment_delivered_definitions as u").select("u.publish_version").where("u.site_id", "=", a.siteId).where(needsDeliveryConfirmation("u", a.now)))
     .where(sql<boolean>`${sql.raw(NOT_FROZEN_SQL)}`)
     .orderBy("p.version")
     .limit(limit);

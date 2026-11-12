@@ -405,7 +405,7 @@ export async function reconcileStatic(env: Env, db: Db, site: SiteRow, waitUntil
 async function confirmFromStatus(env: Env, db: Db, siteId: string, st: StaticSiteStatus): Promise<void> {
   try {
     if (await isWriteFrozen(db)) return;
-    await confirmDeliveries(db, siteId, { history: st.history, historyFrom: st.historyFrom }, Date.now(), apiGuard(env), edgeOrigin(env));
+    await confirmDeliveries(db, siteId, { history: st.history, historyFrom: st.historyFrom }, Date.now(), apiGuard(env));
   } catch (e) {
     console.error("delivery confirmation failed", e);
   }

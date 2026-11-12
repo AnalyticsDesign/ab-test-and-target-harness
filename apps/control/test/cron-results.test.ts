@@ -775,6 +775,20 @@ describe("results-delivery(K14・K17)", () => {
     return { fake, asked };
   }
 
+  test("cron_delivery_skips_runs_ended_past_the_evidence_grace", async () => {
+    // Cron が ctx.now で「終了から 8 日」を測ることを、一覧の配線ごと確かめる(B242 impl-review R3)。
+    // 秒の値や 0 を渡すと閾値が負になり、9 日前に終えた run も対象に残る
+    const owner = await setupOwner();
+    const T = at("2026-11-20T10:00:00Z");
+    for (const [id, endedDaysAgo] of [["site-expired", 9], ["site-recent", 1]] as const) {
+      const sid = await pendingSite(owner, id);
+      await env.DB.prepare("update experiments set status = 'archived', stopped_at = ? where site_id = ?").bind(T - endedDaysAgo * DAY, sid).run();
+    }
+    const { fake, asked } = statusDeployer(null);
+    await runCron(cronEnv(fakeResultsBudget(), fakeResultsHealth(), { DEPLOYER: fake }), T, [resultsDeliveryJob]);
+    expect(asked).toEqual(["site-recent"]);
+  });
+
   test("cron_tick_failure_retry_policy_survives_wraparound", async () => {
     // tick のジョブで 1 件が失敗し続ける → 同じ日の一巡ごとに試し直すが、ほかの対象は毎回進む。
     // daily の段で失敗した対象はその日はもう試さず、翌日に試す
@@ -812,6 +826,7 @@ describe("results-delivery(K14・K17)", () => {
     for (const id of ["site-a", "site-b", "site-c", "site-d"]) {
       const s = await pendingSite(owner, id);
       await env.DB.prepare("update experiment_delivered_definitions set static_generation = ? where site_id = ?").bind(JSON.stringify(gen), s).run();
+      await env.DB.prepare("insert into static_deploy_requests (site_id, epoch, seq, version, requested_at, input_digest) values (?, 1, 1, 1, 0, 'cron-digest')").bind(s).run();
     }
     const sid = await recordingSite(owner);
     const tick = tickSlot(Date.now());
@@ -821,7 +836,7 @@ describe("results-delivery(K14・K17)", () => {
     const at0 = new Date(tick - HOUR).toISOString();
     fake.siteStatus = async (siteId: string) => {
       asked.push(siteId);
-      return { accepted: gen, deployed: gen, deployedAt: at0, history: [{ generation: gen, deployedAt: at0 }], historyFrom: null, pending: false, lastError: null };
+      return { accepted: gen, deployed: gen, deployedAt: at0, history: [{ generation: gen, deployedAt: at0, digest: "cron-digest" }], historyFrom: null, pending: false, lastError: null };
     };
     const e = cronEnv(fakeResultsBudget(), fakeResultsHealth(), { DEPLOYER: fake, RESULTS_DB: sizedResultsDb(() => 1_000) });
     const delivered = async () =>
@@ -1047,7 +1062,8 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
           .run();
       await env.DB.prepare("update sites set collect_until_dirty = 1 where id = ?").bind(sid).run();
       const fake = fakeDeployer();
-      fake.setStatus({ accepted: gen, deployed: gen, deployedAt: new Date(base - HOUR).toISOString(), history: [{ generation: gen, deployedAt: new Date(base - HOUR).toISOString() }], historyFrom: null, pending: false, lastError: null });
+      await env.DB.prepare("insert into static_deploy_requests (site_id, epoch, seq, version, requested_at, input_digest) select ?, ?, ?, max(publish_version), ?, 'cron-digest' from experiment_delivered_definitions where site_id = ? and run_id = ?").bind(sid, gen.epoch, gen.seq, base - HOUR, sid, runId).run();
+      fake.setStatus({ accepted: gen, deployed: gen, deployedAt: new Date(base - HOUR).toISOString(), history: [{ generation: gen, deployedAt: new Date(base - HOUR).toISOString(), digest: "cron-digest" }], historyFrom: null, pending: false, lastError: null });
       const e = cronEnv(fakeResultsBudget(), fakeResultsHealth(), { DEPLOYER: fake, RESULTS_DB: sizedResultsDb(() => 1_000) });
       for (const t of [base, base + 15 * MIN]) await runCron(e, t, CRON_JOBS);
       const delivered = await env.DB.prepare("select settled from experiment_delivered_definitions where site_id = ? and run_id = ?").bind(sid, runId).first<{ settled: string | null }>();
@@ -1239,6 +1255,7 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
       )
         .bind(sid, runId)
         .run();
+      await env.DB.prepare("insert into static_deploy_requests (site_id, epoch, seq, version, requested_at, input_digest) values (?, 1, 1, 1, 0, 'cron-digest')").bind(sid).run();
       sites.push(sid);
     }
     // 1. 凍結中: 12 本のうち wtt-control に書く 11 本とも見送る(results-account-guard は wtt-control に書かないので動く。audit-retention は B129 Task 9、asset-housekeeping は B68)
@@ -1269,7 +1286,7 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
         accepted: { epoch: 1, seq: 1 },
         deployed: { epoch: 1, seq: 1 },
         deployedAt: "2026-11-20T09:00:00.000Z",
-        history: [{ generation: { epoch: 1, seq: 1 }, deployedAt: "2026-11-20T09:00:00.000Z" }],
+        history: [{ generation: { epoch: 1, seq: 1 }, deployedAt: "2026-11-20T09:00:00.000Z", digest: "cron-digest" }],
         historyFrom: null,
         pending: false,
         lastError: null,

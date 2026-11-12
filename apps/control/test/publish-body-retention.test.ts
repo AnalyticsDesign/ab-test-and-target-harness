@@ -93,17 +93,25 @@ describe.each([true, false])("prunePublishBodies (retention indexes: %s)", (inde
   });
   it("keeps a version whose delivery still needs confirmation", async () => {
     const { sid } = await fixture();
+    for (const run of ["r2", "r3", "r4", "r5"]) await env.DB.prepare(`insert into experiments (site_id, id, name, status, run_id, url_match_json, created_by, updated_by, created_at, updated_at)
+      values (?, ?, 'test', 'running', ?, '{}', 'u', 'u', 1, 1)`).bind(sid, run, run).run();
     for (const [version, run, settled] of [[2, "r2", null], [3, "r3", "unknown"], [4, "r4", "unknown"], [10, "r4", "delivered"], [5, "r5", "delivered"]] as const) {
-      await env.DB.prepare("insert into experiment_delivered_definitions (site_id, experiment_id, run_id, publish_version, definition_json, definition_hash, settled) values (?, 'exp_hero', ?, ?, '{}', 'h', ?)").bind(sid, run, version, settled).run();
+      await env.DB.prepare("insert into experiment_delivered_definitions (site_id, experiment_id, run_id, publish_version, definition_json, definition_hash, settled) values (?, ?, ?, ?, '{}', 'h', ?)").bind(sid, run, run, version, settled).run();
     }
     await prune(sid);
     expect(await prunedVersions(sid)).toEqual([1, 4, 5]);
   });
-  it("keeps a version named by a deploy request without an input digest", async () => {
+  it("prunes expired unconfirmed run bodies but keeps recent ones (B242 2-A)", async () => {
     const { sid } = await fixture();
-    for (const [v, digest] of [[2, null], [3, "digest"]] as const) await env.DB.prepare("insert into static_deploy_requests (site_id, epoch, seq, version, requested_at, input_digest) values (?, 1, ?, ?, 1, ?)").bind(sid, v, v, digest).run();
+    for (const [v, days] of [[2, 9], [3, 1]]) {
+      const id = `expired-${v}`;
+      await env.DB.prepare(`insert into experiments (site_id, id, name, status, run_id, stopped_at, url_match_json, created_by, updated_by, created_at, updated_at)
+        values (?, ?, 'test', 'archived', ?, ?, '{}', 'u', 'u', 1, 1)`).bind(sid, id, id, NOW - days! * 86400000).run();
+      await env.DB.prepare(`insert into experiment_delivered_definitions (site_id, experiment_id, run_id, publish_version, definition_json, definition_hash)
+        values (?, ?, ?, ?, '{}', 'h')`).bind(sid, id, id, v).run();
+    }
     await prune(sid);
-    expect(await prunedVersions(sid)).toEqual([1, 3, 4, 5]);
+    expect(await prunedVersions(sid)).toEqual([1, 2, 4, 5]);
   });
   it("prunes the oldest first up to the limit", async () => {
     const { sid } = await fixture();

@@ -149,7 +149,7 @@ export type ExperimentDeliveredDefinitionRow = {
 };
 /**
  * 配信ファイルの出し直しの依頼ごとの「世代 → その出し直しで焼いた版」(requestStaticDeploy が書く)。
- * input_digest = 送った入力の digest(core の staticInputDigest。7o K24)。マイグレーション 0019 の前の記録は NULL
+ * input_digest = 送った入力の digest(core の staticInputDigest。7o K24)。マイグレーション 0019 の前の記録は NULL(配信の確認には数えない)
  */
 export type StaticDeployRequestRow = { site_id: string; epoch: number; seq: number; version: number; requested_at: number; input_digest: string | null };
 export type ExperimentDeliveryChangeRow = { id: Generated<number>; site_id: string; experiment_id: string; run_id: string; publish_version: number; at: number; by: string | null; parts_json: string };

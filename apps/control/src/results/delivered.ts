@@ -1,10 +1,9 @@
-import { sql } from "kysely";
-import { canonicalUrlMatch, expandAudiences, staticInputDigest, type StaticDeployHistoryEntry, type StaticGeneration, type Targeting } from "@wtt/core";
+import { sql, type Selectable } from "kysely";
+import { canonicalUrlMatch, DEPLOY_HISTORY_DAYS, expandAudiences, type StaticDeployHistoryEntry, type StaticGeneration, type Targeting } from "@wtt/core";
 import { DEFAULT_PLAN, type EvaluationPlan } from "@wtt/stats";
-import type { Db, ExperimentDeliveredDefinitionRow, ExperimentRow, SiteRow, StaticDeployRequestRow } from "../db";
+import type { Db, ExperimentDeliveredDefinitionRow, ExperimentRow, StaticDeployRequestRow } from "../db";
 import type { StoredChangeInput, StoredCompileInput } from "../publish";
 import { extractAssetIds } from "../asset-refs";
-import { siteToSettings } from "../site-settings";
 import type { WriteGuard } from "./guard";
 
 /**
@@ -192,32 +191,42 @@ export async function setDeliveredGeneration(db: Db, siteId: string, version: nu
     .execute();
 }
 
+/** 履歴の保持期間 + Cron の停止・再試行の余裕 1 日。 */
+export const DELIVERY_EVIDENCE_GRACE_MS = (DEPLOY_HISTORY_DAYS + 1) * 86_400_000;
+
 /**
- * 配信の確認がまだ要る行の条件(alias = experiment_delivered_definitions の別名)。confirmDeliveries が読む run と、
- * 15 分ごとの Cron が対象にする Site(sitesNeedingDeliveryConfirmation)は、この同じ条件で選ぶ。
- * - settled が NULL(まだ決めていない。partial で仮に確かめた行を含む)
- * - その run の最新の行が unknown(同じ定義の再公開は行を作らないので、後の世代がこの行に当たって delivered になりうる)。
- *   overtaken は後の行が確かめられたときだけ決めるので、最新の行にはならない
+ * 一覧・確認する run・本体の掃除の守りが共有する「配信の確認がまだ要る行」。
+ * 未確定の時刻のある行は、最新かどうか・期限に関係なく全部の履歴で確定するまで残す。
+ * L は「その run にまだ配信の証拠が来うる」条件。履歴の 7 日 + 余裕 1 日で終了した run を外し、
+ * 掃除の守りも同じく狭める(Q549)。一時停止は再開の配信に備え、期限を設けない。
  */
-export function needsDeliveryConfirmation(alias: string) {
+export function needsDeliveryConfirmation(alias: string, now: number) {
   const col = (c: string) => sql.ref(`${alias}.${c}`);
-  // A∨(B∧C) = (A∨B)∧(A∨C)。前半は部分索引 experiment_delivered_definitions_unsettled の WHERE と同じ形に保つ。
-  // 全体を括弧で囲む(not や or の中に置いても意味が変わらないように。括弧は索引の照合に影響しない)。
-  return sql<boolean>`((${col("settled")} is null or ${col("settled")} = 'unknown') and (${col("settled")} is null or ${col("publish_version")} = (select max(x.publish_version) from experiment_delivered_definitions x where x.run_id = ${col("run_id")})))`;
+  // 前半(A∨B)は部分索引の WHERE と同じ字面。全体も括弧で囲み、not / or に埋めても意味を保つ。
+  return sql<boolean>`(
+    (${col("settled")} is null or ${col("settled")} = 'unknown')
+    and (${col("settled")} is null or ${col("delivered_from")} is not null
+      or ${col("publish_version")} = (select max(x.publish_version) from experiment_delivered_definitions x where x.run_id = ${col("run_id")}))
+    and (${col("delivered_from")} is not null or exists (
+      select 1 from experiments e
+      where e.site_id = ${col("site_id")} and e.id = ${col("experiment_id")} and e.run_id = ${col("run_id")}
+        and (e.status in ('running', 'paused') or e.stopped_at >= ${now - DELIVERY_EVIDENCE_GRACE_MS})
+    ))
+  )`;
 }
 
 /**
  * 配信の確認がまだ要る行を持つ Site(15 分ごとの Cron の results-delivery の対象。confirmDeliveries が読む run と同じ条件)。
  * site_id の昇順。after より後だけ・limit 件まで(Cron の続きの位置)。削除の途中の Site(static_removing)は除く
  */
-export async function sitesNeedingDeliveryConfirmation(db: Db, opts: { after?: string | null; limit?: number } = {}): Promise<string[]> {
+export async function sitesNeedingDeliveryConfirmation(db: Db, opts: { now: number; after?: string | null; limit?: number }): Promise<string[]> {
   const after = opts.after ?? null;
   const rows = await db
     .selectFrom("experiment_delivered_definitions as u")
     .innerJoin("sites as s", "s.id", "u.site_id")
     .select("u.site_id")
     .distinct()
-    .where(needsDeliveryConfirmation("u"))
+    .where(needsDeliveryConfirmation("u", opts.now))
     .where("s.static_removing", "is", null)
     .$if(after !== null, (q) => q.where("u.site_id", ">", after!))
     .orderBy("u.site_id")
@@ -229,50 +238,9 @@ export async function sitesNeedingDeliveryConfirmation(db: Db, opts: { after?: s
 /** 配信の確認に渡す状態(デプロイ専用の Worker の siteStatus の history と historyFrom)。partial = Publish の応答の 1 点 */
 export type DeliveryStatus = { history: StaticDeployHistoryEntry[]; historyFrom: string | null; partial?: boolean };
 
-/**
- * 7o K24 (3): 更新前の依頼の記録(input_digest が NULL)の版から、配った入力の digest を作る関数(版ごとに覚える)。
- * 入力 = その版の config(publishes を 1 文)・今の D1 の行の設定(siteToSettings。digest の中で bootstrap に焼く部分だけを使う)・apiBase。
- * 版の config・行が無い、または digest を作れない(parse できない)なら null(照らし合わせられないので数えない)。
- * DO の値を記録に写すことはしない
- */
-function legacyDigestOf(db: Db, siteId: string, apiBase: string | null): (version: number) => Promise<string | null> {
-  const cache = new Map<number, Promise<string | null>>();
-  let site: Promise<SiteRow | undefined> | null = null;
-  const compute = async (version: number): Promise<string | null> => {
-    try {
-      site ??= db.selectFrom("sites").selectAll().where("id", "=", siteId).executeTakeFirst();
-      const row = await site;
-      const pub = await db.selectFrom("publishes").select("config_json").where("site_id", "=", siteId).where("version", "=", version).executeTakeFirst();
-      if (!row || !pub?.config_json) return null;
-      return await staticInputDigest({ config: JSON.parse(pub.config_json), settings: siteToSettings(row), apiBase });
-    } catch {
-      return null;
-    }
-  };
-  return (version) => {
-    let p = cache.get(version);
-    if (!p) cache.set(version, (p = compute(version)));
-    return p;
-  };
-}
-
-/**
- * 7o K24 (3): 履歴の 1 点を、同じ世代の依頼の記録(req)との組で版に引く。引けなければ null(その点は数えない)。
- * rowVersion = その世代を記録に持つ届く定義の行の版(digest の無い点で、記録が無いときだけ使う = 更新前の世代)
- */
-async function versionOfPoint(
-  h: StaticDeployHistoryEntry,
-  req: StaticDeployRequestRow | undefined,
-  rowVersion: number | undefined,
-  legacyDigest: (version: number) => Promise<string | null>,
-): Promise<number | null> {
-  if (h.digest !== undefined) {
-    if (!req) return null;
-    if (req.input_digest !== null) return req.input_digest === h.digest ? req.version : null;
-    return (await legacyDigest(req.version)) === h.digest ? req.version : null;
-  }
-  if (!req) return rowVersion ?? null;
-  return req.input_digest === null ? req.version : null;
+/** digest を持つ履歴の点と、同じ世代・同じ digest の依頼の記録だけを版に引く。 */
+function versionOfPoint(h: StaticDeployHistoryEntry, req: StaticDeployRequestRow | undefined): number | null {
+  return h.digest !== undefined && req?.input_digest != null && req.input_digest === h.digest ? req.version : null;
 }
 
 type Work = ExperimentDeliveredDefinitionRow & { id: number; nextFrom: number | null; nextSettled: ExperimentDeliveredDefinitionRow["settled"] };
@@ -281,11 +249,9 @@ type Work = ExperimentDeliveredDefinitionRow & { id: number; nextFrom: number | 
  * 配信を確かめる(K14)。戻り値 = delivered_from か settled を変えた行の数。
  * - 読むのは needsDeliveryConfirmation の行を持つ run だけ(確定した run は読まない。Cron の 1 回の読み取りを抑える)
  * - history の各点を、同じ世代の依頼の記録(static_deploy_requests)との組で版 v に引く(7o K24 (3)。世代の再利用で別の中身の配信を証拠にしない):
- *   - 点に digest がある: 記録の input_digest が同じときだけ記録の版。記録の input_digest が NULL(更新前に受け付けて更新後に配った)なら、
- *     その記録の版の config・今の D1 の行の設定・apiBase から入力の digest を作り、点と同じときだけ記録の版。違う・記録が無いなら飛ばす
- *     (行の世代からの補完は使わない)
- *   - 点に digest が無い(更新前に配った): 記録が無ければその世代を記録に持つ行の版(更新前の世代)。記録の input_digest が NULL なら記録の版、
- *     digest があれば飛ばす。どれでもなければ飛ばす
+ *   - 点と記録の両方に digest があり、一致するときだけ記録の版を使う。
+ *   - digest の無い点・記録は数えない(v0.11 からすべての依頼と配った点は digest を持つ。
+ *     v0.10 の deployer の古い点と削除の点は数えなくてよい)。
  * - 各 run で「publish_version <= v で最新の行」R の delivered_from を、R に当たる点の時刻の最小値にする(後の点で先に入れていても早い方へ直す。
  *   同じ定義の再公開では前の版の行が後の世代でも確かめられ、その後で前の世代の点が見つかることがあるため)。遅い方へは動かさない
  *   (UPDATE の CASE: 並行する確認が先に早い時刻を書いていたら、それを残す)
@@ -293,34 +259,39 @@ type Work = ExperimentDeliveredDefinitionRow & { id: number; nextFrom: number | 
  * - overtaken / unknown も history の全体と historyFrom を受けたときだけ決める(delivered_from が無い行だけに書く)
  * - delivered_until と テスト中の変更は、行を書いた後に D1 から読み直した delivered_from で作る(並行する確認の結果も含めて付け直す)
  * guard は wtt-control に書く各文の直前に呼ぶ(凍結中なら投げる。K24)。
- * apiBase = control が出し直しに渡す apiBase(edgeOrigin(env))。更新前の記録の digest を作るときだけ使う
  */
-export async function confirmDeliveries(db: Db, siteId: string, status: DeliveryStatus, now: number, guard: WriteGuard, apiBase: string | null): Promise<number> {
-  void now; // 時刻はデプロイの時刻(history)を使う。now は将来の検査(未来の時刻の除外など)のために受ける
+export async function confirmDeliveries(db: Db, siteId: string, status: DeliveryStatus, now: number, guard: WriteGuard): Promise<number> {
   const partial = status.partial === true;
-  const rows = await db
-    .selectFrom("experiment_delivered_definitions")
-    .selectAll()
-    .where("site_id", "=", siteId)
-    .where("run_id", "in", db.selectFrom("experiment_delivered_definitions as u").select("u.run_id").where("u.site_id", "=", siteId).where(needsDeliveryConfirmation("u")))
-    .orderBy("publish_version")
-    .orderBy("id")
-    .execute();
+  // CROSS JOIN は確認の要る run を先に回す結合順を保ち、確定済みの長い run の走査を避ける。
+  // +d.site_id はサイト境界を残しながら、サイト先頭の索引を候補から外す。
+  const rows = (await sql<Selectable<ExperimentDeliveredDefinitionRow>>`
+    select d.* from (
+      select distinct u.run_id from experiment_delivered_definitions u
+      where u.site_id = ${siteId} and ${needsDeliveryConfirmation("u", now)}
+    ) r cross join experiment_delivered_definitions d on d.run_id = r.run_id
+    where +d.site_id = ${siteId}
+    order by d.publish_version, d.id`.execute(db)).rows;
   if (rows.length === 0) return 0;
-  const reqs = await db.selectFrom("static_deploy_requests").selectAll().where("site_id", "=", siteId).execute();
-  const reqByGen = new Map(reqs.map((r) => [genKey(r), r]));
-  // 依頼の記録が無い世代でも、その世代を記録に持つ行があれば、その行の版を焼いた世代とわかる(publishSite は自分の版を焼いた世代だけを入れる)
-  const rowGenVersion = new Map<string, number>();
-  for (const r of rows) {
-    const g = parseGen(r.static_generation);
-    if (g) rowGenVersion.set(genKey(g), r.publish_version);
+  // 点と、その run の全行が持つ世代だけ引く。CROSS JOIN は入力の重複も返すため、Map で世代を重複排除する。
+  // JSON 1 個でバインド上限100を越えないようにする。
+  const generations = new Map<string, [number, number]>();
+  for (const h of status.history) generations.set(genKey(h.generation), [h.generation.epoch, h.generation.seq]);
+  for (const row of rows) {
+    const g = parseGen(row.static_generation);
+    if (g) generations.set(genKey(g), [g.epoch, g.seq]);
   }
-  const legacyDigest = legacyDigestOf(db, siteId, apiBase);
+  // CROSS JOIN は JSON を外側に固定し、必要な世代ごとに主キーを引かせる。空でも文を流し、往復数を保つ。
+  const reqs = (await sql<StaticDeployRequestRow>`
+    select r.* from json_each(${JSON.stringify([...generations.values()])}) j
+    cross join static_deploy_requests r
+      on r.site_id = ${siteId} and r.epoch = json_extract(j.value, '$[0]') and r.seq = json_extract(j.value, '$[1]')
+  `.execute(db)).rows;
+  const reqByGen = new Map(reqs.map((r) => [genKey(r), r]));
   const points: Array<{ version: number; at: number }> = [];
   for (const h of status.history) {
     const at = Date.parse(h.deployedAt);
     if (!Number.isFinite(at)) continue;
-    const version = await versionOfPoint(h, reqByGen.get(genKey(h.generation)), rowGenVersion.get(genKey(h.generation)), legacyDigest);
+    const version = versionOfPoint(h, reqByGen.get(genKey(h.generation)));
     if (version !== null) points.push({ version, at });
   }
   points.sort((a, b) => a.at - b.at || a.version - b.version);
