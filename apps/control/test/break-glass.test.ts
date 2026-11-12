@@ -143,7 +143,7 @@ describe("session login method (B112)", () => {
     const sessionsBefore = await env.DB.prepare(`select count(*) as n from session where "userId" = ?`).bind(pw.userId).first<{ n: number }>();
     const refused = await googleSignIn(pw.email);
     expect(refused.token).toBeNull();
-    expect(new URL(refused.location).searchParams.get("error")).toBe("account_not_linked");
+    expect(refused.error).toBe("account_not_linked");
     expect(await env.DB.prepare(`select count(*) as n from session where "userId" = ?`).bind(pw.userId).first<{ n: number }>()).toEqual(sessionsBefore);
   }, 20_000);
 });

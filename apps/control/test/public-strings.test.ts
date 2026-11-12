@@ -1,3 +1,4 @@
+import { loginFailurePage } from "../src/login-failure";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { publishBodyPruned } from "../src/errors";
@@ -12,6 +13,12 @@ const PRIVATE_REF = /決定 ?[0-9]+|spec ?§|spec R[0-9]|§ ?[0-9]|Plan ?[0-9]+|
 const noPrivateRef = (label: string, text: string) => expect(PRIVATE_REF.exec(text)?.[0], `${label} に非公開参照がある`).toBeUndefined();
 
 describe("public strings carry no private design references", () => {
+  it("login_failure_page", async () => {
+    for (const code of ["not_invited", "email_not_verified", "account_not_linked", "access_denied", "rate_limited", "google_not_configured", "oauth_failed"] as const) {
+      noPrivateRef(`login failure ${code}`, await loginFailurePage(code).text());
+    }
+  });
+
   it("openapi_json_and_llms_txt", async () => {
     noPrivateRef("/openapi.json", await (await call("GET", "/openapi.json")).text());
     noPrivateRef("/llms.txt", await (await call("GET", "/llms.txt")).text());

@@ -926,7 +926,6 @@ export async function googleCallback(
       headers: { cookie },
       ...(opts.envOverride ? { envOverride: opts.envOverride } : {}),
     });
-    expect(cb.status).toBe(302);
     return cb;
   } finally {
     spy.mockRestore();
@@ -945,21 +944,29 @@ export async function googleStart(next?: string): Promise<{ state: string; cooki
   };
 }
 
+/** callback の応答を消費せず、理由のコードを形から読む。 */
+export async function loginFailureOf(res: Response): Promise<string | null> {
+  if (res.headers.get("content-type")?.startsWith("text/html")) {
+    return /data-code="([a-z_]+)"/.exec(await res.clone().text())?.[1] ?? null;
+  }
+  return null;
+}
+
 /**
  * Google ログインを最後まで通す(start → callback → 使い捨てコードの交換)。
- * 成功なら Bearer に使えるセッショントークン、失敗なら token: null と admin の /login?error=… の location を返す
+ * 成功なら Bearer に使えるセッショントークン、失敗なら token: null と error を返す
  */
 export async function googleSignIn(
   email: string,
   opts: { next?: string; name?: string; sub?: string; emailVerified?: boolean } = {},
-): Promise<{ token: string | null; location: string }> {
+): Promise<{ token: string | null; location: string | null; error: string | null }> {
   const cb = await googleCallback(email, opts);
-  const location = cb.headers.get("location")!;
-  const code = new URL(location).searchParams.get("code");
-  if (!code) return { token: null, location };
+  const location = cb.headers.get("location");
+  const code = location ? new URL(location).searchParams.get("code") : null;
+  if (!code) return { token: null, location, error: await loginFailureOf(cb) };
   const exchanged = await call("POST", "/auth/handoff/exchange", { body: { code } });
   expect(exchanged.status).toBe(200);
-  return { token: (await json<{ token: string }>(exchanged)).token, location };
+  return { token: (await json<{ token: string }>(exchanged)).token, location, error: null };
 }
 
 /** B112: 非常口のパスワードで登録・ログインするテスト用の共通パスワード(break-glass 系のテストが共有する) */

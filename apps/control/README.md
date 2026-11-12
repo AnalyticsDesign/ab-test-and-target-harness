@@ -43,8 +43,8 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 | ルート | Role | 内容 |
 |---|---|---|
 | `POST /setup` | — | 初回セットアップ。システム管理者(最初のオーナー)と最初のワークスペースを作る(`x-setup-token`。user が 1 件でもあれば拒否)。パスワードは受け取らず、セッションも返さない |
-| `GET /auth/google/start` | — | Google ログインの入口。管理画面が開く top-level 遷移で、Google の認可画面へ 302 |
-| `GET /auth/callback/google` | — | Google からの戻り。成功なら使い捨てコードを付けて管理画面へ 302(control のオリジンにセッション Cookie を残さない) |
+| `GET /auth/google/start` | — | Google ログインの入口。管理画面が開く top-level 遷移で、Google の認可画面へ 302。flow が無い・形が違うときは control の失敗画面で止まる |
+| `GET /auth/callback/google` | — | Google からの戻り。成功なら使い捨てコードを付けて管理画面へ 302(control のオリジンにセッション Cookie を残さない)。失敗は control の上の画面で終え、管理画面の URL を返さない |
 | `POST /auth/handoff/exchange` | — | 使い捨てコードをセッショントークンに引き換える(管理画面のサーバー側が呼ぶ。1 分・1 回限り) |
 | `GET /login-options` | — | この導入で使えるログイン方法 `{ google, passwordLogin }`(ログイン画面は認証前なので `/capabilities` を読めない) |
 | `POST /break-glass/reset-link` | — | 非常時に OWNER のパスワード再設定リンクを発行(非常用トークン + OWNER のメール。条件を満たさない要求はすべて 404) |

@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { app } from "../src/index";
 import { getAuth } from "../src/auth";
-import { FLOW_RE, NEXT_RE, normalizeLoginError } from "../src/routes/oauth";
+import { FLOW_RE, NEXT_RE } from "../src/routes/oauth";
 import type { Env } from "../src/env";
 import {
   TEST_FLOW,
@@ -10,6 +10,7 @@ import {
   expectEnvelope,
   failingD1Insert,
   googleCallback,
+  loginFailureOf,
   googleSignIn,
   googleStart,
   inviteAndJoin,
@@ -48,20 +49,19 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
     expect(await count(`select count(*) as n from verification`)).toBe(before); // R15: state は Cookie
   });
 
-  it("start without a valid flow sends the browser back to admin to mint one, keeping a safe next", async () => {
-    for (const q of ["", "?flow=short", "?flow=has%20space-0123456789"]) {
+  it("start without a valid flow ends on the control failure page", async () => {
+    for (const q of ["", "?flow=short", "?flow=has%20space-0123456789", "?next=/invite/abc"]) {
       const res = await call("GET", `/auth/google/start${q}`);
-      expect(res.status).toBe(302);
-      expect(res.headers.get("location")).toBe(`${ADMIN}/api/session/google`);
+      expect(res.status).toBe(400);
+      expect(res.headers.get("location")).toBeNull();
+      expect(await loginFailureOf(res)).toBe("oauth_failed");
     }
-    const kept = await call("GET", "/auth/google/start?next=/invite/abc");
-    expect(kept.headers.get("location")).toBe(`${ADMIN}/api/session/google?next=%2Finvite%2Fabc`);
   });
 
   it("an existing user that never used Google is linked by verified email and gets a session", async () => {
     const email = await unlinkedOwner();
     const { token, location } = await googleSignIn(email);
-    const back = new URL(location);
+    const back = new URL(location!);
     expect(back.origin + back.pathname).toBe(`${ADMIN}/api/session/oauth`);
     expect(back.searchParams.get("flow")).toBe(TEST_FLOW);
     expect(token).toBeTruthy();
@@ -124,29 +124,27 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
     const email = uniqueEmail("invited");
     const inv = await json<{ id: string }>(await call("POST", `/workspaces/${owner.workspaceId}/invitations`, { token: owner.token, body: { email, role: "editor" } }));
     const { token, location } = await googleSignIn(email, { next: `/invite/${inv.id}` });
-    expect(new URL(location).searchParams.get("next")).toBe(`/invite/${inv.id}`);
+    expect(new URL(location!).searchParams.get("next")).toBe(`/invite/${inv.id}`);
     expect(token).toBeTruthy();
     expect((await call("POST", `/invitations/${inv.id}/accept`, { token: token! })).status).toBe(200);
   });
 
-  it("a Google account that is neither a user nor invited is sent back to /login with an error and no user row", async () => {
+  it("a Google account that is neither a user nor invited is refused on the control failure page with no user row", async () => {
     await setupOwner();
     const email = uniqueEmail("stranger");
-    const { token, location } = await googleSignIn(email);
+    const { token, error } = await googleSignIn(email);
     expect(token).toBeNull();
-    const back = new URL(location);
-    expect(back.origin + back.pathname).toBe(`${ADMIN}/login`);
     // auth.ts のフックが投げる APIError の message が error= に載る(1.4.21 は Better Auth の link-account の catch が 302 に、
     // 1.7 は 403 の封筒で上がり、callback の deniedCode が同じ code にする。B179 D14)
-    expect(back.searchParams.get("error")).toBe("not_invited");
+    expect(error).toBe("not_invited");
     expect(await count(`select count(*) as n from "user" where email = ?`, email)).toBe(0);
   });
 
   it("an unverified Google email cannot be linked to an existing user", async () => {
     const email = await unlinkedOwner();
-    const { token, location } = await googleSignIn(email, { emailVerified: false });
+    const { token, error } = await googleSignIn(email, { emailVerified: false });
     expect(token).toBeNull();
-    expect(new URL(location).pathname).toBe("/login");
+    expect(error).toBe("account_not_linked");
     expect(await count(`select count(*) as n from account where providerId = 'google'`)).toBe(0);
   });
 
@@ -191,13 +189,14 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
   it("next is dropped unless it is /invite/<id>", async () => {
     const email = await unlinkedOwner();
     const { location } = await googleSignIn(email, { next: "https://evil.example/" });
-    expect(new URL(location).searchParams.get("next")).toBeNull();
+    expect(new URL(location!).searchParams.get("next")).toBeNull();
   });
 
-  it("a callback without state lands on /login?error=oauth_failed instead of a silent page", async () => {
+  it("a callback without state ends on the control failure page", async () => {
     const res = await call("GET", "/auth/callback/google?code=x");
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe(`${ADMIN}/login?error=oauth_failed`);
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+    expect(await loginFailureOf(res)).toBe("oauth_failed");
   });
 
   it("start binds the state to this browser, and the callback refuses a state that is not the one it issued", async () => {
@@ -214,8 +213,9 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
       ["Cookie がまったく無い", { q: state, cookie: "" }],
     ] as const) {
       const res = await call("GET", `/auth/callback/google?code=test-code&state=${encodeURIComponent(req.q)}`, { headers: { cookie: req.cookie } });
-      expect(res.status, name).toBe(302);
-      expect(res.headers.get("location"), name).toBe(`${ADMIN}/login?error=oauth_failed`);
+      expect(res.status, name).toBe(400);
+      expect(res.headers.get("location"), name).toBeNull();
+      expect(await loginFailureOf(res), name).toBe("oauth_failed");
       expect(res.headers.get("set-auth-token"), name).toBeNull();
     }
     // 使い捨てコードは 1 件も発行されない
@@ -232,15 +232,16 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
     expect(expired[0]).toMatch(/httponly/i);
   });
 
-  it("a hand-off code that cannot be issued sends the user to the login screen, not a JSON envelope", async () => {
+  it("a hand-off code that cannot be issued returns the control failure HTML", async () => {
     const email = await unlinkedOwner();
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       // helpers: verification への insert だけ throw する D1 ラッパ(使い捨てコードの保存先)
       const cb = await googleCallback(email, { envOverride: { DB: failingD1Insert(db(), "verification") } });
-      expect(cb.status).toBe(302);
-      expect(cb.headers.get("location")).toBe(`${ADMIN}/login?error=oauth_failed`);
-      expect(cb.headers.get("content-type")).toBeNull();
+      expect(cb.status).toBe(500);
+      expect(cb.headers.get("location")).toBeNull();
+      expect(await loginFailureOf(cb)).toBe("oauth_failed");
+      expect(cb.headers.get("content-type")).toBe("text/html; charset=utf-8");
       expect(err).toHaveBeenCalled();
     } finally {
       err.mockRestore();
@@ -280,25 +281,23 @@ describe("Google sign-in and the hand-off to admin (決定 46)", () => {
   it("start answers 503 google_not_configured when the client is not set", async () => {
     const res = await call("GET", `/auth/google/start?flow=${TEST_FLOW}`, { envOverride: { AB_GOOGLE_CLIENT_ID: "" } });
     expect(res.status).toBe(503);
-    expect((await expectEnvelope(res)).error).toBe("google_not_configured");
+    expect(await loginFailureOf(res)).toBe("google_not_configured");
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
   });
 });
 
 describe("Google sign-in failure codes on better-auth 1.7 (B179 D14)", () => {
-  /** callback の 302 の先が `${ADMIN}/login?error=<code>` だけ(error_description・code が付かない)であることを見て、code を返す */
+  /** Better Auth の 302・封筒のどちらの失敗も、control の画面で理由だけを返す。 */
   const loginErrorOf = async (email: string, opts: { emailVerified?: boolean } = {}): Promise<string | null> => {
     const cb = await googleCallback(email, opts);
     expect(cb.headers.get("set-auth-token")).toBeNull();
-    const back = new URL(cb.headers.get("location")!);
-    expect(back.origin + back.pathname).toBe(`${ADMIN}/login`);
-    expect([...back.searchParams.keys()]).toEqual(["error"]);
-    return back.searchParams.get("error");
+    expect(cb.headers.get("location")).toBeNull();
+    expect(await cb.clone().text()).not.toContain("error_description");
+    return loginFailureOf(cb);
   };
 
   it("oauth_error_codes_stay_lowercase_b179", async () => {
-    // 管理画面に渡る code が 1.4.21 と同じで、error_description(Better Auth の内部の文言)が付かないこと。1.7.15 では、
-    // フックの APIError(code なし)は 403 の封筒で上がって deniedCode が、Better Auth 自身の失敗(account_not_linked)は 302 で来て
-    // normalizeLoginError がそろえる。どちらの形でも先の URL は同じ
+    // Better Auth の封筒・302 のどちらも control の同じ画面にそろえる。内部の error_description は出さない
     const owner = await setupOwner();
     // 1. 招待の無い新しい人(user.create.before)
     expect(await loginErrorOf(uniqueEmail("stranger"))).toBe("not_invited");
@@ -315,12 +314,15 @@ describe("Google sign-in failure codes on better-auth 1.7 (B179 D14)", () => {
     expect(await loginErrorOf(pw.email)).toBe("account_not_linked");
   }, 30_000);
 
-  it("normalizeLoginError only rewrites the admin login page", () => {
-    expect(normalizeLoginError(`${ADMIN}/login?error=NOT_INVITED&error_description=not_invited`, ADMIN)).toBe(`${ADMIN}/login?error=not_invited`);
-    expect(normalizeLoginError(`${ADMIN}/login?error=account_not_linked`, ADMIN)).toBe(`${ADMIN}/login?error=account_not_linked`);
-    // ログイン画面以外(成功の戻り先・別のオリジン)と URL でない値は触らない
-    expect(normalizeLoginError(`${ADMIN}/api/session/oauth?error=X&error_description=y`, ADMIN)).toBe(`${ADMIN}/api/session/oauth?error=X&error_description=y`);
-    expect(normalizeLoginError("https://evil.example/login?error=X", ADMIN)).toBe("https://evil.example/login?error=X");
-    expect(normalizeLoginError("not a url", ADMIN)).toBe("not a url");
+
+});
+
+// B231: failure helper は callback の応答を消費せず、形から理由を読む。
+describe("loginFailureOf", () => {
+  it("reads a failure page without consuming its body", async () => {
+    const page = new Response('<main data-code="account_not_linked">failure</main>', { status: 403, headers: { "content-type": "text/html; charset=utf-8" } });
+    expect(await loginFailureOf(page)).toBe("account_not_linked");
+    expect(await page.text()).toContain("failure");
+    expect(await loginFailureOf(Response.json({ error: "other" }))).toBeNull();
   });
 });

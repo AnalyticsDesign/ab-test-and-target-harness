@@ -5,6 +5,7 @@ import type { AppEnv } from "../app";
 import { googleConfigured } from "../auth";
 import { ApiError, validationFailed } from "../errors";
 import { issueHandoff, redeemHandoff } from "../handoff";
+import { isServerFaultCode, loginFailureCode, loginFailurePage, type LoginFailureCode } from "../login-failure";
 import { errorResponses } from "../openapi";
 
 /** ログイン後の戻り先として受けるのは招待ページだけ(open redirect を作らない)。admin の lib/safe-next.ts と同じ式(両側の literal をテストで固定。B21) */
@@ -40,49 +41,19 @@ const stateCookie = (value: string, maxAge: number, https: boolean) =>
 
 const isHttps = (url: string) => new URL(url).protocol === "https:";
 
-/** 封筒の理由のうち、ログイン画面に出す code(auth.ts の databaseHooks が投げる APIError の message)。それ以外は oauth_failed */
-const DENIED_CODES = new Set(["not_invited", "email_not_verified"]);
-
-/**
- * Better Auth が 302 ではなく封筒を返したときの理由(`/login?error=…` に載せる値)。
- * 1.4.21 では、**セッション作成**が断られた場合(既に user 行がある人が Member でも被招待者でもなくなった = auth.ts の session フック)だけが
- * endpoint の外まで APIError が上がって 403 の封筒になり、新しい user の作成が断られた場合は `?error=<message>` の 302 で戻っていた。
- * B179(D14): 1.7.15 の callback(`api/routes/callback.mjs`)は、APIError の `body.code` があるときだけ 302 に直し、無ければ投げ直す。
- * auth.ts のフックの APIError は message だけなので、user の作成(not_invited・email_not_verified)もセッションの作成(not_invited)も
- * 403 の封筒になる。ここで message を見て、管理画面に渡る code を 1.4.21 と同じにする(知らない理由は oauth_failed)
- */
-async function deniedCode(res: Response): Promise<string> {
+/** Better Auth の封筒は認可を断った 403 の理由だけを使う。内部のメッセージは画面へ渡さない。 */
+async function deniedCode(res: Response): Promise<LoginFailureCode> {
   if (res.status !== 403) return "oauth_failed";
   const body = (await res.json().catch(() => null)) as { message?: unknown; code?: unknown } | null;
-  for (const v of [body?.message, body?.code]) {
-    const code = typeof v === "string" ? v.toLowerCase() : "";
-    if (DENIED_CODES.has(code)) return code;
+  for (const raw of [body?.message, body?.code]) {
+    const code = loginFailureCode(typeof raw === "string" ? raw : null);
+    if (code === "not_invited" || code === "email_not_verified") return code;
   }
   return "oauth_failed";
 }
 
-/**
- * B179(D14): Better Auth の失敗の戻り先(`${AB_ADMIN_URL}/login?error=…`)の code を、管理画面が知っている形にそろえる。
- * 1.7 は `body.code` を持つ APIError を `error=<code>`(`NOT_INVITED` のような大文字のことがある)、`message` を `error_description` に載せて戻す
- * (1.4.21 は `message` を `error=` に載せていた)。今の control のフックは code を持たない APIError を投げるので封筒で来る(上の deniedCode)が、
- * code を持つ形に変わっても管理画面に渡る値が変わらないよう、ここで小文字にそろえる。
- * 小文字にするだけで今の code(`not_invited`・`email_not_verified`・`account_not_linked`・`access_denied`)と同じになるので、対応表は持たない。
- * `error_description` は画面で使わず、Better Auth の内部の文言を管理画面の URL に出さないため落とす。ログイン画面以外の戻り先は触らない
- */
-export function normalizeLoginError(location: string, adminUrl: string): string {
-  let target: URL;
-  try {
-    target = new URL(location);
-  } catch {
-    return location;
-  }
-  const login = new URL("/login", adminUrl);
-  if (target.origin !== login.origin || target.pathname !== login.pathname) return location;
-  const error = target.searchParams.get("error");
-  if (error !== null) target.searchParams.set("error", error.toLowerCase());
-  target.searchParams.delete("error_description");
-  return target.toString();
-}
+/** ブラウザで開く失敗の応答は JSON ではなく固定の HTML。 */
+const failureHtml = { description: "ログインできませんでした(理由と、やり直し方を画面に出す)", content: { "text/html": { schema: { type: "string" as const } } } };
 
 /** 送られてきた Cookie ヘッダから 1 つ取り出す(Hono の getCookie を使わず、この 1 つだけを見る) */
 const readStateCookie = (header: string | undefined): string | null => {
@@ -103,108 +74,102 @@ oauthRoutes.get(
     tags: ["auth"],
     summary: "Google ログインを始める(管理画面から開く。Google の認可画面へ 302)",
     description:
-      "クエリ `flow` は管理画面が発行した値で、ログイン後にそのまま管理画面へ返す(無い・形が違うときは管理画面へ戻して作り直す)。`next` は招待ページ(`/invite/<id>`)だけを受け、ログイン後の戻り先になる。それ以外の値は無視する",
+      "クエリ `flow` は管理画面が発行した値で、ログイン後にそのまま管理画面へ返す。無い・形が違うときは control の上の「ログインできませんでした」の画面(400)で止まる。`next` は招待ページ(`/invite/<id>`)だけを受け、ログイン後の戻り先になる。それ以外の値は無視する",
     security: [],
-    responses: { 302: { description: "Google の認可画面へ(flow が無ければ管理画面へ)" }, ...errorResponses(429, 503) },
+    responses: { 302: { description: "Google の認可画面へ" }, 400: failureHtml, 429: failureHtml, 500: failureHtml, 503: failureHtml },
   }),
   async (c) => {
     const rawNext = c.req.query("next");
     const next = rawNext && NEXT_RE.test(rawNext) ? rawNext : null;
     const flow = c.req.query("flow");
-    if (!flow || !FLOW_RE.test(flow)) {
-      // control を直接開いた場合。flow は admin の Cookie と対なので、admin に作り直させる
-      const mint = new URL("/api/session/google", c.env.AB_ADMIN_URL);
-      if (next) mint.searchParams.set("next", next);
-      return new Response(null, { status: 302, headers: { location: mint.toString(), "cache-control": "no-store" } });
-    }
-    if (!googleConfigured(c.env)) {
-      throw new ApiError(503, "google_not_configured", { hint: "control に Google の OAuth クライアント(ID と secret)を設定して再デプロイしてください" });
-    }
+    if (!flow || !FLOW_RE.test(flow)) return loginFailurePage("oauth_failed");
+    if (!googleConfigured(c.env)) return loginFailurePage("google_not_configured");
     const back = new URL("/api/session/oauth", c.env.AB_ADMIN_URL);
     back.searchParams.set("flow", flow);
     if (next) back.searchParams.set("next", next);
-    const { headers, response } = await c.get("auth").api.signInSocial({
-      body: {
-        provider: "google",
-        callbackURL: back.toString(),
-        errorCallbackURL: new URL("/login", c.env.AB_ADMIN_URL).toString(),
-        disableRedirect: true,
-      },
-      returnHeaders: true,
-    });
-    if (!response.url) throw new ApiError(503, "google_not_configured", { detail: "signInSocial returned no url" });
-    const out = new Headers({ location: response.url, "cache-control": "no-store" });
-    for (const v of headers.getSetCookie()) out.append("set-cookie", v);
-    const state = new URL(response.url).searchParams.get("state");
-    if (!state) throw new ApiError(503, "google_not_configured", { detail: "signInSocial returned no state" });
-    out.append("set-cookie", stateCookie(await sha256Hex(state), STATE_TTL_SEC, isHttps(c.req.url)));
-    return new Response(null, { status: 302, headers: out });
+    try {
+      const { headers, response } = await c.get("auth").api.signInSocial({
+        body: { provider: "google", callbackURL: back.toString(), disableRedirect: true },
+        returnHeaders: true,
+      });
+      if (!response.url) return loginFailurePage("google_not_configured");
+      const state = new URL(response.url).searchParams.get("state");
+      if (!state) return loginFailurePage("google_not_configured");
+      const out = new Headers({ location: response.url, "cache-control": "no-store" });
+      for (const v of headers.getSetCookie()) out.append("set-cookie", v);
+      out.append("set-cookie", stateCookie(await sha256Hex(state), STATE_TTL_SEC, isHttps(c.req.url)));
+      return new Response(null, { status: 302, headers: out });
+    } catch (e) {
+      console.error("oauth start: failed to start Google sign-in", e);
+      return loginFailurePage("oauth_failed", { status: 500 });
+    }
   },
 );
 
 /**
  * Google からの戻り。Better Auth の handler に処理させ、成功(`set-auth-token` 付きの 302)なら
  * セッション Cookie を捨てて使い捨てコードを発行し、admin の BFF へ渡す。control のオリジンにセッション Cookie を残さない。
- * 失敗の 302(`${AB_ADMIN_URL}/login?error=…`)は code を小文字にそろえて返す(normalizeLoginError)
+ * 失敗は Better Auth の戻り先を渡さず、control の固定の画面で終える(B231)
  */
 oauthRoutes.get(
   "/auth/callback/google",
   describeRoute({
     tags: ["auth"],
-    summary: "Google ログインの戻り先(Google がブラウザをここへ戻す。管理画面へ 302)",
+    summary: "Google ログインの戻り先(Google がブラウザをここへ戻す。成功なら管理画面へ 302)",
     security: [],
-    responses: { 302: { description: "管理画面へ(成功なら使い捨てコード付き、失敗なら /login?error=…)" }, ...errorResponses(429) },
+    responses: { 302: { description: "管理画面へ(使い捨てコード付き)" }, ...Object.fromEntries([400, 403, 429, 500].map(status => [status, { ...failureHtml, description: "ログインできませんでした(理由のコードを画面に出す。管理画面へは戻さない)" }])) },
   }),
   async (c) => {
     const auth = c.get("auth");
-    const loginError = (code: string) => {
-      const u = new URL("/login", c.env.AB_ADMIN_URL);
-      u.searchParams.set("error", code);
-      return u.toString();
-    };
     const out = new Headers({ "cache-control": "no-store", "referrer-policy": "no-referrer" });
-    // 結びつけ用の Cookie はこの応答で必ず失効させる(成功でも失敗でも 1 回限り)
+    // 成功でも失敗でも、ブラウザと state の結びつけは 1 回限り。
     out.append("set-cookie", stateCookie("", 0, isHttps(c.req.url)));
-    const redirect = (location: string) => {
-      out.set("location", location);
-      return new Response(null, { status: 302, headers: out });
-    };
-    // state が無いとき、1.4.21 の Better Auth は `?state=state_not_found`(error= ではない)で戻すので画面が無言になった。1.7.15 は
-    // `?error=state_not_found`(api/routes/callback.mjs)で戻すが、管理画面が知らない code なので、どちらにしても先に捕まえて oauth_failed にそろえる
+    const fail = (code: LoginFailureCode, status?: 400 | 403 | 429 | 500 | 503) => loginFailurePage(code, { status, headers: out });
     const state = c.req.query("state");
-    if (!state) return redirect(loginError("oauth_failed"));
-    // start が出した state と同じか(1.4.21 の Better Auth はこの構成では照合しなかった。1.7.15 は照合するが二重にしておく。上の STATE_COOKIE のコメント)。
-    // Better Auth に渡す前に断つので、攻撃者の code が交換されることもない
+    if (!state) return fail("oauth_failed");
     const bound = readStateCookie(c.req.header("cookie"));
-    if (!bound || bound !== (await sha256Hex(state))) return redirect(loginError("oauth_failed"));
-    const res = await auth.handler(c.req.raw);
-    // 失効させる Cookie(state)だけ通す。セッション Cookie は control のオリジンに置かない
-    for (const v of res.headers.getSetCookie()) if (/max-age=0/i.test(v)) out.append("set-cookie", v);
-    const sessionToken = res.headers.get("set-auth-token");
-    const location = res.headers.get("location");
-    if (res.status !== 302 || !location) return redirect(loginError(await deniedCode(res)));
-    const expected = new URL("/api/session/oauth", c.env.AB_ADMIN_URL);
-    const target = new URL(location);
-    const isSuccessTarget = target.origin === expected.origin && target.pathname === expected.pathname;
-    if (!sessionToken) {
-      // 成功の戻り先なのにセッショントークンが無い = bearer の after hook が効いていない(前提 B の崩れ)。原因をログに残す
-      if (isSuccessTarget) {
-        console.error("oauth callback: success redirect without set-auth-token");
-        return redirect(loginError("oauth_failed"));
-      }
-      return redirect(normalizeLoginError(location, c.env.AB_ADMIN_URL)); // Better Auth が組んだ失敗の戻り先(errorCallbackURL か onAPIError.errorURL)
-    }
-    if (!isSuccessTarget) return redirect(loginError("oauth_failed"));
-    // 発行に失敗しても control のオリジンに JSON の封筒を出さない(利用者はログイン画面に戻す)
-    let code: string;
+    // 不正な state は Better Auth と D1 に届く前に断る。
+    if (!bound || bound !== (await sha256Hex(state))) return fail("oauth_failed");
     try {
-      code = await issueHandoff(c.get("db"), sessionToken);
+      const res = await auth.handler(c.req.raw);
+      // 失効だけを通し、control のオリジンにセッション Cookie を残さない。
+      for (const v of res.headers.getSetCookie()) if (/max-age=0/i.test(v)) out.append("set-cookie", v);
+      const sessionToken = res.headers.get("set-auth-token");
+      const location = res.headers.get("location");
+      if (res.status >= 500) {
+        console.error("oauth callback: Better Auth returned a server error", res.status);
+        return fail("oauth_failed", 500);
+      }
+      if (res.status !== 302 || !location) return fail(await deniedCode(res));
+      let target: URL;
+      try {
+        target = new URL(location);
+      } catch {
+        return fail("oauth_failed");
+      }
+      const expected = new URL("/api/session/oauth", c.env.AB_ADMIN_URL);
+      const isSuccessTarget = target.origin === expected.origin && target.pathname === expected.pathname;
+      if (sessionToken && isSuccessTarget) {
+        const code = await issueHandoff(c.get("db"), sessionToken);
+        target.searchParams.set("code", code);
+        // 管理画面へ Location を返せる唯一の枝。認証と利用資格が通り、使い捨てコードを出せたときだけ。
+        out.set("location", target.toString());
+        return new Response(null, { status: 302, headers: out });
+      }
+      if (sessionToken || isSuccessTarget) {
+        console.error("oauth callback: inconsistent success response");
+        return fail("oauth_failed", 500);
+      }
+      const raw = target.searchParams.get("error");
+      if (isServerFaultCode(raw)) {
+        console.error("oauth callback: Better Auth reported an internal fault", raw);
+        return fail("oauth_failed", 500);
+      }
+      return fail(loginFailureCode(raw));
     } catch (e) {
-      console.error("oauth callback: failed to issue the hand-off code", e);
-      return redirect(loginError("oauth_failed"));
+      console.error("oauth callback: failed to complete Google sign-in", e);
+      return fail("oauth_failed", 500);
     }
-    target.searchParams.set("code", code);
-    return redirect(target.toString());
   },
 );
 

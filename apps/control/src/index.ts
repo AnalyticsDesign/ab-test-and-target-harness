@@ -3,6 +3,7 @@ import { CRON_JOBS } from "./cron/jobs";
 import { runCron } from "./cron/runner";
 import type { Env } from "./env";
 import { app } from "./app-routes";
+import { markFromBff } from "./bff-entry";
 import { stripTrustedHeaders } from "./trusted-headers";
 
 // ルートの登録は app-routes.ts(Node のスクリプトが読めるよう cloudflare:workers に依存させない。plan12 K7)。
@@ -18,7 +19,8 @@ export { app };
  */
 export class ControlBff extends WorkerEntrypoint<Env> {
   fetch(req: Request): Promise<Response> {
-    return Promise.resolve(app.fetch(req, this.env, this.ctx));
+    // Q528: 管理画面のログアウトの sign-out をレート制限で数えないための印(app.ts)。ヘッダーではないので公開の入口からは付けられない
+    return Promise.resolve(app.fetch(markFromBff(req), this.env, this.ctx));
   }
 }
 

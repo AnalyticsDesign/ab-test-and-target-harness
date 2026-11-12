@@ -44,7 +44,7 @@ const { POST: setup } = await import("@/app/api/session/setup/route");
 const { POST: acceptInvite } = await import("@/app/api/session/accept-invite/route");
 const { GET: googleStart } = await import("@/app/api/session/google/route");
 const { GET: oauth } = await import("@/app/api/session/oauth/route");
-const { oauthErrorMessage } = await import("@/lib/oauth-errors");
+const { NOT_INVITED } = await import("@/lib/oauth-errors");
 const { controlFetch } = await import("@/lib/control");
 
 const CONTROL = "http://control.test"; // vitest.config.ts の test.env.AB_CONTROL_URL
@@ -397,7 +397,7 @@ describe("POST /api/session/login", () => {
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: string; message: string };
     expect(body.error).toBe("not_invited");
-    expect(body.message).toBe(oauthErrorMessage("not_invited"));
+    expect(body.message).toBe(NOT_INVITED);
     expect(jar.set).not.toHaveBeenCalled();
   });
 

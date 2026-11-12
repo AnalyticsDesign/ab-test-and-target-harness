@@ -96,13 +96,9 @@ describe("better-auth behaviours the upgrade must keep (B128, B179)", () => {
     expect((await googleAccounts())?.n).toBe(0);
     const sessionsBefore = (await sessions())?.n;
 
-    const { token, location } = await googleSignIn(pw.email);
+    const { token, error } = await googleSignIn(pw.email);
     expect(token).toBeNull();
-    const back = new URL(location);
-    expect(`${back.origin}${back.pathname}`).toBe("http://localhost:3000/login"); // wrangler.jsonc の AB_ADMIN_URL
-    expect(back.searchParams.get("error")).toBe("account_not_linked");
-    expect(back.searchParams.has("code")).toBe(false);
-    expect(back.searchParams.has("error_description")).toBe(false);
+    expect(error).toBe("account_not_linked");
     expect((await googleAccounts())?.n).toBe(0); // 結びつかない
     expect((await sessions())?.n).toBe(sessionsBefore); // セッションは増えない
     expect(await env.DB.prepare(`select count(*) as n from "user" where lower(email) = lower(?)`).bind(pw.email).first<{ n: number }>()).toEqual({ n: 1 }); // 新しい user も作られない
@@ -190,7 +186,7 @@ describe("better-auth behaviours the upgrade must keep (B128, B179)", () => {
     const stranger = uniqueEmail("stranger");
     const refused = await googleSignIn(stranger);
     expect(refused.token).toBeNull();
-    expect(new URL(refused.location).searchParams.get("error")).toBe("not_invited");
+    expect(refused.error).toBe("not_invited");
     const invited = await inviteAndJoin(owner.token, owner.workspaceId, "viewer");
     // セッションの印: Google = /callback/google、パスワード = /sign-up/email・/sign-in/email
     const methodOf = async (bearer: string) =>

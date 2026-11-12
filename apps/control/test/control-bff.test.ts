@@ -3,10 +3,10 @@ import { env } from "cloudflare:workers";
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { CLIENT_IP_HEADER, CLIENT_VERSION_HEADER } from "@wtt/core";
-import worker, { ControlBff } from "../src/index";
+import worker, { app, ControlBff } from "../src/index";
 import { stripTrustedHeaders } from "../src/trusted-headers";
 import type { Env } from "../src/env";
-import { json, testEnv } from "./helpers";
+import { call, json, setupOwner, testEnv } from "./helpers";
 
 /**
  * 記録する偽の limiter。AUTH_RATE_LIMITER に渡った `key` を並べる(回数には頼らない。常に通す)。
@@ -94,5 +94,61 @@ describe("public entry and ControlBff (plan12 K8)", () => {
     const res = await viaBff(post({}, "/workspaces", { name: "x" }), testEnv);
     expect(res.status).toBe(503);
     expect((await json(res)).error).toBe("write_frozen");
+  });
+});
+
+/** すべて断り、渡った鍵を並べる limiter(枠を使い切った状態) */
+function denyingLimiter() {
+  const keys: string[] = [];
+  const limiter = { limit: async ({ key }: { key: string }) => (keys.push(key), { success: false }) } as unknown as Env["AUTH_RATE_LIMITER"];
+  return { keys, env: { ...testEnv, AUTH_RATE_LIMITER: limiter } as Env };
+}
+const signOut = (headers: Record<string, string>, path = "/auth/sign-out") =>
+  post({ "content-type": "application/json", ...headers }, path, {});
+
+describe("sign-out is counted only on the public entry (Q528)", () => {
+  it("ControlBff sign-out is not counted and revokes the session even when the limit is used up", async () => {
+    const owner = await setupOwner();
+    const rec = denyingLimiter();
+    const res = await viaBff(signOut({ authorization: `Bearer ${owner.token}`, origin: testEnv.AB_ADMIN_URL, [CLIENT_IP_HEADER]: "203.0.113.20" }), rec.env);
+    expect(res.status).toBe(200);
+    expect(rec.keys).toEqual([]);
+    // 失効したので、同じトークンではもう入れない
+    expect((await call("GET", "/me", { token: owner.token })).status).toBe(401);
+  });
+
+  it("ControlBff still counts the other unauthenticated routes", async () => {
+    const rec = denyingLimiter();
+    const res = await viaBff(post({ [CLIENT_IP_HEADER]: "203.0.113.21" }, "/auth/sign-in/email", { email: "x@example.com", password: "x" }), rec.env);
+    expect(res.status).toBe(429);
+    expect(rec.keys).toEqual(["/auth/sign-in/email:203.0.113.21"]);
+  });
+
+  it("the public entry counts sign-out whatever headers the sender adds", async () => {
+    // binding 経由の見分けはヘッダーではないので、外から何を足しても公開の入口の sign-out は数える
+    const forged: Record<string, string>[] = [
+      {},
+      { [CLIENT_IP_HEADER]: "203.0.113.22" },
+      { "x-wtt-via-bff": "1", "x-wtt-bff": "1", "cf-worker": "admin.example", "x-forwarded-for": "127.0.0.1" },
+      { origin: testEnv.AB_ADMIN_URL, "sec-fetch-site": "same-origin", "x-wtt-client-version": "7" },
+    ];
+    for (const headers of forged) {
+      const rec = denyingLimiter();
+      const res = await viaPublic(signOut({ "cf-connecting-ip": "198.19.0.9", ...headers }), rec.env);
+      expect(res.status, JSON.stringify(headers)).toBe(429);
+      expect(rec.keys, JSON.stringify(headers)).toEqual(["/auth/sign-out:198.19.0.9"]);
+    }
+    // エンコードした別名も同じ枠
+    const rec = denyingLimiter();
+    expect((await viaPublic(signOut({ "cf-connecting-ip": "198.19.0.9" }, "/auth/sign-%6fut"), rec.env)).status).toBe(429);
+  });
+
+  it("a sign-out handed to the app directly (not through ControlBff) is counted", async () => {
+    const rec = denyingLimiter();
+    const ctx = createExecutionContext();
+    const res = await app.fetch(signOut({ [CLIENT_IP_HEADER]: "203.0.113.23" }), rec.env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(429);
+    expect(rec.keys).toEqual(["/auth/sign-out:203.0.113.23"]);
   });
 });

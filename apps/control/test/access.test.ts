@@ -42,7 +42,7 @@ describe("who may hold a session (B20)", () => {
     expect((await call("GET", "/me", { token: token! })).status).toBe(401);
     const retry = await googleSignIn(email);
     expect(retry.token).toBeNull();
-    expect(new URL(retry.location).searchParams.get("error")).toBe("not_invited");
+    expect(retry.error).toBe("not_invited");
   });
 
   it("cuts the session of a removed member and refuses the next sign-in, by Google or by password", async () => {
@@ -59,7 +59,7 @@ describe("who may hold a session (B20)", () => {
     expect((await call("GET", "/me", { token: ed.token })).status).toBe(401);
     const retry = await googleSignIn(ed.email);
     expect(retry.token).toBeNull();
-    expect(new URL(retry.location).searchParams.get("error")).toBe("not_invited");
+    expect(retry.error).toBe("not_invited");
     // 非常用のパスワード経路も断たれる(管理画面のフォームはこの応答をエラーとして出す)
     const signin = await call("POST", "/auth/sign-in/email", { body: { email: ed.email, password: "password123" }, envOverride: BREAK_GLASS });
     expect(signin.status).toBe(403);

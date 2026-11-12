@@ -3,7 +3,9 @@ import { createMiddleware } from "hono/factory";
 import { API_CONTRACT_VERSION, API_VERSION_HEADER, CLIENT_IP_HEADER, MIN_CLIENT_VERSION, MIN_CLIENT_VERSION_HEADER } from "@wtt/core";
 import { KEY_EXPIRED_HINT, isKeyExpired, keyExpiresAt } from "./api-key-expiry";
 import { apiKeyFromHeaders, asLoginMethod, getAuth, type Auth, type LoginMethod, type Role } from "./auth";
+import { isFromBff } from "./bff-entry";
 import { requestBodyLimit } from "./body-limit";
+import { loginFailurePage } from "./login-failure";
 import { getDb, type Db } from "./db";
 import { ApiError, errorHandler, notFound } from "./errors";
 import type { Env } from "./env";
@@ -45,12 +47,13 @@ export function createApp(): Hono<AppEnv> {
     c.header(API_VERSION_HEADER, String(API_CONTRACT_VERSION));
     c.header(MIN_CLIENT_VERSION_HEADER, String(MIN_CLIENT_VERSION));
   });
-  // 無認証の入口だけ経路ごとに IP 単位で 30 回 / 10 秒(Cloudflare Rate Limiting binding)。超過は 429 の封筒。
+  // 無認証の入口だけ経路ごとに IP 単位で 30 回 / 10 秒(Cloudflare Rate Limiting binding)。超過は 429(OAuth の GET は失敗画面、POST は封筒)。
   // AUTH_ALLOW(auth-paths.ts)のうち無認証で叩ける POST と、下の GET 2 本はすべてここに入れる — sign-up / reset-password は
   // トークンのエントロピーがあるので総当たりは現実的でないが、無認証の入口を 1 つでも素通しにすると
   // 「無認証の入口には制限がある」という docs/deploy.md 7 節 の約束が崩れる(多層防御)
   const RATE_LIMITED_POST = new Set([
     "/auth/sign-in/email",
+    "/auth/sign-out",
     "/auth/sign-up/email",
     "/auth/request-password-reset",
     "/auth/reset-password",
@@ -66,7 +69,8 @@ export function createApp(): Hono<AppEnv> {
    * 招待は ID を除いて 1 種別にする(ID ごとに枠が分かれると総当たりの枠が無限になる)
    */
   const rateLimitRouteClass = (method: string, pathname: string): string | null => {
-    if (method === "GET") return RATE_LIMITED_GET.has(pathname) ? pathname : null;
+    // Hono は HEAD でも GET の handler を実行するため、同じ経路 + IP の枠で数える(B233)。
+    if (method === "GET" || method === "HEAD") return RATE_LIMITED_GET.has(pathname) ? pathname : null;
     if (method !== "POST") return null;
     if (RATE_LIMITED_POST.has(pathname)) return pathname;
     if (/^\/invitations\/[^/]+\/accept$/.test(pathname)) return "/invitations/*/accept";
@@ -76,7 +80,11 @@ export function createApp(): Hono<AppEnv> {
     // B154(G17): Hono がルートを選ぶのと同じデコードした path で分類する。生の URL の path だと `/s%65tup` などのエンコードした別名が
     // 分類に当たらないまま本物のルートに届く
     const routeClass = rateLimitRouteClass(c.req.method, c.req.path);
-    if (routeClass) {
+    // Q528: 管理画面の service binding 経由の sign-out(ログアウトのボタン)は数えない。枠に当たると control のセッションが
+    // 失効しないまま管理画面の Cookie だけ消えるため。管理画面はブラウザからの sign-out を中継しないので、binding 経由はログアウトだけ。
+    // 公開の入口に直接来た sign-out(trustedOrigins の答え合わせに使える)はこれまでどおり数える。印はヘッダーではない(bff-entry.ts)
+    const exempt = routeClass === "/auth/sign-out" && isFromBff(c.req.raw);
+    if (routeClass && !exempt) {
       // 決定 63 (6): admin 経由(service binding の ControlBff)なら admin が渡す利用者の IP(x-wtt-client-ip)で数える。
       // この要求は cf-connecting-ip を持たない。公開の入口ではこのヘッダーを消してから app へ渡す(index.ts の stripTrustedHeaders)ので、
       // 外から偽装して枠を選ぶことはできない。どちらも無ければ "unknown"(手元の開発など)
@@ -89,7 +97,10 @@ export function createApp(): Hono<AppEnv> {
         // 決定 29 と同方針の fail-open: レート制限は認可ではなく DoS 抑止で、limiter 障害で管理者全員を締め出さない
         console.error("AUTH_RATE_LIMITER failed (fail-open)", e);
       }
-      if (limited) throw new ApiError(429, "rate_limited", { hint: "しばらく待ってから再試行してください" });
+      if (limited) {
+        if (RATE_LIMITED_GET.has(routeClass)) return loginFailurePage("rate_limited");
+        throw new ApiError(429, "rate_limited", { hint: "しばらく待ってから再試行してください" });
+      }
     }
     await next();
   });

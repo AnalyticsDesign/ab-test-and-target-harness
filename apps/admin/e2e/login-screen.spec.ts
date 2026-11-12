@@ -16,8 +16,16 @@ test("the login screen leads to Google through the BFF and explains OAuth failur
   expect(toGoogle.status()).toBe(302);
   expect(toGoogle.headers().location).toContain("https://accounts.google.com/o/oauth2/v2/auth");
 
-  await page.goto("/login?error=not_invited");
-  await expect(appAlert(page)).toContainText("有効な招待もありません");
+  await page.goto("/login?error=oauth_failed");
+  await expect(appAlert(page)).toContainText("ログインを完了できませんでした");
+  // control を直接開いても管理画面のアドレスは返さない。
+  const direct = await request.get(`${CONTROL_URL}/auth/google/start`, { maxRedirects: 0 });
+  expect(direct.status()).toBe(400);
+  expect(direct.headers().location).toBeUndefined();
+  const html = await direct.text();
+  expect(html).toContain("ログインできませんでした");
+  expect(html).not.toContain(ADMIN_URL);
+  expect(html).not.toContain(new URL(ADMIN_URL).host);
   // このブラウザはログインを始めていない(flow Cookie が無い)ので、他人の戻り URL を開いてもセッションは張られない
   await page.goto("/api/session/oauth?code=bogus&flow=someone-elses-flow-0123");
   await expect(page).toHaveURL(/\/login\?error=oauth_failed$/);

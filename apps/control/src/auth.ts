@@ -122,8 +122,9 @@ function buildAuth(env: Env) {
     // isolate を起こすたびに全表の introspection が D1 に走る
     advanced: { database: { validateSchema: false } },
     trustedOrigins: [env.AB_ADMIN_URL],
-    // OAuth の途中で Better Auth が自前のエラーページ(/auth/error。公開していない)へ飛ばそうとする場合の行き先
-    onAPIError: { errorURL: `${env.AB_ADMIN_URL}/login` },
+    // B231: callback が失敗を固定の画面で終えるので、この URL はブラウザには届かない。
+    // Better Auth の既定の行き先にも管理画面を置かない二重の守り。/auth/error は公開せず 404。
+    onAPIError: { errorURL: `${env.AB_CONTROL_URL}/auth/error` },
     socialProviders: googleConfigured(env)
       ? { google: { clientId: env.AB_GOOGLE_CLIENT_ID!, clientSecret: env.AB_GOOGLE_CLIENT_SECRET!, prompt: "select_account" } }
       : undefined,

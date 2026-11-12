@@ -486,7 +486,7 @@ describe("workspaces / invitations / members", () => {
     // 取り消した後で初めて Google ログインしても user 行はできない
     const late = await googleSignIn(email);
     expect(late.token).toBeNull();
-    expect(new URL(late.location).searchParams.get("error")).toBe("not_invited");
+    expect(late.error).toBe("not_invited");
     expect((await env.DB.prepare(`select count(*) as n from "user" where email = ?`).bind(email).first<{ n: number }>())?.n).toBe(0);
   });
 
