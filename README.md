@@ -86,7 +86,7 @@ flowchart LR
   - R2(画像の置き場): 任意。使わなければ支払い方法の登録も不要
   - 構成の選び方は[導入構成の選び方](docs/install-patterns.md)を参照
 - **GA4 プロパティと GTM コンテナ**: テストの結果を GA4 / BigQuery で読むときに要る(`dataLayer` から GTM 経由で GA4 に送る)。管理画面の結果のタブ(「結果を記録する」を有効にしたサイト)だけで読むなら、無くても判定は出る。本製品が保存するものは[法務](#法務)に書いてある
-- **Node 24 以上と pnpm 10 系**: `packageManager` で固定。wrangler は `pnpm install` で入る
+- **Node 24.18.0 以上の 24 系、または 26.9.0 以上の 26 系と pnpm 10 系**: Node の対応範囲は `engines.node`、pnpm の版は `packageManager` で指定。wrangler は `pnpm install` で入る
 
 費用の目安は次のとおり。プランの選び方は[導入構成の選び方 3 節](docs/install-patterns.md#3-料金プラン問い-2)にある。
 
@@ -144,7 +144,7 @@ Claude Code / Codex などのコーディングエージェントに、下のプ
 
 ```text
 AB Test and Target Harness を私の Cloudflare アカウントに導入してください。
-1. この PC に足りないツール(Git / Node 24 以上の LTS / pnpm / jq。Windows では Git for Windows(Git Bash・OpenSSL を含む)も)を確かめ、入れるもの(名前と入手元)の一覧を 1 回だけ示して了承を取ってから入れる。pnpm は単体で入れず、Node に付く Corepack で使う(clone の後、リポジトリが固定した版が使われる。docs/deploy.md 0.4)
+1. この PC に足りないツール(Git / Node 24.18.0 以上の 24 系、または 26.9.0 以上の 26 系 / pnpm / jq。Windows では Git for Windows(Git Bash・OpenSSL を含む)も)を確かめ、入れるもの(名前と入手元)の一覧を 1 回だけ示して了承を取ってから入れる。pnpm は単体で入れず、Node に付く Corepack で使う(clone の後、リポジトリが固定した版が使われる。docs/deploy.md 0.4)
 2. https://github.com/AnalyticsDesign/ab-test-and-target-harness を短いパスに clone し(Windows では例 C:\wtth。長いパスでは Filename too long で失敗する。docs/deploy.md 0.4)、最新のリリースタグ(git tag の v* を版の順に並べた先頭。GitHub Releases の API は使わない)を checkout する
 3. docs/install-questions.md を読み、その質問の表と進め方の規則どおりに私に聞く。答えは deploy-answers.example.yaml を写した deploy-answers.yaml に書く(既に deploy-answers.yaml があれば、答えの書かれた質問は飛ばす)
 4. node tools/deploy-answers/cli.mjs を実行し、出力を要約せずにそのまま私に見せて、推奨構成と最軽量構成のどちらにするかを聞く。選んだら --accept recommended か --accept lightest を付けて実行する。出力の先頭に『確認: アカウントが変わる』が出て、選んだ構成がそれに当たるときは、その節をそのまま見せ、構成の選択とは別にアカウントの変更への同意を聞く。同意したときだけ --confirm-account-change を付ける(終了コードごとの扱いは docs/deploy.md 0.2)
@@ -202,7 +202,7 @@ AB Test and Target Harness を更新してください。作業ディレクト�
 ## 開発
 
 ```bash
-pnpm install       # 依存の導入(Node 24 以上)
+pnpm install       # 依存の導入(Node 24.18.0 以上の 24 系、または 26.9.0 以上の 26 系)
 pnpm test          # 単体テスト(全パッケージ)
 pnpm e2e           # E2E(sample-site + wrangler dev + Playwright)
 pnpm e2e:admin     # 管理画面の E2E

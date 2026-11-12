@@ -60,10 +60,10 @@ Windows の Git Bash で確認コマンドの出力が期待と違う場合は�
 
 **1. ツールを入れる**(0.4)
 
-Git・Node 24 以上(LTS)・jq を入れ、リポジトリ直下で `corepack enable`(pnpm は単体で入れない)。Windows は Git for Windows の Git Bash で、ここにあるすべてのコマンドを実行する。
+Git・Node(24.18.0 以上の 24 系、または 26.9.0 以上の 26 系)・jq を入れ、リポジトリ直下で `corepack enable`(pnpm は単体で入れない)。Windows は Git for Windows の Git Bash で、ここにあるすべてのコマンドを実行する。
 
 ```bash
-node -v      # v24 以上
+node -v      # v24.18.0 以上の 24 系、または v26.9.0 以上の 26 系
 pnpm -v      # リポジトリ直下で。package.json の packageManager の版(例 pnpm@10.34.5 なら 10.34.5)
 jq --version # jq-1.7 以上
 git --version
@@ -603,7 +603,7 @@ Windows で `pnpm install` が `Failed to validate workerd binary` や `Local de
 | ツール | 用途 | macOS | Linux | Windows |
 |---|---|---|---|---|
 | Git | 取得と更新 | 同梱(Xcode CLT)または `brew install git` | ディストリのパッケージ | Git for Windows(Git Bash を含む)。この文書の bash ブロックはすべて Git Bash で実行する。PowerShell / cmd では動かない。人に示すコマンドだけは 0 節のとおり PowerShell 用も併記する |
-| Node 24 以上(LTS を推奨) | pnpm / wrangler の実行 | `brew install node` | nodesource など | `winget install OpenJS.NodeJS.LTS` |
+| Node 24.18.0 以上の 24 系、または 26.9.0 以上の 26 系(`package.json` の `engines.node` に従う) | pnpm / wrangler の実行 | `brew install node` | nodesource など | `winget install OpenJS.NodeJS.LTS` |
 | pnpm。`package.json` の `packageManager` で固定した版を使う。単体では入れず、Node に付く Corepack で使う | 依存の導入 | `corepack enable` | 同左 | Git Bash で `corepack enable` |
 | wrangler 4 | Cloudflare の操作 | `pnpm install` で入る(ルートの PATH には乗らない) | 同左 | 同左 |
 | curl / openssl | API 呼び出し / 乱数 | 同梱 | 同梱 | Git Bash に同梱 |
@@ -614,7 +614,7 @@ Windows で `pnpm install` が `Failed to validate workerd binary` や `Local de
 確認:
 
 ```bash
-node -v      # v24 以上
+node -v      # v24.18.0 以上の 24 系、または v26.9.0 以上の 26 系
 pnpm -v      # リポジトリ直下で。package.json の packageManager の版(例 pnpm@10.34.5 なら 10.34.5)
 jq --version # jq-1.7 以上
 git --version
