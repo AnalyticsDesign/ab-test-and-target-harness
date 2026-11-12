@@ -570,11 +570,11 @@ control の無認証の入口を直接呼ぶ要求(curl、ブラウザが直接�
 
 control は 15 分ごとの定期処理(Cron)の回ごとに、各ジョブの結果(`ran`・`continued`・`failed` など)を 1 行の要約(`cron run`)にしてログに書く。エラーも同じログに書く。control は Cloudflare の Workers Logs を有効にしてあるので、これらを後から読める。
 
-- **見る場所**: ダッシュボード → Compute(コンピュート)→ Workers & Pages → `wtt-control` → Observability(日本語の表示は未確認)
+- **見る場所**: ダッシュボード → Compute(コンピュート)→ Workers & Pages → control の Worker(`wtt-control` か `wtt-control-<16 桁の 16 進>`) → Observability(日本語の表示は未確認)
 - **読める日数**: 7 日(Free は 2026-11-30 まで 3 日)。それより前の回は読めない
 - **残るもの**: コードが書く行(Cron の回の要約・エラー・警告と、一部の管理操作の記録)だけ。呼び出しごとの要求と応答の記録(invocation logs)は、設定(`apps/control/wrangler.jsonc` の `observability`)で止めている。すべての要求の URL(画像の公開ベース(`AB_ASSET_PUBLIC_BASE`)を control の `/dev-assets` にした構成では、画像を読み込む訪問者の要求も含む)を残さないためでもあるので、有効にしない。ただし、コードが要求の中で行を書いたとき(エラー・想定内の拒否の警告(書き込みの凍結中の `write_frozen`・`usage_not_configured` など)・一部の管理操作の記録(パスワードの再設定リンクの発行、初期設定の後始末))は、その行に要求の URL(path と query string を含む)が付いて残る。path には招待の ID のような、そのまま使える値が入ることがある。要求のヘッダー(API キーやセッション)は残らない。普段の要求では行を書かない
 - **読める人を絞る**: 上のとおり、ログには要求の URL が残ることがあるので、Workers Logs を読める権限(Cloudflare のアカウントのメンバーのロールと、Workers Observability を読める API トークン)は、運用に要る人とトークンだけに絞る
-- **管理画面(`wtt-admin`)と edge では Workers Logs を有効にしない**: 管理画面の要求の URL には、パスワードの再設定のリンクのトークンと、ログインの直後に受け渡す使い捨てのコードが入るため。edge は訪問者の要求を受ける Worker で量も多いので、Workers Logs を有効にしていない
+- **管理画面の Worker(`wtt-admin` か `wtt-admin-<16 桁の 16 進>`)と edge では Workers Logs を有効にしない**: 管理画面の要求の URL には、パスワードの再設定のリンクのトークンと、ログインの直後に受け渡す使い捨てのコードが入るため。edge は訪問者の要求を受ける Worker で量も多いので、Workers Logs を有効にしていない
 - **デプロイ専用の Worker**: `wtt-deployer` も Workers Logs を有効にしてあり、配信ファイルの配置の失敗と、runtime の更新の後の作り直しの失敗を書く。見る場所は ダッシュボード → Compute(コンピュート)→ Workers & Pages → `wtt-deployer` → Observability(日本語の表示は未確認)。control と同じく、呼び出しごとの記録は止めている
 - **要約の行が無い回**: CPU や時間の上限で途中で打ち切られた回は、要約の行が残らない。15 分ごとの行が抜けている時刻は、その回が打ち切られたか、動かなかったことを示す
 - **料金**: Cloudflare は 2026-12-01 から Workers Logs を Cloudflare Observability の料金体系に移す。移った後、Free はアカウント全体で 1 日 0.5 GB まで取り込み、超えた日は次の UTC 0 時まで取り込みを止める(課金はされない)。この枠は同じアカウントのほかの Worker のログなどと分け合うので、ほかが使い切った日は control の行も残らない。Paid は取り込みが月 50 GB まで込みで、保存の量も別に数え、どちらも込みの量を超えた分が課金される。control のログの量は、どちらの上限より桁違いに少ない(条件は 2026-10-25 に確認。[Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)・[Cloudflare Observability の料金](https://developers.cloudflare.com/observability/pricing/))

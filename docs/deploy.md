@@ -49,9 +49,11 @@ Windows の Git Bash で確認コマンドの出力が期待と違う場合は�
 | `<ゾーン名>` | そのホストの Cloudflare のゾーン(例 `example.com`) | ダッシュボードのゾーンの一覧 |
 | `<edge のホスト>` | 別のドメインに置く構成のときだけ。edge と設置タグを置く別のドメインのホスト(例 `ab.example.net`)。この構成では `<ゾーン名>` はこのホストのゾーン(例 `example.net`) | 0.2 の E2c |
 | `<Account ID>` | Cloudflare のアカウント ID(32 桁) | 手順 4 の `wrangler whoami` |
-| `<アカウントのサブドメイン>` | workers.dev のサブドメイン(例 `quiet-river-1a2b`) | 手順 5 の最初のコマンド |
-| `<control URL>` | `https://wtt-control.<アカウントのサブドメイン>.workers.dev` | 上から決まる。Google に登録するリダイレクト URI の元 |
-| `<AB_ADMIN_URL>` | `https://wtt-admin.<アカウントのサブドメイン>.workers.dev` | 上から決まる |
+| `<アカウントのサブドメイン>` | workers.dev のサブドメイン(例 `quiet-river-1a2b`) | 手順 4 の最初のコマンド |
+| `<管理画面の Worker 名>` | `wtt-admin-<16 桁の 16 進>` | 手順 4 の名前のブロック |
+| `<control の Worker 名>` | `wtt-control-<16 桁の 16 進>` | 手順 4 の名前のブロック |
+| `<control URL>` | `https://<control の Worker 名>.<アカウントのサブドメイン>.workers.dev` | 上から決まる。Google に登録するリダイレクト URI の元 |
+| `<AB_ADMIN_URL>` | `https://<管理画面の Worker 名>.<アカウントのサブドメイン>.workers.dev` | 上から決まる |
 | `<owner_email>` | 管理画面にログインする Google アカウントのメールアドレス | 自分 |
 
 ダッシュボードで作るものは 3 つ(Google の OAuth クライアント・Cloudflare の API トークン 2 本)。R2 を使うなら R2 の有効化が加わる。コマンドのブロックは 30 ほど。
@@ -109,6 +111,57 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/subdomain" 
 ```
 
 確認: `subdomain` に名前が出る。それが `<アカウントのサブドメイン>`。`errors` に `10007` が出る(まだ無い)→ ダッシュボードの Compute(コンピュート)→ Workers & Pages を一度開くと作られるので、開いてからやり直す。名前を自分で決めたいなら、0.5 の「サブドメインの名前の決め方」とその下のブロックを使う。
+
+名前を決める。下のブロックが `names: ok …` を出した場合だけ先に進み、2 つの名前を控える。名前を隠すのは補助で、Certificate Transparency のログに載る場合は隠せない。強い保護が要るなら Access(4.5)。詳しい限界と、期待と違うときの対処は 0.5 の「管理画面と control の Worker の名前を決める」を読む。
+
+```bash
+T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
+AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+wname() { sed -nE 's/^  "name": "([a-z0-9-]+)",[[:space:]]*$/\1/p' "apps/$1/wrangler.jsonc"; }
+wsvc() { sed -nE 's/^.*"service": "([a-z0-9-]+)".*$/\1/p' apps/admin/wrangler.jsonc; }
+wlist() {
+  BODY=$(curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/scripts" -H "Authorization: Bearer $T") || BODY=''
+  L=$(printf '%s' "$BODY" | jq -r 'if .success == true and (.result | type) == "array" then ([.result[].id | select(startswith("wtt-"))] | if length == 0 then "none" else join(" ") end) else "error" end' 2>/dev/null) || L=error
+  [ -n "$L" ] || L=error
+  printf '%s' "$L"
+}
+REA='^wtt-admin-[0-9a-f]{16}$'; REC='^wtt-control-[0-9a-f]{16}$'
+if [ "$(wname admin)" = wtt-admin ] && [ "$(wname control)" = wtt-control ] && [ "$(wsvc)" = wtt-control ]; then
+  USED=$(wlist)
+  if [ "$USED" = none ]; then
+    NA="wtt-admin-$(openssl rand -hex 8)"; NC="wtt-control-$(openssl rand -hex 8)"
+    if ! printf '%s\n' "$NA" | grep -Eq "$REA" || ! printf '%s\n' "$NC" | grep -Eq "$REC"; then
+      echo "names: not created (random)"
+    else
+      sed -i.bak -E -e "s/^(  \"name\": )\"wtt-admin\",/\1\"$NA\",/" -e "s/\"service\": \"wtt-control\"/\"service\": \"$NC\"/" apps/admin/wrangler.jsonc \
+        && sed -i.bak -E "s/^(  \"name\": )\"wtt-control\",/\1\"$NC\",/" apps/control/wrangler.jsonc \
+        && rm -f apps/admin/wrangler.jsonc.bak apps/control/wrangler.jsonc.bak
+    fi
+  elif [ "$USED" = error ]; then
+    echo "names: not created (error)"
+  else
+    echo "names: not created (used: $USED)"
+  fi
+fi
+A=$(wname admin); C=$(wname control); S=$(wsvc)
+if printf '%s\n' "$A" | grep -Eq "$REA" && printf '%s\n' "$C" | grep -Eq "$REC" && [ "$S" = "$C" ]; then
+  # 名前がそろっていても、今の導入先を毎回確かめる(再実行・アカウントの選び直し)
+  L=$(wlist)
+  OTHERS=$(printf '%s\n' "$L" | tr ' ' '\n' | awk -v a="$A" -v c="$C" '$0 != "none" && $0 != a && $0 != c' | tr '\n' ' ' | sed 's/ $//')
+  MINE=$(printf '%s\n' "$L" | tr ' ' '\n' | awk -v a="$A" -v c="$C" '$0 == a || $0 == c { n++ } END { print n + 0 }')
+  if [ "$L" = error ]; then
+    echo "names: unverified (error) admin=$A control=$C account=$AID"
+  elif [ -n "$OTHERS" ] && [ "$MINE" -eq 0 ]; then
+    echo "names: check (other workers: $OTHERS) admin=$A control=$C account=$AID"
+  else
+    echo "names: ok admin=$A control=$C account=$AID"   # 期待: この行。account は導入先の Account ID(0.4 で確かめた値)
+  fi
+elif [ "$A" = wtt-admin ] && [ "$C" = wtt-control ] && [ "$S" = wtt-control ]; then
+  echo "names: still default"
+else
+  echo "names: inconsistent admin=$A control=$C service=$S"
+fi
+```
 
 **5. ダッシュボードで作る**(0.5)
 
@@ -295,7 +348,14 @@ pnpm -C apps/control exec wrangler secret list | jq -r '.[].name' | sort   # 期
 | `AB_GOOGLE_CLIENT_ID` | `deploy-secrets.env` の `GOOGLE_CLIENT_ID` の値 |
 | `AB_EDGE_ORIGIN` | `https://<設置ホスト>` |
 | `CF_ACCOUNT_ID` | `<Account ID>` |
-| `AB_USAGE_RESOURCES` | `d1` に手順 11 の `database_id`(`wtt-control`)と手順 7 の `database_id`(`wtt-results`)、`kv` に手順 7 の KV の id を JSON のオブジェクトで書く(形は 3.4 の表) |
+| `AB_USAGE_RESOURCES` | `d1` に手順 11 の `database_id`(`wtt-control`)と手順 7 の `database_id`(`wtt-results`)、`kv` に手順 7 の KV の id を JSON のオブジェクトで書く。`"workers": ["wtt-edge", "<control の Worker 名>", "<管理画面の Worker 名>"]` も書く(形は 3.4 の表) |
+
+使用状況の内訳に、手元の管理画面と control の名前が入っているかを確かめる。2 行とも末尾が `1` であること。`0` なら `AB_USAGE_RESOURCES.workers` に名前を書き直す。ファイルはコメントを含むので、`//` から行末までと配列の中の `/* */` を除き、1 行につないで `workers` の配列だけを取り出している(配列内の文字列に `]` を含めない)。
+
+```bash
+W=$(sed -E 's#(^|[[:space:]])//.*$##' apps/control/wrangler.jsonc | tr -d '\r\n' | grep -oE '"workers": *\[[^]]*\]' | sed -E 's#/\*([^*]|\*+[^*/])*\*+/##g' || true)
+for app in admin control; do N=$(sed -nE 's/^  "name": "([a-z0-9-]+)",[[:space:]]*$/\1/p' "apps/$app/wrangler.jsonc"); printf '%s %s\n' "$N" "$(printf '%s' "$W" | grep -c "\"$N\"")"; done   # 期待: 2 行とも末尾が 1(使用状況の内訳に入っている)
+```
 
 **15. control をデプロイする**(3.5)
 
@@ -305,7 +365,7 @@ pnpm -C apps/control exec wrangler deploy
 ```
 
 ```bash
-# control の URL は上の deploy の出力(https://wtt-control.<アカウントのサブドメイン>.workers.dev)から拾う
+# control の URL は上の deploy の出力(https://<control の Worker 名>.<アカウントのサブドメイン>.workers.dev)から拾う
 curl -sS "<control URL>/llms.txt" -o /dev/null -w '%{http_code}\n'   # 期待: 200(認証不要のガイド本文。control に /healthz は無い)
 ```
 
@@ -317,6 +377,12 @@ deploy の出力の URL が `<control URL>`(Google に登録したリダイレ�
 
 ```bash
 pnpm -C apps/admin build      # vinext build。dist/ 配下に生成設定(wrangler.json)と dist/client を出す
+jq -c '{name, preview_urls, service: [.services[]?.service]}' apps/admin/dist/server/wrangler.json   # 期待: name = <管理画面の Worker 名>、preview_urls = false、service = ["<control の Worker 名>"]
+```
+
+生成設定が期待と違えば deploy しない。手元の `apps/admin/wrangler.jsonc` の `name`・`preview_urls`・`services` を確かめ、ビルドし直す。分からなければ人に聞いて止まる。期待どおりなら:
+
+```bash
 pnpm -C apps/admin deploy:cf  # wrangler deploy --config <ビルドが出した生成設定>
 ```
 
@@ -448,11 +514,11 @@ AI エージェントに任せる場合、構成は 0.2 の質問と検査スク
 |---|---|---|---|
 | edge の公開 | 設置サイトのゾーンの Workers Route(`<設置ホスト>/v1/*`) | 別のドメインに置きたい(サイトのドメインが Cloudflare に無い)/ ドメインを用意せずに *.workers.dev で公開したい(簡易的な導入) | 2.3 / 2.5 / 2.8 |
 | 設置タグの配信 | 配信専用の Worker `wtt-static` を `<設置ホスト>/s/*` に置く。訪問者のタグの読み込みは Worker のリクエストに数えられない | 別のドメインに置く構成では `<edge のホスト>/s/*` に置く。ドメインなし構成(`*.workers.dev`)では `wtt-static` の workers.dev のアドレスで配る | 2.9 |
-| control の公開アドレス | `https://wtt-control.<アカウントのサブドメイン>.workers.dev` | 自分のドメインに置いて WAF / Access を掛けたい | 3.6 / 7.1 |
+| control の公開アドレス | `https://<control の Worker 名>.<アカウントのサブドメイン>.workers.dev` | 自分のドメインに置いて WAF / Access を掛けたい | 3.6 / 7.1 |
 | control の無認証入口の防御 | (1) 何もしない(ログインは Google アカウントで、パスワードの経路は普段閉じている) | 複数人で使う、外部エージェントに API を呼び出させる | 7 節。(2)(3) は実機未検証 |
 | edge の WAF Rate Limiting Rule | 作る(200 回 / 10 秒) | 既に別のレート制限ルールで Free の 1 枠を使っている | 2.7 |
-| 画像の公開ベース | 必ず指定する。R2 のカスタムドメイン、暫定の dev-assets、または none(R2 を使わない)。検査スクリプトは `auto` = `https://wtt-assets.<ゾーン名>` を書く | 支払い方法を登録せずに導入したい(none) | 3.2 |
-| 管理画面の公開アドレス | `https://wtt-admin.<アカウントのサブドメイン>.workers.dev` | 自分のドメインに置いてリンクの見た目を整える / Access・WAF を掛ける | 4.2 |
+| 画像の公開ベース | 必ず指定する。R2 のカスタムドメイン、暫定の dev-assets、または none(R2 を使わない)。検査スクリプトは `auto` = `https://wtt-assets.<ゾーン名>` を書く。`dev-assets` では画像から control のアドレスが分かり、control の名前の乱数による補助は適用されない(管理画面のアドレスは control からは分からない) | 支払い方法を登録せずに導入したい(none) | 3.2 |
+| 管理画面の公開アドレス | `https://<管理画面の Worker 名>.<アカウントのサブドメイン>.workers.dev` | 自分のドメインに置いてリンクの見た目を整える / Access・WAF を掛ける | 4.2 |
 
 ### 0.2 構成を決める(質問と入力ファイル `deploy-answers.yaml`)
 
@@ -730,10 +796,81 @@ fi
 - 依頼文には絶対パスと「エディタで開いたので `=` の右に貼って保存する」を書く。エディタが人の画面に開かなかったときだけ、絶対パスを示して人に開いてもらう。エージェントの実行環境と人の端末が違うときなどに起きる
 - エージェントはこのファイルの中身を表示せず、環境変数に読み込む(下の「確認」)。会話・`deploy-log.md` に値が出ない
 
+**管理画面と control の Worker の名前を決める**(新しい導入だけ):
+
+管理画面と control の名前には、それぞれ `openssl rand -hex 8` で 16 桁の乱数を付ける。設置タグのアドレスやアカウントのサブドメインから、その 2 つのアドレスを当てにくくするため。名前は手元の `apps/admin/wrangler.jsonc`・`apps/control/wrangler.jsonc` の `name` に残し、更新でもその値を使う(6.2)。今ある導入は既定の `wtt-admin`・`wtt-control` のまま更新でき、このブロックで名前を変えない。
+
+Worker の名前が証明書の公開の記録(Certificate Transparency のログ)に載る場合があり、そのときは名前で隠せない。名前を隠すのは補助で、保護の中心はログインと権限。アドレスが知られても、管理画面に入れるのは Google でログインし、招待を受けた人だけ。強い保護が要るなら管理画面の Access(4.5)や control の保護(7 節)を使う。名前はアカウントの Worker の一覧や招待リンクにも出るので、秘密の値として扱う必要はない。
+
+管理画面か control を自分のドメインに置く構成では、そのホスト名が証明書の公開の記録から分かるので、自分のドメインに置いた方の名前は隠せない。画像の公開ベースを control の `/dev-assets` にした構成では、画像の URL に control のアドレスが出るので、control の名前は隠せない。control のログインの入口は、ログインしていない人に管理画面のアドレスを返さない(7 節)ので、control のアドレスが知られても、管理画面のアドレスは control からは分からない。
+
+この製品は Cloudflare の版ごとの Preview URL を使わないので、管理画面と control の設定で `"preview_urls": false` を明示している。通常の workers.dev の公開アドレスは使える。この設定で Certificate Transparency のログへの名前の掲載を防げるとは限らず、既に載った名前も消えない。管理画面のビルドが出す設定(`dist/server/wrangler.json`)でも `preview_urls` が `false` であることを、初回の deploy の前に 4.3 で確かめる。
+
+0.4 でも前の導入が無いかを見るが、手で入れる最短の手順と、アカウントを選び直した場合も確かめるため、ここで Worker の一覧を見直す。次のブロックが `names: ok …` を出した場合だけ先に進む。出た 2 つの名前は `deploy-log.md` と最後の報告に控える。
+
+```bash
+T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
+AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+wname() { sed -nE 's/^  "name": "([a-z0-9-]+)",[[:space:]]*$/\1/p' "apps/$1/wrangler.jsonc"; }
+wsvc() { sed -nE 's/^.*"service": "([a-z0-9-]+)".*$/\1/p' apps/admin/wrangler.jsonc; }
+wlist() {
+  BODY=$(curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/scripts" -H "Authorization: Bearer $T") || BODY=''
+  L=$(printf '%s' "$BODY" | jq -r 'if .success == true and (.result | type) == "array" then ([.result[].id | select(startswith("wtt-"))] | if length == 0 then "none" else join(" ") end) else "error" end' 2>/dev/null) || L=error
+  [ -n "$L" ] || L=error
+  printf '%s' "$L"
+}
+REA='^wtt-admin-[0-9a-f]{16}$'; REC='^wtt-control-[0-9a-f]{16}$'
+if [ "$(wname admin)" = wtt-admin ] && [ "$(wname control)" = wtt-control ] && [ "$(wsvc)" = wtt-control ]; then
+  USED=$(wlist)
+  if [ "$USED" = none ]; then
+    NA="wtt-admin-$(openssl rand -hex 8)"; NC="wtt-control-$(openssl rand -hex 8)"
+    if ! printf '%s\n' "$NA" | grep -Eq "$REA" || ! printf '%s\n' "$NC" | grep -Eq "$REC"; then
+      echo "names: not created (random)"
+    else
+      sed -i.bak -E -e "s/^(  \"name\": )\"wtt-admin\",/\1\"$NA\",/" -e "s/\"service\": \"wtt-control\"/\"service\": \"$NC\"/" apps/admin/wrangler.jsonc \
+        && sed -i.bak -E "s/^(  \"name\": )\"wtt-control\",/\1\"$NC\",/" apps/control/wrangler.jsonc \
+        && rm -f apps/admin/wrangler.jsonc.bak apps/control/wrangler.jsonc.bak
+    fi
+  elif [ "$USED" = error ]; then
+    echo "names: not created (error)"
+  else
+    echo "names: not created (used: $USED)"
+  fi
+fi
+A=$(wname admin); C=$(wname control); S=$(wsvc)
+if printf '%s\n' "$A" | grep -Eq "$REA" && printf '%s\n' "$C" | grep -Eq "$REC" && [ "$S" = "$C" ]; then
+  # 名前がそろっていても、今の導入先を毎回確かめる(再実行・アカウントの選び直し)
+  L=$(wlist)
+  OTHERS=$(printf '%s\n' "$L" | tr ' ' '\n' | awk -v a="$A" -v c="$C" '$0 != "none" && $0 != a && $0 != c' | tr '\n' ' ' | sed 's/ $//')
+  MINE=$(printf '%s\n' "$L" | tr ' ' '\n' | awk -v a="$A" -v c="$C" '$0 == a || $0 == c { n++ } END { print n + 0 }')
+  if [ "$L" = error ]; then
+    echo "names: unverified (error) admin=$A control=$C account=$AID"
+  elif [ -n "$OTHERS" ] && [ "$MINE" -eq 0 ]; then
+    echo "names: check (other workers: $OTHERS) admin=$A control=$C account=$AID"
+  else
+    echo "names: ok admin=$A control=$C account=$AID"   # 期待: この行。account は導入先の Account ID(0.4 で確かめた値)
+  fi
+elif [ "$A" = wtt-admin ] && [ "$C" = wtt-control ] && [ "$S" = wtt-control ]; then
+  echo "names: still default"
+else
+  echo "names: inconsistent admin=$A control=$C service=$S"
+fi
+```
+
+期待と違うとき:
+
+- `names: not created (used: …)` → このアカウントに前の導入がある。撤去して入れ直すか、別のアカウントにするかを人に聞いて止まる(1 節の制約 (1))
+- `names: ok …` でも、`account=` の値が導入先の Account ID(0.4 で確かめた値)と違う → 別のアカウントの一覧を見ている。`CLOUDFLARE_ACCOUNT_ID` をこのシェルで設定し直してやり直す
+- `names: not created (error)`・`names: unverified (error) …` → 一覧が読めない。0.4 の `wrangler login` と `CLOUDFLARE_ACCOUNT_ID` を確かめてやり直す
+- `names: not created (random)` → 乱数を作れなかった。`openssl version`(0.4)が版を出すかを確かめてやり直す
+- `names: check (other workers: …) …` → 手元の名前の Worker が無く、ほかの導入の Worker がある。アカウントを選び直したか、別の導入があるので、人に導入先を確かめて止まる。導入の途中で edge などを先に deploy した後の再実行でも、自分の名前の Worker がまだ無ければここに当たるので、人に確かめる
+- `names: still default` → 名前を作れなかった。既定の名前のまま先に進まない
+- `names: inconsistent …` → 書き換えが途中で止まったか、手で直した。値が空なら `wrangler.jsonc` のインデントと `name` の行の形を確かめる。`git diff apps/admin/wrangler.jsonc apps/control/wrangler.jsonc` の変更が `name` と `service` の行だけなら、`git checkout -- apps/admin/wrangler.jsonc apps/control/wrangler.jsonc` で戻して流し直す。ほかの行も変わっていれば(2.2・3.1・3.2・3.4・4.1 で書いた値)、戻すとその値も消えるので、人に聞いて止まる
+
 **先に control の URL を確定する**(リダイレクト URI に要る。deploy 前でも分かる):
 
 - `control_address: custom` → `https://<control_host>`
-- `control_address: workers-dev` → `https://wtt-control.<アカウントのサブドメイン>.workers.dev`。サブドメインは `wrangler login` の資格情報で API から取る:
+- `control_address: workers-dev` → `https://<control の Worker 名>.<アカウントのサブドメイン>.workers.dev`。サブドメインは `wrangler login` の資格情報で API から取る:
 
 ```bash
 T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
@@ -881,8 +1018,8 @@ set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 | edge(`apps/edge`) | データプレーン。decision・event を訪問者に返す。KV は読むだけ | Cloudflare Workers(設置サイトのゾーンに Route で配置する。別のドメインに置く構成では、そのドメインのホストに Custom Domain で配置する。2 節) |
 | 配信専用の Worker(`wtt-static`) | 設置タグのファイル(`/s/<siteId>.js`)を静的アセットとして配る。訪問者の読み込みは Worker を起動しない | Cloudflare Workers(設置サイトのゾーンに Route で配置する。別のドメインに置く構成では、edge と同じホストに Route で配置する。2.9) |
 | デプロイ専用の Worker(`apps/deployer`、`wtt-deployer`) | 公開・設定の保存のたびに、control の依頼で設置タグのファイルを作り直して `wtt-static` に入れる。デプロイ用トークンを持つのはこの Worker だけ | Cloudflare Workers(インターネットには出さない。2.9) |
-| control(`apps/control`) | コントロールプレーン。管理 API・認証・公開。D1 / R2 / KV に書く | Cloudflare Workers(3 節) |
-| admin(`apps/admin`) | 管理画面(Next.js)。control の API を BFF 経由で呼び出す | Cloudflare Workers(control とは別の Worker。4 節) |
+| control(`apps/control`) | コントロールプレーン。管理 API・認証・公開。D1 / R2 / KV に書く | Cloudflare Workers(新しい導入の名前は `wtt-control-<16 桁の 16 進>`。3 節) |
+| admin(`apps/admin`) | 管理画面(Next.js)。control の API を BFF 経由で呼び出す | Cloudflare Workers(新しい導入の名前は `wtt-admin-<16 桁の 16 進>`。control とは別の Worker。4 節) |
 
 admin のリクエストの数え方:
 
@@ -907,7 +1044,7 @@ admin のリクエストの数え方:
 
 制約が 3 つある。
 
-**(1) 1 つの Cloudflare アカウントに置けるのは 1 インスタンスだけ。** Worker・D1・KV・R2 の名前(`wtt-` で始まる)と Rate Limiting binding の `namespace_id` は固定になっている。同じアカウントに 2 つ目を導入すると 1 つ目を上書きし、Rate Limiting はカウンタを共有する。
+**(1) 1 つの Cloudflare アカウントに置けるのは 1 インスタンスだけ。** 管理画面と control の Worker 名は新しい導入で乱数を付けるが、ほかの Worker・D1・KV・R2 の名前(`wtt-` で始まる)と Rate Limiting binding の `namespace_id` は固定なので、この制約は変わらない。同じアカウントに 2 つ目を導入すると 1 つ目を上書きし、Rate Limiting はカウンタを共有する。
 
 - 検証用と本番など複数を動かすときは Cloudflare アカウントを分ける。Free のアカウントを足しても費用はかからない
 - アカウントを分けると、無料枠の日次上限(アカウント単位)と、配信ファイルのデプロイ用トークン(アカウント全体に適用される)も分かれる
@@ -1500,7 +1637,7 @@ pnpm -C apps/control exec wrangler r2 bucket create wtt-assets </dev/null   # 2.
 (3) 公開ベースを決める。`asset_public_base` の値を変えずに 3.4 の `AB_ASSET_PUBLIC_BASE` に使う。
 
 - **本番ではカスタムドメインを勧める**。カスタムドメインなら、訪問者と管理画面は R2 から直接画像を読み、Worker は動かない(Cloudflare のキャッシュも使われる)。`dev-assets` は、R2 にドメインを接続できない間の暫定と、手元の開発のためのもの
-- `dev-assets` を選んだ場合: 実値は `<control URL>/dev-assets`。control URL は 3.5 の初回 deploy で分かる。control 自身が R2 を読んで画像を返すので、アップロードと IMAGE の変更は動作する。ただし、訪問者のページと管理画面の画像の一覧で画像を 1 枚表示するたびに control が 1 回動き、Workers Free の 1 日のリクエスト数(アカウント全体で 10 万)を edge・管理画面と分け合う。Cloudflare のキャッシュも使われない(ブラウザのキャッシュだけ)。訪問者の多いサイトで IMAGE の変更を配信すると、この枠を先に使い切るおそれがある。R2 直配信より遅くもなる
+- `dev-assets` を選んだ場合: 画像の URL に control のアドレスが出るので、control の名前の乱数による保護の補助は適用されない(管理画面のアドレスは control からは分からない)。実値は `<control URL>/dev-assets`。control URL は 3.5 の初回 deploy で分かる。control 自身が R2 を読んで画像を返すので、アップロードと IMAGE の変更は動作する。ただし、訪問者のページと管理画面の画像の一覧で画像を 1 枚表示するたびに control が 1 回動き、Workers Free の 1 日のリクエスト数(アカウント全体で 10 万)を edge・管理画面と分け合う。Cloudflare のキャッシュも使われない(ブラウザのキャッシュだけ)。訪問者の多いサイトで IMAGE の変更を配信すると、この枠を先に使い切るおそれがある。R2 直配信より遅くもなる
 - `dev-assets` からカスタムドメインに変えるなら、**画像を使い始める前に**変える。`AB_ASSET_PUBLIC_BASE` をカスタムドメインに変えると `GET /dev-assets/*` は自動的に閉じ、それまでに上げた画像の URL(`…/dev-assets/sites/…`)は読めなくなる。画像の一覧の URL・保存済みの変更・公開した設定の URL は書き換わらないので、前の画像は一覧でも表示されなくなり、その画像を使うパターンでは画像を上げ直して選び直すことになる
 - カスタムドメイン(例 `assets.<運用者ドメイン>`)を選んだ場合: 下のコマンドでバケットに接続し、`vars.AB_ASSET_PUBLIC_BASE` をその URL にして再デプロイする。DNS レコードと証明書は Cloudflare が作る。ドメインのゾーンが同じアカウントにあること。権限で拒否されたときだけ人に頼む(下の「期待と違うとき」):
 
@@ -1571,8 +1708,8 @@ pnpm -C apps/control exec wrangler secret list | jq -r '.[].name' | sort   # 期
 
 | キー | 内容 |
 |---|---|
-| `AB_ADMIN_URL` | ← `admin_address`(`workers-dev` なら `https://wtt-admin.<アカウントのサブドメイン>.workers.dev`。サブドメインは 0.5 の API で取ったもの。`custom` なら `https://<admin_host>`)。管理画面の公開 URL。招待リンクとパスワードリセットリンクの先頭、Google ログイン後の戻り先、Better Auth の `trustedOrigins` になる |
-| `AB_CONTROL_URL` | ← `control_address`(`workers-dev` なら初回 deploy の出力の URL、`custom` なら `https://<control_host>`)。control 自身の公開 URL。Better Auth の `baseURL` に使われ、`trustedOrigins`(= `AB_ADMIN_URL`)との整合が要る。workers.dev のまま使う場合の値は `https://wtt-control.<アカウントのサブドメイン>.workers.dev`。サブドメインは 0.5 の API で取ったもの(または初回 `wrangler deploy` の出力)。0.5 で確定した URL と一致すること |
+| `AB_ADMIN_URL` | ← `admin_address`(`workers-dev` なら `https://<管理画面の Worker 名>.<アカウントのサブドメイン>.workers.dev`。サブドメインは 0.5 の API で取ったもの。`custom` なら `https://<admin_host>`)。管理画面の公開 URL。招待リンクとパスワードリセットリンクの先頭、Google ログイン後の戻り先、Better Auth の `trustedOrigins` になる |
+| `AB_CONTROL_URL` | ← `control_address`(`workers-dev` なら初回 deploy の出力の URL、`custom` なら `https://<control_host>`)。control 自身の公開 URL。Better Auth の `baseURL` に使われ、`trustedOrigins`(= `AB_ADMIN_URL`)との整合が要る。workers.dev のまま使う場合の値は `https://<control の Worker 名>.<アカウントのサブドメイン>.workers.dev`。サブドメインは 0.5 の API で取ったもの(または初回 `wrangler deploy` の出力)。0.5 で確定した URL と一致すること |
 | `AB_ASSET_PUBLIC_BASE` | ← `asset_public_base`(URL なら変えずに、`dev-assets` なら `<control URL>/dev-assets`)。画像の公開ベース URL。R2 のカスタムドメイン、または暫定で `<control URL>/dev-assets`(3.2)。**`asset_public_base: none` では書かない**(binding が無いので無視される。binding があるのに空だと画像は無効として扱われる) |
 | `AB_ASSET_MAX_MB` | ← `asset_max_mb`。アップロード 1 件の上限(MB)の文字列 |
 | `AB_PUBLISH_BODY_KEEP` | 任意。サイトごとに公開の本体(配った設定の全文)を残す版の数の文字列。本体が残っている版を新しい順に数える(本体の無い失敗の版は数えない。本体を持つ版がこの数より少ないサイトでは消さない)。書かなければ `"100"`。20〜10,000 の外・整数でない値・空の値は `"100"` として扱う。古い版の本体は 1 日 1 回の定期処理で消え、版・状態・日時・公開した人は公開履歴に残る。下げるとその後の日次の定期処理(UTC 1 時以降の最初の回。その日の処理がまだ終わっていなければ当日の回)から消え(1 サイト 1 回 500 版・1 日の全サイト合計 5,000 版まで)、上げても消えた本体は戻らない。配信中などの守る版は数を超えても残る(運用ガイド「公開履歴の本体の保持」) |
@@ -1592,7 +1729,14 @@ edge の公開 origin(必ず書く):
 | キー | 内容 |
 |---|---|
 | `CF_ACCOUNT_ID` | Cloudflare のアカウント ID(32 桁の 16 進。`pnpm -C apps/control exec wrangler whoami` の Account ID) |
-| `AB_USAGE_RESOURCES` | 内訳に出す本製品のリソース。`wrangler.jsonc` には文字列ではなく **JSON のオブジェクト**として書く。雛形は `d1` と `kv` が空の配列なので、本製品の D1 と KV を足す: `"d1": [{ "id": "<3.1 の database_id>", "name": "wtt-control" }, { "id": "<2.2 の計測用のデータベースの database_id>", "name": "wtt-results" }]`、`"kv": [{ "id": "<2.2 の KV の id>", "name": "CONFIG_KV" }]`(`workers` は既定で `["wtt-edge", "wtt-control", "wtt-admin"]`)。設置タグを配る `wtt-static` と、デプロイ専用の `wtt-deployer`(2.9)も内訳に出すなら、その名前も `workers` に足す。`d1` が空のまま、または書いた ID がどのデータベースとも一致しないと、D1 の 1 データベースあたりの上限は「判定していません」と表示される。`wtt-results` も書くのは、テストの結果の記録で大きくなるデータベースの容量を上限(Free は 1 データベース 500 MB)と比べるため |
+| `AB_USAGE_RESOURCES` | 内訳に出す本製品のリソース。`wrangler.jsonc` には文字列ではなく **JSON のオブジェクト**として書く。雛形は `d1` と `kv` が空の配列なので、本製品の D1 と KV を足す: `"d1": [{ "id": "<3.1 の database_id>", "name": "wtt-control" }, { "id": "<2.2 の計測用のデータベースの database_id>", "name": "wtt-results" }]`、`"kv": [{ "id": "<2.2 の KV の id>", "name": "CONFIG_KV" }]`。`"workers": ["wtt-edge", "<control の Worker 名>", "<管理画面の Worker 名>"]` も書く(0.5 で決めた名前)。設置タグを配る `wtt-static` と、デプロイ専用の `wtt-deployer`(2.9)も内訳に出すなら、その名前も `workers` に足す。`d1` が空のまま、または書いた ID がどのデータベースとも一致しないと、D1 の 1 データベースあたりの上限は「判定していません」と表示される。`wtt-results` も書くのは、テストの結果の記録で大きくなるデータベースの容量を上限(Free は 1 データベース 500 MB)と比べるため |
+
+使用状況の内訳に、手元の管理画面と control の名前が入っているかを確かめる。2 行とも末尾が `1` であること。`0` なら `AB_USAGE_RESOURCES.workers` に名前を書き直す。ファイルはコメントを含むので、`//` から行末までと配列の中の `/* */` を除き、1 行につないで `workers` の配列だけを取り出している(配列内の文字列に `]` を含めない)。
+
+```bash
+W=$(sed -E 's#(^|[[:space:]])//.*$##' apps/control/wrangler.jsonc | tr -d '\r\n' | grep -oE '"workers": *\[[^]]*\]' | sed -E 's#/\*([^*]|\*+[^*/])*\*+/##g' || true)
+for app in admin control; do N=$(sed -nE 's/^  "name": "([a-z0-9-]+)",[[:space:]]*$/\1/p' "apps/$app/wrangler.jsonc"); printf '%s %s\n' "$N" "$(printf '%s' "$W" | grep -c "\"$N\"")"; done   # 期待: 2 行とも末尾が 1(使用状況の内訳に入っている)
+```
 
 **`wrangler.jsonc` の `vars` は本番値を置く場所。** ローカル開発・テストは次の 3 か所で localhost 値に上書きする: `wrangler dev` は `apps/control/.dev.vars`(`.dev.vars.example` を写す)、vitest は `apps/control/vitest.config.ts` の `miniflare.bindings`、admin の E2E は `apps/admin/playwright.config.ts` の control 起動コマンドの `--var`。
 
@@ -1622,13 +1766,13 @@ deploy の出力の URL が、0.5 で確定した control の URL(= Google に�
 確認:
 
 ```bash
-# control の URL は上の deploy の出力(https://wtt-control.<アカウントのサブドメイン>.workers.dev)から拾う
+# control の URL は上の deploy の出力(https://<control の Worker 名>.<アカウントのサブドメイン>.workers.dev)から拾う
 curl -sS "<control URL>/llms.txt" -o /dev/null -w '%{http_code}\n'   # 期待: 200(認証不要のガイド本文。control に /healthz は無い)
 ```
 
 期待と違うとき:
 
-- deploy の直後(特に、0.5 で作ったばかりのサブドメインへの初回 deploy)に 404 や本文 `error code: 1042` が返る → 公開の反映待ち(数十秒)。**30 秒待ってから同じ確認をやり直す**。2 回目も同じなら、deploy の出力に `https://wtt-control.<サブドメイン>.workers.dev` の行があるかを確かめる(無ければ 0.5 のサブドメインの作成と、`wrangler.jsonc` に `workers_dev: false` が入っていないかを見る)
+- deploy の直後(特に、0.5 で作ったばかりのサブドメインへの初回 deploy)に 404 や本文 `error code: 1042` が返る → 公開の反映待ち(数十秒)。**30 秒待ってから同じ確認をやり直す**。2 回目も同じなら、deploy の出力に `https://<control の Worker 名>.<サブドメイン>.workers.dev` の行があるかを確かめる(無ければ 0.5 のサブドメインの作成と、`wrangler.jsonc` に `workers_dev: false` が入っていないかを見る)
 - `d1:migrate:remote` が `✅ No migrations to apply` 以外の失敗で止まる → 3.1 の `database_id` を疑う
 - `wrangler deploy` が `wtt-edge`・`ResultsBudget`・`ResultsHealth` のどれかを含むエラーで失敗する → edge がまだデプロイされていないか、この 2 つを含まない古い edge のまま。2.4(更新では 6.3 の手順 1)で edge をデプロイしてからやり直す
 
@@ -1638,13 +1782,13 @@ control は `*.workers.dev` のままでも動く(ゾーンのキャッシュや
 
 カスタムドメインを使う場合:
 
-1. 7.1 のとおり `apps/control/wrangler.jsonc` を書き換えて(`routes` に加えて `workers_dev` / `preview_urls` を `false` にする)再デプロイする
+1. 7.1 のとおり `apps/control/wrangler.jsonc` を書き換えて(`routes` を足し、`workers_dev` を `false` にする。`preview_urls` は既存の `false` のまま)再デプロイする
 2. control 側の `AB_CONTROL_URL`(と `AB_ASSET_PUBLIC_BASE` が control URL を含むならそれ)と、admin 側 `apps/admin/wrangler.jsonc` の `vars.AB_CONTROL_URL` もその URL に合わせて更新・再デプロイする(7 節)
 3. `AB_ADMIN_URL` は管理画面の実際の URL(4.2)のままにする。Better Auth の `trustedOrigins` に使われるため、control の URL にすると admin の認証 Origin が一致しなくなる
 
 ## 4. admin のデプロイ
 
-管理画面は control とは別の Worker(`wtt-admin`)として Cloudflare Workers に置く。Next.js を Vite で動かす vinext を使い、ビルドが `dist/` 配下に生成設定(`wrangler.json`。デプロイ用の設定)と `dist/client`(静的ファイル)を出す。
+管理画面は control とは別の Worker(0.5 で決めた `<管理画面の Worker 名>`)として Cloudflare Workers に置く。Next.js を Vite で動かす vinext を使い、ビルドが `dist/` 配下に生成設定(`wrangler.json`。デプロイ用の設定)と `dist/client`(静的ファイル)を出す。
 
 - 運用者の PC でのローカル実行は開発用(`pnpm admin:dev`)で、導入の選択肢ではない。招待やリセットのリンクが `localhost` を指して複数人で使えないため
 - 管理画面と control はそれぞれ自分の版を名乗る。更新の後も古い管理画面を開いたままの人がいると、その画面からの保存は control が `426 client_too_old` で断る(古い画面が新しい control に書き込む食い違いを防ぐため)。管理画面の上部に帯が出るので、ページを再読み込みすれば直る。帯の種類は[運用ガイド 6 節](operations.md#6-ロールと管理操作)
@@ -1656,14 +1800,14 @@ control は `*.workers.dev` のままでも動く(ゾーンのキャッシュや
 |---|---|
 | `AB_CONTROL_URL` | 3.5 で確認した control の公開 URL。control 側の `vars.AB_CONTROL_URL` と同じ値にする(違うと sign-in 後に 401 になる)。binding がある構成でも書く(Google のログインでブラウザを control へ送る先と、`services` の binding を外した場合(この文書の手順には無い)に呼ぶ先に使う) |
 
-`services` の binding(`CONTROL` → `wtt-control` の `ControlBff`)はリポジトリの `apps/admin/wrangler.jsonc` に書いてあり、書き換えない。control の Worker 名を `wtt-control` から変えていなければそのまま使える。
+`services` の binding(`CONTROL` → `<control の Worker 名>` の `ControlBff`)は、0.5 の名前のブロックが control の名前に書き換える。更新でも、この宛先と control の `name` をそろえて残す。
 
 `apps/admin/.env.local` は `pnpm admin:dev`(開発)専用で、デプロイには使われない。
 
 ### 4.2 公開アドレス(`admin_address`)
 
-- `workers-dev`(既定): `apps/admin/wrangler.jsonc` は何も書き換えない。URL は `https://wtt-admin.<アカウントのサブドメイン>.workers.dev`(サブドメインは control と同じ)。以下の `custom` の手順は行わない
-- `custom`: 自分のドメインに置く(DNS レコードと証明書は wrangler が作る。ゾーンが Cloudflare にあること)
+- `workers-dev`(既定): 0.5 で名前を書き換えた `apps/admin/wrangler.jsonc` を使う。`workers_dev` は `true`、`preview_urls` は `false` のままにする。URL は `https://<管理画面の Worker 名>.<アカウントのサブドメイン>.workers.dev`(サブドメインは control と同じ)。以下の `custom` の手順は行わない
+- `custom`: 自分のドメインに置く(DNS レコードと証明書は wrangler が作る。ゾーンが Cloudflare にあること)。この構成では名前の乱数で隠せないので、強い保護が要るなら 4.5 の Access を使う
 
 自分のドメインに置く利点: 招待・リセットリンクが `https://admin.<運用者ドメイン>/...` になる / ゾーンの WAF と Cloudflare Access(4.5)を掛けられる。後から `workers-dev` → `custom` に切り替えるときも、下の (0) の確認(作業用のトークンを作り直す。0.5 の最後の段落)と (1) の編集をして admin を再デプロイ → 3.4 の `AB_ADMIN_URL` を新 URL にして control を再デプロイすればよい(ユーザー・API キー・公開履歴は引き続き使える)。
 
@@ -1691,16 +1835,15 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 - `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に Zone → DNS → Read が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 の 2)
 - `n` が 1 以上 → そのホストは使われている。別のホストにする(`admin_host` を変える)か、使っていないことを人に確かめてから人に消してもらう。消した後に、このブロックをやり直す
 
-**(1) `apps/admin/wrangler.jsonc` を編集する。** `workers_dev` と `dev` は**既存の行を置き換え**、`preview_urls` と `routes` は**足す**(同じキーを二重に書くと後ろの行が勝ち、`host: localhost` が失われる)。
+**(1) `apps/admin/wrangler.jsonc` を編集する。** `workers_dev` と `dev` は**既存の行を置き換え**、`preview_urls` は既存の `false` を残し、`routes` は**足す**(同じキーを二重に書くと後ろの行が勝ち、`host: localhost` が失われる)。
 
 ```jsonc
 "workers_dev": false,
-"preview_urls": false,
 "routes": [{ "pattern": "<admin_host>", "custom_domain": true }],
 "dev": { "port": 3000, "host": "localhost" }
 ```
 
-`workers_dev` / `preview_urls` を false にしないと `https://wtt-admin.<アカウントのサブドメイン>.workers.dev` と Preview URL が残り、Access / WAF を迂回できる。
+`workers_dev` / `preview_urls` を false にしないと `https://<管理画面の Worker 名>.<アカウントのサブドメイン>.workers.dev` と Preview URL が残り、Access / WAF を迂回できる。
 
 **(2) ゾーン側で「Always Use HTTPS」を有効にする**(http で開くとセッション Cookie に `Secure` が付かない)。管理画面は https では `__Host-` で始まる名前の Cookie だけを使い、同じドメインの別のホストから置かれた同じ名前の Cookie を受け付けない。この保護も Always Use HTTPS が前提で、無効だと、管理画面を http で開かせて、今の名前(`__Host-` の無い名前)の Cookie を使わせることができる。
 
@@ -1709,17 +1852,23 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 **(3) デプロイ(4.3)の後に、workers.dev 側が閉じたことを確認する:**
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' "https://wtt-admin.<アカウントのサブドメイン>.workers.dev/login"   # 期待: 404 か接続失敗(workers.dev が閉じている)
+curl -sS -o /dev/null -w '%{http_code}\n' "https://<管理画面の Worker 名>.<アカウントのサブドメイン>.workers.dev/login"   # 期待: 404 か接続失敗(workers.dev が閉じている)
 ```
 
 ### 4.3 デプロイ
 
 ```bash
 pnpm -C apps/admin build      # vinext build。dist/ 配下に生成設定(wrangler.json)と dist/client を出す
+jq -c '{name, preview_urls, service: [.services[]?.service]}' apps/admin/dist/server/wrangler.json   # 期待: name = <管理画面の Worker 名>、preview_urls = false、service = ["<control の Worker 名>"]
+```
+
+生成設定が期待と違えば deploy しない。手元の `apps/admin/wrangler.jsonc` の `name`・`preview_urls`・`services` を確かめ、ビルドし直す。分からなければ人に聞いて止まる。期待どおりなら:
+
+```bash
 pnpm -C apps/admin deploy:cf  # wrangler deploy --config <ビルドが出した生成設定>
 ```
 
-deploy の出力に `https://wtt-admin.<アカウントのサブドメイン>.workers.dev` が出る。`custom` のときは `https://<admin_host>` を使う。出力の bindings の一覧に `env.CONTROL (wtt-control#ControlBff)` が出ていれば、control への service binding が設定されている。
+deploy の出力に `https://<管理画面の Worker 名>.<アカウントのサブドメイン>.workers.dev` が出る。`custom` のときは `https://<admin_host>` を使う。出力の bindings の一覧に `env.CONTROL (<control の Worker 名>#ControlBff)` が出ていれば、control への service binding が設定されている。
 
 ### 4.4 確認
 
@@ -1954,10 +2103,39 @@ pnpm install
 
 - 差分なし(初回導入で `wrangler.jsonc` を編集していない = 通常あり得ない)→ stash を作らずに進む
 - apply で衝突 → 両方の変更を見て id・routes・vars・`ratelimits` の `limit` を残し、`git stash drop "$S"` を手で行う。解消後は `grep -n '<<<<<<<' apps/*/wrangler.jsonc` が空であることを確認し、`git restore --staged apps/edge/wrangler.jsonc apps/control/wrangler.jsonc apps/admin/wrangler.jsonc apps/deployer/wrangler.jsonc`(存在するものだけを並べる)で index を戻す(`git status --short` が ` M` の行だけになる)。計測用のデータベースを足すリリースでは `apps/control/wrangler.jsonc` の `d1_databases` で衝突することがある(解き方は 6.3 の該当の節の手順 3)
+  - `name`・`services` の行の近くで衝突したら、名前と宛先は手元の値を残す。`preview_urls` は新しい版の `false` を使う
   - レート制限の既定値が変わる版(CHANGELOG の目印)への更新では、`apps/edge/wrangler.jsonc` の KV の id の行から `ratelimits` の行までの 3 行が 1 回衝突する。KV の id は手元の値にし、その下のコメントと `ratelimits` の行は新しい版の形にして、`limit` は 2.3 の規則で書く。Route などほかの行は自動で戻る
   - ゾーンの WAF があるかは、`deploy-answers.yaml` の `edge_address`・`edge_waf_rate_limit` で見る。ファイルが無ければ 2.7 の GET で確かめる。見るのはルールの有無ではなく、式に `/v1/sites/` を含むルールがあるか(既存の別のルールがあるだけでは WAF があるとは言えない。別のルールがあるために「作らない」を選んだ導入があるため)。そのためのトークンも無ければ人に聞く。更新は別の会話で始まるので、導入時の答えが手元に残っていないことがある
 - `git stash list` に `wtt-deploy-config` が残っている → 前回の更新の取りこぼし。中身を確認して drop
 - `git checkout` が `Your local changes to the following files would be overwritten` で失敗 → 表示されたファイルの差分を確認し、生成物なら `git checkout -- <file>` で捨て、設定ファイルなら stash の対象に加えてから 6.2 をやり直す(失敗したまま先に進まない。`git describe --tags --exact-match` が目標 tag でなければここに戻る)
+
+名前を保ったまま更新できることを、deploy の前に確かめる。上の stash の適用が済み、衝突を解いた後(`grep -n '<<<<<<<' apps/*/wrangler.jsonc` が空)に流す。正しい名前は手元の管理画面と control の `name` の行で、上の退避・適用によって次の版へ引き継ぐ。既定の名前の導入も、乱数の付いた名前の導入も同じブロックで確認する。
+
+```bash
+AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
+wname() { sed -nE 's/^  "name": "([a-z0-9-]+)",[[:space:]]*$/\1/p' "apps/$1/wrangler.jsonc"; }
+role() { [ -n "$2" ] && [ "$2" = "$(printf '%s\n' "$2" | head -1)" ] && case "$2" in "$1" | "$1"-*) true ;; *) false ;; esac; }
+A=$(wname admin); C=$(wname control); S=$(sed -nE 's/^.*"service": "([a-z0-9-]+)".*$/\1/p' apps/admin/wrangler.jsonc)
+if role wtt-admin "$A" && role wtt-control "$C" && [ "$S" = "$C" ]; then
+  BODY=$(curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/scripts" -H "Authorization: Bearer $T") || BODY=''
+  R=$(printf '%s' "$BODY" | jq -r --arg a "$A" --arg c "$C" \
+    'if .success == true and (.result | type) == "array" then ([.result[].id] as $ids | [$a, $c] | map(. as $n | "\($n) \(if any($ids[]; . == $n) then "found" else "missing" end)") | .[]) else "error" end' 2>/dev/null) || R=error
+  [ -n "$R" ] || R=error
+else
+  R="inconsistent admin=${A:-(empty)} control=${C:-(empty)} service=${S:-(empty)}"
+fi
+printf '%s\naccount=%s\n' "$R" "$AID"   # 期待: <管理画面の Worker 名> found と <control の Worker 名> found の 2 行。account は更新する導入の Account ID(6.1 で確かめた値)
+```
+
+両方の行が `found` の場合だけ 6.3 へ進む。
+
+- `inconsistent …` → 手元の名前と宛先がそろっていない。`admin=` が `wtt-admin` で、`control=` が `wtt-control` で始まり、`service=` が `control=` と同じであること。値が `(empty)` なら `name`・`service` の行の形(インデント・行末)が想定と違うか、衝突の印が残っている。衝突を解くときに新しい版の `"service": "wtt-control"` を残した場合は、手元の control の名前に戻す。分からなければ止まって人に聞く
+- `account=` が更新する導入の Account ID(6.1 で確かめた値)と違う → 別のアカウントの一覧を見ている。`CLOUDFLARE_ACCOUNT_ID` を設定し直してやり直す
+- `missing` → 手元の名前が Cloudflare の Worker と違う。このまま deploy すると別の Worker が立つ。アカウントの Worker の一覧で `wtt-admin`・`wtt-control` で始まる名前を確かめ、`name` と管理画面の `services` の宛先をその名前にそろえてからやり直す。分からなければ人に聞く
+- `error` → 一覧が読めない。`wrangler login` と `CLOUDFLARE_ACCOUNT_ID`(6.1)を確かめてやり直す。確かめないまま deploy しない
+
+管理画面と control の `preview_urls` は、新しい版の `false` を残す。前の版で自前ドメイン用に同じキーを別の行へ足していた場合は、同じキーが二重にならないよう 1 行の `false` にまとめる。管理画面のビルドが出す設定で `preview_urls` が `false` になっていることは、4.3 の確かめのブロックで確かめられる。この設定は次回の deploy で反映され、既に証明書の公開の記録に載った名前は消えない(0.5)。
 
 ### 6.3 デプロイ(順序を守る)
 
@@ -2086,7 +2264,7 @@ runtime を作り直したら control と deployer も必ず再デプロイす�
 **管理画面の版の確認と service binding を足すリリースの更新**(CHANGELOG の目印「この版より前に開いたタブは再読み込みが要る」「オーナーと非常口でパスワードを使った人が 1 回ログアウトされる」「admin の設定に binding が増える」):
 
 - 順は上の 2 つ目のブロックと手順 4 のまま(edge → deployer → マイグレーション → control → admin)。**edge は control より先にデプロイする**。新しい版の control は、各サイトのサイト設定の記録(KV)に新しい訪問者の記録の上限を書く。前の版の edge はこの項目を知らないので、その記録を読めないものとして扱い、そのサイトの判定と送信が 404 になる。**admin は control より後にデプロイする**。admin の binding の宛先(control の `ControlBff`)が要るため
-- 手順 4 の出力の bindings に `env.CONTROL (wtt-control#ControlBff)` が出ることを確かめる(4.3)。6.4 では、`curl -sSI "<control URL>/llms.txt" | grep -i x-wtt-min-client-version` が `x-wtt-min-client-version: 1` を返すことも確かめる
+- 手順 4 の出力の bindings に `env.CONTROL (<control の Worker 名>#ControlBff)` が出ることを確かめる(4.3)。6.4 では、`curl -sSI "<control URL>/llms.txt" | grep -i x-wtt-min-client-version` が `x-wtt-min-client-version: 1` を返すことも確かめる
 - **v0.11 より前に開いた管理画面のタブは、凍結を外した後の最初の保存で「管理画面が古い版です」(426)になる**。ページを再読み込みすれば直る(未保存の入力は消えるので、必要なら控えてから)。更新の前に利用者に伝えておく
 - **更新の後、オーナーと、これまでに非常口(8 節)でパスワードを使った人が 1 回ログアウトされる**。Google でログインし直せばよい。新しい版は、非常口が閉じている間、パスワードの記録とその持ち主のログイン状態を 15 分ごとに消す(8 節)。既存の導入では、初回セットアップがオーナーに誰も知らない乱数のパスワードの記録を残しているので、オーナーも対象になる。非常口が閉じていれば凍結を外してから通常 15 分以内に、非常口を開けたまま更新したら閉じた後の最初の定期処理で消える。作業者自身もログアウトされうるので、先に伝えておく
 - 新しい訪問者の記録の上限(運用ガイド 7 節)は、凍結を外した後の control の定期処理(15 分ごと)が、1 回に 10 サイトずつ各サイトのサイト設定の記録に入れる。入るまでは上限なしで今までどおり動く。翌日に `pnpm -C apps/control exec wrangler kv key get "site:<siteId>:settings" --namespace-id <namespace ID> --remote` で `newProfileBudget` が入ったことを確かめる。すぐに入れたいサイトは、管理画面でサイト設定を一度保存する
@@ -2388,15 +2566,14 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 - `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に Zone → DNS → Read が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 の 2)
 - `n` が 1 以上 → そのホストは使われている。別のホストにする(`control_host` を変える)か、使っていないことを人に確かめてから人に消してもらう。消した後に、このブロックをやり直す
 
-確かめたら、`apps/control/wrangler.jsonc` に `workers_dev` / `preview_urls`(どちらも `false`)と `routes` を**足し**、既存の `dev` の行を下の `dev` で**置き換えて**(同じキーを二重に書くと後ろの行が勝つ)再デプロイする。DNS レコードと証明書は wrangler が自動で作る。
+確かめたら、`apps/control/wrangler.jsonc` に `workers_dev: false` と `routes` を**足し**、`preview_urls` は既存の `false` を残し、既存の `dev` の行を下の `dev` で**置き換えて**(同じキーを二重に書くと後ろの行が勝つ)再デプロイする。DNS レコードと証明書は wrangler が自動で作る。
 
-`workers_dev` / `preview_urls` を `false` にしないと `https://wtt-control.<アカウントのサブドメイン>.workers.dev` と Preview URL が開いたままになり、(2)(3) の防御を迂回できる。
+`workers_dev` / `preview_urls` を `false` にしないと `https://<control の Worker 名>.<アカウントのサブドメイン>.workers.dev` と Preview URL が開いたままになり、(2)(3) の防御を迂回できる。
 
-確認: `wrangler deploy` の出力の `Deployed wtt-control triggers` に `control.<運用者ドメイン>` だけが並び、workers.dev の行が**無い**こと。
+確認: `wrangler deploy` の出力の `Deployed <control の Worker 名> triggers` に `control.<運用者ドメイン>` だけが並び、workers.dev の行が**無い**こと。
 
 ```jsonc
 "workers_dev": false,
-"preview_urls": false,
 "routes": [{ "pattern": "control.<運用者ドメイン>", "custom_domain": true }],
 // edge と同じ落とし穴: routes を書くと local mode の origin host も route になるので、ローカル開発用に host を固定する
 "dev": { "port": 8788, "host": "localhost" }
@@ -2495,7 +2672,9 @@ Zero Trust(Free で 50 ユーザーまで)の Access アプリケーション(Se
 - 使えるのは **Cloudflare アカウントで control の secret を設定できる人だけ**。その人は D1 も触れるので、この入口で権限が増えることはない
 - **ここは人が自分の端末で行う**(エージェントに頼まない)。非常用トークンと再設定リンクは、持っていればオーナーのアカウントに入れる秘密なので、エージェントの会話・作業ログ・CI の出力に残さない。端末の画面に出した場合は、使い終わったら scrollback を消す(多くのターミナルで Cmd/Ctrl + K)
 
-1. 非常用トークンを置く(16 文字以上。短い値は無視される)。secret にするのは、vars は次の `wrangler deploy` で設定ファイルの内容に上書きされて消えるため。ダッシュボードで置くなら Compute(コンピュート)→ Workers & Pages → `wtt-control` → Settings(設定)→ Runtime variables and secrets(ランタイム変数とシークレット)→ Add variable(変数を追加する)で種類を secret にして → Add variable and deploy(変数を追加してデプロイ)
+別の端末や新しい clone から行うときは、先に 6.2 の名前の確かめのブロックを流し、2 行とも `found` であることを確かめる。乱数の名前の導入では、手元の `apps/control/wrangler.jsonc` の `name` が導入した Worker の名前でないと、次のコマンドが別の Worker を宛先にする。
+
+1. 非常用トークンを置く(16 文字以上。短い値は無視される)。secret にするのは、vars は次の `wrangler deploy` で設定ファイルの内容に上書きされて消えるため。ダッシュボードで置くなら Compute(コンピュート)→ Workers & Pages → `<control の Worker 名>` → Settings(設定)→ Runtime variables and secrets(ランタイム変数とシークレット)→ Add variable(変数を追加する)で種類を secret にして → Add variable and deploy(変数を追加してデプロイ)
 
    ```bash
    BG=$(openssl rand -hex 16)                                              # 画面には出さない(echo しない)
@@ -2592,8 +2771,10 @@ echo "${#CF_ZONE_ID}"   # 期待: 32
 G=https://api.cloudflare.com/client/v4/graphql; H=(-H "Authorization: Bearer $CF_ANALYTICS_TOKEN" -H 'content-type: application/json')
 SINCE=<開始 UTC> UNTIL=<終了 UTC>
 
+C=$(sed -nE 's/^  "name": "([a-z0-9-]+)",[[:space:]]*$/\1/p' apps/control/wrangler.jsonc)
+[ -n "$C" ] || { echo "control name: not found in apps/control/wrangler.jsonc"; exit 1; }
 # (1) Worker の実行結果(日 × status。errors = 例外・資源超過などの実行失敗。Worker が自分で返す 5xx はここには出ない)
-curl -sS $G "${H[@]}" -d '{"query":"query($acct: string!, $since: Time!, $until: Time!) { viewer { accounts(filter: { accountTag: $acct }) { workersInvocationsAdaptive(limit: 500, filter: { scriptName_in: [\"wtt-edge\",\"wtt-control\"], datetime_geq: $since, datetime_lt: $until }) { dimensions { scriptName date status } sum { requests errors } } } } }","variables":{"acct":"'$CF_ACCOUNT_ID'","since":"'$SINCE'","until":"'$UNTIL'"}}' \
+curl -sS $G "${H[@]}" -d '{"query":"query($acct: string!, $since: Time!, $until: Time!) { viewer { accounts(filter: { accountTag: $acct }) { workersInvocationsAdaptive(limit: 500, filter: { scriptName_in: [\"wtt-edge\",\"'"$C"'\"], datetime_geq: $since, datetime_lt: $until }) { dimensions { scriptName date status } sum { requests errors } } } } }","variables":{"acct":"'$CF_ACCOUNT_ID'","since":"'$SINCE'","until":"'$UNTIL'"}}' \
   > $SCRATCH/cf-inv.json
 # 応答の検証(GraphQL は HTTP 200 でも本文の errors に失敗を返す)。失敗したら止める
 jq -e '.errors == null and (.data.viewer.accounts | length) == 1 and (.data.viewer.accounts[0].workersInvocationsAdaptive | type) == "array"' $SCRATCH/cf-inv.json >/dev/null \
@@ -2868,11 +3049,11 @@ pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --com
 Cloudflare アカウントから本ツールをすべて取り除く。**取り消せない**ので、必要なら先に 10.1 の export を取る。順序は「訪問者に見える側から」= 設置サイトのタグ → admin → control → edge → データ → ゾーンのルール → 外部の資格情報(edge は、edge の Durable Object を参照する control の後に消す)。
 
 1. **【人が行う】設置サイトからタグを外す**(GTM のタグを一時停止して公開、または `<script src=".../s/<siteId>.js">` を削除)。先に Worker を消すと、タグが残ったページで設置タグのファイルが 404 / 522 になる(ページ自体は壊れない: 読み込みに失敗しても元のページが出るだけ)
-2. Worker を 5 つ消す。Route・Custom Domain・Durable Objects(Visitor Profile の全データ)は Worker と一緒に消える。`wtt-deployer` を消すと設置タグのファイルの作り直しが止まるので、`wtt-static` より後に消す:
+2. Worker を 5 つ消す。先に 6.2 の名前の確かめのブロックを流し、2 行とも `found` であることを確かめる(管理画面と control は手元の `name` の Worker を消すため)。途中まで消した後にやり直すときは、消し終えた Worker の行が `missing` になるので、残っている方の行が `found` であることを確かめる。Route・Custom Domain・Durable Objects(Visitor Profile の全データ)は Worker と一緒に消える。`wtt-deployer` を消すと設置タグのファイルの作り直しが止まるので、`wtt-static` より後に消す:
 
 ```bash
-pnpm -C apps/admin exec wrangler delete --config dist/server/wrangler.json    # wtt-admin(dist が無ければ先に pnpm -C apps/admin build。または --config を付けず wrangler delete wtt-admin)
-pnpm -C apps/control exec wrangler delete                     # wtt-control。secret(BETTER_AUTH_SECRET など)も一緒に消える。deploy 用の Worker と edge の Durable Object への binding もこれで外れる
+pnpm -C apps/admin exec wrangler delete --config dist/server/wrangler.json    # <管理画面の Worker 名>(dist が無ければ先に pnpm -C apps/admin build。または --config を付けず wrangler delete <管理画面の Worker 名>)
+pnpm -C apps/control exec wrangler delete                     # <control の Worker 名>。secret(BETTER_AUTH_SECRET など)も一緒に消える。deploy 用の Worker と edge の Durable Object への binding もこれで外れる
 pnpm -C apps/edge exec wrangler delete                        # wtt-edge。Route と DO(結果の記録の予算を含む)と secret(RESULTS_VISITOR_KEY)を含む
 pnpm -C apps/deployer exec wrangler delete wtt-static         # 配信専用の Worker。設置タグのファイルと Route も消える(`wrangler deploy` では作っていない Worker なので、名前を明示する)
 pnpm -C apps/deployer exec wrangler delete                    # wtt-deployer。secret(CF_DEPLOY_TOKEN)と Durable Objects も一緒に消える
@@ -2907,7 +3088,7 @@ curl -sS -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RI
 
 5. 外部の資格情報を片づける(**【人に依頼】**):
 
-- Google Cloud の OAuth クライアント `wtt-control-<識別子>`(0.5)を削除する。プロジェクト `wtt-auth` をほかの導入と共有していなければ、プロジェクトごと消してよい
+- Google Cloud の OAuth クライアント `wtt-control-<識別子>`(0.5)を削除する。control の Worker 名(`wtt-control-<16 桁の 16 進>`)とは別で、識別子はアカウントのサブドメイン。プロジェクト `wtt-auth` をほかの導入と共有していなければ、プロジェクトごと消してよい
 - Cloudflare の API トークンのうち残っているものを失効する: 配信ファイルのデプロイ用 `wtt-deploy-<識別子>` と使用状況の表示用 `wtt-usage-<識別子>`(識別子は 0.5)。ゾーンの設定用 `wtt-setup-<識別子>` と稼働確認用は期限切れなら何もしなくてよい
   - **失効する前に、名前だけで決めず、撤去する導入のトークンかを確かめる。** API トークンはユーザーに属するので、ほかの導入(別のアカウントに入れた導入や試しの導入)のトークンも同じ一覧に並ぶ(0.5)。名前は人が付けるので、重なったり、手順と違う名前になったりする。トークンを開き、Account Resources(アカウント リソース)が撤去するアカウントだけであることと、作成日がその導入を入れた日(`deploy-log.md` の日付)と合うことを確かめる
   - どちらかが合わない、または確かめられないトークンは失効しない。失効は取り消せず、まだ使っている導入のデプロイ用のトークンを失効すると、その導入では公開や設定の保存をしても設置タグのファイルが作り直されなくなる(使用状況の表示用なら、管理画面の使用状況が取れなくなる)

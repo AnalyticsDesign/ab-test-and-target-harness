@@ -1,4 +1,7 @@
 {
+  // 使わない版ごとの公開入口を閉じる。通常の workers.dev の公開アドレスは使える。
+  "preview_urls": false,
+  // 新しい導入では docs/deploy.md 0.5 でこの名前に乱数を付ける。更新でも手元の値を残す(6.2)。
   "name": "wtt-control",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",

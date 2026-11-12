@@ -92,7 +92,7 @@ Free では Cloudflare の課金通知が使えないので、ダッシュボー
 
 管理画面へのログインはどの構成でも **Google アカウント**で、入れるのは招待されたメールアドレスだけ。メール + パスワードの経路は普段閉じているので、**総当たりの標的になるパスワード入力が無い**(Google でログインできなくなったときだけ開ける手順が[デプロイガイド 8 節](deploy.md#8-非常時の入り方)にある)。本人確認と多要素認証は Google 側に寄るので、**管理画面に入る Google アカウントでは 2 段階認証を有効にする**。用意するものは Google の OAuth クライアント 1 つ(クライアント ID と クライアント シークレット。[デプロイガイド 3.3](deploy.md#33-secrets))。
 
-**管理画面(admin)** は control とは別の Worker として Cloudflare Workers に置く(既定は `https://wtt-admin.<アカウントのサブドメイン>.workers.dev`)。admin は control を service binding(同じ Cloudflare アカウントの Worker 同士の内部の接続)で呼ぶので、**admin と control は同じ Cloudflare アカウントに置く**。この接続は control のゾーンを経由しないので、control に掛けた WAF・Access の対象にならず、ログインの回数は control が利用者の IP ごとに数える。自分のドメインに載せると招待・リセットリンクの見た目が整い、Access / WAF をゾーンで掛けられる(`admin_address: custom`)。運用者の PC でのローカル実行は開発用で、導入の選択肢ではない。
+**管理画面(admin)** は control とは別の Worker として Cloudflare Workers に置く(既定は `https://wtt-admin-<16 桁の 16 進>.<アカウントのサブドメイン>.workers.dev`)。admin は control を service binding(同じ Cloudflare アカウントの Worker 同士の内部の接続)で呼ぶので、**admin と control は同じ Cloudflare アカウントに置く**。この接続は control のゾーンを経由しないので、control に掛けた WAF・Access の対象にならず、ログインの回数は control が利用者の IP ごとに数える。自分のドメインに載せると招待・リセットリンクの見た目が整い、Access / WAF をゾーンで掛けられる(`admin_address: custom`)。運用者の PC でのローカル実行は開発用で、導入の選択肢ではない。
 
 ## 5. 付加機能(問い 4)
 

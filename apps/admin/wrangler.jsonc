@@ -1,5 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
+  // 使わない版ごとの公開入口を閉じる。通常の workers.dev の公開アドレスは使える。
+  "preview_urls": false,
+  // 新しい導入では docs/deploy.md 0.5 でこの名前と下の services の宛先に乱数を付ける。更新でも手元の値を残す(6.2)。
   "name": "wtt-admin",
   // 公開アドレス(docs/deploy.md 4.2)。自分のドメインに載せるときは false にし routes を書く(workers.dev と Preview URL を閉じる)
   "workers_dev": true,
@@ -22,8 +25,8 @@
   },
   // 自分のドメインに載せるとき(docs/deploy.md 4.2)。DNS と証明書は wrangler が作る
   // 下の 3 行のうち "workers_dev" と "dev" は**上の `workers_dev` 行と下の `dev` 行を置き換える**(足すと後ろの行が勝つ)。
-  // "preview_urls" と "routes" は新しく足す
-  // "workers_dev": false, "preview_urls": false,
+  // "preview_urls" は上の false を残し、"routes" は新しく足す
+  // "workers_dev": false,
   // "routes": [{ "pattern": "admin.example.com", "custom_domain": true }],
   // "dev": { "port": 3000, "host": "localhost" }  // routes を書くと local mode の origin host が route になるので固定する(control 7.1 と同じ落とし穴)
   "dev": { "port": 3000 }
