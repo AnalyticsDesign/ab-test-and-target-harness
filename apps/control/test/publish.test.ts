@@ -105,6 +105,30 @@ describe("publish (spec §13.6)", () => {
     expect(row.config_hash).toBe(await sha256Hex((await env.CONFIG_KV.get(kvKeys.config(sid, 1)))!));
   });
 
+  it("returns 404 with a hint for a version whose body was pruned", async () => {
+    const { owner, sid } = await siteWithRunning();
+    await publishRes(owner.token, sid);
+    await env.DB.prepare("update publishes set config_json = null, body_pruned_at = 123 where site_id = ? and version = 1").bind(sid).run();
+    const res = await call("GET", `/sites/${sid}/publishes/1`, { token: owner.token });
+    expect(res.status).toBe(404);
+    const b = await json(res);
+    expect(b).toMatchObject({ error: "not_found", bodyPrunedAt: 123 });
+    expect(b.hint).toBeTruthy();
+    await env.DB.prepare("update publishes set body_pruned_at = null where site_id = ? and version = 1").bind(sid).run();
+    const reserved = await call("GET", `/sites/${sid}/publishes/1`, { token: owner.token });
+    expect(reserved.status).toBe(404);
+    const r = await json(reserved);
+    expect(r).not.toHaveProperty("bodyPrunedAt"); expect(r).not.toHaveProperty("hint");
+  });
+
+  it("lists bodyPrunedAt per version", async () => {
+    const { owner, sid } = await siteWithRunning();
+    await publishRes(owner.token, sid); await publishRes(owner.token, sid);
+    await env.DB.prepare("update publishes set config_json = null, body_pruned_at = 123 where site_id = ? and version = 1").bind(sid).run();
+    const list = await json<Array<{ version: number; bodyPrunedAt: number | null }>>(await call("GET", `/sites/${sid}/publishes`, { token: owner.token }));
+    expect(list.map((r) => [r.version, r.bodyPrunedAt])).toEqual([[2, null], [1, 123]]);
+  });
+
   it("publish_failure_before_activation_keeps_old_config", async () => {
     const { owner, sid } = await siteWithRunning();
     await publishRes(owner.token, sid);
@@ -385,7 +409,7 @@ describe("publish (spec §13.6)", () => {
     // 7 版目の掃除の時点では 7 版すべてが 5 分以内に有効だった → 全部残る
     for (let v = 1; v <= 7; v++) expect(await config(sid, v)).not.toBeNull();
     // 5 分より後に cleanupOldVersions を呼ぶ(Cron と同じ呼び方)。7 版目だけが残る
-    expect(await cleanupOldVersions(deployEnv(), db, sid, 7, t0 + 6 * 60_000)).toBeGreaterThan(0);
+    expect((await cleanupOldVersions(deployEnv(), db, sid, 7, t0 + 6 * 60_000)).queries).toBeGreaterThan(0);
     for (let v = 1; v <= 6; v++) expect(await config(sid, v)).toBeNull();
     expect(await config(sid, 7)).not.toBeNull();
     // 何も消すものが無いときは beforeDelete(凍結の確かめ)も呼ばない

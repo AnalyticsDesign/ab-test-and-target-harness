@@ -91,7 +91,7 @@ export type AssetRow = {
 };
 /** 公開したときの定義が使っている画像(B68。同じマイグレーション)。エクスペリエンスの削除で外部キーにより消える */
 export type AssetDeliveredRefRow = { site_id: string; asset_id: string; experiment_id: string };
-export type PublishRow = { id: string; site_id: string; version: number; status: "reserved" | "failed" | "active" | "superseded"; config_hash: string | null; config_json: string | null; needs_profile: number | null; error: string | null; kv_deleted: number; published_by: string; created_at: number; activated_at: number | null;
+export type PublishRow = { id: string; site_id: string; version: number; status: "reserved" | "failed" | "active" | "superseded"; config_hash: string | null; config_json: string | null; body_pruned_at: number | null; needs_profile: number | null; error: string | null; kv_deleted: number; published_by: string; created_at: number; activated_at: number | null;
   /** B69(migrations/0026): その版の配る設定に入ったエクスペリエンスの ID(JSON の配列)。更新の前の版は NULL */
   experiment_ids_json: string | null };
 

@@ -6,6 +6,7 @@ import { resultsDeliveryJob } from "../src/cron/results-jobs";
 import { runCron } from "../src/cron/runner";
 import { getDb } from "../src/db";
 import type { Env } from "../src/env";
+import { prunePublishBodies } from "../src/publish-body-retention";
 import { publishSite } from "../src/publish";
 import { changedParts, confirmDeliveries, definitionHash, deliveredAt, recordDeliveredDefinitions, sitesNeedingDeliveryConfirmation, type DeliveredDefinition } from "../src/results/delivered";
 import type { WriteGuard } from "../src/results/guard";
@@ -772,6 +773,38 @@ describe("配信の確認の入力の digest(7o K24)", () => {
       if (via === "repair") expect((await selfRepair(owner.token, sid, fake)).staticStale).toBe(false);
       else await cronDelivery(fake);
       expect(await rowOf(sid, row.active_version!)).toMatchObject({ delivered_from: at, settled: "delivered" });
+    }
+  });
+
+  it("confirms the same deliveries after pruning when a legacy deploy request points at an old version", async () => {
+    const shared = await setupOwner();
+    for (const via of ["repair", "cron"] as const) {
+      // 更新前の control が書いた依頼の記録(input_digest が NULL)と、更新前の DO が受け付けて配置待ちだった状態(digest なし・保存済みの入力)
+      const { owner, sid } = await runningSite(shared);
+      const row = await siteRow(sid);
+      const g = genOf(row);
+      await db().insertInto("static_deploy_requests").values({ site_id: sid, epoch: g.epoch, seq: g.seq, version: row.active_version!, requested_at: Date.now() }).execute();
+      const fake = fakeDeployer();
+      fake.setSite(sid, { accepted: g, deployed: null, input: await staticInputOf(sid) });
+      await fake.flush(); // 更新後の deployer の alarm で配置(履歴の点に digest が付く)
+      const st = await fake.siteStatus(sid);
+      // 元の依頼(版 1)を保持の境より古くし、同じ履歴で確認する前後を比べる。
+      const beforeDefs = await rows(sid);
+      await confirmDeliveries(db(), sid, st, Date.now(), noGuard, (await staticInputOf(sid)).apiBase);
+      const expected = (await rows(sid)).map((r) => ({ delivered_from: r.delivered_from, settled: r.settled }));
+      for (const r of beforeDefs) await db().updateTable("experiment_delivered_definitions").set({ delivered_from: r.delivered_from, settled: r.settled }).where("id", "=", r.id).execute();
+      for (let v = 2; v <= 25; v++) {
+        await seedPublish(sid, v, owner.userId, Date.now());
+        await db().updateTable("publishes").set({ config_json: "{}", config_hash: "h", kv_deleted: 1 }).where("site_id", "=", sid).where("version", "=", v).execute();
+      }
+      await db().updateTable("publishes").set({ kv_deleted: 1 }).where("site_id", "=", sid).execute();
+      await db().updateTable("sites").set({ active_version: 25, static_served_version: 25 }).where("id", "=", sid).execute();
+      expect((await prunePublishBodies(env, db(), { siteId: sid, keep: [25], keepCount: 20, siteCap: 500, dailyCap: 5000, runId: crypto.randomUUID(), now: Date.now() })).pruned).toBe(4);
+      await confirmDeliveries(db(), sid, st, Date.now(), noGuard, (await staticInputOf(sid)).apiBase);
+      expect((await rows(sid)).map((r) => ({ delivered_from: r.delivered_from, settled: r.settled }))).toEqual(expected);
+      expect(st.history[0]!.digest).toBeDefined();
+      const at = Date.parse(st.deployedAt!);
+      expect(await rowOf(sid, row.active_version!)).toMatchObject({ delivered_from: Date.parse(st.deployedAt!), settled: "delivered" });
     }
   });
 

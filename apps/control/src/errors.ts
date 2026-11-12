@@ -82,6 +82,11 @@ export class ApiError extends Error {
 }
 
 export const notFound = () => new ApiError(404, "not_found");
+export const publishBodyPruned = (prunedAt: number) => new ApiError(404, "not_found", {
+  message: "この版の公開の本体は残っていません",
+  hint: "公開の本体は、サイトごとに新しい版から決まった数だけ残します(既定は 100 版で、導入の設定で変えられます)。それより古い版は、版・状態・日時・公開した人だけが公開履歴の一覧に残ります",
+  bodyPrunedAt: prunedAt,
+});
 
 /**
  * B68: 画像の確かめに落ちたときの hint(公開の失敗と、状態を変える口の 409 が共有する。どの画像かは assetProblems に載る)。

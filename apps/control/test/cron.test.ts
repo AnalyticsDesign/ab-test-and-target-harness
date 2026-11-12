@@ -12,11 +12,12 @@ import { resetUsageCache } from "../src/usage";
 import { kvKeys } from "@wtt/core";
 import { siteSettingsRefreshJob } from "../src/cron/site-settings-refresh";
 import { breakGlassSweep } from "../src/cron/break-glass-sweep";
-import { configCleanupJob } from "../src/cron/config-cleanup";
+import { configCleanupJob, configCleanupJobWith, summarizePruneTimes } from "../src/cron/config-cleanup";
 import { staticReconcileJob } from "../src/cron/static-reconcile";
 import { auditRetentionJob } from "../src/cron/audit-retention";
 import { assetHousekeepingJob } from "../src/cron/asset-housekeeping";
-import { publishSite } from "../src/publish";
+import { cleanupOldVersions, publishSite } from "../src/publish";
+import { housekeepingCtx } from "./housekeeping-helpers";
 import { siteToSettings } from "../src/site-settings";
 import { call, createExperiment, createSite, failingKv, fakeDeployer, runDirect, setupOwner, siteRow, siteWithRunning, testEnv, TEXT_CHANGE, userActor } from "./helpers";
 
@@ -659,6 +660,194 @@ describe("config-cleanup (plan12 K14 (b))", () => {
     await runDirect(sid, eid);
     return sid;
   }
+
+  it("returns the keep set after deleting retired versions and when nothing is doomed", async () => {
+    const { owner, sid } = await siteWithRunning();
+    await publishTimes(owner, sid, 3);
+    expect(await cleanupOldVersions(deployEnv(), getDb(env), sid, 3, T, async () => {})).toEqual({ queries: 4, keep: [3], deleted: 2 });
+    expect(await cleanupOldVersions(deployEnv(), getDb(env), sid, 3, T, async () => {})).toEqual({ queries: 2, keep: [3], deleted: 0 });
+  });
+
+  it.each(["unreadable", "broken", "unknown"])("returns null keep when %s", async (kind) => {
+    const { owner, sid } = await siteWithRunning();
+    await publishTimes(owner, sid, 3);
+    if (kind === "broken") await env.CONFIG_KV.put(kvKeys.active(sid), "x");
+    if (kind === "unknown") await env.DB.prepare("update sites set static_served_version = null where id = ?").bind(sid).run();
+    const e = deployEnv(kind === "unreadable" ? { CONFIG_KV: failingKv(new RegExp(`^${kvKeys.active(sid)}$`), "get") } : {});
+    expect(await cleanupOldVersions(e, getDb(e), sid, 3, T)).toEqual({ queries: kind === "unknown" ? 1 : 0, keep: null, deleted: 0 });
+  });
+
+  const bodyCount = async (sid: string) => (await env.DB.prepare("select count(*) as n from publishes where site_id = ? and body_pruned_at is not null").bind(sid).first<{ n: number }>())!.n;
+  const pruneEnv = (over: Partial<Env> = {}) => deployEnv({ AB_PUBLISH_BODY_KEEP: "20", ...over });
+  const summaryLogs = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.map((a) => String(a[0])).filter((s) => s.startsWith("cron config-cleanup: sites "));
+
+  it("prunes the old bodies on the daily run after deleting their kv keys and logs counts without site ids", async () => {
+    const { owner, sid } = await siteWithRunning();
+    await publishTimes(owner, sid, 25);
+    const log = vi.spyOn(console, "log");
+    await runCron(pruneEnv(), T, [configCleanupJob]);
+    expect(await bodyCount(sid)).toBe(5);
+    for (let v = 1; v <= 25; v++) expect(await configExists(sid, v)).toBe(v === 25);
+    const rows = await getDb(env).selectFrom("publishes").select(["version", "config_json"]).where("site_id", "=", sid).orderBy("version").execute();
+    for (const r of rows) expect(r.config_json === null).toBe(r.version <= 5);
+    const lines = summaryLogs(log);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("bodies pruned 5");
+    expect(lines[0]).toContain("kv deleted 24");
+    expect(lines[0]).toMatch(/, rows_read [1-9]\d*,/);
+    expect(lines[0]).not.toContain(sid);
+  });
+
+  it("prunes nothing for a site whose kv cannot be read and still prunes the others", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const other = await secondSite(owner);
+    await publishTimes(owner, sid, 25); await publishTimes(owner, other, 25);
+    await runCron(pruneEnv({ CONFIG_KV: failingKv(new RegExp(`^${kvKeys.active(sid)}$`), "get") }), T, [configCleanupJob]);
+    expect(await bodyCount(sid)).toBe(0); expect(await bodyCount(other)).toBe(5);
+  });
+
+  it("prunes nothing for a site whose kv cleanup threw", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const other = await secondSite(owner);
+    await publishTimes(owner, sid, 25); await publishTimes(owner, other, 25);
+    const DB = new Proxy(env.DB, { get(t, p) {
+      if (p === "prepare") return (q: string) => {
+        const stmt = t.prepare(q);
+        return new Proxy(stmt, { get(st, k) {
+          if (k === "bind") return (...a: unknown[]) => {
+            if (q.startsWith('select "static_served_version"') && a.includes(sid)) throw new Error("injected sites read failure");
+            return st.bind(...a);
+          };
+          const v = Reflect.get(st, k); return typeof v === "function" ? v.bind(st) : v;
+        } });
+      };
+      const v = Reflect.get(t, p); return typeof v === "function" ? v.bind(t) : v;
+    } });
+    await configCleanupJob.run(housekeepingCtx(pruneEnv({ DB }), T));
+    expect(await bodyCount(sid)).toBe(0); expect(await bodyCount(other)).toBe(5);
+  });
+
+  it("skips a site with no more versions than the keep without a query", async () => {
+    const { owner, sid } = await siteWithRunning(); await publishTimes(owner, sid, 10);
+    let count = 0;
+    const DB = countingD1(env.DB, (n) => count += n);
+    await configCleanupJob.run(housekeepingCtx(pruneEnv({ DB }), T));
+    // 凍結の確かめは helper が元の DB を使うので除く。以前と同じ 6 往復。
+    expect(count).toBe(6);
+    expect(await bodyCount(sid)).toBe(0);
+  });
+
+  it("prunes down to the new keep after lowering the env", async () => {
+    const { owner, sid } = await siteWithRunning(); await publishTimes(owner, sid, 25);
+    await runCron(deployEnv(), T, [configCleanupJob]); expect(await bodyCount(sid)).toBe(0);
+    await runCron(pruneEnv(), T + 86_400_000, [configCleanupJob]); expect(await bodyCount(sid)).toBe(5);
+  });
+
+  it("stops at the per-site and daily caps", async () => {
+    const { owner, sid } = await siteWithRunning(); const other = await secondSite(owner);
+    await publishTimes(owner, sid, 25); await publishTimes(owner, other, 25);
+    await runCron(pruneEnv(), T, [configCleanupJobWith({ siteCap: 3, dailyCap: 4 })]);
+    expect((await Promise.all([bodyCount(sid), bodyCount(other)])).sort()).toEqual([1, 3]);
+    const c = await env.DB.prepare("select cursor from cron_cursors where job = 'config-cleanup:body-prune'").first<{ cursor: string }>();
+    expect(JSON.parse(c!.cursor).pruned).toBe(4);
+  });
+
+  it("carries the daily count across continued runs and resets on the next day; logs the prune times also when the run continues", async () => {
+    const { owner, sid } = await siteWithRunning(); const other = await secondSite(owner);
+    await publishTimes(owner, sid, 25); await publishTimes(owner, other, 25);
+    const job = configCleanupJobWith({ siteCap: 3, dailyCap: 4 });
+    const log = vi.spyOn(console, "log");
+    expect(await job.run(housekeepingCtx(pruneEnv(), T, 9))).toEqual({ more: true });
+    expect((await bodyCount(sid)) + (await bodyCount(other))).toBe(3);
+    expect(summaryLogs(log)[0]).toContain("prune stmt ms max"); expect(summaryLogs(log)[0]).toContain(" total ");
+    await job.run(housekeepingCtx(pruneEnv(), T + 15 * 60_000));
+    expect((await bodyCount(sid)) + (await bodyCount(other))).toBe(4);
+    await job.run(housekeepingCtx(pruneEnv(), T + 86_400_000));
+    expect((await bodyCount(sid)) + (await bodyCount(other))).toBe(8);
+  });
+
+  it("does nothing while frozen, including bodies after kv active was read", async () => {
+    const { owner, sid } = await siteWithRunning(); await publishTimes(owner, sid, 25);
+    await freeze(); await runCron(pruneEnv(), T, [configCleanupJob]); expect(await bodyCount(sid)).toBe(0); await unfreeze();
+    const kv = new Proxy(env.CONFIG_KV, { get(t, p) {
+      if (p === "get") return async (key: string) => { const v = await t.get(key); if (key === kvKeys.active(sid)) await freeze(); return v; };
+      const v = Reflect.get(t, p); return typeof v === "function" ? v.bind(t) : v;
+    } }) as KVNamespace;
+    await runCron(pruneEnv({ CONFIG_KV: kv }), T, [configCleanupJob]); expect(await bodyCount(sid)).toBe(0);
+  });
+
+  it.each([
+    [[900, 10], { maxMs: 900, totalMs: 910 }],
+    [[600, 500, 600, 500, 600, 500, 600, 500, 600, 500, 600, 500], { maxMs: 600, totalMs: 6600 }],
+    [[5, null], { maxMs: null, totalMs: null }], [[], { maxMs: 0, totalMs: 0 }],
+  ])("summarizes prune times %j", (a, expected) => expect(summarizePruneTimes(a)).toEqual(expected));
+
+  it("stops after an unknown prune failure", async () => {
+    const { owner, sid } = await siteWithRunning(); const other = await secondSite(owner);
+    await publishTimes(owner, sid, 25); await publishTimes(owner, other, 25);
+    let attempts = 0;
+    const DB = new Proxy(env.DB, { get(t, p) {
+      if (p === "batch") return async () => { attempts++; throw new Error("injected unknown commit result"); };
+      const v = Reflect.get(t, p); return typeof v === "function" ? v.bind(t) : v;
+    } });
+    await configCleanupJob.run(housekeepingCtx(pruneEnv({ DB }), T));
+    expect(attempts).toBe(1);
+    expect(await bodyCount(sid)).toBe(0); expect(await bodyCount(other)).toBe(0);
+    expect(await configExists(sid, 1)).toBe(false); expect(await configExists(other, 1)).toBe(false);
+  });
+
+  /** batch の数を数える D1 の包み(ほかの呼び出しは base のまま) */
+  const batchCounting = (base: D1Database, count: () => void) => new Proxy(base, { get(t, p) {
+    if (p === "batch") return (stmts: D1PreparedStatement[]) => { count(); return t.batch(stmts); };
+    const v = Reflect.get(t, p); return typeof v === "function" ? v.bind(t) : v;
+  } }) as D1Database;
+
+  it("does not start a body batch that no longer fits the run after a large kv cleanup, and prunes it on a later day", async () => {
+    const { owner, sid } = await siteWithRunning(); await publishTimes(owner, sid, 52);
+    let trips = 0, batches = 0;
+    const DB = batchCounting(countingD1(env.DB, (n) => trips += n), () => batches++);
+    const log = vi.spyOn(console, "log");
+    // 残り 9: 初め 2 + KV の掃除 5(sites・publishes・凍結の確かめ・印 2。51 版で印は 2 文)= 7。本体の 2 + 位置の保存 1 は収まらない
+    await configCleanupJob.run(housekeepingCtx(pruneEnv({ DB }), T, 9));
+    expect(batches).toBe(0);
+    expect(trips).toBe(7); // 凍結の確かめ 1 は helper が元の DB で読むので数えない。合わせて 8 ≤ 9
+    expect(await bodyCount(sid)).toBe(0);
+    expect(summaryLogs(log)[0]).toContain("1 over the run budget");
+    // 次の日は KV に消す版が無いので収まる
+    await configCleanupJob.run(housekeepingCtx(pruneEnv({ DB }), T + 86_400_000, 9));
+    expect(batches).toBe(1);
+    expect(await bodyCount(sid)).toBe(32);
+  });
+
+  it("counts a site whose keep is unknown as unknown even after a prune failure", async () => {
+    const { owner, sid } = await siteWithRunning(); const other = await secondSite(owner);
+    await publishTimes(owner, sid, 25); await publishTimes(owner, other, 25);
+    const second = [sid, other].sort()[1]!;
+    const DB = new Proxy(env.DB, { get(t, p) {
+      if (p === "batch") return async () => { throw new Error("injected unknown commit result"); };
+      const v = Reflect.get(t, p); return typeof v === "function" ? v.bind(t) : v;
+    } });
+    const log = vi.spyOn(console, "log");
+    await configCleanupJob.run(housekeepingCtx(pruneEnv({ DB, CONFIG_KV: failingKv(new RegExp(`^${kvKeys.active(second)}$`), "get") }), T));
+    expect(summaryLogs(log)[0]).toContain("skipped 1 unknown / 0 within keep / 0 over the daily cap / 0 over the run budget / 0 after a prune failure");
+  });
+
+  it("checks the freeze again before the body batch when the kv cleanup deleted nothing", async () => {
+    const { owner, sid } = await siteWithRunning(); await publishTimes(owner, sid, 25);
+    await runCron(deployEnv(), T, [configCleanupJob]); // 既定の 100 版: KV だけが消え、本体は残る
+    expect(await bodyCount(sid)).toBe(0);
+    let batches = 0;
+    const DB = batchCounting(env.DB, () => batches++);
+    const kv = new Proxy(env.CONFIG_KV, { get(t, p) {
+      if (p === "get") return async (key: string) => { const v = await t.get(key); if (key === kvKeys.active(sid)) await freeze(); return v; };
+      const v = Reflect.get(t, p); return typeof v === "function" ? v.bind(t) : v;
+    } }) as KVNamespace;
+    await expect(configCleanupJob.run(housekeepingCtx(pruneEnv({ DB, CONFIG_KV: kv }), T + 86_400_000))).rejects.toBeInstanceOf(CronFrozen);
+    expect(batches).toBe(0);
+    expect(await bodyCount(sid)).toBe(0);
+    expect(await env.DB.prepare("select * from cron_cursors where job = 'config-cleanup:body-prune'").first()).toBeNull();
+    await unfreeze();
+  });
 
   it("is registered as a daily job that writes control and has no query share (static-reconcile and asset-housekeeping follow it, 7o K13・B68)", () => {
     expect(new Date(T).getUTCHours()).toBeGreaterThanOrEqual(1);

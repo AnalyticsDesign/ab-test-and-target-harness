@@ -40,7 +40,7 @@ export function PublishHistory({ history, activeVersion }: { history: PublishRow
         </table>
       </div>
       <p className="muted">
-        ロールバックの操作は今後追加します(過去の版の config は control の <code>GET /sites/:sid/publishes/:version</code> で取得できます)
+        ロールバックの操作は今後追加します(過去の版の config は control の <code>GET /sites/:sid/publishes/:version</code> で取得できます(新しい版から決まった数だけ残します。既定は 100 版))
       </p>
     </>
   );

@@ -22,6 +22,8 @@ export type Env = {
    */
   AB_UPLOADER_PUBLIC_BASE?: string;
   AB_ASSET_MAX_MB?: string;
+  /** 公開の本体を残す版数(20〜10,000、既定 100) */
+  AB_PUBLISH_BODY_KEEP?: string;
   /** 1 サイトの画像の合計の上限(MB。既定 1024)と枚数の上限(既定 1000)。B68。読めない値は既定(core の assetSiteMaxBytes / assetSiteMaxCount) */
   AB_ASSET_SITE_MAX_MB?: string;
   AB_ASSET_SITE_MAX_COUNT?: string;

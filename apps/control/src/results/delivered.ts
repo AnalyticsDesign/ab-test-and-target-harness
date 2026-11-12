@@ -178,7 +178,10 @@ export async function recordDeliveredDefinitions(
   }
 }
 
-/** publishSite が activation の後に、この版を焼いた出し直しの世代を行に入れる(まだ入っていないときだけ) */
+/**
+ * publishSite が activation の後に、この版を焼いた出し直しの世代を行に入れる(まだ入っていないときだけ)。
+ * `static_generation is null` は部分索引 experiment_delivered_definitions_without_generation(migration 0028)の WHERE と同じ項。外すと索引が使われず、サイトの全行を読む
+ */
 export async function setDeliveredGeneration(db: Db, siteId: string, version: number, generation: StaticGeneration): Promise<void> {
   await db
     .updateTable("experiment_delivered_definitions")
@@ -198,7 +201,9 @@ export async function setDeliveredGeneration(db: Db, siteId: string, version: nu
  */
 export function needsDeliveryConfirmation(alias: string) {
   const col = (c: string) => sql.ref(`${alias}.${c}`);
-  return sql<boolean>`(${col("settled")} is null or (${col("settled")} = 'unknown' and ${col("publish_version")} = (select max(x.publish_version) from experiment_delivered_definitions x where x.run_id = ${col("run_id")})))`;
+  // A∨(B∧C) = (A∨B)∧(A∨C)。前半は部分索引 experiment_delivered_definitions_unsettled の WHERE と同じ形に保つ。
+  // 全体を括弧で囲む(not や or の中に置いても意味が変わらないように。括弧は索引の照合に影響しない)。
+  return sql<boolean>`((${col("settled")} is null or ${col("settled")} = 'unknown') and (${col("settled")} is null or ${col("publish_version")} = (select max(x.publish_version) from experiment_delivered_definitions x where x.run_id = ${col("run_id")})))`;
 }
 
 /**

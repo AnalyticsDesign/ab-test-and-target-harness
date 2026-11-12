@@ -7,7 +7,7 @@ import { requireSession, type AppEnv } from "../app";
 import { guardAssets } from "../asset-guard";
 import { auditActor, auditStatement } from "../audit";
 import { toStatement, type AudienceRow, type ChangeRow, type ExperimentRow } from "../db";
-import { ApiError, notFound, validationFailed } from "../errors";
+import { ApiError, notFound, publishBodyPruned, validationFailed } from "../errors";
 import { overlapWarnings } from "../experiment-order";
 import { SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
@@ -74,6 +74,7 @@ const PublishListItemSchema = z.object({
   publishedBy: z.object({ id: z.string(), name: z.string() }),
   createdAt: z.number().int().describe("epoch ミリ秒"),
   activatedAt: z.number().int().nullable().describe("epoch ミリ秒"),
+  bodyPrunedAt: z.number().int().nullable().describe("この版の公開の本体を、保存の上限を過ぎたため消した時刻(epoch ミリ秒)。null は本体が残っているか、もともと無い(予約・失敗の版)。消した版は GET /sites/:sid/publishes/:version が 404"),
   needsProfile: z.boolean().nullable(),
   error: z
     .string()
@@ -217,6 +218,7 @@ publishRoutes.get(
         "publishes.status",
         "publishes.created_at",
         "publishes.activated_at",
+        "publishes.body_pruned_at",
         "publishes.needs_profile",
         "publishes.error",
         "publishes.published_by",
@@ -232,6 +234,7 @@ publishRoutes.get(
         status: r.status,
         createdAt: r.created_at,
         activatedAt: r.activated_at,
+        bodyPrunedAt: r.body_pruned_at,
         needsProfile: r.needs_profile === null ? null : r.needs_profile === 1,
         error: r.error === null ? null : canReadRawPublishError(role) ? r.error : publishErrorCode(r.error),
         publishedBy: { id: r.published_by, name: r.publisher_name ?? "(削除済み)" },
@@ -245,11 +248,12 @@ publishRoutes.get(
   "/sites/:sid/publishes/:version",
   describeRoute({
     tags: ["publish"],
-    summary: "公開履歴の本体(管理者以上)。その version の compiled config",
+    summary: "公開履歴の本体(管理者以上)。その version の compiled config。古い版の本体は残らないことがある(404 の bodyPrunedAt)",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "compiled config", content: { "application/json": { schema: resolver(PublishDetailSchema) } } },
       ...errorResponses(401, 403, 404, 422),
+      404: { ...errorResponses(404)[404], description: "版が無いか、本体がありません。保存の上限を過ぎて本体を消した版は bodyPrunedAt(epoch ミリ秒)と hint を返します" },
     },
   }),
   requireSession,
@@ -262,11 +266,14 @@ publishRoutes.get(
     const row = await c
       .get("db")
       .selectFrom("publishes")
-      .select(["version", "config_json"])
+      .select(["version", "config_json", "body_pruned_at"])
       .where("site_id", "=", site.id)
       .where("version", "=", version)
       .executeTakeFirst();
-    if (!row || !row.config_json) throw notFound();
+    if (!row || !row.config_json) {
+      if (row?.body_pruned_at !== null && row?.body_pruned_at !== undefined) throw publishBodyPruned(row.body_pruned_at);
+      throw notFound();
+    }
     return c.json({ version: row.version, config: JSON.parse(row.config_json) });
   },
 );

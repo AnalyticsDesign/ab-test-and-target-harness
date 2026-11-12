@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { publishBodyPruned } from "../src/errors";
 import { IMAGE_DISABLED_HINT, LIBRARY_DISABLED_HINT } from "../src/capabilities";
 import { call, choosePrimaryGoal, createExperiment, createSite, fakeDeployer, fakeResultsBudget, joinWithPassword, json, RESULTS_STORE, setupOwner } from "./helpers";
 
@@ -141,6 +142,9 @@ describe("public strings carry no private design references", () => {
   }, 20_000);
 
   it("error_envelopes_with_hints", async () => {
+    const pruned = publishBodyPruned(123);
+    noPrivateRef("publish body pruned", JSON.stringify(pruned.toBody()));
+
     const { token, workspaceId } = await setupOwner();
     const { id: sid } = await createSite(token, workspaceId);
     const byoid = await call("PATCH", `/sites/${sid}`, { token, body: { idSource: "cookie:_wtt_vid" } });

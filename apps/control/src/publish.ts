@@ -677,7 +677,9 @@ export function publicPublishResult(r: PublishResult): PublishResult {
  * 新しい版に押し出されると、D1 だけを見た cleanup は**配信中の config を消してしまう**。
  * そのため KV を読んでその版を必ず残し、KV が読めなければ 1 件も消さない(fail-closed)
  */
-export async function cleanupOldVersions(env: Env, db: Db, siteId: string, writtenVersion: number, nowMs: number, beforeDelete?: () => Promise<void>): Promise<number> {
+export type CleanupResult = { queries: number; keep: number[] | null; deleted: number };
+
+export async function cleanupOldVersions(env: Env, db: Db, siteId: string, writtenVersion: number, nowMs: number, beforeDelete?: () => Promise<void>): Promise<CleanupResult> {
   // 戻り値 = 出した D1 のクエリの数(KV は数えない)。Cron が 1 回の実行の D1 の予算を数えるのに使う
   let queries = 0;
   let served: number | null;
@@ -685,9 +687,9 @@ export async function cleanupOldVersions(env: Env, db: Db, siteId: string, writt
     const raw = await env.CONFIG_KV.get(kvKeys.active(siteId));
     served = raw === null ? null : Number(raw);
   } catch {
-    return queries; // KV が読めない = いま何が配信されているか分からない。何も消さない
+    return { queries, keep: null, deleted: 0 }; // KV が読めない = いま何が配信されているか分からない。何も消さない
   }
-  if (served !== null && !Number.isInteger(served)) return queries; // 壊れた active レコード。同上
+  if (served !== null && !Number.isInteger(served)) return { queries, keep: null, deleted: 0 }; // 壊れた active レコード。同上
   // 決定 52 / plan K20: 配信ファイル(静的アセット)が配っている版。配信ファイルの更新が遅れている間も、
   // 古い bootstrap が decision でその版を求めるので、その版の config を残す
   queries++;
@@ -697,13 +699,13 @@ export async function cleanupOldVersions(env: Env, db: Db, siteId: string, writt
     .where("id", "=", siteId)
     .executeTakeFirst();
   // ① 配っている版がまだ分からない(確かめた出し直しが無い)なら何も消さない
-  if (!st || st.static_served_version === null) return queries;
+  if (!st || st.static_served_version === null) return { queries, keep: null, deleted: 0 };
   queries++;
   const rows = await db
     .selectFrom("publishes")
     .select(["id", "version", "status", "activated_at", "kv_deleted"])
     .where("site_id", "=", siteId)
-    .where("kv_deleted", "=", 0)
+    .where("kv_deleted", "=", sql.lit(0))
     .where("config_hash", "is not", null)
     .orderBy("version", "desc")
     .execute();
@@ -715,7 +717,7 @@ export async function cleanupOldVersions(env: Env, db: Db, siteId: string, writt
   if (st.static_prev_served_version !== null && st.static_served_at !== null && nowMs - st.static_served_at < RECENT_ACTIVE_MS) keep.add(st.static_prev_served_version);
   for (const r of rows) if (r.activated_at !== null && nowMs - r.activated_at < RECENT_ACTIVE_MS) keep.add(r.version);
   const doomed = rows.filter((r) => !keep.has(r.version));
-  if (doomed.length === 0) return queries;
+  if (doomed.length === 0) return { queries, keep: [...keep].sort((a, b) => a - b), deleted: 0 };
   // 消す(KV を書く)直前の確かめ。Cron は凍結の確かめをここに渡す(公開の途中の掃除は渡さない)。凍結中は投げて何も消さない
   if (beforeDelete) {
     queries++; // 確かめの読み取り 1 件
@@ -743,7 +745,7 @@ export async function cleanupOldVersions(env: Env, db: Db, siteId: string, writt
       .where(sql<boolean>`${sql.raw(NOT_FROZEN_SQL)}`)
       .execute();
   }
-  return queries;
+  return { queries, keep: [...keep].sort((a, b) => a - b), deleted: deleted.length };
 }
 
 /**
