@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page, type Request, type TestInfo } from "@playwright/test";
+import { waitForObservedQuiet, type ObservedRequest } from "./request-count-observation";
 import { ADMIN_URL, CONTROL_URL, WORKSPACE_NAME, controlHeaders, createExperiment, createSite, login, waitForHydration } from "./fixtures";
 // 版は決め打ちしない(公開の版ではリリースの作業が dev を版の文字列に書き換える)
 import { RELEASE_VERSION } from "../generated/release";
@@ -208,11 +209,9 @@ const AUD = { id: "aud_e2e_rcount", name: "E2E request count audience" };
 const GOAL = { id: "goal_e2e_rcount", name: "E2E request count goal" };
 /** 観測の口(admin の wrangler dev) */
 const OBSERVABILITY = `${ADMIN_URL}/cdn-cgi/local/explorer/api/local/observability/query`;
-/** 新しい要求がこの間来なければ「落ち着いた」とみなす */
-const QUIET_MS = 2_000;
 
 /** admin への要求 1 件と、その中で control へ出した要求の URL */
-type AdminRequest = { url: string; control: string[] };
+type AdminRequest = ObservedRequest;
 /** 数えた結果。total は control への要求の数、byPath はそのパスごとの内訳 */
 type Counts = { total: number; byPath: Record<string, number> };
 
@@ -230,7 +229,7 @@ async function query(sql: string): Promise<unknown[][]> {
  */
 async function adminRequests(from: number, to = Number.MAX_SAFE_INTEGER): Promise<AdminRequest[]> {
   const rows = await query(
-    `SELECT r.span_id, json_extract(r.attributes, '$."url.full"'), json_extract(c.attributes, '$."url.full"')
+    `SELECT r.span_id, json_extract(r.attributes, '$."url.full"'), json_extract(c.attributes, '$."url.full"'), r.outcome, c.span_id, c.outcome
      FROM spans r
      LEFT JOIN spans c ON c.trace_id = r.trace_id AND c.name = 'fetch' AND json_extract(c.attributes, '$."url.full"') LIKE '${CONTROL_URL}/%'
      WHERE r.service = 'wtt-admin' AND r.parent_id IS NULL AND json_extract(r.attributes, '$."faas.trigger"') = 'http'
@@ -238,31 +237,18 @@ async function adminRequests(from: number, to = Number.MAX_SAFE_INTEGER): Promis
      ORDER BY r.start_ms, c.start_ms`,
   );
   const byRoot = new Map<string, AdminRequest>();
-  for (const [id, url, controlUrl] of rows) {
-    const req = byRoot.get(String(id)) ?? { url: String(url), control: [] };
+  for (const [id, url, controlUrl, outcome, childId, childOutcome] of rows) {
+    const req = byRoot.get(String(id)) ?? { url: String(url), control: [], complete: true };
+    req.complete &&= outcome != null && (childId == null || childOutcome != null);
     if (controlUrl) req.control.push(String(controlUrl));
     byRoot.set(String(id), req);
   }
   return [...byRoot.values()];
 }
 
-/** admin への要求と control への要求の数が QUIET_MS の間変わらなくなるまで待ち、その時刻を返す(先読み・表示の後の取り直しを含めるため) */
-async function waitQuiet(from: number): Promise<number> {
-  const deadline = Date.now() + 30_000;
-  let last = "";
-  let since = Date.now();
-  while (Date.now() < deadline) {
-    const reqs = await adminRequests(from);
-    const now = `${reqs.length}/${reqs.reduce((n, r) => n + r.control.length, 0)}`;
-    if (now !== last) {
-      last = now;
-      since = Date.now();
-    } else if (Date.now() - since >= QUIET_MS) {
-      return Date.now();
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  throw new Error("admin への要求が 30 秒たっても落ち着かない");
+/** 到着した要求の完了と静穏を待つ。操作の窓ではブラウザが送った要求の到着も確認する。 */
+async function waitQuiet(from: number, expectedUrls?: () => readonly string[]): Promise<number> {
+  return waitForObservedQuiet(() => adminRequests(from), expectedUrls);
 }
 
 /** 要求の URL・パスの ID を記号に置き換える(記録の鍵。ワークスペースの ID は実行ごとに変わる) */
@@ -303,15 +289,19 @@ async function record(testInfo: TestInfo, name: string, data: unknown): Promise<
 }
 
 /** ブラウザが admin へ送った要求(メソッド・pathname)を、stop() まで集める。観測の口の span にはメソッドが無いので、書き込みの識別に使う */
-function watchBrowserRequests(page: Page): { seen: Array<{ method: string; pathname: string }>; stop: () => void } {
+function watchBrowserRequests(page: Page): { seen: Array<{ method: string; pathname: string }>; observedUrls: string[]; stop: () => void } {
   const seen: Array<{ method: string; pathname: string }> = [];
+  const observedUrls: string[] = [];
   const origin = new URL(ADMIN_URL).origin;
   const on = (req: Request) => {
     const u = new URL(req.url());
-    if (u.origin === origin) seen.push({ method: req.method(), pathname: u.pathname });
+    if (u.origin !== origin) return;
+    seen.push({ method: req.method(), pathname: u.pathname });
+    // 静的assetはWorkerの根のspanに出ない。測定対象のHTML/RSC/BFFだけを照合する。
+    if (req.resourceType() === "document" || u.searchParams.has("_rsc") || u.pathname.startsWith("/api/control/")) observedUrls.push(req.url());
   };
   page.on("request", on);
-  return { seen, stop: () => page.off("request", on) };
+  return { seen, observedUrls, stop: () => page.off("request", on) };
 }
 
 /** 画面の URL を組むための ID(ワークスペースの ID はサイトを作った後に分かる) */
@@ -858,11 +848,14 @@ test("stage 2 writes: an audience save, a goal edit, an experiment create and a 
   const windowOf = async (press: () => Promise<void>, done: () => Promise<void>) => {
     const browser = watchBrowserRequests(page);
     const from = Date.now();
-    await press();
-    await done();
-    const reqs = await adminRequests(from, await waitQuiet(from));
-    browser.stop();
-    return { reqs, browser: browser.seen };
+    try {
+      await press();
+      await done();
+      const reqs = await adminRequests(from, await waitQuiet(from, () => browser.observedUrls));
+      return { reqs, browser: browser.seen };
+    } finally {
+      browser.stop();
+    }
   };
   type Press = "single" | "double";
   const presses: Press[] = ["single", "double"];
