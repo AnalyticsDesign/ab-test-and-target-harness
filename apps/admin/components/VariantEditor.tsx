@@ -116,7 +116,19 @@ export function VariantEditor({
           ) : null}
         </div>
         {single ? null : (
-          <div className={styles.kinds} role="radiogroup" aria-label="オリジナルか変更ありか">
+          <div className={styles.kinds} role="radiogroup" aria-label="オリジナルか変更ありか"
+            onKeyDown={(e) => {
+              if (lockVariantSet || !["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(e.key)) return;
+              e.preventDefault();
+              const radios = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+              const index = radios.indexOf(e.target as HTMLButtonElement);
+              if (index < 0) return;
+              const direction = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1;
+              const next = radios[(index + direction + radios.length) % radios.length]!;
+              next.focus();
+              next.click();
+            }}
+          >
             <KindCard checked={variant.original} disabled={lockVariantSet} title="オリジナル" description="ページを変えずに表示します" onSelect={() => onChange({ ...variant, original: true })} />
             <KindCard checked={!variant.original} disabled={lockVariantSet} title="変更あり" description="このパターンでページに変更を加えます" onSelect={() => onChange({ ...variant, original: false })} />
           </div>
@@ -257,7 +269,7 @@ export function VariantEditor({
 /** 「オリジナル / 変更あり」の選択カード(B77 Q3)。見出しは付けず、説明文で選ぶと何が起きるかを示す */
 function KindCard({ checked, disabled, title, description, onSelect }: { checked: boolean; disabled: boolean; title: string; description: string; onSelect: () => void }) {
   return (
-    <button type="button" role="radio" aria-checked={checked} className={styles.kind} disabled={disabled} onClick={onSelect}>
+    <button type="button" role="radio" aria-checked={checked} tabIndex={checked ? 0 : -1} className={styles.kind} disabled={disabled} onClick={onSelect}>
       <span className={styles.dot} aria-hidden="true" />
       <span className={styles.kindTitle}>{title}</span>
       <span className={styles.kindDesc}>{description}</span>

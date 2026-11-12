@@ -7,7 +7,7 @@ import config from "@/next.config";
  * 応答に実際に付くこと(HTML と Route Handler)は E2E(e2e/login-screen.spec.ts)で確かめる
  */
 describe("next.config headers()", () => {
-  it("全パスに frame-ancestors 'none' と X-Frame-Options: DENY だけを付ける", async () => {
+  it("全パスに埋め込み禁止と Referrer-Policy を付ける", async () => {
     expect(config.headers).toBeTypeOf("function");
     const rules = await config.headers!();
     expect(rules).toEqual([
@@ -17,6 +17,7 @@ describe("next.config headers()", () => {
           // CSP は frame-ancestors だけ(ほかのディレクティブは足さない。画面のスクリプト・スタイルの読み込みに触れない)
           { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
           { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "same-origin" },
         ],
       },
     ]);

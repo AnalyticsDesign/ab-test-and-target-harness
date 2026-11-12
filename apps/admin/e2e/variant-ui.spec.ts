@@ -98,6 +98,20 @@ test.describe.serial("pattern UI (B77)", () => {
     const b = await pickVariant("b");
     await expect(b.getByRole("radio", { name: /^変更あり/ })).toHaveAttribute("aria-checked", "true");
     await expect(b.getByRole("radio", { name: /^オリジナル/ })).toHaveAttribute("aria-checked", "false");
+    // B86: 群の Tab 停止点は選択中の 1 枚だけ。矢印キーは選択とフォーカスを同時に移す。
+    const original = b.getByRole("radio", { name: /^オリジナル/ });
+    const changed = b.getByRole("radio", { name: /^変更あり/ });
+    await changed.focus();
+    await page.keyboard.press("Tab");
+    await expect(b.getByLabel("名前(100 字以内)")).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(changed).toBeFocused();
+    for (const key of ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"]) {
+      const selected = key === "ArrowRight" || key === "ArrowLeft" ? original : changed;
+      await page.keyboard.press(key);
+      await expect(selected).toBeFocused();
+      await expect(selected).toHaveAttribute("aria-checked", "true");
+    }
   });
 
   test("even_split_and_auto_redistribute", async () => {
@@ -238,7 +252,7 @@ test.describe.serial("pattern UI (B77)", () => {
     await expect(saveState()).toHaveText("未保存の変更あり");
     rec = recordWrites(page);
     const res = page.waitForResponse(isWrite("PATCH", base(EXP_MAIN.id)));
-    await page.getByRole("button", { name: "保存(下書き)" }).click();
+    await page.getByRole("button", { name: "保存(メモ)" }).click();
     expect((await res).status()).toBe(200);
     // 保存の後は、帯の左に「保存しました」を出す(終了したエクスペリエンスでも、成功の文がある間は帯を残す。次に欄を変えるか破棄すると帯ごと消える)
     await expect(saveState()).toHaveText("保存しました");

@@ -15,6 +15,9 @@ const config: NextConfig = {
         headers: [
           { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
           { key: "X-Frame-Options", value: "DENY" },
+          // 外部へ管理画面の URL を渡さず、同一オリジンの form POST の Origin は保つ。
+          // no-referrer は native form の Origin も null にするため、ログアウトの出自検査と両立しない。
+          { key: "Referrer-Policy", value: "same-origin" },
         ],
       },
     ];

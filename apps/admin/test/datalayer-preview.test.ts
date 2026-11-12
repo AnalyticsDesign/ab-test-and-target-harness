@@ -15,7 +15,7 @@ describe("出力プレビュー(B77 K13、設計書 §5 の「出力」)", () =>
       { key: "event", value: '"ab_conversion"' },
       { key: "ab_goal_id", value: '"g"' },
       { key: "ab_goal_name", value: '"buy"', note: "指定した目標名", overridden: true },
-      { key: "ab_extra", value: "null" },
+      { key: "ab_extra", value: "null", note: "追加する情報なし" },
     ]);
   });
   it("exposurePreview: パターンの値がエクスペリエンスの値を上書き", () => {

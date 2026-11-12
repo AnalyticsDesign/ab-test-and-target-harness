@@ -56,6 +56,6 @@ export function conversionPreview(names: AnalyticsSettings, input: { goalId: str
     line("event", names.conversion.event),
     line(k.goalId, input.goalId),
     input.goalName ? line(k.goalName, input.goalName, "指定した目標名", true) : line(k.goalName, input.goalId, "指定なし = 目標 ID"),
-    line(names.extraKey, null),
+    line(names.extraKey, null, "追加する情報なし"),
   ];
 }

@@ -94,6 +94,7 @@ export default defineConfig({
     { name: "invite", testMatch: /invite-flow/, dependencies: ["publish"], use: { browserName: "chromium" } },
     { name: "audience", testMatch: /audience-flow/, dependencies: ["publish"], use: { browserName: "chromium" } },
     { name: "login-screen", testMatch: /login-screen/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    { name: "referrer-policy", testMatch: /referrer-policy\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // testMatch は絶対パスに当たるので、ファイル名まで絞る(/write-freeze/ だけだと、チェックアウト先のディレクトリ名
     // 「…d13-write-freeze」にも当たり、e2e/ のすべてのファイル(fake-cf-api.mjs まで)を読み込んでしまう)
     { name: "write-freeze", testMatch: /write-freeze\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },

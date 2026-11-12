@@ -348,7 +348,7 @@ test.describe.serial("results flow (D9 ③)", () => {
     await expect(memo).toBeEditable();
     await memo.fill("結果の E2E(終了後のメモ)");
     const saved = page.waitForResponse((r) => r.url().includes(`/experiments/${EXP.id}`) && r.request().method() === "PATCH");
-    await page.getByRole("button", { name: "保存(下書き)" }).click();
+    await page.getByRole("button", { name: "保存(メモ)" }).click();
     const res = await saved;
     expect(res.status()).toBe(200);
     expect(res.request().postDataJSON()).toEqual({ description: "結果の E2E(終了後のメモ)" });

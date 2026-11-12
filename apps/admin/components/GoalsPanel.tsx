@@ -58,7 +58,7 @@ function GoalAnalyticsFields({
         tipLabel="目標名の補足"
         tip={
           <>
-            <code>{k.goalName}</code> に出力します。空なら目標 ID({goalId})を出力します。{EXPOSED_NOTE}
+            <code>{k.goalName}</code> に出力します。空なら目標 ID{goalId ? `(${goalId})` : " "}を出力します。{EXPOSED_NOTE}
           </>
         }
       >
@@ -66,7 +66,7 @@ function GoalAnalyticsFields({
           aria-label="目標名"
           aria-invalid={error ? true : undefined}
           value={goalName}
-          placeholder={`空なら目標 ID(${goalId})を出力`}
+          placeholder={goalId ? `空なら目標 ID(${goalId})を出力` : "空なら目標 ID を出力"}
           maxLength={100}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
@@ -79,7 +79,7 @@ function GoalAnalyticsFields({
         {note ? <span className={styles.note}>{note}</span> : null}
       </AnalyticsSection>
       <AnalyticsSection output title="出力される内容" tipLabel="出力される内容の補足" tip="この目標を達成したときに dataLayer に送る内容です。キー名はサイト設定(外部計測の名前)の値です">
-        <DataLayerPreview extraKey={names.extraKey} lines={conversionPreview(names, { goalId, goalName })} />
+        <DataLayerPreview extraKey={names.extraKey} lines={conversionPreview(names, { goalId: goalId || "<目標 ID>", goalName })} />
       </AnalyticsSection>
     </div>
   );
@@ -407,7 +407,7 @@ function GoalAddForm({ siteId, names }: { siteId: string; names: AnalyticsSettin
       >
         <GoalAnalyticsFields
           names={names}
-          goalId={goalId || "<目標 ID>"}
+          goalId={goalId}
           goalName={addGoalName}
           error={addIssue ?? fields["analytics.overrides.goalName"]}
           disabled={false}

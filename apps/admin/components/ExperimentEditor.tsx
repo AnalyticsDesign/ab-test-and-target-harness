@@ -260,7 +260,7 @@ function ExperimentEditorBody({
   const canEdit = role !== "viewer";
   const isTest = experiment.kind === "test";
   const [error, setError] = useState<string | null>(null);
-  const [errorTab, setErrorTab] = useState<EditorTab | null>(null);
+  const [errorTabs, setErrorTabs] = useState<EditorTab[]>([]);
   const [attrHint, setAttrHint] = useState<{ variantIdx: number; changeIdx: number } | null>(null);
   // 保存を試したか(ruling R12: それまではキーが空の行に「値を入力してください」を出さない)。保存の成功・破棄で戻す
   const [saveTried, setSaveTried] = useState(false);
@@ -306,7 +306,7 @@ function ExperimentEditorBody({
     setEmptyHtml(null);
     setAttrHint(null);
     setError(null);
-    setErrorTab(null);
+    setErrorTabs([]);
     setPlanServerFields({});
   }
   function discard() {
@@ -325,7 +325,7 @@ function ExperimentEditorBody({
     // 配信率・配信条件は、実際に送る PATCH に載るときだけ見る(最終レビュー FR-Medium-1: 開いた後にほかの人が上げた配信率で、名前だけの保存を止めない)
     const problem = steps.patchExperiment ? preSaveLockProblem(experiment, experimentPatchBody(base, draft), draft, site.retentionDays) : null;
     if (problem) {
-      setErrorTab("overview");
+      setErrorTabs(["overview"]);
       setError(problem);
       return true;
     }
@@ -337,7 +337,7 @@ function ExperimentEditorBody({
       if (onExperiment) onCardOpen("experiment", true);
       for (const id of variantIds) onCardOpen(`v:${id}`, true);
       if (variantIds[0]) onVariant(variantIds[0]);
-      setErrorTab(onExperiment ? "overview" : "variants");
+      setErrorTabs([...(onExperiment ? ["overview" as const] : []), ...(variantIds.length ? ["variants" as const] : [])]);
       setError("外部計測(dataLayer 出力)に保存できない値があります。欄の下の案内に沿って直してください");
       return true;
     }
@@ -347,7 +347,7 @@ function ExperimentEditorBody({
       const changeId = variants.find((v) => v.id === empty.variantId)!.changes[empty.changeIndex]!.id;
       setEmptyHtml({ variantId: empty.variantId, changeId });
       onVariant(empty.variantId);
-      setErrorTab("variants");
+      setErrorTabs(["variants"]);
       setError("HTML の変更に、HTML が入っていないものがあります");
       return true;
     }
@@ -355,7 +355,7 @@ function ExperimentEditorBody({
     if (plan.view && plan.form && (planModeNow === "draft" || planModeNow === "extend")) {
       const planErrors = { ...planFormErrors(plan.form), ...(planModeNow === "extend" ? extensionErrors(plan.view.plan, plan.form) : {}) };
       if (Object.keys(planErrors).length > 0) {
-        setErrorTab("plan");
+        setErrorTabs(["plan"]);
         setError("評価計画に直す欄があります");
         return true;
       }
@@ -365,7 +365,7 @@ function ExperimentEditorBody({
 
   async function save() {
     setError(null);
-    setErrorTab(null);
+    setErrorTabs([]);
     setAttrHint(null);
     setSavedMessage(null);
     setPlanServerFields({});
@@ -497,7 +497,7 @@ function ExperimentEditorBody({
         const { stage, savedSomething } = progress;
         const where: EditorTab | null =
           e instanceof ApiClientError ? failedTab(stage, first === undefined ? undefined : String(first)) : stage === "patch" ? "overview" : stage === "plan" ? "plan" : null;
-        setErrorTab(where);
+        setErrorTabs(where ? [where] : []);
         setError(saveErrorMessage(e, savedSomething));
         if (stage === "plan") setPlanServerFields(fieldErrors(e));
         return;
@@ -543,12 +543,12 @@ function ExperimentEditorBody({
         value={tab}
         onChange={(id) => onTab(id as EditorTab)}
         tabs={[
-          { id: "overview", label: "基本設定", marked: errorTab === "overview" && tab !== "overview" },
-          { id: "variants", label: "パターン", marked: (errorTab === "variants" || weightSum !== 100) && tab !== "variants" },
+          { id: "overview", label: "基本設定", marked: errorTabs.includes("overview") && tab !== "overview" },
+          { id: "variants", label: "パターン", marked: (errorTabs.includes("variants") || weightSum !== 100) && tab !== "variants" },
           // 評価計画と結果はテストだけ。結果は下書きでは押せない(「開始後に表示されます」。設計書 §10)
           ...(isTest
             ? [
-                { id: "plan", label: "評価計画", marked: errorTab === "plan" && tab !== "plan" },
+                { id: "plan", label: "評価計画", marked: errorTabs.includes("plan") && tab !== "plan" },
                 { id: "results", label: "結果", disabled: experiment.status === "draft", hint: experiment.status === "draft" ? "開始後に表示されます" : undefined },
               ]
             : []),
@@ -669,7 +669,7 @@ function ExperimentEditorBody({
           </button>
           {/* 保存中の表示は範囲の覆い(「保存中…」)が出すので、ボタンの文言は変えない */}
           <button type="button" className="btn btn-primary" disabled={busy || weightSum !== 100} onClick={() => void save()}>
-            保存(下書き)
+            {experiment.status === "archived" ? "保存(メモ)" : "保存(下書き)"}
           </button>
         </SaveBar>
       ) : null}
