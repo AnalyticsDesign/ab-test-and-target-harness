@@ -1,4 +1,5 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useState } from "react";
 import { useConfirm, useConfirmWithOption } from "@/components/ConfirmProvider";
 import { api } from "@/lib/client";
@@ -61,6 +62,7 @@ function InstanceAdminsBody({
   workspaces: Array<{ id: string; name: string }> | null;
   myUserId: string;
 }) {
+  const hydrated = useHydrated();
   // 確認は範囲の中で開く(確認の持ち主をこの範囲にする)
   const ask = useConfirm();
   const askWithOption = useConfirmWithOption();
@@ -149,7 +151,7 @@ function InstanceAdminsBody({
           </tbody>
         </table>
       </div>
-      <form
+      <form method="post"
         className="card"
         onSubmit={(e) => {
           e.preventDefault();
@@ -180,7 +182,7 @@ function InstanceAdminsBody({
               />
             </div>
             {candidates.length === 0 ? <p className="muted">先にワークスペースへ招待し、受諾してもらってください。</p> : null}
-            <SubmitButton busy={false} disabled={picked === null}>
+            <SubmitButton busy={false} disabled={!hydrated || picked === null}>
               システム管理者にする
             </SubmitButton>
           </>

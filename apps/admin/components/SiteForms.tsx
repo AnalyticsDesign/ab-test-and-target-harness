@@ -1,4 +1,5 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useEffect, useState } from "react";
 import { api, describeError, fieldErrors } from "@/lib/client";
 import type { SiteCreated, UsageSettingsView } from "@/lib/types";
@@ -33,6 +34,7 @@ export function SiteCreateForm({ workspaceId, visibleSites }: { workspaceId: str
 }
 
 function SiteCreateFormBody({ workspaceId, visibleSites }: { workspaceId: string; visibleSites: number }) {
+  const hydrated = useHydrated();
   const { busy, run } = useBusyAction();
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
@@ -50,7 +52,7 @@ function SiteCreateFormBody({ workspaceId, visibleSites }: { workspaceId: string
     };
   }, []);
   return (
-    <form
+    <form method="post"
       className="card"
       onSubmit={async (e) => {
         e.preventDefault();
@@ -120,7 +122,7 @@ function SiteCreateFormBody({ workspaceId, visibleSites }: { workspaceId: string
         />
       </Field>
       <ErrorBox message={error} />
-      <SubmitButton busy={busy}>作成</SubmitButton>
+      <SubmitButton busy={busy} disabled={!hydrated}>作成</SubmitButton>
     </form>
   );
 }

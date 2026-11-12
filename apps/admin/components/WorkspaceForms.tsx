@@ -1,4 +1,5 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useState } from "react";
 import { api, describeError, fieldErrors } from "@/lib/client";
 import { Field } from "./Field";
@@ -23,11 +24,12 @@ export function WorkspaceCreateForm({ autoFocus = false }: { autoFocus?: boolean
 }
 
 function WorkspaceCreateFormBody({ autoFocus }: { autoFocus: boolean }) {
+  const hydrated = useHydrated();
   const { busy, run } = useBusyAction();
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
   return (
-    <form
+    <form method="post"
       id="new"
       className="card"
       onSubmit={async (e) => {
@@ -57,7 +59,7 @@ function WorkspaceCreateFormBody({ autoFocus }: { autoFocus: boolean }) {
         <input name="name" required placeholder="例: 採用広報" autoFocus={autoFocus} />
       </Field>
       <ErrorBox message={error} />
-      <SubmitButton busy={busy}>作成</SubmitButton>
+      <SubmitButton busy={busy} disabled={!hydrated}>作成</SubmitButton>
     </form>
   );
 }

@@ -1,4 +1,5 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { timeZoneOptions } from "@/lib/time-zones";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -75,6 +76,7 @@ export function SiteSettingsForm({
   /** 作成で衝突を避けるために共有か Cookie 名を変えたとき、その知らせ(作成の直後の 1 回だけ。sharingNoticeFor で突き合わせた値) */
   sharingAdjusted?: SharingAdjusted | null;
 }) {
+  const hydrated = useHydrated();
   const router = useRouter();
   const refreshAndWait = useRefreshAndWait();
   const ask = useConfirm();
@@ -266,7 +268,7 @@ export function SiteSettingsForm({
     <div>
       {!canAdmin ? <p className="banner-warn">サイト設定の変更は管理者以上が行います(閲覧のみ)</p> : null}
       {/* 節の切り替えは左の設定のメニュー(SettingsSidebar)の「サイト設定」の項目。入力エラーのある節の印もそちらに付く */}
-      <form id="site-settings-form" onSubmit={onSubmit} onInvalid={onInvalid}
+      <form method="post" id="site-settings-form" onSubmit={onSubmit} onInvalid={onInvalid}
         onChange={(e) => {
           setDirty(true);
           // change は変えた欄から form へ上がってくる(型は form の change だが、target は欄)
@@ -525,7 +527,7 @@ export function SiteSettingsForm({
           dirty={dirty && !checking}
           message={checking ? "保存しています。ドメインを確かめています" : section === "domains" && mode === "B" ? "保存すると、ドメインごとに edge が応答するかを確かめ直します" : undefined}
         >
-          <SubmitButton busy={busy} form="site-settings-form">保存</SubmitButton>
+          <SubmitButton busy={busy} disabled={!hydrated} form="site-settings-form">保存</SubmitButton>
         </SaveBar>
       ) : null}
     </div>

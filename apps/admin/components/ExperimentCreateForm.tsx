@@ -1,4 +1,5 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useState } from "react";
 import { api, describeError } from "@/lib/client";
 import { Field } from "./Field";
@@ -28,13 +29,14 @@ export function ExperimentCreateForm({ wid, sid }: { wid: string; sid: string })
 }
 
 function ExperimentCreateFormBody({ wid, sid }: { wid: string; sid: string }) {
+  const hydrated = useHydrated();
   const { busy, run } = useBusyAction();
   const [error, setError] = useState<string | null>(null);
   const [idError, setIdError] = useState<string | null>(null);
   const [urlMatch, setUrlMatch] = useState<UrlMatchValue>(DEFAULT_URL_MATCH);
   const [kind, setKind] = useState<ExperimentKind>("test");
   return (
-    <form
+    <form method="post"
       className="card"
       style={{ maxWidth: 640 }}
       onSubmit={async (e) => {
@@ -81,7 +83,7 @@ function ExperimentCreateFormBody({ wid, sid }: { wid: string; sid: string }) {
         <TargetUrlField value={urlMatch} onChange={setUrlMatch} />
       </Field>
       <ErrorBox message={error} />
-      <SubmitButton busy={busy}>{createButtonLabel(kind)}</SubmitButton>
+      <SubmitButton busy={busy} disabled={!hydrated}>{createButtonLabel(kind)}</SubmitButton>
     </form>
   );
 }

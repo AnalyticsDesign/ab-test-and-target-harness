@@ -1,4 +1,6 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
+import { SubmitButton } from "../SubmitButton";
 import { useEffect, useRef, useState } from "react";
 import { api, describeError } from "@/lib/client";
 import { auditActionLabel, auditActorLabel, auditDetailLine, auditTargetLabel, auditViaLabel, type AuditEventView } from "@/lib/audit-labels";
@@ -71,6 +73,7 @@ export function appendAuditMore(l: Load, query: string, cursor: string, r: Audit
 }
 
 export function AuditLogPanel({ scope, apiPath, initialFilter, initialQuery, initialPage }: Props) {
+  const hydrated = useHydrated();
   const [filter, setFilter] = useState<AuditFilter>(initialFilter);
   const [load, setLoad] = useState<Load>({ kind: "ok", query: initialQuery, page: initialPage, more: "idle" });
   // 期間の選択で「日時を指定」を選んだが、まだ読んでいない
@@ -186,7 +189,7 @@ export function AuditLogPanel({ scope, apiPath, initialFilter, initialQuery, ini
         </label>
       </div>
       {rangeOpen ? (
-        <form
+        <form method="post"
           className={styles.range}
           style={{ marginBottom: 16 }}
           aria-label="期間の日時"
@@ -201,9 +204,9 @@ export function AuditLogPanel({ scope, apiPath, initialFilter, initialQuery, ini
           <Field label="終了(空 = 今まで)" error={rangeError?.field === "to" ? rangeError.message : null}>
             <input type="datetime-local" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} />
           </Field>
-          <button type="submit" className="btn">
+          <SubmitButton busy={false} disabled={!hydrated}>
             この期間で読む
-          </button>
+          </SubmitButton>
         </form>
       ) : null}
       {load.kind === "loading" ? (
@@ -242,6 +245,7 @@ const WINDOW_NAMES = { start: "開いた時刻", end: "閉じた時刻", unit: "
  * 初期値は URL の期間か、読み込んだ記録からの推定(最初の非常口からの再設定リンクの発行 〜 次の掃除)。推定は目安で、記録が無ければ空
  */
 function BreakGlassWindow({ filter, initialEvents, onApply }: { filter: AuditFilter; initialEvents: AuditEventView[]; onApply: (from: string, to: string) => boolean }) {
+  const hydrated = useHydrated();
   const [value, setValue] = useState({ from: "", to: "" });
   const [error, setError] = useState<InputError | null>(null);
   // 初期値はマウントの後に 1 回だけ入れる(見ている人のタイムゾーン。入れた後は人の入力を上書きしない)
@@ -258,7 +262,7 @@ function BreakGlassWindow({ filter, initialEvents, onApply }: { filter: AuditFil
       <p className="muted">
         非常用トークン(secret)を入れた時刻と消した時刻を入れてください。初期値は記録からの推定(最初の非常口からの再設定リンクの発行 〜 次の掃除)で、実際より狭くなることがあります(再設定リンクを出す前の招待の受諾は入らず、掃除は消すものが無いと記録されません)。
       </p>
-      <form
+      <form method="post"
         className={styles.range}
         onSubmit={(e) => {
           e.preventDefault();
@@ -277,9 +281,9 @@ function BreakGlassWindow({ filter, initialEvents, onApply }: { filter: AuditFil
         <Field label="閉じた時刻(空 = 今まで)" error={error?.field === "to" ? error.message : null}>
           <input type="datetime-local" value={value.to} onChange={(e) => setValue({ ...value, to: e.target.value })} />
         </Field>
-        <button type="submit" className="btn">
+        <SubmitButton busy={false} disabled={!hydrated}>
           この期間で絞る
-        </button>
+        </SubmitButton>
       </form>
     </section>
   );

@@ -58,6 +58,13 @@ test("while the emergency door is open, the login screen shows the emergency for
   await expect(page.getByRole("heading", { name: "非常用: メールアドレスとパスワード" })).toBeVisible();
   await login(page);
   await expect(page.getByTestId("break-glass-banner")).toBeVisible();
+  // B223: 既存のログインを使い、JS を止めた API キー発行フォームも同じ手順で検査する。
+  await assertNativeFormSafety(browser, {
+    path: "/w/me/api-keys",
+    selector: 'section[aria-labelledby="issue-title"] form',
+    values: { name: "B223_NATIVE_KEY_NAME_f61a" },
+    storageState: await page.context().storageState(),
+  });
   await openWorkspace(page);
   await expect(page.getByTestId("break-glass-banner")).toBeVisible();
 

@@ -1,9 +1,11 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useState } from "react";
 import { capAfterScopeChange, capCeiling, capFromChoice, capOptions, EXPIRY_OPTIONS, expiresInDaysOf, expiryAt, formatDeadline, FULL_SCOPE, initialScope, issueMissing, scopeOptions, validChoice, type CapChoice, type ExpiryChoice } from "@/lib/api-keys";
 import { api, describeError } from "@/lib/client";
 import type { ApiKey, Workspace } from "@/lib/types";
 import { Field } from "../Field";
+import { SubmitButton } from "../SubmitButton";
 import { ErrorBox } from "../ErrorBox";
 import { Picker } from "../ui/Picker";
 import { useBusyAction } from "../ui/BusyScope";
@@ -21,6 +23,7 @@ export type IssuedResult = ApiKey & { key: string };
  * 覆いは読み直しの反映(一覧の新しい行)まで続く
  */
 export function IssueKeyForm({ workspaces, amInstanceAdmin, onIssued }: { workspaces: Workspace[]; amInstanceAdmin: boolean; onIssued: (k: IssuedResult) => void }) {
+  const hydrated = useHydrated();
   const scopes = scopeOptions(workspaces, amInstanceAdmin);
   const [name, setName] = useState("");
   const [chosenScope, setScope] = useState<string | null>(initialScope(scopes));
@@ -61,6 +64,7 @@ export function IssueKeyForm({ workspaces, amInstanceAdmin, onIssued }: { worksp
       <h2 id="issue-title">新しい API キーを発行</h2>
       <p className="muted">発行したキーは 1 度だけ表示されます。用途ごとに分けて発行すると、不要になったときに個別に失効できます。</p>
       <form
+        method="post"
         onSubmit={(e) => {
           e.preventDefault();
           void issue();
@@ -104,9 +108,9 @@ export function IssueKeyForm({ workspaces, amInstanceAdmin, onIssued }: { worksp
         </Field>
         <ErrorBox message={error} />
         <div className="row">
-          <button type="submit" className="btn btn-primary" disabled={busy || missing !== null}>
+          <SubmitButton busy={busy} disabled={!hydrated || missing !== null}>
             発行する
-          </button>
+          </SubmitButton>
           <span className="muted" aria-live="polite">
             {missing ?? ""}
           </span>

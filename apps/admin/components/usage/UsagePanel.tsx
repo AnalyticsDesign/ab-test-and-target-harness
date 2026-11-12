@@ -1,5 +1,6 @@
 // apps/admin/components/usage/UsagePanel.tsx
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useState } from "react";
 import { api } from "@/lib/client";
 import type { ControlCapacity, UsageReport, UsageSettings } from "@/lib/types";
@@ -46,6 +47,7 @@ export function UsagePanel({ settings, usage, controlCapacity }: { settings: Usa
 
 /** 設定のフォーム。保存の結果はボタンの横(失敗はボタンのすぐ上)に出す。欄を変えたら成功の文を消す */
 function UsageSettingsForm({ settings }: { settings: UsageSettings }) {
+  const hydrated = useHydrated();
   const { run } = useBusyAction();
   const { notice, show, clear, clearStatus } = useBusyNotice();
   const [form, setForm] = useState<UsageSettings>(settings);
@@ -68,7 +70,7 @@ function UsageSettingsForm({ settings }: { settings: UsageSettings }) {
   }
 
   return (
-    <form className="card" onSubmit={save} data-testid="usage-settings">
+    <form method="post" className="card" onSubmit={save} data-testid="usage-settings">
       <h2>設定</h2>
       <fieldset className={styles.field}>
         <legend>見られる人</legend>
@@ -92,7 +94,7 @@ function UsageSettingsForm({ settings }: { settings: UsageSettings }) {
       ) : null}
       <ErrorBox message={notice.error} />
       {notice.status ? <p role="status">{notice.status}</p> : null}
-      <SubmitButton busy={false} disabled={!dirty}>保存</SubmitButton>
+      <SubmitButton busy={false} disabled={!hydrated || !dirty}>保存</SubmitButton>
     </form>
   );
 }

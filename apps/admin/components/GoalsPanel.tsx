@@ -1,4 +1,5 @@
 "use client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { Fragment, useState } from "react";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { api, fieldErrors } from "@/lib/client";
@@ -297,6 +298,7 @@ function GoalsList({ siteId, goals, canEdit, names }: { siteId: string; goals: G
 
 /** 追加のフォームのカード。結果は追加のボタンの横(失敗はボタンのすぐ上)に出す */
 function GoalAddForm({ siteId, names }: { siteId: string; names: AnalyticsSettings }) {
+  const hydrated = useHydrated();
   const { run } = useBusyAction();
   const { notice, show, clear, clearStatus } = useBusyNotice();
   const [type, setType] = useState<Goal["type"]>("PAGEVIEW");
@@ -332,7 +334,7 @@ function GoalAddForm({ siteId, names }: { siteId: string; names: AnalyticsSettin
   }
 
   return (
-    <form
+    <form method="post"
       className="card"
       data-testid="goal-add"
       onChange={clearStatus}
@@ -420,7 +422,7 @@ function GoalAddForm({ siteId, names }: { siteId: string; names: AnalyticsSettin
       {/* 失敗はボタンのすぐ上、成功はボタンの横 */}
       <ErrorBox message={notice.error} />
       <div className="row" data-testid="goal-add-actions">
-        <SubmitButton busy={false}>追加</SubmitButton>
+        <SubmitButton busy={false} disabled={!hydrated}>追加</SubmitButton>
         {notice.status ? <span role="status">{notice.status}</span> : null}
       </div>
     </form>
