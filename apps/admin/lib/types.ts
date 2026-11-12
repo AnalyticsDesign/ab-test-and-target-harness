@@ -157,7 +157,7 @@ export type Goal = {
 /** backlog D13: 書き込みの凍結の状態。reason = null は「凍結の設定が読めない」(凍結中として扱う) */
 export type WriteFreezeState = { reason: string | null; until: string | null; since: number | null };
 /** `GET /capabilities`。この導入で使える機能(control の env から決まる) */
-export type Capabilities = { imageUpload: boolean; edgeOrigin: string | null; tagOrigin: string | null; edgeOnWorkersDev: boolean; passwordLogin: boolean; resultsStore: boolean; writeFreeze: WriteFreezeState | null; apiVersion: number | null; minClientVersion: number | null;
+export type Capabilities = { productVersion: string | null; imageUpload: boolean; edgeOrigin: string | null; tagOrigin: string | null; edgeOnWorkersDev: boolean; passwordLogin: boolean; resultsStore: boolean; writeFreeze: WriteFreezeState | null; apiVersion: number | null; minClientVersion: number | null;
   /** B68: R2 なしの画像アップローダーがあるか。アップローダーが入る前の control は返さない(undefined = false として扱う) */
   imageUploader?: boolean;
 };

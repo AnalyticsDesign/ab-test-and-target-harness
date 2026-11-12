@@ -1,3 +1,4 @@
+import { RELEASE_VERSION } from "./generated/release";
 import { z } from "zod";
 import { API_CONTRACT_VERSION, MIN_CLIENT_VERSION } from "@wtt/core";
 import { passwordLoginOpen } from "./break-glass";
@@ -110,6 +111,7 @@ export function resultsStore(env: Env): boolean {
 }
 
 export const CapabilitiesSchema = z.object({
+  productVersion: z.string().describe("この導入の製品の版名(公開リポジトリの Release と同じ v1.0 の形)。公開版でない build では dev。ログインした人と API キーにだけ返す"),
   imageUpload: z.boolean().describe("画像アップロードと IMAGE の変更が使えるか(R2 と公開ベース URL が設定されているとき true)"),
   edgeOrigin: z.string().nullable().describe("edge(訪問者のブラウザが decision / event を送る先)の公開 origin。未設定なら null"),
   tagOrigin: z.string().nullable().describe("設置タグ(/s/<siteId>.js)を配る公開 origin。未設定なら null"),
@@ -133,6 +135,7 @@ export type Capabilities = z.infer<typeof CapabilitiesSchema>;
 /** env だけで決まる部分。凍結は D1 を読むのでルートで足す(writeFreeze) */
 export function capabilities(env: Env): Omit<Capabilities, "writeFreeze"> {
   return {
+    productVersion: RELEASE_VERSION,
     apiVersion: API_CONTRACT_VERSION, minClientVersion: MIN_CLIENT_VERSION, // plan12 K6: 管理画面の版のバナーが読む
     imageUpload: imageStore(env) !== null, edgeOrigin: edgeOrigin(env), tagOrigin: tagOrigin(env), edgeOnWorkersDev: edgeOnWorkersDev(env), passwordLogin: passwordLoginOpen(env),
     resultsStore: resultsStore(env), imageThumbnails: env.IMAGES !== undefined,

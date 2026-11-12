@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useId, useRef } from "react";
 import { HELP, HELP_KEYS } from "@/generated/help.ja";
-import { RELEASE_VERSION } from "@/generated/release";
 import { useHelp } from "./HelpProvider";
 import styles from "./HelpPanel.module.css";
 
@@ -10,7 +9,7 @@ import styles from "./HelpPanel.module.css";
  * 開いた項目まで送って強調する。Esc と「閉じる」で閉じ、フォーカスはパネルを開いた「?」に戻る(HelpProvider)。
  * 本文の HTML は scripts/help-lib.mjs が許した書式だけで作ったもの(生の HTML は文字として出る)なので、そのまま入れる
  */
-export function HelpPanel() {
+export function HelpPanel({ releaseVersion }: { releaseVersion: string }) {
   const { panelKey, closePanel } = useHelp();
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -67,7 +66,7 @@ export function HelpPanel() {
         })}
       </div>
       <div className={styles.panelFoot}>
-        この説明は管理画面と同じ版({RELEASE_VERSION})に含まれています。表示中の言語: 日本語
+        この説明は管理画面と同じ版({releaseVersion})に含まれています。表示中の言語: 日本語
       </div>
     </aside>
   );

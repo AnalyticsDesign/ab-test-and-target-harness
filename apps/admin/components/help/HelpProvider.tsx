@@ -6,7 +6,7 @@ import { HelpPanel } from "./HelpPanel";
 
 /**
  * 説明(ヘルプ)の右のパネルを 1 つだけ置き、どの画面の <HelpTip> からも開けるようにする(D9 plan ③ K22・設計書 §11.1)。
- * パネルの開閉と、閉じたときのフォーカスの戻り先(パネルを開いた「?」のボタン)をここで持つ。root layout に置く
+ * パネルの開閉と、閉じたときのフォーカスの戻り先(パネルを開いた「?」のボタン)をここで持つ。/w layout に置く
  */
 type HelpContextValue = {
   /** 開いているパネルで強調する項目(閉じていれば null) */
@@ -18,7 +18,7 @@ type HelpContextValue = {
 
 const HelpContext = createContext<HelpContextValue | null>(null);
 
-export function HelpProvider({ children }: { children: ReactNode }) {
+export function HelpProvider({ children, releaseVersion }: { children: ReactNode; releaseVersion: string }) {
   const [panelKey, setPanelKey] = useState<HelpKey | null>(null);
   const returnTo = useRef<HTMLElement | null>(null);
   const focusBack = useRef(false);
@@ -41,7 +41,7 @@ export function HelpProvider({ children }: { children: ReactNode }) {
     if (el?.isConnected) el.focus();
   }, [panelKey]);
 
-  // ページを移動したら閉じる(Provider は root layout にあり移動で消えないため。戻り先のボタンも前のページのもの)
+  // ページを移動したら閉じる(Provider は /w layout にあり移動で消えないため。戻り先のボタンも前のページのもの)
   const pathname = usePathname();
   useEffect(() => {
     returnTo.current = null;
@@ -52,13 +52,13 @@ export function HelpProvider({ children }: { children: ReactNode }) {
   return (
     <HelpContext.Provider value={value}>
       {children}
-      <HelpPanel />
+      <HelpPanel releaseVersion={releaseVersion} />
     </HelpContext.Provider>
   );
 }
 
 export function useHelp(): HelpContextValue {
   const v = useContext(HelpContext);
-  if (!v) throw new Error("HelpTip / HelpPanel は HelpProvider の中で使う(app/layout.tsx)");
+  if (!v) throw new Error("HelpTip / HelpPanel は HelpProvider の中で使う(app/w/layout.tsx)");
   return v;
 }

@@ -217,7 +217,9 @@ describe("nav", () => {
     const gs = settingsGroups({ kind: "workspace", wid: "ws1" }, { workspaces: wsOf("admin"), instanceAdmin: true });
     expect(gs.map((g) => [g.heading, g.name])).toEqual([["ワークスペース", "ワークスペース1"], ["個人", null], ["システム", null]]);
     expect(gs[0]!.items.map((i) => i.href)).toEqual(["/w/ws1/members", "/w/ws1/api-keys", "/w/ws1/audit-events"]);
-    expect(gs[1]!.items.map((i) => i.href)).toEqual(["/w/me/api-keys", "/w/me/display"]);
+    expect(gs[1]!.items.map((i) => i.href)).toEqual(["/w/me/api-keys", "/w/me/display", "/w/me/about"]);
+    const nonAdmin = settingsGroups({ kind: "workspace", wid: "ws1" }, { workspaces: wsOf("viewer"), instanceAdmin: false });
+    expect(nonAdmin.find((g) => g.scope === "personal")!.items.map((i) => i.href)).toEqual(["/w/me/api-keys", "/w/me/display", "/w/me/about"]);
     expect(gs[2]!.items.map((i) => i.href)).toEqual(["/w/me/instance-admins", "/w/me/workspaces", "/w/me/usage", "/w/me/static-delivery", "/w/me/audit-events"]);
   });
 

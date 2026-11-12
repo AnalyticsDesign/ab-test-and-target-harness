@@ -1,0 +1,10 @@
+.about { display: flex; flex-direction: column; gap: 16px; }
+.lead { margin: 0; color: var(--muted); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+.card h2 { margin: 0; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 20px; margin: 0; }
+.kv dt { color: var(--muted); font-size: 12.5px; }
+.kv dd { margin: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.callout { border: 1px solid var(--warn); background: var(--warn-soft); color: var(--text); border-radius: var(--radius); padding: 8px 12px; font-size: 12.5px; }
+.version { font-size: 14px; font-weight: 500; }
+.warn { color: var(--warn); }

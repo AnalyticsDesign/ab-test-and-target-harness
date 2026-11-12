@@ -100,6 +100,8 @@ export default defineConfig({
     { name: "write-freeze", testMatch: /write-freeze\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     { name: "experiment-kind", testMatch: /experiment-kind-flow/, dependencies: ["publish"], use: { browserName: "chromium" } },
     { name: "results-settings", testMatch: /results-settings\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
+    // B142: 閲覧者が設定から版を確認する。新しい spec も全件に含める。
+    { name: "product-version", testMatch: /product-version\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // plan12 K6: 版のバナー(/capabilities を差し替えて確かめるだけで、状態は変えない)
     { name: "version-banner", testMatch: /version-banner\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     // B77: パターン UI と目標名(専用のサイトを作るので publish-flow の状態には触らないが、owner の setup は publish-flow が行う)

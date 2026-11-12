@@ -10,7 +10,6 @@ import { POPSTATE_GUARD_SCRIPT } from "@/lib/popstate-guard";
 import { HydrationMark } from "@/components/HydrationMark";
 import { ThemeResync } from "@/components/ThemeResync";
 import { ConfirmProvider } from "@/components/ConfirmProvider";
-import { HelpProvider } from "@/components/help/HelpProvider";
 
 export const metadata = { title: "AB Test and Target Harness" };
 
@@ -31,7 +30,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       </head>
       <body>
         <ConfirmProvider>
-          <HelpProvider>{children}</HelpProvider>
+          {children}
         </ConfirmProvider>
         <ThemeResync />
         <HydrationMark />

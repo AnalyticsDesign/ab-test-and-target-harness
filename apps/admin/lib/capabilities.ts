@@ -1,7 +1,7 @@
 import type { Capabilities, ChangeType, WriteFreezeState } from "./types";
 import { formatLocalTime } from "./local-time";
 
-export const DEFAULT_CAPABILITIES: Capabilities = { imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null, apiVersion: null, minClientVersion: null };
+export const DEFAULT_CAPABILITIES: Capabilities = { productVersion: null, imageUpload: true, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, writeFreeze: null, apiVersion: null, minClientVersion: null };
 
 export const CHANGE_TYPES: ChangeType[] = ["TEXT", "IMAGE", "HIDE", "ATTRIBUTE", "HTML", "CSS", "CUSTOM_JS"];
 
@@ -21,6 +21,7 @@ export function parseCapabilities(data: unknown): Capabilities | null {
   if (bad("resultsStore", (v) => typeof v === "boolean")) return null;
   if (bad("writeFreeze", (v) => v === null || isWriteFreezeState(v))) return null;
   // plan12 K6: 版の 2 つの数。欠けている(古い control)なら null = 版のバナーを出さない。あるのに数でなければ応答全体を信用しない
+  if (bad("productVersion", (v) => typeof v === "string")) return null;
   if (bad("apiVersion", isVersionNumber)) return null;
   if (bad("minClientVersion", isVersionNumber)) return null;
   // B68: R2 なしの画像アップローダー。欠けている(アップローダーが入る前の control)なら入れない = 画面は false として扱う
@@ -34,6 +35,7 @@ export function parseCapabilities(data: unknown): Capabilities | null {
     passwordLogin: d.passwordLogin === true,
     resultsStore: d.resultsStore === true,
     writeFreeze: isWriteFreezeState(d.writeFreeze) ? d.writeFreeze : null,
+    productVersion: typeof d.productVersion === "string" && /^(dev|v\d+\.\d+(\.\d+)?)$/.test(d.productVersion) ? d.productVersion : null,
     apiVersion: isVersionNumber(d.apiVersion) ? d.apiVersion : null,
     minClientVersion: isVersionNumber(d.minClientVersion) ? d.minClientVersion : null,
     ...(typeof d.imageUploader === "boolean" ? { imageUploader: d.imageUploader } : {}),

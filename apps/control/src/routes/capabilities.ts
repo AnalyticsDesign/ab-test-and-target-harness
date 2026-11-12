@@ -12,7 +12,7 @@ capabilityRoutes.get(
   "/capabilities",
   describeRoute({
     tags: ["capabilities"],
-    summary: "この導入で使える機能(画像アップロードの有無、edge と設置タグの公開 origin、パスワードログインの有無、結果を記録するデータベースの有無)と、書き込みの凍結の状態、API 契約の版(apiVersion)と受け付ける最低のクライアントの版(minClientVersion)を返す",
+    summary: "製品の版名(productVersion)、この導入で使える機能(画像アップロードの有無、edge と設置タグの公開 origin、パスワードログインの有無、結果を記録するデータベースの有無)と、書き込みの凍結の状態、API 契約の版(apiVersion)と受け付ける最低のクライアントの版(minClientVersion)を返す",
     responses: {
       200: { description: "機能の一覧", content: { "application/json": { schema: resolver(CapabilitiesSchema) } } },
       ...errorResponses(401),

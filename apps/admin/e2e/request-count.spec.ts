@@ -10,7 +10,7 @@ import { ADMIN_URL, CONTROL_URL, WORKSPACE_NAME, controlHeaders, createExperimen
  * 同じ GET のまとめが外れ、1 画面で約 20 回の往復と CPU の超過(exceededResources)になって、気づくまで 9 日かかった。
  *
  * 対象の画面(SCREENS): ホーム・ワークスペースのホーム・サイトのトップ(= エクスペリエンスの一覧)・目標・オーディエンスの一覧・画像の一覧(B68)・
- * エクスペリエンスの詳細・オーディエンスの詳細(設定)・サイト設定・メンバー(ワークスペースの設定)・公開・公開履歴・操作の記録(ワークスペース・導入全体。B129)。
+ * エクスペリエンスの詳細・オーディエンスの詳細(設定)・サイト設定・メンバー(ワークスペースの設定)・公開・公開履歴・操作の記録(ワークスペース・導入全体。B129)・この導入について(B142)。
  * B148: サイト設定のドメインの節(siteSettingsDomains)は、直接(?section=domains)・節のリンク・節の保存 1 回を SCREENS の外で数える(節の切り替えはルーターを通らない)。
  * 目標には詳細の画面が無い(一覧の中で編集する)ので、目標の一覧で代える。画面ごとに次の 2 通りを数える:
  * - 直接: page.goto で URL を開く(HTML の要求)
@@ -61,7 +61,8 @@ type ScreenName =
   | "publish"
   | "history"
   | "auditLog"
-  | "instanceAuditLog";
+  | "instanceAuditLog"
+  | "about";
 
 /**
  * 回数の上限(画面ごと。直す側が変えやすいよう 1 か所に置く)。値 = 実測 + 1(余裕の付け方はファイルの先頭)。
@@ -69,6 +70,9 @@ type ScreenName =
  * 実測の値は各画面の添付(request-counts-*)と、最後の表(summary)に残る
  */
 export const REQUEST_LIMITS: Record<ScreenName, { direct: number; navigation: number }> = {
+  // B142: 新しい設定の画面。直接は外枠の /capabilities とまとめる。移動で読むのは /capabilities だけ。
+  // 実測 3 / 3(2026-11-12 の全件 e2e)。RSC でも外枠の /me・/workspaces/summary が出て計3本。既存画面の上限は変えない。
+  about: { direct: 4, navigation: 4 },
   // 実測(2026-10-30。直接 / 遷移)の後ろに書く。共通の 3〜4 回 = 外枠の /me・/workspaces/summary・/capabilities(+ サイトの下は /sites/:sid)
   home: { direct: 4, navigation: 4 }, // 実測 3 / 3(外枠だけ)
   workspace: { direct: 5, navigation: 5 }, // 実測 4 / 4(+ workspaces/:wid/sites)
@@ -333,6 +337,12 @@ type Screen = {
 };
 
 const SCREENS: Screen[] = [
+  {
+    name: "about", path: () => "/w/me/about",
+    ready: (p) => expect(p.getByTestId("product-version")).toHaveText("dev"),
+    from: () => "/w/me/display",
+    link: (p) => navLink(p, "この導入について"),
+  },
   // ホーム: ワークスペースのホームから左上のロゴで戻る
   { name: "home", path: () => "/w", ready: (p) => expect(heading(p, "ホーム")).toBeVisible(), from: ({ wid }) => `/w/${wid}`, link: (p) => navLink(p, "AB Test and Target Harness") },
   // ワークスペースのホーム(サイト一覧): ホームのワークスペースのカードから(fixtures.ts の openWorkspace と同じ)

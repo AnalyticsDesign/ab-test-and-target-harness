@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
 import { capabilities, edgeOnWorkersDev, edgeOrigin, IMAGE_DISABLED_HINT, imageStore, LIBRARY_DISABLED_HINT, libraryDisabledHint, resultsStore, tagOrigin } from "../src/capabilities";
 import type { Env } from "../src/env";
-import { call, createSite, expectEnvelope, RESULTS_STORE, seedAssetRow, setupOwner } from "./helpers";
+import { call, json, createSite, expectEnvelope, RESULTS_STORE, seedAssetRow, setupOwner } from "./helpers";
+
+import { RELEASE_VERSION } from "../src/generated/release";
 
 const withEnv = (o: Partial<Env>): Env => ({ ...(env as unknown as Env), ...o }) as Env;
 
@@ -61,9 +63,9 @@ describe("capabilities", () => {
     const { token } = await setupOwner();
     const on = await call("GET", "/capabilities", { token, envOverride: { ...RESULTS_STORE, AB_EDGE_ORIGIN: "https://wtt-edge.my-sub.workers.dev" } });
     expect(on.status).toBe(200);
-    expect(await on.json()).toEqual({ imageUpload: true, edgeOrigin: "https://wtt-edge.my-sub.workers.dev", tagOrigin: "https://wtt-edge.my-sub.workers.dev", edgeOnWorkersDev: true, passwordLogin: false, resultsStore: true, imageThumbnails: false, writeFreeze: null, apiVersion: 7, minClientVersion: 7 });
+    expect(await on.json()).toEqual({ imageUpload: true, edgeOrigin: "https://wtt-edge.my-sub.workers.dev", tagOrigin: "https://wtt-edge.my-sub.workers.dev", edgeOnWorkersDev: true, passwordLogin: false, resultsStore: true, imageThumbnails: false, writeFreeze: null, productVersion: RELEASE_VERSION, apiVersion: 7, minClientVersion: 7 });
     const off = await call("GET", "/capabilities", { token, envOverride: { ASSETS: undefined, AB_EDGE_ORIGIN: undefined } });
-    expect(await off.json()).toEqual({ imageUpload: false, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, imageThumbnails: false, writeFreeze: null, apiVersion: 7, minClientVersion: 7 });
+    expect(await off.json()).toEqual({ imageUpload: false, edgeOrigin: null, tagOrigin: null, edgeOnWorkersDev: false, passwordLogin: false, resultsStore: false, imageThumbnails: false, writeFreeze: null, productVersion: RELEASE_VERSION, apiVersion: 7, minClientVersion: 7 });
     expect(capabilities(withEnv({ AB_ASSET_PUBLIC_BASE: "" })).imageUpload).toBe(false);
   });
 
@@ -104,4 +106,11 @@ describe("capabilities", () => {
     expect(libraryDisabledHint(true)).toBe(LIBRARY_DISABLED_HINT.withUploader);
     expect(IMAGE_DISABLED_HINT).not.toBe(LIBRARY_NO_UPLOADER); // IMAGE の 422 は別の文
   });
+});
+
+it("capabilities_return_product_version_for_session_and_api_key_b142", async () => {
+  const { token } = await setupOwner();
+  expect((await json(await call("GET", "/capabilities", { token }))).productVersion).toBe(RELEASE_VERSION);
+  const { key } = await json<{ key: string }>(await call("POST", "/me/api-keys", { token, body: { name: "agent", workspaceId: null } }));
+  expect((await json(await call("GET", "/capabilities", { token: key }))).productVersion).toBe(RELEASE_VERSION);
 });

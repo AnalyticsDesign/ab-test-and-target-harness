@@ -112,12 +112,12 @@ export const HERO_TEXT = "E2E から書き換え";
  * admin BFF は接続元 IP を転送しないので(決定 35 (4))、この E2E のすべての無認証 POST は control からは
  * 同じ IP に見え、経路ごとに 1 枠を共有する(apps/control/src/app.ts)。
  *
- * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 42 回(`login(` の呼び出しの実数。publish-flow 10 / audience-flow 10 /
+ * **テストを足すときはこの予算を数えること。** 現在 1 実行あたり sign-in 43 回(`login(` の呼び出しの実数。publish-flow 10 / audience-flow 10 /
  * version-banner 2 / request-count 3 / experiment-kind-flow 1 / login-screen 1 / results-flow 1 / invite-flow 1 / static-delivery 1 / results-settings 1 /
- * variant-ui 1 / write-freeze 1 / refresh-race 1 / shell-reuse 1 / domains-flow 1 / experiment-save 1 / leave-guard 1 / nav-feedback 1 / busy-scopes 1 / audit-log 1 / images-flow 1、うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 /
- * 招待受諾 6 回(invite-flow 1 / static-delivery 1 / busy-scopes 1 / audit-log 2 / images-flow 1。`acceptInvite()` は受諾でセッションを得るので、招待されたメンバーの sign-in は数えない)/
+ * variant-ui 1 / write-freeze 1 / refresh-race 1 / shell-reuse 1 / domains-flow 1 / experiment-save 1 / leave-guard 1 / nav-feedback 1 / busy-scopes 1 / audit-log 1 / images-flow 1 / product-version 1、うち publish-flow の 1 回は非常口の手順 `setOwnerPassword()` の後の初回ログイン)/ setup 1 回 /
+ * 招待受諾 7 回(invite-flow 1 / static-delivery 1 / busy-scopes 1 / audit-log 2 / images-flow 1 / product-version 1。`acceptInvite()` は受諾でセッションを得るので、招待されたメンバーの sign-in は数えない)/
  * `break-glass/reset-link` 2 回(publish-flow 1 / audit-log 1)/ `reset-password` 1 回。
- * 1 実行の sign-in の合計(42)は上限(30 回 / 10 秒。`apps/control/wrangler.jsonc` の AUTH_RATE_LIMITER)を超えていて、合計だけでは
+ * 1 実行の sign-in の合計(43)は上限(30 回 / 10 秒。`apps/control/wrangler.jsonc` の AUTH_RATE_LIMITER)を超えていて、合計だけでは
  * 10 秒窓に収まるとは言えない。今は `workers: 1` で直列に走り、各 `login()` の間に画面の遷移とテストの操作が入るので、1 つの 10 秒窓に
  * 入る sign-in は合計よりずっと少ない(窓ごとの実数は測っていない)。これ以上ログインを増やすなら、
  * 各テストでログインし直すのをやめて `storageState` でセッションを引き回すこと(ログインの検証は 1 本残せばよい)。

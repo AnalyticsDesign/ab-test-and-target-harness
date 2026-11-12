@@ -30,6 +30,7 @@ export function siteNav(caps: { imageUpload: boolean; imageUploader?: boolean })
 const SETTINGS_NAV: Array<{ href: string; label: string; icon: IconName; section: "personal" | "system"; prefetch?: false }> = [
   { href: "/w/me/api-keys", label: "API キー", icon: "key", section: "personal" },
   { href: "/w/me/display", label: "画面表示", icon: "eye", section: "personal" },
+  { href: "/w/me/about", label: "この導入について", icon: "info", section: "personal" },
   { href: "/w/me/instance-admins", label: "システム管理者", icon: "shield", section: "system" },
   { href: "/w/me/workspaces", label: "ワークスペース", icon: "stack", section: "system" },
   // prefetch を止める: この画面は control の GET /usage(= Cloudflare の使用量の取得)を呼ぶ。先読みすると、測っている使用量そのものを増やしてしまう

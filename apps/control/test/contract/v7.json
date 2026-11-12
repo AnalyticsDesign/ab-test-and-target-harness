@@ -2152,6 +2152,9 @@
                 "passwordLogin": {
                   "type": "boolean"
                 },
+                "productVersion": {
+                  "type": "string"
+                },
                 "resultsStore": {
                   "type": "boolean"
                 },
@@ -2205,6 +2208,7 @@
                 "imageUpload",
                 "minClientVersion",
                 "passwordLogin",
+                "productVersion",
                 "resultsStore",
                 "tagOrigin",
                 "writeFreeze"

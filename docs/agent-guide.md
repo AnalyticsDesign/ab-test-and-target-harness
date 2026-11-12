@@ -86,6 +86,8 @@ curl -sS "$AB_CONTROL_URL/me" -H "x-api-key: $AB_API_KEY"
 
 **API の版と 426**: 作業の初めに `GET /capabilities` の `apiVersion`(API 契約の版)を確かめ、前回の作業のときと違えば `/openapi.json` を読み直してください(要求や応答の形が変わっていることがあります)。どの応答にも `x-wtt-api-version`(今の版)と `x-wtt-min-client-version`(書き込みを受け付ける最低の版。`/capabilities` の `minClientVersion` と同じ値)のヘッダーが付きます。版を名乗りたいエージェントは、要求に `x-wtt-client-version: <対応している apiVersion>` を付けられます。付けた場合、その版が最低の版より小さいと、変更操作が `426 client_too_old` になります(読み取りは断られません)。付けなければ版の判定はされません。426 を受けたら、`/openapi.json` を読み直して変わった点を確かめ、人に知らせてから、新しい形で送り直してください。
 
+**製品の版**: 作業の初めに `GET /capabilities` の `productVersion` で、この導入の製品の版を確かめられます(公開リポジトリの Release と同じ版名。開発の build では `dev`)。`apiVersion`(要求の形の版)とは別のものです。要求の形を合わせるには `apiVersion` を使ってください。ログインしていない入口(`/llms.txt`・`/openapi.json`)には製品の版名は出ません。
+
 ---
 
 ## 2. レシピ

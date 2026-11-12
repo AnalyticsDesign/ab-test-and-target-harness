@@ -3,7 +3,6 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { parseHelp, renderHelpModule, renderMarkdown } from "../scripts/help-lib.mjs";
 import { HELP, HELP_KEYS, isHelpKey } from "../generated/help.ja";
-import { RELEASE_VERSION } from "../generated/release";
 
 /**
  * D9 plan ③ Task 13(K22): 説明(ヘルプ)の原稿 docs/experiment-results.md を管理画面に同梱する。
@@ -71,7 +70,9 @@ describe("説明の原稿と画面の鍵", () => {
   });
 
   test("版の表示: 開発では dev、公開物では版の文字列", () => {
-    expect(RELEASE_VERSION).toMatch(/^(dev|v\d+\.\d+(\.\d+)?)$/);
+    const generated = readFileSync(path.join(ROOT, "generated/release.ts"), "utf8");
+    const version = generated.match(/export const RELEASE_VERSION = "([^"]+)";/)?.[1];
+    expect(version).toMatch(/^(dev|v\d+\.\d+(\.\d+)?)$/);
   });
 });
 
