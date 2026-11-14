@@ -305,6 +305,21 @@ pnpm -C apps/control exec wrangler d1 create wtt-control </dev/null   # 2.2 と�
 pnpm -C apps/control exec wrangler r2 bucket create wtt-assets </dev/null   # 2.2 と同じく、設定ファイルへの追記は非対話なので行わない
 ```
 
+公開用のドメインをつなぐ前に、そのホストが空いていることを確かめる。`domain add` は、同じ名前の DNS レコードがすでにあると、断らずにそのレコードを R2 のレコードに置き換え、外しても元に戻らない(3.2 の「先に、ホストが空いていることを確かめる」)。まず、すでに接続していないかと、ほかの Worker に使われていないかを見る:
+
+```bash
+pnpm -C apps/control exec wrangler r2 bucket domain list wtt-assets   # 使うドメインが一覧に出ていれば接続済み。下の確認と domain add を飛ばし、最後の curl の確認に進む
+```
+
+```bash
+HOST=<assets.example.com>
+T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
+AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hostname=$HOST" -H "Authorization: Bearer $T" | jq '{ok: .success, n: (.result | length)}'   # 期待: {"ok": true, "n": 0}
+```
+
+次に、ダッシュボード → 対象ゾーン → DNS → Records(レコード)で、`<assets.example.com>` と同じ名前のレコードが無いことを確かめる(種類を問わない)。レコードがある、または `n` が 1 以上なら、そのホストは使われている。下の `domain add` を流さず、別のホストにする。
+
 ```bash
 ZID=$(curl -sS "https://api.cloudflare.com/client/v4/zones?name=<ゾーン名>" -H "Authorization: Bearer $(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)" | jq -r '.result[0].id')
 pnpm -C apps/control exec wrangler r2 bucket domain add wtt-assets --domain <assets.example.com> --zone-id "$ZID" --min-tls 1.2 --force
@@ -454,6 +469,7 @@ curl -s https://<設置タグのホスト>/s/<siteId>.js | head -c 400
 | ゾーンの設定用の Cloudflare API トークン(Cache Rules / WAF / Zone Read / DNS Read、期限 = 翌日、ゾーン限定)を発行して伝える | ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のときと、control か管理画面を自分のドメインに置くとき(`control_address` か `admin_address` が `custom`)。0.5 で一度に。失効は期限切れに任せる |
 | 配信ファイルのデプロイ用トークンと使用状況の表示用トークンを発行して伝える。権限は前者が Workers Scripts の Edit のみ、後者が Account Analytics の Read のみ。どちらもアカウント単位で、期限なし | 初回のみ(どの構成でも)。0.5 で一度に |
 | R2 の有効化 | 初回のみ。`code: 10042` が出たとき |
+| 画像の公開用のホストに、同じ名前の DNS レコードが無いかをダッシュボードで確かめる | 3.2 で、`CF_TOKEN` が無い構成(またはそのゾーンが `CF_TOKEN` の対象に無いとき)に、画像をカスタムドメインで配るとき |
 | ダッシュボードで Workers Paid に切り替える | `plan: paid` で、アカウントがまだ Free のとき。0.5 で一度に |
 | ダッシュボードの Workers & Pages を一度開く | 0.5 でサブドメインを API で作れなかったときだけ |
 | 更新時の設定の再保存 | 6.4 で (b) があるとき |
@@ -1678,7 +1694,45 @@ pnpm -C apps/control exec wrangler r2 bucket create wtt-assets </dev/null   # 2.
 - **本番ではカスタムドメインを勧める**。カスタムドメインなら、訪問者と管理画面は R2 から直接画像を読み、Worker は動かない(Cloudflare のキャッシュも使われる)。`dev-assets` は、R2 にドメインを接続できない間の暫定と、手元の開発のためのもの
 - `dev-assets` を選んだ場合: 画像の URL に control のアドレスが出るので、control の名前の乱数による保護の補助は適用されない(管理画面のアドレスは control からは分からない)。実値は `<control URL>/dev-assets`。control URL は 3.5 の初回 deploy で分かる。control 自身が R2 を読んで画像を返すので、アップロードと IMAGE の変更は動作する。ただし、訪問者のページと管理画面の画像の一覧で画像を 1 枚表示するたびに control が 1 回動き、Workers Free の 1 日のリクエスト数(アカウント全体で 10 万)を edge・管理画面と分け合う。Cloudflare のキャッシュも使われない(ブラウザのキャッシュだけ)。訪問者の多いサイトで IMAGE の変更を配信すると、この枠を先に使い切るおそれがある。R2 から直接配信するより遅くもなる
 - `dev-assets` からカスタムドメインに変えるなら、**画像を使い始める前に**変える。`AB_ASSET_PUBLIC_BASE` をカスタムドメインに変えると `GET /dev-assets/*` は自動的に閉じ、それまでに上げた画像の URL(`…/dev-assets/sites/…`)は読めなくなる。画像の一覧の URL・保存済みの変更・公開した設定の URL は書き換わらないので、前の画像は一覧でも表示されなくなり、その画像を使うパターンでは画像を上げ直して選び直すことになる
-- カスタムドメイン(例 `assets.<運用者ドメイン>`)を選んだ場合: 下のコマンドでバケットに接続し、`vars.AB_ASSET_PUBLIC_BASE` をその URL にして再デプロイする。DNS レコードと証明書は Cloudflare が作る。ドメインのゾーンが同じアカウントにあること。権限で拒否されたときだけ人に頼む(下の「期待と違うとき」):
+- カスタムドメイン(例 `assets.<運用者ドメイン>`)を選んだ場合: 先にホストが空いていることを確かめてから、下のコマンドでバケットに接続し、`vars.AB_ASSET_PUBLIC_BASE` をその URL にして再デプロイする。DNS レコードと証明書は Cloudflare が作る。ドメインのゾーンが同じアカウントにあること。権限で拒否されたときだけ人に頼む(下の「期待と違うとき」)
+
+**先に、ホストが空いていることを確かめる**。`wrangler r2 bucket domain add` は、同じ名前の DNS レコードがすでにあるホストに流すと、断らずにそのレコードを消して R2 のレコードに置き換える。`domain remove` で接続を外しても、元のレコードは戻らない。そのホストをほかのサービスで使っていると、そのサービスが止まる。`--force` が飛ばすのは「バケットの中身をそのドメインで公開してよいか」の確認だけで、非対話の実行ではこの確認は `--force` が無くても yes で進む。上書きを防ぐ働きは無いので、`--force` は残し、代わりに次の確認をする。
+
+まず、すでに接続していないかを見る(やり直しのとき):
+
+```bash
+pnpm -C apps/control exec wrangler r2 bucket domain list wtt-assets   # 使うドメインが一覧に出ていれば接続済み。下の確認と domain add を飛ばし、最後の curl の確認に進む
+```
+
+一覧に無ければ、ほかの Worker の Custom Domain に使われていないことを確かめる(`wrangler login` の資格情報を使う):
+
+```bash
+HOST=<assets.example.com>
+T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
+AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hostname=$HOST" -H "Authorization: Bearer $T" | jq '{ok: .success, n: (.result | length)}'   # 期待: {"ok": true, "n": 0}
+```
+
+続けて、ゾーンに同じ名前の DNS レコードが無いことを確かめる(種類を問わない)。`CF_TOKEN`(0.5 の 2。Zone → DNS → Read を含む)がある構成では API で見る:
+
+```bash
+set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
+HOST=<assets.example.com>
+ZONE=<そのホストのゾーン名>
+ZID=$(curl -sS "https://api.cloudflare.com/client/v4/zones?name=$ZONE" -H "Authorization: Bearer $CF_TOKEN" | jq -r '.result[0].id')
+echo "ZID=$ZID"   # 期待: 32 桁の ID(null なら、ZONE の名前が違うか、CF_TOKEN の対象のゾーンに入っていない)
+curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/dns_records?name=$HOST" -H "Authorization: Bearer $CF_TOKEN" | jq '{ok: .success, n: (.result | length)}'   # 期待: {"ok": true, "n": 0}
+```
+
+`CF_TOKEN` が無い構成(`workers-dev` で画像のホストだけゾーンに置くときなど)と、`ZID` が null のときは、**【人に依頼】** ダッシュボード → 対象ゾーン → DNS → Records(レコード)で、そのホストと同じ名前のレコードが無いことを確かめてもらう。
+
+確認で期待と違うとき:
+
+- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く
+- `n` が 1 以上、またはダッシュボードに同じ名前のレコードがある → そのホストは使われている。`domain add` を流さない。別のホストにする(`asset_public_base` を答え直す)か、そのレコードが要らないことを人に確かめてから消してもらう。消した後に、確認をやり直す
+- R2 のカスタムドメインが、ほかの Worker の Custom Domain と重なったときの動きは確かめていない。重なっていれば、上と同じく流さない
+
+空いていることを確かめたら、接続する:
 
 ```bash
 ZID=$(curl -sS "https://api.cloudflare.com/client/v4/zones?name=<ゾーン名>" -H "Authorization: Bearer $(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)" | jq -r '.result[0].id')
@@ -1692,7 +1746,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' "https://<assets.example.com>/"   # �
 - 最後の確認が `000` / `5xx`、または `403` で、`domain list` の `ownership_status` か `ssl_status` が `pending` → 接続の反映待ち。接続の直後は 403 が返ることがある。30 秒おきに `domain list` と最後の確認をやり直す。5 分たっても `pending` のままなら、作業を中断して人に報告する
 - どちらも `active` になった後も 403 → 反映待ちではない。応答の本文(`curl -sS "https://<assets.example.com>/"`)と `domain list` の出力を `deploy-log.md` に残す。ドメインとバケット名の設定を確かめてから人に報告する
 - `domain add` がゾーンの所有を理由に失敗する(zone が見つからない / 別アカウント)→ そのドメインのゾーンが同じアカウントに無い。`dev-assets` に切り替えるか、ゾーンを持つアカウントに導入する
-- `domain add` が権限を理由に失敗する → **【人に依頼】** ダッシュボードで同じドメインを接続してもらい、`domain list` の確認から再開する。この失敗は、`wrangler login` の資格情報で DNS の書き込みが拒否される場合で、実サイトでは未検証
+- `domain add` が権限を理由に失敗する → **【人に依頼】** ダッシュボードで同じドメインを接続してもらい、`domain list` の確認から再開する。この失敗は、`wrangler login` の資格情報で DNS の書き込みが拒否される場合。Free の新しいアカウントで確かめたときは、`wrangler login` の資格情報で接続でき、数分で `ownership_status`・`ssl_status` とも `active` になった。ダッシュボードで接続するときも、上の空きの確認を先に済ませる
   - 画面: Storage & databases(ストレージとデータベース)→ R2 Object Storage(R2 オブジェクトストレージ)のバケットの一覧で `wtt-assets` → Settings(設定)タブ → Custom Domains(カスタム ドメイン)の Add(追加)。Status(ステータス)が Active(アクティブ)になれば接続済み
   - 接続するまでは `AB_ASSET_PUBLIC_BASE` を `<control URL>/dev-assets` にしておけば、アップロードと IMAGE の変更は動作する
 
