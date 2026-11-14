@@ -43,7 +43,7 @@ owner_email: <you@example.com>                                   # E3 管理画�
 # release_tag: latest                # 導入するリリースタグ(例 v0.9)。latest = git tag の v* を版の順に並べた先頭(GitHub Releases の API は使わない。デプロイガイド 0.3)
 # control_address: workers-dev       # workers-dev | custom。custom のときは control_host も書く
 # control_host: control.example.com  # control_address: custom のときのホスト(DNS と証明書は wrangler が作る)
-# control_protection: none           # control の無認証入口の守り。none | waf | access(waf / access は control_address: custom が前提。waf / access は実サイト未検証)
+# control_protection: none           # control の無認証入口の守り。none | waf | access(waf / access は control_address: custom が前提。どちらも人のダッシュボードの作業がある。デプロイガイド 7.2・7.3)
 # edge_waf_rate_limit: true          # /v1/sites/* と /__ab/* に WAF Rate Limiting Rule を作る(推奨)
 # edge_waf_requests_per_10s: 200     # 同一 IP から 10 秒あたりの上限。WAF ルールの値。WAF を作らない構成では edge の Rate Limiting binding の値(デプロイガイド 2.3)
 # asset_max_mb: 5                    # 画像アップロード 1 件の上限(MB)

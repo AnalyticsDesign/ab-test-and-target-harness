@@ -16,5 +16,5 @@ AB Test and Target Harness の文書一式。導入・運用のための手順�
 | [operations.md](operations.md) | 運用ガイド。エクスペリエンスのライフサイクル、下書きプレビュー、公開の反映、開始直後のチェック、ロールと管理操作、レート制限の実効、既知の制約と課題、トラブルシュート |
 | [analytics.md](analytics.md) | 分析ガイド。何が測れるか、前提の設定(カスタム定義 / BigQuery)、レシピの取得、方式 A(GA4 探索レポート)、方式 B(BigQuery)、GA4 Data API、結果の読み方 |
 | [experiment-results.md](experiment-results.md) | テスト結果の読み方。評価計画と評価時点、判定の 5 つの状態と数値、データ品質(割り振りの偏り・混在・適用の失敗・収集の失敗と停止)、終了と採用・複製、記録の設定と保持。管理画面の「?」の説明の原稿でもある |
-| [agent-guide.md](agent-guide.md) | エージェント向けガイド(正はこのリポジトリのこのファイル)。鍵の範囲と権限、API キー、レシピ 7 本(エクスペリエンスを作って公開まで / 下書きの検証 / 結果を読む / 配信条件の what-if / オーディエンス / 使用状況の監視 / 複製)、踏みやすい制約。control が `GET /llms.txt` で配る |
+| [agent-guide.md](agent-guide.md) | エージェント向けガイド(正式な版は、このリポジトリのこのファイル)。鍵の範囲と権限、API キー、レシピ 7 本(エクスペリエンスを作って公開まで / 下書きの検証 / 結果を読む / 配信条件の what-if / オーディエンス / 使用状況の監視 / 複製)、踏みやすい制約。control が `GET /llms.txt` で配る |
 | [../deploy-answers.example.yaml](../deploy-answers.example.yaml) | リポジトリ直下。導入時の入力ファイルの雛形 |

@@ -13,10 +13,10 @@
 「同意管理(CMP)を入れていない / CSP を出していない / Mode A」のサイトなら、次の 5 つで設置が終わる。
 
 - [ ] デプロイガイドを 5 節のスモークまで終える
-- [ ] 管理画面でサイトを作る(または確認する)— [2 節](#2-サイトを作る)
-- [ ] viewport の meta の直後にタグを 1 本置く — [3 節](#3-タグを置く)
-- [ ] GA4 にカスタムディメンションを 3 件登録し、GTM に変数・トリガー・タグを作る — [4 節](#4-ga4-と-gtm-をつなぐ)(GTM 部分は JSON のインポートで短縮できる)
-- [ ] エクスペリエンスを 1 つ開始し、4 点を確認する — [5 節](#5-設置後の確認)
+- [ ] 管理画面でサイトを作る(または確認する)。[2 節](#2-サイトを作る)
+- [ ] viewport の meta の直後にタグを 1 本置く。[3 節](#3-タグを置く)
+- [ ] GA4 にカスタムディメンションを 3 件登録し、GTM に変数・トリガー・タグを作る。[4 節](#4-ga4-と-gtm-をつなぐ)(GTM 部分は JSON のインポートで短縮できる)
+- [ ] エクスペリエンスを 1 つ開始し、4 点を確認する。[5 節](#5-設置後の確認)
 
 うまくいかないときは [6 節](#6-うまくいかないとき)。
 
@@ -51,11 +51,11 @@
 ## 1. 前提
 
 - [デプロイガイド](deploy.md)を 5 節まで終えている: edge と control が動き、管理画面にログインでき、スモーク(サイトを作ってエクスペリエンスを開始 → 終了)が通っている
-- `<設置ホスト>` で設置タグを配る配信専用の Worker と edge の Route が効いている(既定の構成では `<設置ホスト>/s/*` が配信専用の Worker、`<設置ホスト>/v1/*` が edge。[デプロイガイド 2.3](deploy.md#23-route-を書く)・[2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker))。別のドメインに置く構成では `<設置ホスト>` = `<edge のホスト>`(`<edge のホスト>/s/*` が配信専用の Worker の Route、edge はそのホストの Custom Domain。[デプロイガイド 2.5](deploy.md#25-公開アドレスの選び方))。`*.workers.dev` で公開する構成では `<設置ホスト>` = `wtt-static.<アカウントのサブドメイン>.workers.dev`(Route は無い)。どちらも制約は[導入構成の選び方 2 節](install-patterns.md#2-edge-の置き方問い-1)
+- `<設置ホスト>` で設置タグを配る配信専用の Worker と edge の Route が動いている(既定の構成では `<設置ホスト>/s/*` が配信専用の Worker、`<設置ホスト>/v1/*` が edge。[デプロイガイド 2.3](deploy.md#23-route-を書く)・[2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker))。別のドメインに置く構成では `<設置ホスト>` = `<edge のホスト>`(`<edge のホスト>/s/*` が配信専用の Worker の Route、edge はそのホストの Custom Domain。[デプロイガイド 2.5](deploy.md#25-公開アドレスの選び方))。`*.workers.dev` で公開する構成では `<設置ホスト>` = `wtt-static.<アカウントのサブドメイン>.workers.dev`(Route は無い)。どちらも制約は[導入構成の選び方 2 節](install-patterns.md#2-edge-の置き方問い-1)
 - サイトに GTM コンテナが入っており、GA4 にデータを送っている(GA4 の Google タグが GTM 内で動いている)。確かめるときは、ページの HTML を取得して探すのではなく、ブラウザの DevTools → Network でページを開き、`gtm.js` と `g/collect` への通信があることを見る(GTM を JavaScript で後から挿入するサイトでは、HTML に GTM のスニペットが無い)
 - GA4 の次の 2 つを控えてある
-  - **測定 ID**(`G-` で始まる)— GA4 → 管理 → データストリーム
-  - **数値のプロパティ ID**(`<GA4 プロパティ ID>`)— GA4 → 管理 → プロパティの設定 → プロパティの詳細。4 節の API 手順と分析で使う
+  - **測定 ID**(`G-` で始まる)。GA4 → 管理 → データストリーム
+  - **数値のプロパティ ID**(`<GA4 プロパティ ID>`)。GA4 → 管理 → プロパティの設定 → プロパティの詳細。4 節の API 手順と分析で使う
 
 ## 2. サイトを作る
 
@@ -100,8 +100,8 @@ edge が受け付けるページの Origin(`受け付ける Origin(/v1/ の CORS
 確認: ブラウザで `https://<設置ホスト>/s/<siteId>.js` を開き、JavaScript が表示されること。設置タグを別オリジン(別のドメインに置く構成の `<edge のホスト>` / `*.workers.dev`)で配っているときは、404 が配信専用の Worker の応答(本文 `not found`)になる。サイトの 404 ページ(HTML)が出るのは、設置サイトのゾーンに Route を置く構成だけ。
 
 - `not found` という短い文字列だけが出る → そのサイトがまだ一度も公開されていない(デプロイガイドのスモークで開始 → 終了していれば公開済み)か、公開の後の配信ファイルの更新が済んでいない(管理画面のサイトの上部に警告が出る。[運用ガイド 4 節](operations.md#4-公開の反映))か、サイト ID の綴り違い。この状態でもサイトは元の表示のまま動く
-- サイトの 404 ページ(HTML)が出る → 配信専用の Worker の Route が効いていない。[デプロイガイド 2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker) の確認を見直す
-- 別のドメインに置く構成で、本文が `404 Not Found` だけ → edge が受けている。配信専用の Worker の Route(`<edge のホスト>/s/*`)が効いていないので、[デプロイガイド 2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker) の (3)(4) を見直す
+- サイトの 404 ページ(HTML)が出る → 配信専用の Worker の Route が動いていない。[デプロイガイド 2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker) の確認を見直す
+- 別のドメインに置く構成で、本文が `404 Not Found` だけ → edge が受けている。配信専用の Worker の Route(`<edge のホスト>/s/*`)が動いていないので、[デプロイガイド 2.9](deploy.md#29-設置タグの配信配信専用の-worker-とデプロイ専用の-worker) の (3)(4) を見直す
 
 **SPA の注意**: 画面遷移を `pushState` で行うサイトでは、遷移しても条件の再評価は行われない。新しい評価が走るのはページの再読み込みを伴う遷移だけ([運用ガイド 8 節](operations.md#8-既知の制約))。
 
@@ -177,7 +177,7 @@ curl -sS "https://analyticsadmin.googleapis.com/v1beta/properties/$PID/customDim
 | `GA4 - ab_exposure` | `ab_exposure` | `ab_experiment_id` = `{{DLV - ab_experiment_id}}`、`ab_variant_id` = `{{DLV - ab_variant_id}}`、`ab_experiment_name` = `{{DLV - ab_experiment_name}}`、`ab_variant_name` = `{{DLV - ab_variant_name}}` | `CE - ab_exposure` |
 | `GA4 - ab_conversion` | `ab_conversion` | `ab_goal_id` = `{{DLV - ab_goal_id}}`、`ab_goal_name` = `{{DLV - ab_goal_name}}` | `CE - ab_conversion` |
 
-変数はタグの設定欄(上の表のイベント パラメータなど)で使い、カスタム HTML のタグの JavaScript の文字列の中に `'{{DLV - ab_variant_name}}'` のように直接書かない。値に `'` が入るとタグが壊れる。
+変数はタグの設定欄(上の表のイベント パラメータなど)で使い、カスタム HTML のタグの JavaScript の文字列の中に `'{{DLV - ab_variant_name}}'` のように直接書かない。値に `'` が入るとタグが動かなくなる。
 
 作ったら GTM の**プレビュー**で対象ページを開き、エクスペリエンスが動いているページで `ab_exposure` のタグが発火することを確かめてから**公開**する(エクスペリエンスの開始は [5 節](#5-設置後の確認)の手順で行う)。
 
@@ -327,7 +327,7 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
   -d '{"v":1,"url":"https://<ページのホスト>/","referrer":"","device":"desktop"}' | grep -i set-cookie
 ```
 
-`set-cookie:` の行が出れば通っている。
+`set-cookie:` の行が出れば、Cookie が発行されている。
 
 タグを置くドメイン・Route・疎通確認の URL は、すべて `<ページのホスト>` に揃える。タグは Mode B の decision / event を `/__ab/…` の相対 URL で送るので、タグを別のホストから配っていても `/__ab/*` はページのホスト側に要る。
 
@@ -335,7 +335,7 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 
 - タグは `/__ab/decision` に訪問者 ID を含めずに送り、edge が `Set-Cookie` で正本 Cookie を発行する。`サブドメインをまたいだ共有` がオフなら、ホスト限定の HttpOnly で JavaScript から読めない。オン(既定)なら、`Domain` を付けた HttpOnly なしの Cookie になり、JavaScript から読める([下の小節](#サブドメインをまたいで-id-を共有する))
 - 同意の撤回で Cookie が消えるのは、`AB.consent(false)` が呼ばれたときだけ([7 節](#7-consent-の配線cmp-を使うサイト))。ページ読み込み時点で `denied` の場合は通信そのものを行わないため、既に発行された Cookie は残る(Cookie 自体の有効期限は 1 年)。`retentionDays` が決めるのはサーバー側の Visitor Profile の寿命で、Cookie ではない
-- `撤回時に訪問者プロフィールを削除(forgetOnRevoke)` は、Mode B では訪問者プロフィールの削除には効かない(結果の記録の削除には効く。[7 節](#7-consent-の配線cmp-を使うサイト))
+- `撤回時に訪問者プロフィールを削除(forgetOnRevoke)` は、Mode B では訪問者プロフィールの削除には適用されない(結果の記録の削除には適用される。[7 節](#7-consent-の配線cmp-を使うサイト))
 
 ### サブドメインをまたいで ID を共有する
 
@@ -365,11 +365,11 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 
 **必要な設置作業**: 無い。decision / event を受ける edge の公開は、デプロイガイドの手順([2.3](deploy.md#23-route-を書く))で済んでいる。公開の仕方は導入構成で決まる: 設置サイトのゾーンに置く構成では `<設置ホスト>/v1/*` の Route、別のドメインに置く構成では `<edge のホスト>` の Custom Domain、`*.workers.dev` の構成では `wtt-edge.<アカウントのサブドメイン>.workers.dev`。タグは decision / event を、設置タグのファイルに書き込まれた edge の宛先(デプロイガイド 3.4 の `AB_EDGE_ORIGIN`)に送る。edge に届かないと decision が失敗し、エクスペリエンスは出ない(元の表示のまま)。設置サイトのゾーンに置く構成で Route が無いと、要求がサイト本体に届いて 404 になる。
 
-保存するのは閲覧回数・目標達成回数・保存済みの割当だけで、生のイベントや個人情報は保存しない。最終訪問から `retentionDays`(既定 90 日)で自動的に消える。**`retentionDays` を変えると、その後に訪問した訪問者から新しい日数が効く**(保持期限は訪問のたびに「その時点の設定」で置き直される)。変更より前の最終訪問から一度も戻ってこない訪問者の Profile は、変更前の日数で消える。短くした場合に休眠中の Profile まで即時に短くする手段は無いので、保持の方針を説明するときはこの挙動を含める。
+保存するのは閲覧回数・目標達成回数・保存済みの割当だけで、生のイベントや個人情報は保存しない。最終訪問から `retentionDays`(既定 90 日)で自動的に消える。**`retentionDays` を変えると、その後に訪問した訪問者から新しい日数が適用される**(保持期限は訪問のたびに「その時点の設定」で置き直される)。変更より前の最終訪問から一度も戻ってこない訪問者の Profile は、変更前の日数で消える。短くした場合に休眠中の Profile まで即時に短くする手段は無いので、保持の方針を説明するときはこの挙動を含める。
 
-- **数えるのはルールを公開した後の閲覧だけ。** 閲覧したページの条件は公開時に設定に焼き込まれ、それより前の訪問は数えない
+- **数えるのはルールを公開した後の閲覧だけ。** 閲覧したページの条件は公開時に設定に書き込まれ、それより前の訪問は数えない
 - **今見ているページも「見たことがある」に含む。** 条件のページの初回訪問で、同じページの `visited` が真になる
-- **目標の数え方**: PAGEVIEW = URL 条件に一致するページの読み込みごと、CLICK = セレクタに一致する要素のクリックごと(子要素のクリックや、描画し直された要素にも効く)、CUSTOM = `AB.track("<goalId>")` の呼び出しごと。重複は除かない(GTM のクリックトリガーと同じ)。このサイトでは `ab_conversion` の `dataLayer` への push に加えてサーバーにも送る(目標だけを使うサイトでは `needsProfile` にならず、`dataLayer` にだけ出る)
+- **目標の数え方**: PAGEVIEW = URL 条件に一致するページの読み込みごと、CLICK = セレクタに一致する要素のクリックごと(子要素のクリックや、描画し直された要素のクリックも数える)、CUSTOM = `AB.track("<goalId>")` の呼び出しごと。重複は除かない(GTM のクリックトリガーと同じ)。このサイトでは `ab_conversion` の `dataLayer` への push に加えてサーバーにも送る(目標だけを使うサイトでは `needsProfile` にならず、`dataLayer` にだけ出る)
 - **コスト**: このサイトでは、ページビューごとに decision 1 リクエスト + Durable Object 1 リクエスト、一致した目標 1 つごとに event 1 + Durable Object 1、訪問者ごとに削除用の alarm 1 が発生する。PAGEVIEW 目標は読み込みごとに発火するので、URL 条件が広いと Durable Object のリクエストが倍増する。Cloudflare の Free プランの上限を超えると decision が失敗し、エクスペリエンスは出なくなる(サイトは元の表示のまま動く)
 
 `/v1/sites/*` と `/__ab/*` は認証が無く(Origin の検証だけ)、でたらめな訪問者 ID を送られると Profile が量産され得る。守りは Cloudflare 側に置く: ゾーンの WAF Rate Limiting Rule と使用量の監視([デプロイガイド 2.7](deploy.md#27-waf-rate-limiting-rule推奨) にしきい値の指針と、社内ネットワークなど多人数が 1 つの IP を共有する場合の注意がある)。
@@ -383,7 +383,7 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 | type | 動き | 1 ページでの回数 | Exposure が出る条件 |
 |---|---|---|---|
 | HTML | `position`(`replace` = 要素そのものを置換 / `before` / `after` / `append`)で挿入する。`runScripts: true` のときだけ中の `<script>` を作り直して実行する(inline / `src` 両対応)。`false` なら `<script>` は実行されずに残る(JSON-LD などデータ用途向け) | DOM 挿入は要素ごと、`<script>` の実行はページ読み込みごとに 1 回 | DOM 挿入が成功したとき(中の `<script>` の成否は問わない) |
-| CSS | 変更ごとに `<style data-ab-experiment data-ab-variant data-ab-change>` を `<head>` の末尾に 1 回入れる。prehide の対象外(チラつくことがある)。後から読み込まれるサイトの CSS に同じ詳細度で負けることがある — 効かないときは詳細度を上げるか `!important` を使う | 1 回 | 入れたとき(対照群・処理群とも起動直後) |
+| CSS | 変更ごとに `<style data-ab-experiment data-ab-variant data-ab-change>` を `<head>` の末尾に 1 回入れる。prehide の対象外(チラつくことがある)。後から読み込まれるサイトの CSS に同じ詳細度で負けることがある。スタイルが反映されないときは詳細度を上げるか `!important` を使う | 1 回 | 入れたとき(対照群・処理群とも起動直後) |
 | CUSTOM_JS | `function(element, ctx) { …書いたコード… }` を、セレクタに**最初に一致した要素**を `element`(と `this`)にして実行する。`ctx = { experimentId, variantId, changeId }`。目標の送信は `window.AB.track(goalId)`、割当の参照は `window.AB.getAssignments()` | ページ読み込みごとに 1 回。SPA の再描画では再実行しない | 関数が登録され、例外なく終わったとき |
 
 - ページ全体に効かせる CUSTOM_JS はセレクタを `body` にする
@@ -400,7 +400,7 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 |---|---|
 | CSP なし | 何もしない |
 | nonce 方式(`script-src 'nonce-…'`。`'strict-dynamic'` の有無は問わない) | **設置タグに nonce を付ける**だけ。`style-src` を絞っているなら同じ nonce 方式にする(prehide と CSS の変更の `<style>` に引き継ぐ) |
-| allowlist 方式(ホストの列挙だけで nonce なし) | 作る inline の `<script>` / `<style>` が通らない。`'unsafe-inline'` を足せば通るが推奨しない — nonce 方式への移行を勧める(他社ツールや GTM も同じ案内をしている) |
+| allowlist 方式(ホストの列挙だけで nonce なし) | 作る inline の `<script>` / `<style>` が通らない。`'unsafe-inline'` を足せば通るが推奨しない。nonce 方式への移行を勧める(他社ツールや GTM も同じ案内をしている) |
 | Trusted Types の強制(`require-trusted-types-for 'script'`) | **非対応**。HTML(`innerHTML` による挿入そのものが拒否される。`<script>` の有無を問わない)と CUSTOM_JS は動かない。TEXT / IMAGE / HIDE / ATTRIBUTE / CSS は動く(`<style>` の `textContent` は Trusted Types の対象外)。失敗はその変更だけに閉じる |
 
 **設置タグや edge が設置サイトと別オリジンの構成**(`*.workers.dev` や別のドメインで公開している)では、`connect-src` に edge のホストを足す(decision / event の送信先)。結果を記録する場合も、テストの参加と目標の達成を同じ edge の `/event` に送るので、`connect-src` に edge のホストが要る(足さないと送信がブラウザで止まり、ツールの側では失敗として数えられない)。設置タグの `script-src` には、設置タグを配るホスト(配信専用の Worker)を allowlist 方式のサイトだけ足す(nonce 方式なら設置タグの nonce で通る)。同一オリジンの構成(設置サイトのゾーンの Route)では不要。ただし、Mode B で Route の無いホスト(Cloudflare 外のドメイン)のページは、edge の `/v1/` に別のオリジンとして送るので、そのページの CSP の `connect-src` に edge のホストが要る([8 節](#サブドメインをまたいで-id-を共有する))。
@@ -438,13 +438,13 @@ curl -si -X POST "https://<ページのホスト>/__ab/decision" -H 'content-typ
 | `正本 Cookie 名` | 訪問者 ID | 新しいサイトの既定は `_wtt_vid`(v0.11 より前に作ったサイトは `_ab_vid` のまま変わらない)。**変えると全訪問者の ID が作り直され、割当がリセットされる**。旧名は `retentionDays` の間、削除対象として記録され、その間は再利用できない |
 | `サブドメインをまたいだ共有`(設定のキーは `shareSubdomains`) | 訪問者 ID | 既定 on。訪問者 ID の Cookie を、登録ドメインの下のどのホストでも読めるように発行する。オンにしている間は、同じ登録ドメインのすべてのホストを信頼することになる。同じ導入の別のサイトと Cookie の名前が重なると、保存は 422 `sharing_conflict` で断られる。API の `GET /sites/<siteId>` は、共有のまとまり(`cookieGroups`。共有がオフなら空)も返す。[8 節](#サブドメインをまたいで-id-を共有する) |
 | `UUID Cookie(外部ツール連携用の別名。出力専用)` | 訪問者 ID | 有効にすると、正本の ID から導出した UUIDv4 を別の Cookie(`UUID Cookie 名`。新しいサイトの既定は `_wtt_uuid`、それより前に作ったサイトは `_ab_uuid`)にも書く。導出した UUID から正本の ID には戻せず、ID の発行時刻も含まない。BYOID(Mode C)の訪問者にも出す。Mode C では割当に使う ID(BYOID のハッシュ。BYOID の Cookie が無ければ匿名 ID)から導出するので、ログインの前後で UUID Cookie の値が変わる。ツール自身はこの Cookie を読まない |
-| `タイムゾーン` | 一般 | 既定 `Asia/Tokyo`。IANA の名前(`America/New_York` など)。エクスペリエンスの配信条件の曜日・時間帯の判定に使う(訪問者の端末のタイムゾーンではなくサイトのタイムゾーン)。変えたら次の公開から効く |
+| `タイムゾーン` | 一般 | 既定 `Asia/Tokyo`。IANA の名前(`America/New_York` など)。エクスペリエンスの配信条件の曜日・時間帯の判定に使う(訪問者の端末のタイムゾーンではなくサイトのタイムゾーン)。変えたら次の公開から反映される |
 | `同意の扱い` | 一般 | 設定のキーは `consentMode`。`同意を待たずに動かす`(既定。`implicit`)または `訪問者が同意するまで動かさない`(`required`)。[7 節](#7-consent-の配線cmp-を使うサイト) |
 | `decisionTimeoutMs(300〜3000)` | 一般 | decision の応答を待つ時間。超えるとその読み込みではエクスペリエンスを出さない(元の表示のまま) |
-| `retentionDays(Profile と旧 Cookie 名の保持日数)` | 一般 | 既定 90(1〜3650)。最終訪問からこの日数で Visitor Profile を自動削除する。変更は次に訪問した訪問者から効く(休眠中の Profile は変更前の日数で消える。[9 節](#9-履歴条件と-visitor-profile)) |
+| `retentionDays(Profile と旧 Cookie 名の保持日数)` | 一般 | 既定 90(1〜3650)。最終訪問からこの日数で Visitor Profile を自動削除する。変更は次に訪問した訪問者から適用される(休眠中の Profile は変更前の日数で消える。[9 節](#9-履歴条件と-visitor-profile)) |
 | `撤回時に訪問者プロフィールを削除(forgetOnRevoke)` | 一般 | 既定 on。同意の撤回時にサーバー側の履歴をすぐ消す([7 節](#7-consent-の配線cmp-を使うサイト))。off にすると `retentionDays` まで残す。結果を記録するサイトでは、その訪問者の結果の記録も同じ設定で消す |
 | `新しい訪問者の記録の上限(1 日あたり)` | 一般 | 履歴の条件を使うサイトで、1 日に新しく記録する訪問者(Visitor Profile)の数の上限。空欄 = Cloudflare のプランに合わせた既定(Free 20,000 / Paid 200,000)。1 時間あたりはこの値の 10% まで。超えた訪問者にもテストは表示されるが、その訪問の履歴は記録しない。API は `newProfileBudgetPerDay`。[運用ガイド 7 節](operations.md#新しい訪問者の記録の上限サイト設定) |
-| `結果を記録する` | 一般 | テストの参加と目標の達成を、この導入の計測用のデータベースに記録する。新しいサイトは、計測用のデータベースがある導入なら有効で作られる。既存のサイトは無効のまま。切り替えは次の公開から効き、記録するのは有効にした後に開始したテストだけ(有効にする前に開始したテストは、複製して開始し直す)。テストの途中で無効にすると、止めていた期間はそのテストの記録が欠ける。計測用のデータベースが無い導入では有効にできない(409 `results_store_missing`)。有効にすると、送信先の確認の案内(`/v1/*` の Route(Mode B では `/__ab/*` の Route)、または CSP の `connect-src`。[10 節](#10-コードの変更と-csp))が出る |
+| `結果を記録する` | 一般 | テストの参加と目標の達成を、この導入の計測用のデータベースに記録する。新しいサイトは、計測用のデータベースがある導入なら有効で作られる。既存のサイトは無効のまま。切り替えは次の公開から反映され、記録するのは有効にした後に開始したテストだけ(有効にする前に開始したテストは、複製して開始し直す)。テストの途中で無効にすると、止めていた期間はそのテストの記録が欠ける。計測用のデータベースが無い導入では有効にできない(409 `results_store_missing`)。有効にすると、送信先の確認の案内(`/v1/*` の Route(Mode B では `/__ab/*` の Route)、または CSP の `connect-src`。[10 節](#10-コードの変更と-csp))が出る |
 | `参加者ごとの記録を残す日数(7〜365 日)` | 一般 | 既定 90。テストの記録を終えてからこの日数を過ぎた参加者ごとの記録(個票)を消す |
 | `外部計測の名前(dataLayer の名札)` | 外部計測の名前 | `dataLayer の変数名`(既定 `dataLayer`) / `extra の名前空間キー` / `露出のイベント名` / `露出: experimentId キー` / `露出: experimentName キー` / `露出: variantId キー` / `露出: variantName キー` / `コンバージョンのイベント名` / `コンバージョン: goalId キー` / `コンバージョン: goalName キー` の 10 項目。既定のままで使える([12 節](#12-datalayer-の契約と命名の規則)) |
 | `ga4PropertyId(数値の GA4 プロパティ ID。G- で始まる測定 ID ではありません)` | 外部 ID | 管理者以上。分析レシピ(`analytics-recipe`)がプロパティ ID を埋めるのに使う。空 = 未設定(レシピはプレースホルダのまま)。[分析ガイド 2 節 (d)](analytics.md#d-サイトに外部-id-を設定する) |
@@ -506,7 +506,7 @@ GA4 で `ab_error` のイベント数を見れば、制限に当たったペー�
 
 - エクスペリエンス名はエクスペリエンス側の `experimentName`、パターン名はパターン側の `variantName`、目標名は目標側の `goalName` で指定する。指定が無ければ、それぞれの ID を出す
 - エクスペリエンス・パターン・目標の「名前」の欄(`name`)は、管理画面の中だけで使う。設置タグのファイルにも dataLayer にも入らないので、訪問者には届かない。外部計測で指定した値は dataLayer に入り、訪問者もブラウザで見られるので、社内向けの言葉や個人情報は入れない
-- レベルをまたぐ上書き(エクスペリエンス側で `variantName`、パターン側で `experimentName`)は受け付けない — 全パターンが同じ名前になったり、パターンごとにエクスペリエンス名が変わったりして、GA4 のセグメントが壊れるため
+- レベルをまたぐ上書き(エクスペリエンス側で `variantName`、パターン側で `experimentName`)は受け付けない。全パターンが同じ名前になったり、パターンごとにエクスペリエンス名が変わったりして、GA4 のセグメントが使えなくなるため
 - `experimentId` / `variantId` / イベント名は上書きできない
 - `extra` はキーごとにパターンの値がエクスペリエンスの値に優先する
 
@@ -526,7 +526,7 @@ GA4 で `ab_error` のイベント数を見れば、制限に当たったペー�
 - イベント名はさらに、`query_id` で始まるものと、GA4 の予約・自動収集イベント名(`page_view` / `click` / `session_start` など)が不可。Exposure と Conversion のイベント名は互いに別にする
 - サイト単位の 7 つのキー名は互いに別にし、`event` は使えない
 - 値(`extra` の値と、`experimentName` / `variantName` / `goalName` の指定)は文字列 1〜100 字。改行・タブなどの制御文字(U+0000〜U+001F・U+007F〜U+009F)と U+2028 / U+2029 は使えない(保存時に `invalid_analytics_value` で拒否する。保存済みと同じ値は検査しない)。1 エクスペリエンス × パターンの `extra` は 20 キーまで
-- `extra` はパターンごとに複製されて配信用の設定に焼き込まれるので、エクスペリエンス単位の `extra` は 512KB のサイズ上限に対してパターンの数だけ効く(超えると公開が `config_too_large` で失敗する)
+- `extra` はパターンごとに複製されて配信用の設定に書き込まれるので、エクスペリエンス単位の `extra` は 512KB のサイズ上限に対してパターンの数の分だけ数えられる(超えると公開が `config_too_large` で失敗する)
 
 拒否する GA4 の予約・自動収集イベント名のリストは GA4 のヘルプの写しで、**GA4 側で後から増えたものには追随しない**。受け付けてしまった予約名のイベントは GA4 が記録せずに捨てる(DebugView で確認できる)。エクスペリエンスは止まらず、影響は名前を変えた運用者の計測の欠落に限られる。
 

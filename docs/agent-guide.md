@@ -1,10 +1,10 @@
 # エージェント向けガイド(AB Test and Target Harness)
 
 このツールは **外部の AI エージェントが REST で直接操作できる**ように作られています。
-本製品は LLM を呼ばず、GA4 / BigQuery への照会もヘッドレスブラウザも持ちません。それらはエージェント側の手足です。
-本製品の責務は「エージェントが自分の手足で作業するのに必要な情報と操作を、機械可読な契約で出す」ことに限ります。
+本製品は LLM を呼ばず、GA4 / BigQuery への照会もヘッドレスブラウザも持ちません。それらはエージェントの側で用意する道具です。
+本製品が受け持つのは、「エージェントが自分の道具で作業するのに必要な情報と操作を、機械可読な契約で出す」ことだけです。
 
-- 契約の正: `GET {AB_CONTROL_URL}/openapi.json`(OpenAPI 3.1。ルート定義の zod から生成しており手書きしません)
+- 正式な契約: `GET {AB_CONTROL_URL}/openapi.json`(OpenAPI 3.1。ルート定義の zod から生成しており手書きしません)
 - この文書の配布: `GET {AB_CONTROL_URL}/llms.txt`(認証不要。中身はこのファイルと同一)
 
 ---
@@ -16,16 +16,16 @@
 エージェントは**人間のユーザーに紐づいた API キー**で動きます。鍵は発行時に**範囲**と**権限**を持ちます。
 
 - **範囲**: **ワークスペース**(指定した 1 つのワークスペースだけで使える。API の値は `workspace`。そのワークスペースのメンバーなら誰でも発行できる)か、**すべてのワークスペース**(API の値は `full`。システム管理者だけが発行・使用できる)。範囲外のワークスペースとその配下のサイトは、存在しないのと同じ 404 になり、`GET /workspaces` にも出ません。迷ったらワークスペースの鍵にします(漏れたときの被害がそのワークスペースに留まる)
-- **権限**(API の `roleCap`): 実際の権限は **そのワークスペースでの持ち主のロールと、鍵の権限の低い方**です。権限は 閲覧者(`viewer`)/ 編集者(`editor`)/ 管理者(`admin`)/ 本人と同じ(`null`)から選び、ワークスペースの鍵はそのワークスペースでのロール、すべてのワークスペースの鍵は持ち主が持つ最高位のロールと同等かそれ以下だけ選べます。権限は付与ではありません(ロールより上には行かない)
+- **権限**(API の `roleCap`): 実際の権限は **そのワークスペースでの持ち主のロールと、鍵の権限の低い方**です。権限は 閲覧者(`viewer`)/ 編集者(`editor`)/ 管理者(`admin`)/ 本人と同じ(`null`)から選び、ワークスペースの鍵はそのワークスペースでのロール、すべてのワークスペースの鍵は持ち主が持つ最高位のロールと同等かそれ以下だけ選べます。鍵の権限で、ロールより上の権限が与えられることはありません
 
 権限を絞った鍵とワークスペースの鍵は、持ち主がシステム管理者でもシステム管理者の操作(ワークスペースの作成・削除・システム管理者の一覧)はできません。**鍵は、持ち主が範囲を使えなくなった時点で 401 になります**: すべてのワークスペースの鍵は持ち主がシステム管理者でなくなったとき、ワークスペースの鍵は持ち主がそのワークスペースから外れたときやワークスペースが削除されたとき。
 
-**鍵ではできないこと(人とアクセス権の書き込み)**: 次の操作は、人が管理画面から行います。API キーで呼ぶと、鍵の種類(すべてのワークスペースの鍵・本人と同じ権限の鍵・システム管理者の鍵)に関わらず 403 `session_required` です。漏れた鍵で、鍵を増やす・自分を招待して居座る・他人のパスワードを変える・ワークスペースを消す、を防ぐためです(鍵を失効させても、増やした鍵や招待で入ったメンバーは残ってしまう)。
+**鍵ではできないこと(人とアクセス権の書き込み)**: 次の操作は、人が管理画面から行います。API キーで呼ぶと、鍵の種類(すべてのワークスペースの鍵・本人と同じ権限の鍵・システム管理者の鍵)に関わらず 403 `session_required` です。漏れた鍵で、鍵を増やす・自分を招待して居座る・他人のパスワードを変える・ワークスペースを消す、といった操作をされないためです(鍵を失効させても、増やした鍵や招待で入ったメンバーは残ってしまう)。
 
 - API キーの発行・一覧・失効(自分の鍵も、メンバーの鍵も)
 - 招待の発行・取り消し・受諾
 - メンバーのロールの変更・削除、パスワードのリセットリンクの発行
-- システム管理者の追加・外す
+- システム管理者を追加する・外す
 - ワークスペースの作成・削除
 - ログインとログイン状態の操作(`/auth/*`)
 
@@ -35,12 +35,12 @@
 |---|---|---|
 | 閲覧者(`viewer`) | 読み取り(エクスペリエンス(`experiment`)の閲覧・変更履歴・`evaluate`・`draft-bootstrap`・`analytics-recipe`) | 分析・監査だけを任せる |
 | 編集者(`editor`) | 上記 + エクスペリエンス / パターン(`variant`)/ 変更(`change`。コードの変更を含む)の**下書き**作成・編集 | 人間が公開する運用(推奨) |
-| 管理者(`admin`) | 上記 + **公開・開始・一時停止・再開・終了**(= 訪問者に届く操作)・ワークスペースの操作の記録の読み取り | 人間のゲートを置かない運用 |
+| 管理者(`admin`) | 上記 + **公開・開始・一時停止・再開・終了**(= 訪問者に届く操作)・ワークスペースの操作の記録の読み取り | 人間の確認を挟まない運用 |
 
-**被害半径**: 管理者の権限の鍵は、コードの変更(HTML / CSS / CUSTOM_JS)を含むエクスペリエンスを**そのまま本番のサイトで実行**できます。
+**被害の範囲**: 管理者の権限の鍵は、コードの変更(HTML / CSS / CUSTOM_JS)を含むエクスペリエンスを**そのまま本番のサイトで実行**できます。
 これは GTM のカスタム HTML と同じ信頼レベルです。人間が公開のボタンを押す運用にしたいなら権限を「編集者」にした鍵にし、公開は管理画面から人間が行ってください。管理画面は、公開と状態の変更を確認画面で見た内容に固定します。実行中・一時停止中のエクスペリエンスの変更も編集者が保存できるので、確認画面の著者・時刻・「コードを含む」「外部の URL を含む」の印と、同時に公開される変更の一覧を毎回確かめてください。
 
-API で同じ束縛を使う手順は次のとおりです。公開する場合は `GET /sites/{sid}/publish-preview` を読み、内容を確かめ、応答の `digest` を `POST /sites/{sid}/publish` の本文 `{ "expectDigest": "<digest>" }` に入れて送ります。状態を変更する場合は `GET /sites/{sid}/publish-preview?transition=<experimentId>:<running|paused|archived>` を読み、`transitionDigest` を状態の変更(`POST /sites/{sid}/experiments/{experimentId}/status`)の `expectDigest` に入れます。公開が `200` + `ok: false, error: "stale_preview"`、状態の変更が `409 stale_preview` なら、確認した後に内容が変わっています。状態の変更の 409 では何も変わっていません。確認画面を読み直し、変わった内容を確かめてから送り直してください。状態の変更が `200` で `publish.error` が `stale_preview` だった場合は、確かめの直後に保存が割り込んで、状態は変わり公開だけが済んでいません。確認画面を読み直して、`POST /sites/{sid}/publish` で公開してください。
+API で、確かめた内容に操作を固定する手順は次のとおりです。公開する場合は `GET /sites/{sid}/publish-preview` を読み、内容を確かめ、応答の `digest` を `POST /sites/{sid}/publish` の本文 `{ "expectDigest": "<digest>" }` に入れて送ります。状態を変更する場合は `GET /sites/{sid}/publish-preview?transition=<experimentId>:<running|paused|archived>` を読み、`transitionDigest` を状態の変更(`POST /sites/{sid}/experiments/{experimentId}/status`)の `expectDigest` に入れます。公開が `200` + `ok: false, error: "stale_preview"`、状態の変更が `409 stale_preview` なら、確認した後に内容が変わっています。状態の変更の 409 では何も変わっていません。確認画面を読み直し、変わった内容を確かめてから送り直してください。状態の変更が `200` で `publish.error` が `stale_preview` だった場合は、確かめの直後に保存が割り込んで、状態は変わり公開だけが済んでいません。確認画面を読み直して、`POST /sites/{sid}/publish` で公開してください。
 
 `expectDigest` は API では任意です。付けなければ、操作した時点の保存内容がすべて公開されます。API キーで呼ぶエージェントは版を名乗らないので、契約の版が上がっても 426 にはならず、`expectDigest` を付けない呼び方は今までどおりです。
 
@@ -78,7 +78,7 @@ curl -sS "$AB_CONTROL_URL/me" -H "x-api-key: $AB_API_KEY"
 { "error": "validation_failed", "message": "…", "hint": "次にどうすればよいか", "path": ["variants", 0, "weight"], "issues": [] }
 ```
 
-`error` は機械可読コード、`hint` は次に取るべき行動です。自己修正はこの 2 つを見てください。
+`error` は機械可読コード、`hint` は次に取るべき行動です。エージェントが自分で直すときは、この 2 つを見てください。
 
 **正規表現の 422** は、理由のコード(`error`。`regex_syntax` / `regex_unsupported_escape` / `regex_too_large` など)を返し、`message` に理由と書き換え方を書きます。式の中の位置は `index`(0 始まり)と `length` で示します。書き換えの例があるときだけ、`hint` に `書き換えの例: …` が付きます(例が無い理由では `hint` は付かないので、`message` を読んで書き換えてください)。`path` は値の欄を指します。
 
@@ -86,7 +86,7 @@ curl -sS "$AB_CONTROL_URL/me" -H "x-api-key: $AB_API_KEY"
 
 **API の版と 426**: 作業の初めに `GET /capabilities` の `apiVersion`(API 契約の版)を確かめ、前回の作業のときと違えば `/openapi.json` を読み直してください(要求や応答の形が変わっていることがあります)。どの応答にも `x-wtt-api-version`(今の版)と `x-wtt-min-client-version`(書き込みを受け付ける最低の版。`/capabilities` の `minClientVersion` と同じ値)のヘッダーが付きます。版を名乗りたいエージェントは、要求に `x-wtt-client-version: <対応している apiVersion>` を付けられます。付けた場合、その版が最低の版より小さいと、変更操作が `426 client_too_old` になります(読み取りは断られません)。付けなければ版の判定はされません。426 を受けたら、`/openapi.json` を読み直して変わった点を確かめ、人に知らせてから、新しい形で送り直してください。
 
-**製品の版**: 作業の初めに `GET /capabilities` の `productVersion` で、この導入の製品の版を確かめられます(公開リポジトリの Release と同じ版名。開発の build では `dev`)。`apiVersion`(要求の形の版)とは別のものです。要求の形を合わせるには `apiVersion` を使ってください。ログインしていない入口(`/llms.txt`・`/openapi.json`)には製品の版名は出ません。
+**製品の版**: 作業の初めに `GET /capabilities` の `productVersion` で、この導入の製品の版を確かめられます(公開リポジトリの Release と同じ版名。開発の build では `dev`)。`apiVersion`(要求の形の版)とは別のものです。要求の形を合わせるには `apiVersion` を使ってください。ログインせずに読める URL(`/llms.txt`・`/openapi.json`)には製品の版名は出ません。
 
 ---
 
@@ -122,7 +122,7 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/status" \
 
 - 評価計画は、何を・いつまで集めて・どう判定するかの約束で、結果を記録するサイト(`GET /sites/:sid` の `resultsEnabled` が `true`)で開始した時点に固定されます。必須は判定に使う目標(`primaryGoalId`)だけです。目標が無い開始と、基準(`baselineVariantId`。既定はオリジナルの中で先頭のパターン、オリジナルが無ければ先頭のパターン)の重みが 0 の開始は 422 `evaluation_plan_incomplete` です
 - `GET …/evaluation-plan` は、保存していない項目を既定値で埋めた形(最低期間 14 日・最大期間 8 週・確率のしきい値 95 など)と `cautions`(最低期間が短い・しきい値が低い・目標参加者数が無い。開始は止めない)を返します。目標参加者数(`targetPerVariant`、パターンごと)が空だと、人数に関係なく最低期間の終わりに判定します
-- 開始後に受けるのは、評価時点の前に `minDays`・`maxWeeks` を増やす・`targetPerVariant` を増やす(新しく設ける)変更だけです(`reason` を添えると変更の履歴に残ります)。縮める変更、判定の基準(`delta`・`rope`・`threshold`)・判定に使う目標・基準の変更は 409 `evaluation_plan_locked`、評価時点の後は 409 `evaluation_already_fixed` です。早く終えるときは終了し、基準を変えるときは複製して新しいテストにします。目標参加者数のある計画を延ばすときに、到達を確かめる読み取りができなければ 503 `results_read_unavailable`(時間をおいてやり直す)
+- 開始後に受け付けるのは、評価時点の前に `minDays`・`maxWeeks` を増やす・`targetPerVariant` を増やす(新しく設ける)変更だけです(`reason` を添えると変更の履歴に残ります)。縮める変更、判定の基準(`delta`・`rope`・`threshold`)・判定に使う目標・基準の変更は 409 `evaluation_plan_locked`、評価時点の後は 409 `evaluation_already_fixed` です。早く終えるときは終了し、基準を変えるときは複製して新しいテストにします。目標参加者数のある計画を延ばすときに、到達を確かめる読み取りができなければ 503 `results_read_unavailable`(時間をおいてやり直す)
 - 結果を記録しないサイトでの開始は成功し、応答の `warnings` に `path: "results"` が出ます(結果はツールに残らず、後から記録を有効にしても、このテストは記録されません)。`path: "resultsCapacity"` は計測用のデータベースの空きが少なくなる見込みの警告です(開始は止めない)
 - 評価計画の保存は公開の対象になりません(「未公開の編集あり」になりません)
 
@@ -203,7 +203,7 @@ curl -sS -X DELETE "$AB_CONTROL_URL/sites/$SID/assets/<画像の id>" -H "Author
 
 - **名前**は管理用で、公開 URL には入りません(URL に入るのはサイトの ID とランダムな画像の ID だけ)。100 字まで。サイトの中で重なると、アップロードでは `hero_q1 (2).png` のように番号を付け、応答の `renamedFrom` に元の名前が入ります。アップロードでも、同じ名前の画像が同時に上がり続けたときと、同じ名前(番号違いを含む)の画像が多すぎて番号を付けられないときは 409 `asset_name_taken` で、画像は置かれません(別の名前を `name` に付けて送り直してください)。名前の変更で重なると 409 `asset_name_taken` です(削除待ちの画像の名前も、消えるまで数えます)
 - アップロードに `experimentId` などほかの項目を付けると 422 です。サイトの上限(枚数・合計)を超えると 409 `asset_quota_exceeded`(`usage` を添えます。削除待ちの画像も消えるまで数えます)、1 枚の上限を超えると 413 `asset_too_large` です。アップロード・名前の変更・削除の応答の `usage` に、サイトの使用量が入ります
-- **IMAGE の `src` に書けるのは**、そのサイトの画像の一覧にある画像の公開 URL(アップロード・名前の変更の応答の `publicUrl`、一覧では `urlPrefix` + `path`。と、R2 なしの画像アップローダーで上げたそのサイトの画像の URL)だけです。一覧に無い・削除待ちの画像の URL と、縮小版(`thumbnailUrl`)の URL は 422 `asset_not_found` で、その保存では何も書かれません
+- **IMAGE の `src` に書けるのは**、そのサイトの画像の一覧にある画像の公開 URL(アップロード・名前の変更の応答の `publicUrl`、一覧では `urlPrefix` + `path`)と、R2 なしの画像アップローダーで上げたそのサイトの画像の URL だけです。一覧に無い・削除待ちの画像の URL と、縮小版(`thumbnailUrl`)の URL は 422 `asset_not_found` で、その保存では何も書かれません
 - サイトの画像の URL を、文字参照(`&#…;`)・CSS のエスケープ(`\…`)・`%` の形で書いた変更は、種類を問わず 422 `asset_ref_encoded` です。HTML・CSS・ATTRIBUTE の変更に画像の URL を書くときも、そのままの形で書いてください
 - 一覧の `usedBy`(と `inUse`)は、下書きの IMAGE と ATTRIBUTE の `src` だけを見ます。HTML・CSS の変更の中だけで使っている画像は「使っていない」と出て削除待ちにできますが、24 時間の後の確かめで使われていると分かれば消えずに戻ります
 - **公開の確かめ**: 公開する内容(HTML・CSS・属性の値を含む)に、削除した画像・削除の途中の画像・同じ導入の別のサイトの画像の URL があると、公開は失敗します(`ok: false`、`error` が `asset_missing` か `asset_other_site`。`assetProblems` に URL・理由・`experimentId`・`variantId`・`changeId` が入ります)。公開の確認(`GET /sites/:sid/publish-preview`)の `assetProblems` で、公開の前に同じ一覧を見られます
@@ -252,7 +252,7 @@ curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/draft-bootstrap" \
 
 得られるのは設置タグのファイルと同形式の**完全に機能する** bootstrap JS(compiled config + runtime)です。KV にも本番の配信ファイルにも書き込まれませんが、隔離されるかどうかは**ページの URL に `#__ab_preview=` フラグメントが付いているかだけ**で決まります。
 
-**警告**: `addInitScript` で注入したのに URL にフラグメントを付け忘れると、下書きは**本番として**動きます。`needsProfile: false` のサイトでは未公開のエクスペリエンスがそのまま適用され、訪問者 ID の Cookie(サイト設定の `正本 Cookie 名`。新しいサイトの既定は `_wtt_vid`、v0.11 より前に作ったサイトは `_ab_vid`)が作られ、`ab_exposure` が dataLayer / GA4 に送られます(存在しないエクスペリエンス ID のイベントとして実データに混入します)。加えて二重起動ガードにより、そのページに設置タグがあっても本番側のエクスペリエンスは止まります。**`goto` する URL には毎回 `#__ab_preview=<エクスペリエンス ID>:<パターン ID>` を付けてください**。付け忘れに気づく手段は無いので、注入と `goto` は必ずセットで書くこと。
+**警告**: `addInitScript` で注入したのに URL にフラグメントを付け忘れると、下書きは**本番として**動きます。`needsProfile: false` のサイトでは未公開のエクスペリエンスがそのまま適用され、訪問者 ID の Cookie(サイト設定の `正本 Cookie 名`。新しいサイトの既定は `_wtt_vid`、v0.11 より前に作ったサイトは `_ab_vid`)が作られ、`ab_exposure` が dataLayer / GA4 に送られます(存在しないエクスペリエンス ID のイベントとして実データに混入します)。加えて二重起動ガードにより、そのページに設置タグがあっても本番側のエクスペリエンスは止まります。**`goto` する URL には毎回 `#__ab_preview=<エクスペリエンス ID>:<パターン ID>` を付けてください**。付け忘れに気づく手段は無いので、注入と `goto` は必ずセットで書いてください。
 
 これをヘッドレスブラウザに注入し、`#__ab_preview=<エクスペリエンス ID>:<パターン ID>` でパターンを固定します:
 
@@ -264,18 +264,18 @@ await page.goto("https://www.example.com/lp/#__ab_preview=exp_hero_q1:b");
 const report = await page.evaluate(() => window.AB.getPreviewReport());
 ```
 
-`report` は変更ごとの当たり外れです:
+`report` は、変更ごとの適用結果です:
 
 ```json
 [{ "experimentId": "exp_hero_q1", "variantId": "b",
    "changes": [{ "changeId": "c_text", "type": "TEXT", "selector": "h1.hero", "matched": 1, "applied": true }] }]
 ```
 
-- `matched: 0` = **セレクタが外れている**(最頻の失敗)。`applied: false` と合わせて修正の根拠にしてください
+- `matched: 0` = **セレクタが外れている**(最も多い失敗)。`applied: false` と合わせて修正の根拠にしてください
 - `error` は適用時の例外メッセージ(CUSTOM_JS の throw、CSP でのブロックなど)。HTML `runScripts` の `<script src>` は、**読込に成功した後で投げた例外**も後から `applied: false` / `error` に反映されます。ただし **inline スクリプトがタイマー等から後で投げた例外**は、どの変更のものか帰属できないため report には出ません(同期の例外は出ます)
 - プレビューは**完全隔離モード**です: 指定したエクスペリエンスだけを強制適用し、Cookie・consent・decision 通信・目標・Exposure に一切触れません。したがって**プレビューの閲覧は計測に混ざりません**
 - 通常表示では `window.AB.getPreviewReport()` は `null` を返します
-- **注入は `addInitScript`(ページのどのスクリプトよりも先に走らせる)**。`page.evaluate` や `page.goto` の後に流し込むと DOM の適用が間に合いません。対象ページに**設置タグがあっても下書きが勝ちます** — runtime は 1 ページ 1 起動で、後から走った設置タグの bootstrap は何もしません(`window.AB` も上書きされません)
+- **注入は `addInitScript`(ページのどのスクリプトよりも先に走らせる)**。`page.evaluate` や `page.goto` の後に流し込むと DOM の適用が間に合いません。対象ページに**設置タグがあっても下書きが優先されます**。runtime は 1 ページ 1 起動で、後から走った設置タグの bootstrap は何もしません(`window.AB` も上書きされません)
 - **CSP を出しているページでは設置タグを消さずに注入してください**。注入したコードには `document.currentScript` が無く nonce を取れないため、runtime は**設置タグの nonce を引き継いで** CSS / HTML の `<script>` / CUSTOM_JS を適用します。設置タグを外したページに注入すると、nonce が要るページでは適用がブロックされます
 
 **`getPreviewReport()` が空配列(`[]`)のとき**: プレビューの処理が動けば、`report` には指定したエクスペリエンスごとに必ず 1 行が入ります(ID の誤りやフラグメントの書式の誤りも、`error` 付きの行になります)。したがって空配列は、プレビューの処理がまだ始まっていないか、始められなかったことを表します。上の手順のように下書きの bootstrap を注入した場合は、プレビューの処理が bootstrap に含まれているので、この状態は読むのが早すぎたときか、下の 2. の `wtt: preview failed` が出たときにしか起きません。始められないことがあるのは、このレシピの冒頭で紹介した設置タグ経由のプレビューで、別ファイル `/s/preview/<hash>.js` を読めなかったときです。原因は次の順に確かめます。
@@ -377,7 +377,7 @@ curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/analytics-recipe" -
 - BigQuery SQL の `_TABLE_SUFFIX` は、エクスペリエンスの実施期間の UTC 日付の**前後 1 日を含む**範囲です。GA4 export の日次テーブルの日付はプロパティのタイムゾーンで付くため(UTC と最大 1 日ずれる)、走査範囲を広げたうえで**採否は `event_timestamp`(UTC マイクロ秒)の条件**で決めています。広げた分の期間外イベントは数えません
 - `notes` に上の帰属の規則が入ります。結果を報告するときはこの注記も併せて伝えてください
 - `{{GA4_PROPERTY_ID}}` / `{{BQ_DATASET}}` は、サイトに外部の ID が未設定のときのプレースホルダです。`PATCH /sites/:sid` で管理者が設定します(管理画面に入力欄はありません)
-- `runReport` が **400 `Field customEvent:… is not a valid dimension`** を返すときは、GA4 プロパティに `ab_experiment_id` / `ab_variant_id` / `ab_goal_id`(名札を変えていればその名前)が**イベントスコープのカスタムディメンション**として登録されていません。これはサイトの設置側(人間)の GA4 設定作業です — `docs/site-install.md` の「4. GA4 と GTM をつなぐ」を運用者に伝えてください。登録前のイベントは遡って次元にならないので、行が 0 でも契約の失敗ではありません
+- `runReport` が **400 `Field customEvent:… is not a valid dimension`** を返すときは、GA4 プロパティに `ab_experiment_id` / `ab_variant_id` / `ab_goal_id`(名札を変えていればその名前)が**イベントスコープのカスタムディメンション**として登録されていません。これはサイトの設置側(人間)の GA4 設定作業です。`docs/site-install.md` の「4. GA4 と GTM をつなぐ」を運用者に伝えてください。登録前のイベントは遡ってディメンションにならないので、行が 0 でも契約の失敗ではありません
 
 **パターン別の CVR は GA4 だけでは出せません**。conversion イベントにはエクスペリエンス / パターンが付かない設計のため、パターン × 目標の CVR は BigQuery(GA4 export)で出します。
 GA4 単体で見る手段(v1alpha `runFunnelReport` のセグメントや GTM のユーザープロパティ)は alpha 依存 / 追加設定前提のため、レシピには含めていません。
@@ -435,7 +435,7 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/$EID/status" -H "Author
 ```
 
 - オーディエンスの応答の `usedBy` に、そのオーディエンスを配信条件で使っているエクスペリエンスが並びます
-- オーディエンスの編集は**次の公開で**、参照するすべてのエクスペリエンスに効きます(保存しただけでは配信は変わりません)
+- オーディエンスの編集は**次の公開で**、参照するすべてのエクスペリエンスに反映されます(保存しただけでは配信は変わりません)
 - 公開の前に `GET /sites/$SID/publish-preview` で確かめられます。`audienceChanges`(オーディエンスの変更で配信対象が変わるエクスペリエンス)・`droppedPageConditions`(次の公開で数えるのをやめるページの条件)・`compileError`(いまの下書きが公開で止まる理由)を見てください
 - 閲覧したページの条件・目標の条件・オーディエンスの書き方と、保存時の制限は「踏みやすい制約」にあります
 
@@ -443,8 +443,8 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/$EID/status" -H "Author
 
 本製品は通知を送りません。監視はエージェントが `GET /usage` を定期的に(例: 1 時間ごと)読んで行います。鍵は閲覧者の権限・ワークスペースの範囲で足ります(導入の設定が「システム管理者のみ」なら、システム管理者が発行した鍵を使う。範囲と権限は問わない)。
 
-1. `GET /usage` を読む。`worst.status` が `warning` / `critical` / `exhausted` なら知らせる(資源名・割合・`projectedExhaustAt`・`resetAt` を添える)
-2. `status` の 2 系統を混ぜない: `ok` / `warning` / `critical` / `exhausted` は**止まる危険**、`within_reference` / `over_reference` は Paid の **月額 $5 に含まれる量との比較**(止まらない。超えた分が課金の対象)。`worst` は止まる危険のある資源だけから選ばれる
+1. `GET /usage` を読む。`worst.status` が `warning` / `critical` / `exhausted` なら知らせる(リソース名・割合・`projectedExhaustAt`・`resetAt` を添える)
+2. `status` の 2 系統を混ぜない: `ok` / `warning` / `critical` / `exhausted` は**止まる危険**、`within_reference` / `over_reference` は Paid の **月額 $5 に含まれる量との比較**(止まらない。超えた分が課金の対象)。`worst` は止まる危険のあるリソースだけから選ばれる
 3. **応答が返らないこと自体を危険信号にする**: Workers の日次上限が尽きると control も止まり、`GET /usage` は Cloudflare のエラーページ(1027)になる。そのときは運用ガイドの「Cloudflare を直接見る」手順(別のトークンが要る)で確かめる
 4. `503 usage_not_configured` は導入時にトークンを入れていない(監視できない)。`503 usage_upstream_failed` は Cloudflare 側の失敗で、時間をおいて読み直す。`403` は「見られる人」の設定の外
 
@@ -508,7 +508,7 @@ done
 - **ID は作成後に変更できません**(エクスペリエンス / パターン / 目標 / オーディエンス)。`experimentId` は割当ハッシュの入力なので、変えると全訪問者の割当が変わります。作り直す場合は新しい ID で作ります。エクスペリエンスとオーディエンスの ID に `new` は使えません(管理画面の新規作成の画面と重なるため。422)。エクスペリエンス・パターン・目標の ID に `constructor` は使えません(JavaScript で特別な意味を持つ名前で、設置タグが設定を読むときに取り違えるため。422)
 - **公開の反映**: 公開の結果の `staticDeploy` が `deployed` なら、訪問者のブラウザには 60 秒以内に届きます。`pending` なら配信ファイルの更新を再試行中です(`GET /sites/:sid` の `staticStale` が `true`。続くときは `POST /sites/:sid/static/redeploy` で作り直せます。管理者以上)。公開直後の検証は 1 分ほど待つか、キャッシュを迂回する URL で確認してください。`GET /sites/:sid` の `staticMismatch` が `true` なら、配信ファイルの記録が食い違っています(データベースを過去の時点に戻した後などに起きます)。`staticMismatch` が `false` でも食い違っていないとは限りません。15 分ごとの定期処理がサイトに印を付けるのは、公開中のサイトで、デプロイ専用の Worker の記録が通常の更新の世代で先に進んでいるときだけで、それ以外の形の食い違い(データベースでは未公開のサイト・データベースに無いサイトなど)では、`staticMismatch` もサイトの警告も出ないことがあります。全体は、管理画面の配信ファイルの画面か、`GET /static/status` の `mismatchSites` で確かめてください。ただし、同じ世代で中身が食い違うかの比較は、ID の順に先頭の 25 サイトまで(公開中の設定の合計が大きいときはそれより少ない)なので、その形の食い違いが多いと `mismatchSites` に出ないサイトが残りえます。疑わしいときは、システム管理者に全サイトの配信ファイルの作り直しを頼んでください。`POST /sites/:sid/static/redeploy` で今の公開内容に作り直せます(管理者以上)
 - **種別は作成後に変えられない**。パターンの数はテストが 2 つ以上、パーソナライズが 1 つ(違反は 422 `variant_count_invalid`)。変えたいときは複製する
-- **重なったときの優先**: 同じ要素の部分を複数のエクスペリエンスが変えると、パーソナライズ(作成の古い順)→ テスト(開始・再開の新しい順)の後ろが勝つ(テストどうしは先に配信に入ったもの。再開したテストは、その間に開始したテストより優先が低い)。保証するのは同じ要素の同じ部分までで、祖先と子孫にまたがる重なりは保証しない。公開の応答の `warnings`(`path` = `experiments.<優先の低い方>`)と `GET …/publish-preview` の `overlaps` に、対象 URL の条件とセレクタの文字列がどちらも完全に一致する組だけが出る(対象 URL は、行・`and`・パラメータの順の違いを無視して比べる)。`?transition=<id>:running` を付けると、その下書きを開始したとき・一時停止中のテストを再開したときの組が分かる。`starting=<id>` は古い名前として引き続き使える
+- **重なったときの優先**: 同じ要素の部分を複数のエクスペリエンスが変えると、パーソナライズ(作成の古い順)→ テスト(開始・再開の新しい順)の順に重ね、後ろのものが優先される(テストどうしは先に配信に入ったもの。再開したテストは、その間に開始したテストより優先が低い)。保証するのは同じ要素の同じ部分までで、祖先と子孫にまたがる重なりは保証しない。公開の応答の `warnings`(`path` = `experiments.<優先の低い方>`)と `GET …/publish-preview` の `overlaps` に、対象 URL の条件とセレクタの文字列がどちらも完全に一致する組だけが出る(対象 URL は、行・`and`・パラメータの順の違いを無視して比べる)。`?transition=<id>:running` を付けると、その下書きを開始したとき・一時停止中のテストを再開したときの組が分かる。`starting=<id>` は古い名前として引き続き使える
 - **開始後のテストで変えられないもの**: パターンの追加・削除・重み、基準、判定に使う目標の選択(パターンの集合の `PUT …/variants` は下書きだけ。409 `experiment_active`)、配信率(`trafficPercentage`)を下げる・割当の固定(`persistAssignment`)を変える(409 `test_setting_locked`。絞るときは一時停止か終了)。配信率を上げる・変更・対象 URL・配信条件・目標の定義の変更はできますが、公開して配信を確かめた時点で「テスト中の変更」として結果に記録されます。大きく変えるなら複製して新しいテストにします。パーソナライズはどの状態でも編集できます
 - **終了したテストは読み取り専用**: エクスペリエンスの更新・パターン・変更・評価計画の保存は 409 `experiment_archived_readonly` です(変えるときは複製する)。メモ(`description` だけの `PATCH` と `PATCH …/variants/:vid`)・採用の記録・削除はできます
 - **一度開始したテストを削除すると**、結果の記録・採用・計画の変更の履歴もすぐに消え、参加者ごとの記録は削除の直後から順に消えます。ID はこのサイトでは使い直せません
@@ -540,11 +540,11 @@ done
 - **削除と参照**: 参照されているオーディエンス(409 `audience_in_use`)と、オーディエンスから参照されている目標(409 `goal_in_use`)は削除できません。存在しないオーディエンス・目標の参照は、保存が 422、公開は `ok: false` です(`unknown_audience` / `unknown_goal`)
 - **保存期間(`retentionDays`)を短くする PATCH** は、期間がそれを超える条件(保存済みの定義と公開中の設定)があると 422 `within_days_exceeds_retention` です(`conflicts` に一覧を返します)。先に条件の期間を直して公開してください
 
-- **selector はページ内で一意**に。当たらない selector は `evaluate` では検出できません — レシピ 2 の `matched` で確認してください
+- **selector はページ内で一意**に。当たらない selector は `evaluate` では検出できません。レシピ 2 の `matched` で確認してください
 - **変更はパターンあたり 100 件まで**、1 つの変更の payload は 64KB まで、compiled config 全体で 512KB まで
 - **要求の本文の大きさには上限があります**: 既定は 1MiB、変更の全置換(`PUT …/variants/:vid/changes`)は約 13MB、画像のアップロードは 1 枚の上限(`AB_ASSET_MAX_MB`)+ 1MiB です。超えると 413 `payload_too_large`(画像は 413 `asset_too_large`)を返します
 - **ATTRIBUTE には allowlist があります**(`on*` / `style` / `srcdoc` などは拒否。`href` / `src` は http(s) と相対 URL のみ)。拒否は `attribute_not_allowed` / `attribute_url_not_allowed`
-- **コードの変更(HTML / CSS / CUSTOM_JS)と CSP**: 対象サイトが CSP を出している場合の条件と、開始直後の必須確認手順は `docs/site-install.md` の「10. コードの変更と CSP」と `docs/operations.md` の「5. 開始直後のチェック」を参照してください。CSP でブロックされた CUSTOM_JS は片側だけ Exposure が出ない(SRM)状態になります。**公開前にレシピ 2 の `getPreviewReport()` で `error` を確認する**のが最短の予防です
+- **コードの変更(HTML / CSS / CUSTOM_JS)と CSP**: 対象サイトが CSP を出している場合の条件と、開始直後の必須確認手順は `docs/site-install.md` の「10. コードの変更と CSP」と `docs/operations.md` の「5. 開始直後のチェック」を参照してください。CSP でブロックされた CUSTOM_JS は片側だけ Exposure が出ない(SRM)状態になります。**公開前にレシピ 2 の `getPreviewReport()` で `error` を確認する**のが最も手早い予防です
 - **編集者の権限の鍵で公開・開始を呼ぶと 403**(`{"error":"forbidden","required":"admin"}`)。人間に公開を依頼してください
 - **ワークスペース・メンバー・招待・システム管理者の書き込みは鍵ではできません**(1.1 の「鍵ではできないこと」。403 `session_required`)。以下の項目は、人が管理画面から操作したときの挙動の参考です
 - **公開中の全サイトの配信ファイルの作り直し(`POST /static/rebuild`)も鍵ではできません**(403 `session_required`)。システム管理者が管理画面から行います。エージェントは、サイトごとの `POST /sites/:sid/static/redeploy` を公開中のサイトの数だけ呼びます
@@ -553,10 +553,10 @@ done
 - **システム管理者には、ワークスペースの側から手を出せません**: `PATCH` / `DELETE /workspaces/:wid/members/:memberId` は 409 `instance_admin_member`、システム管理者宛てのリセットリンクの発行とシステム管理者の鍵の失効は、システム管理者でない人には 403 です。`GET /workspaces/:wid/members` の各行の `instanceAdmin`、`GET /workspaces/:wid/api-keys` の各行の `owner.instanceAdmin` で見分けます。メンバー宛てのリセットリンクは、発行先のワークスペースで管理者以上の人が、発行先だけに所属する人か自分自身に発行できる。対象が他のワークスペースにも所属するときは、そのすべてでオーナーの人かシステム管理者だけが発行できる(それ以外は 403)。
 - **既にそのワークスペースのメンバーへの招待は 409 `already_member`** です。招待リンクの発行(`POST /workspaces/:wid/invitations`。システム管理者はすべてのワークスペースのメンバーなので、そのメールアドレスも対象)と、招待の受諾のどちらでも返ります(招待を使わずにそのままログインすれば入れます)
 - **ワークスペースの削除(`DELETE /workspaces/:wid`)もシステム管理者だけ**です。配下のサイトに実行中のエクスペリエンスがあれば 409 `workspace_has_running_experiments`(`siteId` / `experimentId` を返す。先に終了する)。**最後に残った 1 つのワークスペースは削除できず** 409 `last_workspace` を返します(すべて消すと、誰もワークスペースを作れずログインもできない状態になるため)。作り直したいときは、先に新しいワークスペースを作ってから古い方を削除してください
-- **サイトの作成(`POST /workspaces/:wid/sites`)で、削除したサイトの ID を指定すると 409 `site_id_taken` になることがあります**。削除したサイトの ID は、そのサイトがあったワークスペースでだけ作り直せます(誤って削除したサイトを戻す使い方は通ります)。別のワークスペースから作ろうとすると、今あるサイトの ID を指定したときと同じ 409 `site_id_taken`(`message` は「このサイト ID は既に使われています」、`hint` は「別の ID を指定してください」)で、`reason` は付きません。元のワークスペースを見られる人(そのワークスペースのメンバー。多くの場合はシステム管理者)にだけ、`reason: "retired_elsewhere"` と詳しい `message` を返します。この場合は、別の ID にするか、元のワークスペースで作ってください。元のワークスペースが消えたサイトの ID(ワークスペースごと削除したサイトの ID)を作れるのは、システム管理者のセッションと、上限(`roleCap`)の無いシステム管理者の鍵だけです。上限付きの鍵とワークスペースの鍵、システム管理者でない人は、今あるサイトと同じ 409 になります。削除したサイトの ID の記録は消えません
+- **サイトの作成(`POST /workspaces/:wid/sites`)で、削除したサイトの ID を指定すると 409 `site_id_taken` になることがあります**。削除したサイトの ID は、そのサイトがあったワークスペースでだけ作り直せます(誤って削除したサイトを戻す使い方はできます)。別のワークスペースから作ろうとすると、今あるサイトの ID を指定したときと同じ 409 `site_id_taken`(`message` は「このサイト ID は既に使われています」、`hint` は「別の ID を指定してください」)で、`reason` は付きません。元のワークスペースを見られる人(そのワークスペースのメンバー。多くの場合はシステム管理者)にだけ、`reason: "retired_elsewhere"` と詳しい `message` を返します。この場合は、別の ID にするか、元のワークスペースで作ってください。元のワークスペースが消えたサイトの ID(ワークスペースごと削除したサイトの ID)を作れるのは、システム管理者のセッションと、上限(`roleCap`)の無いシステム管理者の鍵だけです。上限付きの鍵とワークスペースの鍵、システム管理者でない人は、今あるサイトと同じ 409 になります。削除したサイトの ID の記録は消えません
 - **サイトのタグを置くドメインは `domains`(文字列の配列)で書きます**: `POST /workspaces/:wid/sites` と `PATCH /sites/:sid` は `domains` だけを受けます(1〜50 行。`www.example.com` の形、開発用は `http://localhost:8080` の形。`https://` 付き・大文字は保存のときにそろえます)。先頭の行が代表のドメインです。`PATCH` で送ると一覧ごと置き換わり、送らなければ今の一覧のままです。`domain`・`allowedOrigins`・`hosts` を送ると 422 `legacy_domain_fields`、行の誤りは 422 `invalid_domains`(`issues` に行ごとの理由)。`GET /sites/:sid` の `domains` は行ごとの判定(`verdict`)付きの一覧で、`domain`・`allowedOrigins`・`edgeDomains`(Cloudflare 経由と確かめたドメイン)・`outsideDomains`・`uncheckedDomains` は、一覧から決まる読むだけの値です。Mode B のサイトでは、保存のたびに control が一覧のドメインごとに Cloudflare 経由かを確かめ、作成と `PATCH` の応答の `domainChecks` に、判定が変わった行(`changes`)・この保存で確かめなかった行(`deferred`。次の保存で確かめる)・答えが得られなかった行(`unknown`。前の判定のまま)を返します。Route を足した後は、もう一度保存すると確かめ直します
 - **招待の一覧(`GET /workspaces/:wid/invitations`)に出るのは、まだ受けられていない招待だけ**です。受諾済み・取り消し済みの行は返りません。API キーで読むと、各行の `id`・`url` は `null` です(招待の ID はそのまま受諾に使えるため、管理画面からログインして読んだときだけ返します)。取り消しは `DELETE /workspaces/:wid/invitations/:id`(管理者。成功すると 204、すでに受諾済み・取り消し済み・別ワークスペースの ID は 404)
-- **同じメールアドレスへの再発行**(`POST /workspaces/:wid/invitations`): 有効な招待が既にあり**ロールが同じ**なら、新しい招待は作らずその招待の期限を 7 日後まで延ばし、`extended: true` と**同じ `id` / `url`** を返します。**ロールが違う**ときは 409 `already_invited`(現在のロールを `role` と `message` で返す)で、招待には何も起きません — ロールを変えるときは先に取り消してから発行し直してください。有効な招待が無ければ新規発行で `extended: false` を返し、同じ宛先の期限切れの招待は取り消し済みとして片づけます
+- **同じメールアドレスへの再発行**(`POST /workspaces/:wid/invitations`): 有効な招待が既にあり**ロールが同じ**なら、新しい招待は作らずその招待の期限を 7 日後まで延ばし、`extended: true` と**同じ `id` / `url`** を返します。**ロールが違う**ときは 409 `already_invited`(現在のロールを `role` と `message` で返す)で、招待には何も起きません。ロールを変えるときは先に取り消してから発行し直してください。有効な招待が無ければ新規発行で `extended: false` を返し、同じ宛先の期限切れの招待は取り消し済みとして片づけます
 - **名前(エクスペリエンス / パターン / 目標の `name`)は管理画面の中だけで使い、訪問者には届きません**(100 字以内)。compiled config・設置タグのファイル・`draft-bootstrap` に入りません。dataLayer の `ab_experiment_name` / `ab_variant_name` / `ab_goal_name` は、外部計測(`analytics.overrides` の `experimentName` / `variantName` / `goalName`)で指定した値、指定が無ければそれぞれの ID です
 - **外部計測の値**(名前の指定と `extra` の値)は 1〜100 字で、改行・タブなどの制御文字(U+0000〜U+001F・U+007F〜U+009F)と U+2028 / U+2029 は使えません。違反は 422 `invalid_analytics_value`(`path` が値の位置、`code` が `empty` / `too_long` / `invalid_char`)。保存済みと同じ値は検査しないので、古い値が残っていても、ほかの欄の保存は止まりません。外部計測の値は dataLayer に入り、サイトの訪問者もブラウザで見られます
 - **Windows の Git Bash から日本語を含む JSON を送ると文字化けする**ことがあります(`curl -d '{"name":"…"}'` の引数が UTF-8 にならない)。UTF-8 のファイルに書いて `curl --data-binary @body.json -H 'content-type: application/json' …` で送ってください
