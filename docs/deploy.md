@@ -457,7 +457,7 @@ curl -s https://<設置タグのホスト>/s/<siteId>.js | head -c 400
 | ダッシュボードで Workers Paid に切り替える | `plan: paid` で、アカウントがまだ Free のとき。0.5 で一度に |
 | ダッシュボードの Workers & Pages を一度開く | 0.5 でサブドメインを API で作れなかったときだけ |
 | 更新時の設定の再保存 | 6.4 で (b) があるとき |
-| ゾーンのレート制限ルールの式の書き換え・回数の変更(Free で 1 本のルールをほかの用途と分け合うとき) | 2.7 で既存のルールに OR で足すとき、7.2 で control のパスを足して 1 本にしたルールの回数を変えるとき |
+| ゾーンのレート制限ルールを書き換えるための作業用のトークン(Zone WAF Edit / Zone Read、期限 = 翌日、ゾーン限定)を発行して伝える。書き換えはエージェントが API で行う(2.7 の「1 本のルールを書き換える」) | 導入の後に、2.7・7.2 のルールの式や回数を変えるとき。導入の途中は 0.5 の 2 のトークンを使う |
 | 撤去時の R2 の中身の削除、OAuth クライアント・API トークン・Access の削除。別のドメインに置く構成では、DNS レコードが消えたことの確認と証明書の削除 | 10.4 |
 
 **ダッシュボードの画面名の書き方**(この文書と、エージェントが人に示す依頼文の両方):
@@ -1416,10 +1416,31 @@ curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/http_r
 - `could not find entrypoint ruleset` または `rules: []` → 下の PUT で作る
 - 既にルールが 1 本あり、式に `/v1/sites/` が無い → Free プランでは枠が無い。運用者に「既存ルールに OR で `/v1/sites/` と `/__ab/` を足す」か「作らない(`edge_waf_rate_limit: false`)」かを聞く
   - 作らないを選んだら、`deploy-answers.yaml` の `edge_waf_rate_limit` を `false` にする(後の更新で WAF の有無を決めるのがこのキーなので、6.2)。あわせて `apps/edge/wrangler.jsonc` の `limit` を 2.3 の WAF が無い構成の値(`edge_waf_requests_per_10s`)に書き直し、edge を deploy し直す。2.3 では WAF がある構成の値(1000)を書いているため
-  - OR で足すなら、しきい値はその既存ルールの回数になる。binding はその回数と 2.3 の規則で比べる。足すのは、**【人に依頼】** ダッシュボードでそのルールを開いて式を書き換えてもらう(下の PUT はレート制限ルールを丸ごと置き換えるので、既存のルールが消える)
+  - OR で足すなら、しきい値はその既存ルールの回数になる。binding はその回数と 2.3 の規則で比べる。足すのは、下の「1 本のルールを書き換える」の PATCH で、`ADD` に `(starts_with(http.request.uri.path, "/v1/sites/")) or (starts_with(http.request.uri.path, "/__ab/"))` を入れて行う(下の PUT はレート制限ルールを丸ごと置き換えるので、既存のルールが消える)
 - 式に `/v1/sites/` が既にあり、`/__ab/` も含まれる → 作らずに終わる(再実行時)
-- 式に `/v1/sites/` はあるが `/__ab/` が無い → Mode B のサイトを置かない(入力ファイルの `dlite_hosts` が空)なら、作らずに終わる。Mode B のサイトを置くなら、`/__ab/*` がこのルールの外に残るので、**【人に依頼】** ダッシュボードでそのルールを開き、式に OR で `(starts_with(http.request.uri.path, "/__ab/"))` を足してもらう(下の PUT はレート制限ルールを丸ごと置き換えるので使わない)。足した後に上の GET で式を読み直し、`/__ab/` が入ったことを確かめる。式はパスだけで書くので、ゾーンの中のホストを後から足しても、そのホストの `/__ab/*` もこのルールに入る。後から Mode B のホストを足すとき([6.7](#67-mode-b-のホストを後から足す))は、式に `/__ab/` が入っていることだけを確かめ直す(それまで Mode B のホストが無かった導入では、ここで初めて足すことになる)
-- 上の 2 つのどちらでも、式に `/setup` も含まれる(7.2 で control のパスを足して 1 本にした Free のルール)なら、回数を変えるときも下の PUT を使わない。PUT で置き換えると control のパスが消える。**【人に依頼】** ダッシュボードでそのルールを開いて回数を変えてもらう
+- 式に `/v1/sites/` はあるが `/__ab/` が無い → Mode B のサイトを置かない(入力ファイルの `dlite_hosts` が空)なら、作らずに終わる。Mode B のサイトを置くなら、`/__ab/*` がこのルールの外に残るので、下の「1 本のルールを書き換える」の PATCH で、`ADD` に `(starts_with(http.request.uri.path, "/__ab/"))` を入れて足す(下の PUT はレート制限ルールを丸ごと置き換えるので使わない)。足した後に上の GET で式を読み直し、`/__ab/` が入ったことを確かめる。式はパスだけで書くので、ゾーンの中のホストを後から足しても、そのホストの `/__ab/*` もこのルールに入る。後から Mode B のホストを足すとき([6.7](#67-mode-b-のホストを後から足す))は、式に `/__ab/` が入っていることだけを確かめ直す(それまで Mode B のホストが無かった導入では、ここで初めて足すことになる)
+- 上の 2 つのどちらでも、式に `/setup` も含まれる(7.2 で control のパスを足して 1 本にした Free のルール)なら、回数を変えるときも下の PUT を使わない。PUT で置き換えると control のパスが消える。下の「1 本のルールを書き換える」の PATCH で、`NEWLIMIT` に新しい回数を入れて変える
+
+**1 本のルールを書き換える**(既存のルールの式に条件を足す・回数を変えるとき。ルール単位の PATCH で、ルールの ID とほかの項目はそのまま残る。Free のゾーンでも使える)。`RID` に上の GET の `rules` の `id` を入れ、`ADD`(式の後ろに OR で足す条件)と `NEWLIMIT`(新しい回数)の要るほうだけを書く:
+
+```bash
+RID=<上の GET の rules の id>
+ADD=''        # 式に OR で足す条件。足さないなら空のまま
+NEWLIMIT=''   # 新しい回数(10 秒あたり)。変えないなら空のまま
+EP=$(curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/http_ratelimit/entrypoint" -H "$H")
+RS=$(printf '%s' "$EP" | jq -r '.result.id')
+BODY=$(printf '%s' "$EP" | jq -c --arg rid "$RID" --arg add "$ADD" --arg lim "$NEWLIMIT" '
+  [.result.rules[] | select(.id == $rid)] | if length == 1 then .[0] else error("rule not found") end
+  | del(.id, .version, .last_updated)
+  | if $add != "" then .expression = "(" + .expression + ") or " + $add else . end
+  | if $lim != "" then .ratelimit.requests_per_period = ($lim | tonumber) else . end') \
+  && curl -sS -X PATCH "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RS/rules/$RID" \
+       -H "$H" -H 'content-type: application/json' -d "$BODY" | jq '{success, errors}'   # 期待: {"success": true, "errors": []}
+```
+
+PATCH では、変えない項目も含めてルールのすべての項目を送る(Cloudflare の文書の指定)。上のブロックは今のルールを読み、読み取り専用の `id`・`version`・`last_updated` を除いて、変える項目だけを書き換えて送る。`rule not found` で止まったら `RID` が違うので、上の GET で読み直す。PATCH の後に上の GET で、同じ `id` のルールの式と回数が変わったことを確かめる。
+
+導入の後に書き換えるときは、0.5 の 2 の `CF_TOKEN` が期限切れになっている。そのゾーンに限った Zone(ゾーン)→ Zone WAF(ゾーン WAF)→ Edit(編集)と Zone(ゾーン)→ Zone(ゾーン)→ Read(読み取り)のトークン(期限 = 翌日)を人に作ってもらい、`deploy-secrets.env` の `CF_TOKEN=` に書いてから、上の 2.6 の `HOST=… ZONE=… H=… ZID=…` を定義し直して流す。
 
 ```bash
 RL=$(cat <<JSON
@@ -1439,17 +1460,17 @@ curl -sS -X PUT "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases
 確認はサイト作成前でも実行できる。`/v1/sites/*` は 404 を返すが、404 もカウントされる。本番のしきい値での確認は下の並列送信で行う。間隔が長すぎると 10 秒の期間をまたいで永遠に遮断されないので、連続で送る:
 
 ```bash
-# 50 並列で 30 秒以内に LIMIT を超える。429 が 1 つでも出れば有効
+# 50 並列で 30 秒以内に LIMIT を超える。本文が error code: 1015 の応答が 1 つでも出れば有効
 END=$((SECONDS+30)); HIT=0
 while [ $SECONDS -lt $END ]; do
-  seq 1 50 | xargs -P 50 -I{} curl -sS -o /dev/null -w '%{http_code}\n' "https://$HOST/v1/sites/probe/decision" | grep -q '^429$' && { HIT=1; break; }
+  seq 1 50 | xargs -P 50 -I{} curl -sS "https://$HOST/v1/sites/probe/decision" -w '\n' | grep -q 'error code: 1015' && { HIT=1; break; }
 done
 echo "hit=$HIT"   # 期待: hit=1
 ```
 
 期待と違うとき:
 
-- hit=1 → 有効。10 秒待って `curl -sS -o /dev/null -w '%{http_code}\n' "https://$HOST/v1/sites/probe/decision"` が 404 に戻ることを確認。既定の構成では binding(1000、2.3)が WAF(200)より大きく、WAF が先に止めるので、この確認で出る 429 は WAF の遮断
+- hit=1 → 有効。10 秒待って `curl -sS -o /dev/null -w '%{http_code}\n' "https://$HOST/v1/sites/probe/decision"` が 404 に戻ることを確認。判定は状態コードではなく本文で行う。edge の binding が返す平文の 429 `rate limited` は WAF の遮断ではないので数えない
 - hit=0 かつ API の読み戻し(上の entrypoint GET)にルールが無い → 作成に失敗している
 - hit=0 かつルールはある → 判定不能(反映待ち・検出遅延・送信量不足)。1 分後に再実行し、それでも hit=0 なら人に報告する
 
@@ -2609,7 +2630,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 
 edge 用のルール(2.7)と枠を取り合う点に注意する:
 
-- Free で両方が要るなら、新しいルールは作れない。2.7 のルールの条件式に、control のパスを OR で足して 1 本にする(手順 2 の Free の式)。しきい値は edge と共通(2.7 の値)になる。edge と control への要求は IP ごとに合わせて数えるので、会社の拠点などで訪問者の閲覧がしきい値を超えると、同じ IP の管理者がブラウザで直接開く Google ログインの 2 経路(`/auth/google/start`・`/auth/callback/google`)も遮断され、ログインできなくなる(逆も同じ)。管理画面のほかの通信は service binding で control に届き、この WAF を通らないので遮断されない(7 節の冒頭)。1 本にした後は、2.7 の API の PUT を流し直さない(ルールが edge の式だけで置き換わり、control のパスが消える)。control 側でこれ以上絞りたいなら (3) Access を足す(7.3)
+- Free で両方が要るなら、新しいルールは作れない。2.7 のルールの条件式に、control のパスを OR で足して 1 本にする(手順 2 の Free の式)。しきい値は edge と共通(2.7 の値)になる。edge と control への要求は IP ごとに合わせて数えるので、会社の拠点などで訪問者の閲覧がしきい値を超えると、同じ IP の管理者がブラウザで直接開く Google ログインの 2 経路(`/auth/google/start`・`/auth/callback/google`)も遮断され、ログインできなくなる(逆も同じ)。管理画面のほかの通信は service binding で control に届き、この WAF を通らないので遮断されない(7 節の冒頭)。1 本にした後は、2.7 の API の PUT を流し直さない(ルールが edge の式だけで置き換わり、control のパスが消える)。式や回数を変えるときは 2.7 の「1 本のルールを書き換える」の PATCH を使う。control 側でこれ以上絞りたいなら (3) Access を足す(7.3)
 - 別々のしきい値が要るなら Pro 以上(Pro は 2 本まで)
 - 専用のルールを持てるなら(別のゾーン、または Pro 以上)、50 回 / 10 秒にする。WAF は経路を区別せずに数え、Google ログインは開始と戻りで 1 人 2 回になる。50 なら、同じ拠点から 10 秒に約 25 人がログインできる(研修などの一斉ログインの目安)
 
@@ -2626,7 +2647,7 @@ edge 用のルール(2.7)と枠を取り合う点に注意する:
 
 #### 手順
 
-1. ダッシュボード → 対象ゾーン → Security(セキュリティ)→ Security rules(セキュリティ ルール)→ Create rule(ルールを作成)→ **Rate limiting rules(レート制限ルール)**。Free で 2.7 のルールを作ってあるなら、新しく作らずに、そのルールを開いて条件を書き換える
+1. ダッシュボード → 対象ゾーン → Security(セキュリティ)→ Security rules(セキュリティ ルール)→ Create rule(ルールを作成)→ **Rate limiting rules(レート制限ルール)**。Free で 2.7 のルールを作ってあるなら、新しく作らずに、そのルールの式を書き換える。API なら 2.7 の「1 本のルールを書き換える」の PATCH で、`ADD` に下の Free の式の後半の 4 つ(`(starts_with(http.request.uri.path, "/auth/")) or (http.request.uri.path eq "/setup") or (starts_with(http.request.uri.path, "/invitations/")) or (http.request.uri.path eq "/break-glass/reset-link")`)を入れる。ダッシュボードなら、そのルールを開いて条件を書き換える
 2. 条件(Edit expression(式を編集)で書く):
    - **Pro 以上**: ホスト名の条件とパスの条件を `and` でつなぐ。パスの 4 つは括弧でくくる(括弧が無いと `and` が先に結びつき、後ろの 3 つがゾーンのすべてのホストに掛かる)
 
@@ -2657,7 +2678,9 @@ echo "hit=$HIT"   # 期待: hit=1
 
 hit=0 なら 1 分後に 1 回だけやり直す。それでも hit=0 なら人に報告する。
 
-管理画面の BFF の通信は service binding で control に届き、control のゾーンを経由しないので、この WAF には数えられない(7 節の冒頭)。WAF が数えるのは、上の式に当たる要求のうち、ブラウザが直接開く Google ログインの 2 経路・非常口のトークンの照合・5 節でエージェントが curl で送る `POST /setup` と、無認証の入口を直接呼ぶ第三者の要求。API キーを使う呼び出しは式に当たらないので数えない。管理画面からのログインの回数は、control の binding が利用者の IP ごとに数える。CI や運用スクリプトから無認証の入口(ログイン・`/setup` など)を連続して呼ぶ場合は、この WAF の回数に入る。**実機検証は未実施。**
+管理画面の BFF の通信は service binding で control に届き、control のゾーンを経由しないので、この WAF には数えられない(7 節の冒頭)。WAF が数えるのは、上の式に当たる要求のうち、ブラウザが直接開く Google ログインの 2 経路・非常口のトークンの照合・5 節でエージェントが curl で送る `POST /setup` と、無認証の入口を直接呼ぶ第三者の要求。API キーを使う呼び出しは式に当たらないので数えない。管理画面からのログインの回数は、control の binding が利用者の IP ごとに数える。CI や運用スクリプトから無認証の入口(ログイン・`/setup` など)を連続して呼ぶ場合は、この WAF の回数に入る。
+
+Free のゾーンで、2.7 と 1 本にしたルール(上の Free の式)を作り、edge の `/v1/sites/*` と control の `POST /setup`・`GET /auth/google/start` の両方で本文 `error code: 1015` の遮断が出ること、管理画面の BFF の要求がこの WAF に数えられないことを確かめてある。
 
 ### 7.3 (3) Cloudflare Access
 
