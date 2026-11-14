@@ -486,6 +486,8 @@ control は、人とアクセス権の操作と、サイト・エクスペリエ
 
 そのうえ Workers の binding 自体が permissive で結果整合なので、本番の負荷では制限が掛からなかったという実測がある。**実効的な守りはゾーンの WAF Rate Limiting Rule**([デプロイガイド 2.7](deploy.md#27-waf-rate-limiting-rule推奨))のほうで、`/v1/sites/*` と `/__ab/*` の両方をこれで受ける。WAF が遮断した要求は、ダッシュボードの Security Events で見られる(手順は[デプロイガイド 2.7](deploy.md#27-waf-rate-limiting-rule推奨) の「遮断を見る」)。
 
+edge と設置タグには、bot を見分けて除く処理が無い。ゾーンのある構成では、Cloudflare の Bot Fight Mode と、レート制限ルールで検証済みの bot を数えない条件を足せる。どちらも既定では使わない。Bot Fight Mode はゾーン全体に掛かり、経路ごとに外せないので、オンにした後はテストの表示と管理画面のログインを確かめる。確かめた範囲と手順は[デプロイガイド 2.7](deploy.md#27-waf-rate-limiting-rule推奨) の「bot への対策(任意)」。
+
 ### control(無認証の入口 11 経路)
 
 `auth/google/start`(Google へ送り出す)/ `auth/callback/google`(Google からの戻り)/ `auth/handoff/exchange`(ログイン直後に管理画面がセッションを受け取る使い捨てコードの交換)/ `break-glass/reset-link`(非常用トークンの照合)/ `setup` / 招待受諾 / `auth/sign-out`(ログアウト)と、非常時だけ開くパスワードの 4 経路(`auth/sign-in/email` / `auth/sign-up/email` / `auth/request-password-reset` / `auth/reset-password`)に、**経路ごとに 30 回 / 10 秒**を掛けている。Google へ送り出す経路と Google からの戻りは、HEAD の要求も GET と同じ枠で数える。ログアウトは、control の公開のアドレスに直接届いた要求だけを数え、管理画面のログアウトのボタンから届く要求は数えない(枠に当たると、ログイン状態が残ったまま管理画面の Cookie だけが消えるため)。1 つの送信元 IP から、経路ごとに 10 秒に 30 回まで通す。同じ拠点(NAT)から研修などで 30 人規模が一斉にログインしても止めないための値。ログインのライブラリに内蔵されたレート制限は使っておらず、control の制限はこの binding だけ。

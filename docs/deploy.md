@@ -1421,18 +1421,20 @@ curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/http_r
 - 式に `/v1/sites/` はあるが `/__ab/` が無い → Mode B のサイトを置かない(入力ファイルの `dlite_hosts` が空)なら、作らずに終わる。Mode B のサイトを置くなら、`/__ab/*` がこのルールの外に残るので、下の「1 本のルールを書き換える」の PATCH で、`ADD` に `(starts_with(http.request.uri.path, "/__ab/"))` を入れて足す(下の PUT はレート制限ルールを丸ごと置き換えるので使わない)。足した後に上の GET で式を読み直し、`/__ab/` が入ったことを確かめる。式はパスだけで書くので、ゾーンの中のホストを後から足しても、そのホストの `/__ab/*` もこのルールに入る。後から Mode B のホストを足すとき([6.7](#67-mode-b-のホストを後から足す))は、式に `/__ab/` が入っていることだけを確かめ直す(それまで Mode B のホストが無かった導入では、ここで初めて足すことになる)
 - 上の 2 つのどちらでも、式に `/setup` も含まれる(7.2 で control のパスを足して 1 本にした Free のルール)なら、回数を変えるときも下の PUT を使わない。PUT で置き換えると control のパスが消える。下の「1 本のルールを書き換える」の PATCH で、`NEWLIMIT` に新しい回数を入れて変える
 
-**1 本のルールを書き換える**(既存のルールの式に条件を足す・回数を変えるとき。ルール単位の PATCH で、ルールの ID とほかの項目はそのまま残る。Free のゾーンでも使える)。`RID` に上の GET の `rules` の `id` を入れ、`ADD`(式の後ろに OR で足す条件)と `NEWLIMIT`(新しい回数)の要るほうだけを書く:
+**1 本のルールを書き換える**(既存のルールの式に条件を足す・回数を変えるとき。ルール単位の PATCH で、ルールの ID とほかの項目はそのまま残る。Free のゾーンでも使える)。`RID` に上の GET の `rules` の `id` を入れ、`ADD`(式の後ろに OR で足す条件)・`ANDADD`(式の全体を括弧でくくって and で足す条件)・`NEWLIMIT`(新しい回数)の要るものだけを書く:
 
 ```bash
 RID=<上の GET の rules の id>
 ADD=''        # 式に OR で足す条件。足さないなら空のまま
+ANDADD=''     # 式に and で足す条件(例 not cf.client.bot)。足さないなら空のまま
 NEWLIMIT=''   # 新しい回数(10 秒あたり)。変えないなら空のまま
 EP=$(curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/http_ratelimit/entrypoint" -H "$H")
 RS=$(printf '%s' "$EP" | jq -r '.result.id')
-BODY=$(printf '%s' "$EP" | jq -c --arg rid "$RID" --arg add "$ADD" --arg lim "$NEWLIMIT" '
+BODY=$(printf '%s' "$EP" | jq -c --arg rid "$RID" --arg add "$ADD" --arg andadd "$ANDADD" --arg lim "$NEWLIMIT" '
   [.result.rules[] | select(.id == $rid)] | if length == 1 then .[0] else error("rule not found") end
   | del(.id, .version, .last_updated)
   | if $add != "" then .expression = "(" + .expression + ") or " + $add else . end
+  | if $andadd != "" then .expression = "(" + .expression + ") and " + $andadd else . end
   | if $lim != "" then .ratelimit.requests_per_period = ($lim | tonumber) else . end') \
   && curl -sS -X PATCH "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RS/rules/$RID" \
        -H "$H" -H 'content-type: application/json' -d "$BODY" | jq '{success, errors}'   # 期待: {"success": true, "errors": []}
@@ -1522,6 +1524,20 @@ IP with NAT support は Cloudflare の画面の名前で、日本語の表示は
 - Free プランではこれが上限で、分散した送信元を止める手段は無い。アクセスの多いサイトや標的にされる可能性のあるサイトは、Workers Paid(日次の上限が無く従量)にするか、`needsProfile` を使わない構成にする。この構成は decision を送らないので Durable Object に触れない
 
 あわせて使用量の監視も行う。Cloudflare の課金通知は上位プラン限定で、Workers / Durable Objects 専用の指標も無い。そのため Free では、ダッシュボード → Compute(コンピュート)→ Workers & Pages → `wtt-edge` → Metrics(メトリクス)と、Compute(コンピュート)→ Durable Objects の Requests / Storage を週 1 回目視する。
+
+#### bot への対策(任意)
+
+edge と設置タグには、bot を見分けて除く処理が無い。ゾーンのある構成では、Cloudflare の次の 2 つを足せる。どちらも既定では使わない。
+
+**Bot Fight Mode**: ゾーン全体に掛かる設定。ダッシュボード → 対象ゾーン →「セキュリティ」→「設定」→「DDoS 攻撃」の下の「Bot Fight モード」(日本語の表示。英語の表示は未確認)。
+
+- 確かめた範囲(macOS・1 つの回線): オンのまま、Safari で開いたテストのページで、設置タグのファイル(`/s/*`)・decision・event がどれも確認の画面(challenge)を出さずに返り、テストが表示された。1 秒に 1 回 × 50 回の curl でも `/v1/*` は Worker の応答を返した。Chrome での管理画面からの Google ログイン(ブラウザが control を直接開く 2 経路)も確認の画面なしで通った。ゾーンの「セキュリティ」→「アナリティクス」(日本語の表示。英語の表示は未確認)にも、Bot Fight モードが止めた要求は出なかった
+- これは、この条件で止めなかったというだけである。ほかのブラウザ・回線・送り方で、正しい訪問者の `/v1/*` や管理画面のログインに確認の画面を出さないとは言えない。Cloudflare の文書は、API の通信にも確認の画面を出しうるとしている
+- 経路ごとには外せない。WAF のカスタムルールの Skip でも Page Rules でも外せず、外れるのは IP Access rules に当たる要求だけ(Cloudflare の文書)。正しい訪問者が止められたら、ゾーン全体でオフにする
+- Bot Fight Mode が止めた要求が Workers のリクエストの数に入るかは、確かめられていない(確かめたときに止められた要求が無かったため)
+- 使うなら、オンにした後に、設置サイトの実際のページでテストが出ることと、管理画面に Google でログインできることを確かめ、しばらくは上の「アナリティクス」で止められた要求を見る
+
+**レート制限ルールで検証済みの bot を数えない**: 2.7 のルールに、上の「1 本のルールを書き換える」の PATCH で `ANDADD` に `not cf.client.bot` を入れると、Cloudflare が検証済みとする bot(検索エンジンなど)の要求をこのルールで数えなくなる。Free のゾーンでも、API はこの式を受け付けた(同じ意味の `not cf.bot_management.verified_bot` も受け付けたが、Cloudflare の文書はこのフィールドを上位のプランのものとしているので、`cf.client.bot` を使う)。式が受け付けられることを確かめただけで、検証済みの bot が実際に数えられなくなるかは確かめていない。
 
 ### 2.8 ドメインありへの移行(`workers-dev` → `route`)
 
