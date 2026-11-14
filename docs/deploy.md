@@ -176,8 +176,8 @@ CF_USAGE_TOKEN=<使用状況の表示用トークン>   # どの構成でも要�
 ```
 
 - **Google の OAuth クライアント**: `https://console.cloud.google.com/auth/overview` で、プロジェクト(新しく作るなら `wtt-auth`)→ Get started(開始)の 4 段の入力(新しいプロジェクトのときだけ)→ Audience(対象)→ Clients(クライアント)の順に進む。種類は Web application(ウェブ アプリケーション)、リダイレクト URI は `<control URL>/auth/callback/google` を 1 つ。画面ごとの決めることと推奨は 0.5 の 1 の表。Client ID と Client secret を `GOOGLE_CLIENT_ID=` / `GOOGLE_CLIENT_SECRET=` に書く
-- **配信ファイルのデプロイ用トークン**: My Profile(マイ プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)→ Custom token(カスタム トークン)。名前は `wtt-deploy-<アカウントのサブドメイン>`。権限は Account(アカウント)→ Workers Scripts(Workers スクリプト)→ Edit(編集)のみ。Account Resources(アカウント リソース)は導入先のアカウントだけで、期限なし。値を `CF_DEPLOY_TOKEN=` に書く(0.5 の 3)
-- **使用状況の表示用トークン**: 同じ画面で作る。名前は `wtt-usage-<アカウントのサブドメイン>`。権限は Account(アカウント)→ Account Analytics(アカウント分析)→ Read(読み取り)のみで、期限なし。値を `CF_USAGE_TOKEN=` に書く(0.5 の 4)
+- **配信ファイルのデプロイ用トークン**: ダッシュボードの右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)。Token name(トークン名)は `wtt-deploy-<アカウントのサブドメイン>`。Start from scratch(最初から作成)の Start with an Account policy(アカウント ポリシーから開始)→ Include(含む)の Account(アカウント)で導入先のアカウントを選ぶ → Developer Platform(開発者プラットフォーム)の Workers Scripts(Workers スクリプト)の Edit(編集)のチェックだけを入れる → Token expiration(トークンの有効期限)は No expiration(期限なし)→ Continue to summary(概要に進む)で確かめて作成。値を `CF_DEPLOY_TOKEN=` に書く(0.5 の 3)
+- **使用状況の表示用トークン**: 同じ画面で作る。Token name(トークン名)は `wtt-usage-<アカウントのサブドメイン>`。上と同じく Start with an Account policy(アカウント ポリシーから開始)で導入先のアカウントを選び、Analytics & Logs(分析とログ)の Account Analytics(アカウント分析)の Read(読み取り)のチェックだけを入れる。期限は No expiration(期限なし)。値を `CF_USAGE_TOKEN=` に書く(0.5 の 4)。作った直後の画面のタブは、値を書いたら閉じる
 - `CF_TOKEN` の行は 2.6・2.7 を後で足すときに使う(0.5 の 2)。ここでは空のままでよい
 
 確認。値は画面に出ない:
@@ -481,6 +481,8 @@ curl -s https://<設置タグのホスト>/s/<siteId>.js | head -c 400
 - Cloudflare と Google Cloud の画面のメニュー・タブ・ボタンの名前は、英語の表示(日本語の表示)の順で併記する。例: Storage & databases(ストレージとデータベース)→ R2 Object Storage(R2 オブジェクトストレージ)。両方が同じ名前なら 1 つだけ書く
 - Cloudflare の既定は英語で、My Profile(マイ プロフィール)→ Settings(設定)→ Language(言語)で日本語に変えられる
 - エージェントは、人の画面の言語が分かればその言語の名前だけを示してよい。分からなければ併記のまま示す
+- 人に頼む手順は、画面に実際に出る言葉だけで、クリックする順に書く。説明のための別の言葉(「対象」「分類」など)に言い換えない。言い換えると、人は画面のどこを押せばよいか分からなくなる。補足が要るときは、画面の言葉を書いた後ろに添える
+- この文書の手順のうち、画面の名前を確かめていないものには「未確認」と書いてある。エージェントがこの文書に無い画面の手順を人に示すときは、推測で画面の名前を作らず、分からない名前は分からないと伝える
 
 ### エージェントの作業規則
 
@@ -973,26 +975,35 @@ fi
 - (b) クライアントを作り直す: Clients(クライアント)の一覧でそのクライアントにチェックを入れ、Delete(削除)を押す。表の Clients(クライアント)の行から作り直す(リダイレクト URI も登録し直す)。消したクライアントは、30 日以内なら Restore deleted OAuth clients(削除した OAuth クライアントを復元)で戻せる
 
 2. **ゾーンの設定用の Cloudflare API トークン**(ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のときと、control か管理画面を自分のドメインに置くとき(`control_address` か `admin_address` が `custom`)だけ。どれにも当たらなければ不要)
-   - 画面: My Profile(マイ プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)→ Custom token(カスタム トークン)の Get started(始める)
+   - 画面: ダッシュボードの右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)
    - Token name(トークン名)= `wtt-setup-<識別子>`
-   - Permissions(権限)= Zone(ゾーン)→ Cache Rules → Edit(編集)、Zone(ゾーン)→ Zone WAF(ゾーン WAF)→ Edit(編集)、Zone(ゾーン)→ Zone(ゾーン)→ Read(読み取り)、Zone(ゾーン)→ DNS → Read(読み取り)。DNS の読み取りは、ホストが空いていることを確かめるのに使う(`custom-domain` の 2.3、管理画面の 4.2、control の 7.1)
-   - Zone Resources(ゾーン リソース)= 対象ゾーンに限定。設置サイトのゾーンに置く構成(`route`)では設置サイトのゾーン、別のドメインに置く構成(`custom-domain`)では `edge_host` のゾーン(`zone_name`)。`control_host`・`admin_host` を置くゾーンがこれと違えば、そのゾーンも足す(Include(含める)の行を増やす)。`workers-dev` の構成で control か管理画面を自分のドメインに置くときは、`control_host`・`admin_host` のゾーンだけにする。`control_host`・`admin_host` のゾーンの名前は、依頼文を出す前にエージェントが確かめる: ホストの末尾から候補の名前(`admin.example.co.jp` なら `example.co.jp`・`co.jp`)を作り、`wrangler login` の資格情報で `GET /zones?name=<候補>` を引いて、導入先のアカウントの有効なゾーンが返った名前にする
-   - 期限 = 翌日。TTL の Select time range(時間範囲を選択)の終了日で指定する。失効の手間をなくすため。導入が翌日までに終わらなければ発行し直す
-   - Continue to summary(概要に進む)で内容を確かめて作成し、値を `CF_TOKEN=` に書く
+   - Start from scratch(最初から作成)の Start with a Zone policy(ゾーン ポリシーから開始)を押す
+   - Include(含む)の Resource type(リソースタイプ)で Specific zone(特定のゾーン)を選び、Zone(ゾーン)の Select...(選択する...)で対象のゾーンを選ぶ。設置サイトのゾーンに置く構成(`route`)では設置サイトのゾーン、別のドメインに置く構成(`custom-domain`)では `edge_host` のゾーン(`zone_name`)。`control_host`・`admin_host` を置くゾーンがこれと違えば、そのゾーンも足す(Add new policy(新しいポリシーを追加)→ Add new Zone policy(新しいゾーン ポリシーを追加)で同じ権限のポリシーをもう 1 つ作る)。`workers-dev` の構成で control か管理画面を自分のドメインに置くときは、`control_host`・`admin_host` のゾーンだけにする。`control_host`・`admin_host` のゾーンの名前は、依頼文を出す前にエージェントが確かめる: ホストの末尾から候補の名前(`admin.example.co.jp` なら `example.co.jp`・`co.jp`)を作り、`wrangler login` の資格情報で `GET /zones?name=<候補>` を引いて、導入先のアカウントの有効なゾーンが返った名前にする
+   - 権限の行で、次の 4 つのチェックを入れる(分類の名前の後ろに、その中の行の名前を書いた。Cache Rules と DNS は日本語の表示でも英語のまま):
+     - Cache & Performance(Cache & パフォーマンス)の Cache Rules の Edit(編集)
+     - App Security(アプリのセキュリティ)の Zone WAF(ゾーン WAF)の Edit(編集)
+     - DNS & Zones(DNS とゾーン)の Zone(ゾーン)の Read(読み取り)
+     - DNS & Zones(DNS とゾーン)の DNS の Read(読み取り)。DNS の読み取りは、ホストが空いていることを確かめるのに使う(`custom-domain` の 2.3、画像の 3.2、管理画面の 4.2、control の 7.1)
+   - Token expiration(トークンの有効期限)= Custom(カスタム)で、終了を翌日にする。失効の手間をなくすため。導入が翌日までに終わらなければ発行し直す。カレンダーで翌日を 1 回押すと、End(終了)だけでなく Start(開始)も翌日の 00:00 になり、そのままでは今日はこのトークンを使えない。Start(開始)の日時を今日の今の時刻より前に直してから Apply(適用)を押す(直す操作は画面で確かめていない。直せなければ、期限を 7 days(7日)にして、導入が終わったら人に削除してもらう)
+   - Continue to summary(概要に進む)で、権限と期限の開始・終了を確かめてから作成し、値を `CF_TOKEN=` に書く
 3. **配信ファイルのデプロイ用トークン**(どの構成でも要る)
    - 画面: 2 と同じ。ゾーンのある構成(`route`・`custom-domain`)では 2 と同じ画面で続けて作る
    - Token name(トークン名)= `wtt-deploy-<識別子>`
-   - Permissions(権限)= Account(アカウント)→ Workers Scripts(Workers スクリプト)→ Edit(編集)のみ
-   - Account Resources(アカウント リソース)= 導入先のアカウントだけ
-   - 期限なし。デプロイ専用の Worker の secret として常設する。このトークンはアカウント内のすべての Worker を書き換えられるので、ほかの場所に置かない
-   - 値を `CF_DEPLOY_TOKEN=` に書く
+   - Start from scratch(最初から作成)の Start with an Account policy(アカウント ポリシーから開始)を押す
+   - Include(含む)の Account(アカウント)で、導入先のアカウントを選ぶ(初めは All accounts(すべてのアカウント)になっているので、選び直す)
+   - 権限の行で、Developer Platform(開発者プラットフォーム)の Workers Scripts(Workers スクリプト)の Edit(編集)のチェックだけを入れる。同じ分類に Workers という別の行があるので、取り違えない
+   - Token expiration(トークンの有効期限)= No expiration(期限なし)。デプロイ専用の Worker の secret として常設する。このトークンはアカウント内のすべての Worker を書き換えられるので、ほかの場所に置かない
+   - Continue to summary(概要に進む)で確かめてから作成し、値を `CF_DEPLOY_TOKEN=` に書く
 4. **使用状況の表示用のトークン**(どの構成でも要る)
    - 画面: 同じ
    - Token name(トークン名)= `wtt-usage-<識別子>`
-   - Permissions(権限)= Account(アカウント)→ Account Analytics(アカウント分析)→ Read(読み取り)のみ
-   - Account Resources(アカウント リソース)= 導入先のアカウントだけ
-   - 期限なし。権限は使用状況の読み取りだけで、漏れても設定やデータは書き換えられない。期限を付けると、切れた日から管理画面の使用状況に「使用状況を取得できませんでした」と出る。その場合はトークンの作り直しと 3.3 の secret の入れ直しが要る。ほかの機能には影響しない。失効は撤去のとき(10.4)に行う
-   - 値を `CF_USAGE_TOKEN=` に書く。Cloudflare のアカウント ID も一緒に控える(3.4 の `CF_ACCOUNT_ID` に入れる)
+   - Start from scratch(最初から作成)の Start with an Account policy(アカウント ポリシーから開始)を押し、Include(含む)の Account(アカウント)で導入先のアカウントを選ぶ
+   - 権限の行で、Analytics & Logs(分析とログ)の Account Analytics(アカウント分析)の Read(読み取り)のチェックだけを入れる
+   - Token expiration(トークンの有効期限)= No expiration(期限なし)。権限は使用状況の読み取りだけで、漏れても設定やデータは書き換えられない。期限を付けると、切れた日から管理画面の使用状況に「使用状況を取得できませんでした」と出る。その場合はトークンの作り直しと 3.3 の secret の入れ直しが要る。ほかの機能には影響しない。失効は撤去のとき(10.4)に行う
+   - Continue to summary(概要に進む)で確かめてから作成し、値を `CF_USAGE_TOKEN=` に書く。Cloudflare のアカウント ID も一緒に控える(3.4 の `CF_ACCOUNT_ID` に入れる)
+
+トークンを作った直後の画面には、トークンの値が出る。値を `deploy-secrets.env` に書いたら、その画面のタブを閉じてもらう(画面を共有している・画面を取り込む道具を使っているときに、値が人の目や記録に残らないようにするため)。
+
 5. **Workers Paid への切り替え**(`plan: paid` で、アカウントがまだ Free のときだけ)。ダッシュボードの Compute(コンピュート)→ Workers plans(Workers のプラン)で Workers Paid を選ぶ。料金は月 $5 からで、支払い方法の登録が要る
 
 **同じ依頼文で、最初のワークスペースの名前を聞く**(`deploy-answers.yaml` の `workspace_name` が `#` で始まる未記入のとき)。別の機会に聞き直すと、人に確認を求める回数が増える。必ずこの依頼文に含める。
@@ -1023,7 +1034,7 @@ set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 [ -n "$CF_USAGE_TOKEN" ] && echo cf_usage_token=present || echo cf_usage_token=missing   # 期待: present(missing なら人に頼み直す)
 ```
 
-導入が終わったら(5 節の後)`rm deploy-secrets.env` を実行する。`CF_TOKEN` は期限切れで無効になるので失効の操作は要らない。導入の後に control か管理画面を自分のドメインに移すときは、4.2・7.1 の空きの確認のために作業用のトークンを作り直す。0.5 の手順で `deploy-secrets.env` を `CF_TOKEN=` の行だけで作り直し、そのホストのゾーンに限った Zone(ゾーン)→ Zone(ゾーン)→ Read(読み取り)と Zone(ゾーン)→ DNS → Read(読み取り)のトークン(期限 = 翌日)を人に作ってもらって書く。確認が済んだらファイルを消す。`CF_DEPLOY_TOKEN` と `CF_USAGE_TOKEN` は期限が無く、それぞれデプロイ専用の Worker と control の secret として使い続ける。失効は撤去のときに行う(10.4)。
+導入が終わったら(5 節の後)`rm deploy-secrets.env` を実行する。`CF_TOKEN` は期限切れで無効になるので失効の操作は要らない。導入の後に control か管理画面を自分のドメインに移すときは、4.2・7.1 の空きの確認のために作業用のトークンを作り直す。0.5 の手順で `deploy-secrets.env` を `CF_TOKEN=` の行だけで作り直し、そのホストのゾーンに限ったトークンを人に作ってもらって書く。作り方は上の 2 と同じで、権限の行は DNS & Zones(DNS とゾーン)の Zone(ゾーン)の Read(読み取り)と DNS の Read(読み取り)の 2 つだけ、期限は翌日。確認が済んだらファイルを消す。`CF_DEPLOY_TOKEN` と `CF_USAGE_TOKEN` は期限が無く、それぞれデプロイ専用の Worker と control の secret として使い続ける。失効は撤去のときに行う(10.4)。
 
 ## 1. 前提と全体像
 
@@ -1336,7 +1347,7 @@ curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "https://<edge のホ�
 
 2.6 / 2.7 の bash ブロックは同じシェルで続けて実行する。別々に実行する場合は、各ブロックの前に `set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a` と `HOST=… ZONE=… H=… ZID=…` の定義を入れ直す。
 
-期待と違うとき(2.6 / 2.7 共通): API が `403` または `errors` に `not entitled` / `permission` を含む応答を返す → トークンに Account → Account Rulesets → Edit を追加して再発行する。Cloudflare の文書には、Cache Rules の管理に Account Rulesets Edit を挙げる版がある。必要な権限の最小集合は環境で確認する。
+期待と違うとき(2.6 / 2.7 共通): API が `403` または `errors` に `not entitled` / `permission` を含む応答を返す → トークンに、Start with an Account policy(アカウント ポリシーから開始)で導入先のアカウントを選んだポリシーを足し、Rules & Configuration(ルールと構成)の Account Rulesets(アカウント ルールセット)の Edit(編集)を入れて再発行する(Add new policy(新しいポリシーを追加)→ Add new Account policy(新しいアカウント ポリシーを追加))。Cloudflare の文書には、Cache Rules の管理に Account Rulesets Edit を挙げる版がある。必要な権限の最小集合は環境で確認する。
 
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
@@ -1458,7 +1469,7 @@ BODY=$(printf '%s' "$EP" | jq -c --arg rid "$RID" --arg add "$ADD" --arg andadd 
 
 PATCH では、変えない項目も含めてルールのすべての項目を送る(Cloudflare の文書の指定)。上のブロックは今のルールを読み、読み取り専用の `id`・`version`・`last_updated` を除いて、変える項目だけを書き換えて送る。`rule not found` で止まったら `RID` が違うので、上の GET で読み直す。PATCH の後に上の GET で、同じ `id` のルールの式と回数が変わったことを確かめる。
 
-導入の後に書き換えるときは、0.5 の 2 の `CF_TOKEN` が期限切れになっている。そのゾーンに限った Zone(ゾーン)→ Zone WAF(ゾーン WAF)→ Edit(編集)と Zone(ゾーン)→ Zone(ゾーン)→ Read(読み取り)のトークン(期限 = 翌日)を人に作ってもらい、`deploy-secrets.env` の `CF_TOKEN=` に書いてから、上の 2.6 の `HOST=… ZONE=… H=… ZID=…` を定義し直して流す。
+導入の後に書き換えるときは、0.5 の 2 の `CF_TOKEN` が期限切れになっている。そのゾーンに限ったトークンを人に作ってもらい(作り方は 0.5 の 2 と同じで、権限の行は App Security(アプリのセキュリティ)の Zone WAF(ゾーン WAF)の Edit(編集)と、DNS & Zones(DNS とゾーン)の Zone(ゾーン)の Read(読み取り)、期限は翌日)、`deploy-secrets.env` の `CF_TOKEN=` に書いてから、上の 2.6 の `HOST=… ZONE=… H=… ZID=…` を定義し直して流す。
 
 ```bash
 RL=$(cat <<JSON
@@ -2876,7 +2887,7 @@ Workers の実行回数・失敗と、訪問者に返った 5xx を GraphQL Anal
 
 用意するもの:
 
-- **【人に依頼】** 稼働確認用のトークン `CF_ANALYTICS_TOKEN`。稼働確認は導入の数日後に行うので、0.5 の導入用トークンは期限切れになっている。権限 = **Account(アカウント)→ Account Analytics(アカウント分析)→ Read(読み取り)+ Zone(ゾーン)→ Analytics → Read(読み取り)**(対象ゾーンのみ、期限は短く。作り方は 0.5 の Cloudflare API トークンと同じ画面)。control に入れる `CF_USAGE_TOKEN` とは別物
+- **【人に依頼】** 稼働確認用のトークン `CF_ANALYTICS_TOKEN`。稼働確認は導入の数日後に行うので、0.5 の導入用トークンは期限切れになっている。作り方は 0.5 の Cloudflare API トークンと同じ画面で、ポリシーを 2 つ入れる: Start with an Account policy(アカウント ポリシーから開始)で導入先のアカウントを選び、Analytics & Logs(分析とログ)の Account Analytics(アカウント分析)の Read(読み取り)。続けて Add new policy(新しいポリシーを追加)→ Add new Zone policy(新しいゾーン ポリシーを追加)で Specific zone(特定のゾーン)に対象のゾーンを選び、Analytics & Logs(分析とログ)の Analytics の Read(読み取り)(Analytics は日本語の表示でも英語のまま)。期限は短く(Custom(カスタム)。0.5 の 2 の期限の注意)。control に入れる `CF_USAGE_TOKEN` とは別物
 - アカウント ID = `pnpm -C apps/control exec wrangler whoami`
 - ゾーン ID = `wrangler login` の資格情報で API から取る(ダッシュボードを開かなくてよい):
 
@@ -2887,7 +2898,7 @@ echo "${#CF_ZONE_ID}"   # 期待: 32
 ```
 
 ```bash
-# CF_ANALYTICS_TOKEN: Account Analytics: Read + Zone Analytics: Read のみのトークン / CF_ACCOUNT_ID: pnpm -C apps/control exec wrangler whoami の Account ID / CF_ZONE_ID: zone_name のゾーンの ID
+# CF_ANALYTICS_TOKEN: アカウントの Account Analytics の Read と、ゾーンの Analytics の Read だけのトークン / CF_ACCOUNT_ID: pnpm -C apps/control exec wrangler whoami の Account ID / CF_ZONE_ID: zone_name のゾーンの ID
 # 半開区間 [SINCE, UNTIL)。UNTIL を過ぎた実時刻になってから実行する
 G=https://api.cloudflare.com/client/v4/graphql; H=(-H "Authorization: Bearer $CF_ANALYTICS_TOKEN" -H 'content-type: application/json')
 SINCE=<開始 UTC> UNTIL=<終了 UTC>
@@ -3103,7 +3114,7 @@ K が 0 なら、この段はここで終わる。
 grep -q '^CLOUDFLARE_API_TOKEN=' deploy-secrets.env || printf 'CLOUDFLARE_API_TOKEN=\n' >> deploy-secrets.env
 ```
 
-- **【人に依頼】** API トークンを作り、値を `CLOUDFLARE_API_TOKEN=` の右に貼って保存してもらう。画面: My Profile(マイ プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)→ Custom token(カスタム トークン)の Get started(始める)。Token name(トークン名)= `wtt-restore-<識別子>`(識別子は 0.5 の「Cloudflare の API トークンの名前」と同じ)。Permissions(権限)= Account(アカウント)→ Workers R2 Storage → Read(読み取り)と、Account(アカウント)→ D1 → Edit(編集)(Workers R2 Storage の日本語の表示は未確認)。D1 の編集も要るのは、道具の中で動く wrangler も、`CLOUDFLARE_API_TOKEN` があれば `wrangler login` より優先してそのトークンを使い、D1 を読み書きするため。Account Resources(アカウント リソース)= 導入先のアカウントだけ。期限 = 翌日(TTL の Select time range(時間範囲を選択)の終了日)
+- **【人に依頼】** API トークンを作り、値を `CLOUDFLARE_API_TOKEN=` の右に貼って保存してもらう。画面: ダッシュボードの右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)。Token name(トークン名)= `wtt-restore-<識別子>`(識別子は 0.5 の「Cloudflare の API トークンの名前」と同じ)。Start from scratch(最初から作成)の Start with an Account policy(アカウント ポリシーから開始)→ Include(含む)の Account(アカウント)で導入先のアカウントを選ぶ → Developer Platform(開発者プラットフォーム)の Workers R2 Storage の Read(読み取り)と D1 の Edit(編集)のチェックを入れる(Workers R2 Storage と D1 は日本語の表示でも英語のまま)。D1 の編集も要るのは、道具の中で動く wrangler も、`CLOUDFLARE_API_TOKEN` があれば `wrangler login` より優先してそのトークンを使い、D1 を読み書きするため。Token expiration(トークンの有効期限)= Custom(カスタム)で終了を翌日にする(Start(開始)も翌日になるので直す。0.5 の 2 の期限の注意)→ Continue to summary(概要に進む)で確かめて作成
 - 読み込んで、値を表示せずに確かめ、上の (2) から流し直す:
 
 ```bash
@@ -3211,7 +3222,7 @@ curl -sS -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RI
 
 - Google Cloud の OAuth クライアント `wtt-control-<識別子>`(0.5)を削除する。control の Worker 名(`wtt-control-<16 桁の 16 進>`)とは別で、識別子はアカウントのサブドメイン。プロジェクト `wtt-auth` をほかの導入と共有していなければ、プロジェクトごと消してよい
 - Cloudflare の API トークンのうち残っているものを失効する: 配信ファイルのデプロイ用 `wtt-deploy-<識別子>` と使用状況の表示用 `wtt-usage-<識別子>`(識別子は 0.5)。ゾーンの設定用 `wtt-setup-<識別子>` と稼働確認用は期限切れなら何もしなくてよい
-  - **失効する前に、名前だけで決めず、撤去する導入のトークンかを確かめる。** API トークンはユーザーに属するので、ほかの導入(別のアカウントに入れた導入や試しの導入)のトークンも同じ一覧に並ぶ(0.5)。名前は人が付けるので、重なったり、手順と違う名前になったりする。トークンを開き、Account Resources(アカウント リソース)が撤去するアカウントだけであることと、作成日がその導入を入れた日(`deploy-log.md` の日付)と合うことを確かめる
+  - **失効する前に、名前だけで決めず、撤去する導入のトークンかを確かめる。** API トークンはユーザーに属するので、ほかの導入(別のアカウントに入れた導入や試しの導入)のトークンも同じ一覧に並ぶ(0.5)。名前は人が付けるので、重なったり、手順と違う名前になったりする。一覧でトークンを開き、対象のアカウントが撤去するアカウントだけであること(トークンの詳細の画面の名前は確かめていない)と、作成日がその導入を入れた日(`deploy-log.md` の日付)と合うことを確かめる
   - どちらかが合わない、または確かめられないトークンは失効しない。失効は取り消せず、まだ使っている導入のデプロイ用のトークンを失効すると、その導入では公開や設定の保存をしても設置タグのファイルが作り直されなくなる(使用状況の表示用なら、管理画面の使用状況が取れなくなる)
 - Cloudflare Access のアプリケーション(4.5 / 7.3)を削除する
 - GTM のタグ・トリガー・変数を削除する
