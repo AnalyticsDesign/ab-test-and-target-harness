@@ -979,26 +979,26 @@ fi
    - Token name(トークン名)= `wtt-setup-<識別子>`
    - Start from scratch(最初から作成)の Start with a Zone policy(ゾーン ポリシーから開始)を押す
    - Include(含む)の Resource type(リソースタイプ)で Specific zone(特定のゾーン)を選び、Zone(ゾーン)の Select...(選択する...)で対象のゾーンを選ぶ。設置サイトのゾーンに置く構成(`route`)では設置サイトのゾーン、別のドメインに置く構成(`custom-domain`)では `edge_host` のゾーン(`zone_name`)。`control_host`・`admin_host` を置くゾーンがこれと違えば、そのゾーンも足す(Add new policy(新しいポリシーを追加)→ Add new Zone policy(新しいゾーン ポリシーを追加)で同じ権限のポリシーをもう 1 つ作る)。`workers-dev` の構成で control か管理画面を自分のドメインに置くときは、`control_host`・`admin_host` のゾーンだけにする。`control_host`・`admin_host` のゾーンの名前は、依頼文を出す前にエージェントが確かめる: ホストの末尾から候補の名前(`admin.example.co.jp` なら `example.co.jp`・`co.jp`)を作り、`wrangler login` の資格情報で `GET /zones?name=<候補>` を引いて、導入先のアカウントの有効なゾーンが返った名前にする
-   - 権限の行で、次の 4 つのチェックを入れる(分類の名前の後ろに、その中の行の名前を書いた。Cache Rules と DNS は日本語の表示でも英語のまま):
+   - 次の 4 つにチェックを入れる(Cache Rules と DNS は日本語の表示でも英語のまま):
      - Cache & Performance(Cache & パフォーマンス)の Cache Rules の Edit(編集)
      - App Security(アプリのセキュリティ)の Zone WAF(ゾーン WAF)の Edit(編集)
      - DNS & Zones(DNS とゾーン)の Zone(ゾーン)の Read(読み取り)
      - DNS & Zones(DNS とゾーン)の DNS の Read(読み取り)。DNS の読み取りは、ホストが空いていることを確かめるのに使う(`custom-domain` の 2.3、画像の 3.2、管理画面の 4.2、control の 7.1)
-   - Token expiration(トークンの有効期限)= Custom(カスタム)で、終了を翌日にする。失効の手間をなくすため。導入が翌日までに終わらなければ発行し直す。カレンダーで翌日を 1 回押すと、End(終了)だけでなく Start(開始)も翌日の 00:00 になり、そのままでは今日はこのトークンを使えない。Start(開始)の日時を今日の今の時刻より前に直してから Apply(適用)を押す(直す操作は画面で確かめていない。直せなければ、期限を 7 days(7日)にして、導入が終わったら人に削除してもらう)
+   - Token expiration(トークンの有効期限)= Custom(カスタム)で、終了を翌日にする。失効の手間をなくすため。導入が翌日までに終わらなければ発行し直す。カレンダーで翌日を 1 回押すと、End(終了)だけでなく Start(開始)も翌日の 00:00 になり、そのままでは今日はこのトークンを使えない。Start(開始)の日時を今日の今の時刻より前に直してから Apply(適用)を押す。直す操作は画面で確かめていないので、直せないときは作成せずにエージェントに伝えてもらう
    - Continue to summary(概要に進む)で、権限と期限の開始・終了を確かめてから作成し、値を `CF_TOKEN=` に書く
 3. **配信ファイルのデプロイ用トークン**(どの構成でも要る)
    - 画面: 2 と同じ。ゾーンのある構成(`route`・`custom-domain`)では 2 と同じ画面で続けて作る
    - Token name(トークン名)= `wtt-deploy-<識別子>`
    - Start from scratch(最初から作成)の Start with an Account policy(アカウント ポリシーから開始)を押す
    - Include(含む)の Account(アカウント)で、導入先のアカウントを選ぶ(初めは All accounts(すべてのアカウント)になっているので、選び直す)
-   - 権限の行で、Developer Platform(開発者プラットフォーム)の Workers Scripts(Workers スクリプト)の Edit(編集)のチェックだけを入れる。同じ分類に Workers という別の行があるので、取り違えない
+   - Developer Platform(開発者プラットフォーム)の Workers Scripts(Workers スクリプト)の Edit(編集)にだけチェックを入れる。Developer Platform(開発者プラットフォーム)には Workers Scripts(Workers スクリプト)とは別に Workers もあるので、取り違えない
    - Token expiration(トークンの有効期限)= No expiration(期限なし)。デプロイ専用の Worker の secret として常設する。このトークンはアカウント内のすべての Worker を書き換えられるので、ほかの場所に置かない
    - Continue to summary(概要に進む)で確かめてから作成し、値を `CF_DEPLOY_TOKEN=` に書く
 4. **使用状況の表示用のトークン**(どの構成でも要る)
    - 画面: 同じ
    - Token name(トークン名)= `wtt-usage-<識別子>`
    - Start from scratch(最初から作成)の Start with an Account policy(アカウント ポリシーから開始)を押し、Include(含む)の Account(アカウント)で導入先のアカウントを選ぶ
-   - 権限の行で、Analytics & Logs(分析とログ)の Account Analytics(アカウント分析)の Read(読み取り)のチェックだけを入れる
+   - Analytics & Logs(分析とログ)の Account Analytics(アカウント分析)の Read(読み取り)にだけチェックを入れる
    - Token expiration(トークンの有効期限)= No expiration(期限なし)。権限は使用状況の読み取りだけで、漏れても設定やデータは書き換えられない。期限を付けると、切れた日から管理画面の使用状況に「使用状況を取得できませんでした」と出る。その場合はトークンの作り直しと 3.3 の secret の入れ直しが要る。ほかの機能には影響しない。失効は撤去のとき(10.4)に行う
    - Continue to summary(概要に進む)で確かめてから作成し、値を `CF_USAGE_TOKEN=` に書く。Cloudflare のアカウント ID も一緒に控える(3.4 の `CF_ACCOUNT_ID` に入れる)
 
@@ -1034,7 +1034,7 @@ set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 [ -n "$CF_USAGE_TOKEN" ] && echo cf_usage_token=present || echo cf_usage_token=missing   # 期待: present(missing なら人に頼み直す)
 ```
 
-導入が終わったら(5 節の後)`rm deploy-secrets.env` を実行する。`CF_TOKEN` は期限切れで無効になるので失効の操作は要らない。導入の後に control か管理画面を自分のドメインに移すときは、4.2・7.1 の空きの確認のために作業用のトークンを作り直す。0.5 の手順で `deploy-secrets.env` を `CF_TOKEN=` の行だけで作り直し、そのホストのゾーンに限ったトークンを人に作ってもらって書く。作り方は上の 2 と同じで、権限の行は DNS & Zones(DNS とゾーン)の Zone(ゾーン)の Read(読み取り)と DNS の Read(読み取り)の 2 つだけ、期限は翌日。確認が済んだらファイルを消す。`CF_DEPLOY_TOKEN` と `CF_USAGE_TOKEN` は期限が無く、それぞれデプロイ専用の Worker と control の secret として使い続ける。失効は撤去のときに行う(10.4)。
+導入が終わったら(5 節の後)`rm deploy-secrets.env` を実行する。`CF_TOKEN` は期限切れで無効になるので失効の操作は要らない。導入の後に control か管理画面を自分のドメインに移すときは、4.2・7.1 の空きの確認のために作業用のトークンを作り直す。0.5 の手順で `deploy-secrets.env` を `CF_TOKEN=` の行だけで作り直し、そのホストのゾーンに限ったトークンを人に作ってもらって書く。作り方は上の 2 と同じで、チェックを入れるのは DNS & Zones(DNS とゾーン)の Zone(ゾーン)の Read(読み取り)と DNS の Read(読み取り)の 2 つだけ、期限は翌日。確認が済んだらファイルを消す。`CF_DEPLOY_TOKEN` と `CF_USAGE_TOKEN` は期限が無く、それぞれデプロイ専用の Worker と control の secret として使い続ける。失効は撤去のときに行う(10.4)。
 
 ## 1. 前提と全体像
 
@@ -1243,7 +1243,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 
 期待と違うとき:
 
-- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に Zone → DNS → Read が無いときに出る(0.5 の 2)
+- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に DNS & Zones(DNS とゾーン)の DNS の Read(読み取り)が無いときに出る(0.5 の 2)
 - `n` が 1 以上 → そのホストは使われている。別のホストにする(0.2 の E2c を答え直す)か、使っていないことを人に確かめてから人に消してもらう。消した後に、このブロックをやり直す
 
 確かめたら、`apps/edge/wrangler.jsonc` の `routes` を次にする(`workers_dev` の行は書かない):
@@ -1429,7 +1429,7 @@ WAF を作るとき・値を変えるときは、edge の Rate Limiting binding 
 
 #### 既定: API で作る(エージェントはこちら)
 
-`edge_waf_rate_limit: true`(既定)のとき。トークンは 2.6 と同じ `CF_TOKEN`(Zone → WAF → Edit を含む)。
+`edge_waf_rate_limit: true`(既定)のとき。トークンは 2.6 と同じ `CF_TOKEN`(App Security(アプリのセキュリティ)の Zone WAF(ゾーン WAF)の Edit(編集)を含む)。
 
 ```bash
 LIMIT=200    # edge_waf_requests_per_10s
@@ -1459,7 +1459,7 @@ EP=$(curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/phases/h
 RS=$(printf '%s' "$EP" | jq -r '.result.id')
 BODY=$(printf '%s' "$EP" | jq -c --arg rid "$RID" --arg add "$ADD" --arg andadd "$ANDADD" --arg lim "$NEWLIMIT" '
   [.result.rules[] | select(.id == $rid)] | if length == 1 then .[0] else error("rule not found") end
-  | del(.id, .version, .last_updated)
+  | {description, expression, action, ratelimit, enabled}
   | if $add != "" then .expression = "(" + .expression + ") or " + $add else . end
   | if $andadd != "" then .expression = "(" + .expression + ") and " + $andadd else . end
   | if $lim != "" then .ratelimit.requests_per_period = ($lim | tonumber) else . end') \
@@ -1467,9 +1467,9 @@ BODY=$(printf '%s' "$EP" | jq -c --arg rid "$RID" --arg add "$ADD" --arg andadd 
        -H "$H" -H 'content-type: application/json' -d "$BODY" | jq '{success, errors}'   # 期待: {"success": true, "errors": []}
 ```
 
-PATCH では、変えない項目も含めてルールのすべての項目を送る(Cloudflare の文書の指定)。上のブロックは今のルールを読み、読み取り専用の `id`・`version`・`last_updated` を除いて、変える項目だけを書き換えて送る。`rule not found` で止まったら `RID` が違うので、上の GET で読み直す。PATCH の後に上の GET で、同じ `id` のルールの式と回数が変わったことを確かめる。
+PATCH では、変えない項目も含めてルールのすべての項目を送る(Cloudflare の文書の指定)。上のブロックは今のルールを読み、`description`・`expression`・`action`・`ratelimit`・`enabled` の 5 つを、変える項目だけ書き換えて送る(2.7 と 7.2 で作るルールの項目はこの 5 つだけ)。`rule not found` で止まったら `RID` が違うので、上の GET で読み直す。PATCH の後に上の GET で、同じ `id` のルールの式と回数が変わったことを確かめる。
 
-導入の後に書き換えるときは、0.5 の 2 の `CF_TOKEN` が期限切れになっている。そのゾーンに限ったトークンを人に作ってもらい(作り方は 0.5 の 2 と同じで、権限の行は App Security(アプリのセキュリティ)の Zone WAF(ゾーン WAF)の Edit(編集)と、DNS & Zones(DNS とゾーン)の Zone(ゾーン)の Read(読み取り)、期限は翌日)、`deploy-secrets.env` の `CF_TOKEN=` に書いてから、上の 2.6 の `HOST=… ZONE=… H=… ZID=…` を定義し直して流す。
+導入の後に書き換えるときは、0.5 の 2 の `CF_TOKEN` が期限切れになっている。そのゾーンに限ったトークンを人に作ってもらい(作り方は 0.5 の 2 と同じで、チェックを入れるのは App Security(アプリのセキュリティ)の Zone WAF(ゾーン WAF)の Edit(編集)と、DNS & Zones(DNS とゾーン)の Zone(ゾーン)の Read(読み取り)、期限は翌日)、`deploy-secrets.env` の `CF_TOKEN=` に書いてから、上の 2.6 の `HOST=… ZONE=… H=… ZID=…` を定義し直して流す。
 
 ```bash
 RL=$(cat <<JSON
@@ -1526,7 +1526,7 @@ edge の設定で `CF_TOKEN` を使うのは 2.7 まで(control か管理画面�
 
 IP with NAT support は Cloudflare の画面の名前で、日本語の表示は未確認。
 
-**IPv6 の数え方**: Free のゾーンで、同じ回線の同じ /64 の 2 つの IPv6 アドレスから送って確かめたところ、レート制限ルールの IP の単位(`ip.src`)は IPv6 をアドレスごとに数えた(/64 にまとめなかった)。一方のアドレスが遮断されている間も、もう一方のアドレスの要求は通った。そのため、IPv6 で接続する環境では、同じ LAN の機械も別々に数えられ、上の NAT の合算は起きにくい。逆に、1 つの回線の /64 の中でアドレスを変えながら送ると、アドレスごとの回数に分かれる。確かめたのは 1 つの回線・1 日だけ。
+**IPv6 の数え方**: Free のゾーンで、同じ回線の同じ /64 の 2 つの IPv6 アドレスから送って確かめたところ、レート制限ルールの IP の単位(`ip.src`)は IPv6 をアドレスごとに数えた(/64 にまとめなかった)。一方のアドレスが遮断されている間も、もう一方のアドレスの要求は通った。確かめたのは 1 つの回線・1 日だけ。
 
 人数の目安の前提: `needsProfile` のサイトでは 1 PV で decision 1 回と event 約 1 回を送り、閲覧中の人は 30 秒に 1 PV 程度とした(1 人あたり 10 秒に約 0.7 回)。これは結果を記録しないサイトの値。同じページでページビューの目標が 2 つ一致すると、閲覧中も 1 PV で 3 回(decision 1 回と目標ごとの event)になり、既定の 200 回 / 10 秒で通る人数の目安は約 200 人になる。結果を記録するサイトでは、テストの参加(参加したテストごとに 1 回)と目標の達成の送信が足される。送信済みの印をブラウザに保存できれば同じ訪問者 × テスト(目標)には 1 回だけで、続けて閲覧している間は増えないが、保存できない環境(`localStorage` が使えないなど)ではページごとに送り直す。1 テスト・1 目標のページを初めて開くと 1 PV で 4 回程度になり、テストや目標が多いページではさらに増える。多くの人が同時に初めて開く場面(朝礼で同じページを案内するなど)では目安より少ない人数で当たるので、表の人数をそのまま当てはめない。
 
@@ -1724,7 +1724,7 @@ AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/
 curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hostname=$HOST" -H "Authorization: Bearer $T" | jq '{ok: .success, n: (.result | length)}'   # 期待: {"ok": true, "n": 0}
 ```
 
-続けて、ゾーンに同じ名前の DNS レコードが無いことを確かめる(種類を問わない)。`CF_TOKEN`(0.5 の 2。Zone → DNS → Read を含む)がある構成では API で見る:
+続けて、ゾーンに同じ名前の DNS レコードが無いことを確かめる(種類を問わない)。`CF_TOKEN`(0.5 の 2。DNS & Zones(DNS とゾーン)の DNS の Read(読み取り)を含む)がある構成では API で見る:
 
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
@@ -1936,7 +1936,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 
 期待と違うとき:
 
-- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に Zone → DNS → Read が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 の 2)
+- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に DNS & Zones(DNS とゾーン)の DNS の Read(読み取り)が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 の 2)
 - `n` が 1 以上 → そのホストは使われている。別のホストにする(`admin_host` を変える)か、使っていないことを人に確かめてから人に消してもらう。消した後に、このブロックをやり直す
 
 **(1) `apps/admin/wrangler.jsonc` を編集する。** `workers_dev` と `dev` は**既存の行を置き換え**、`preview_urls` は既存の `false` を残し、`routes` は**足す**(同じキーを二重に書くと後ろの行が勝ち、`host: localhost` が失われる)。
@@ -1974,7 +1974,7 @@ pnpm -C apps/admin deploy:cf  # wrangler deploy --config <ビルドが出した�
 
 deploy の出力に `https://<管理画面の Worker 名>.<アカウントのサブドメイン>.workers.dev` が出る。`custom` のときは `https://<admin_host>` を使う。出力の bindings の一覧に `env.CONTROL (<control の Worker 名>#ControlBff)` が出ていれば、control への service binding が設定されている。
 
-期待と違うとき: deploy が `Service binding 'CONTROL' references Worker '<control の Worker 名>' which was not found.` と `[code: 10143]` で終了コード 1 になる → binding の宛先の control がこのアカウントに無い。新しい版は作られず、前の版がそのまま動く。control が未デプロイなら 3.5 でデプロイしてからやり直す。デプロイ済みなら、`apps/admin/wrangler.jsonc` の `services` の `service` と、`apps/control/wrangler.jsonc` の `name` が同じかを確かめる
+期待と違うとき: deploy が `Service binding 'CONTROL' references Worker '<control の Worker 名>' which was not found.` と `[code: 10143]` で終了コード 1 になる → binding の宛先の control がこのアカウントに無い。このとき管理画面の新しい版は作られない。control が未デプロイなら 3.5 でデプロイしてからやり直す。デプロイ済みなら、`apps/admin/wrangler.jsonc` の `services` の `service` と、`apps/control/wrangler.jsonc` の `name` が同じかを確かめる
 
 ### 4.4 確認
 
@@ -2679,7 +2679,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 
 期待と違うとき:
 
-- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に Zone → DNS → Read が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 の 2)
+- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に DNS & Zones(DNS とゾーン)の DNS の Read(読み取り)が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 の 2)
 - `n` が 1 以上 → そのホストは使われている。別のホストにする(`control_host` を変える)か、使っていないことを人に確かめてから消してもらう。消した後に、このブロックをやり直す
 
 確かめたら、`apps/control/wrangler.jsonc` に `workers_dev: false` と `routes` を**足し**、`preview_urls` は既存の `false` を残し、既存の `dev` の行を下の `dev` で**置き換えて**(同じキーを二重に書くと後ろの行が勝つ)再デプロイする。DNS レコードと証明書は wrangler が自動で作る。
@@ -2774,12 +2774,12 @@ Free のアカウントで、この節の形(control に Access を掛け、エ�
 **作り方**(**【人に依頼】**。画面の日本語の表示は確かめたもの。英語の表示は、確かめていないものに「英語の表示は未確認」と書いた):
 
 1. **ログインの方法に One-time PIN を足す**。Zero Trust を有効にしただけでは、Access のログインの方法は `Cloudflare`(Cloudflare のアカウントのメンバーのログイン)だけで、アカウントのメンバーでないメールアドレスは通れない。このとき Access のログインの画面は「Cloudflare sign-in is restricted to members of the account.」と出て、コードを送る方法が無い。Zero Trust →「インテグレーション」→「ID プロバイダー」→「ID プロバイダーを追加する」→「ログイン方法を追加する」→ `One-time PIN`(英語の表示は未確認)
-2. **サービストークンを作る**(エージェント・非常口の curl 用)。Zero Trust → Access controls → Service credentials → Service Tokens → Create Service Token(日本語の表示は未確認)。作成の直後の画面で Client ID と Client Secret を控える。控えずに閉じたら、そのトークンを消して作り直す
-3. **ポリシーを 2 つ作る**。Zero Trust → Access controls(Access コントロール)→ Policies(ポリシー)→「ポリシーを追加する」(英語の表示は未確認)
+2. **サービストークンを作る**(エージェント・非常口の curl 用)。Cloudflare の文書では Zero Trust → Access controls → Service credentials → Service Tokens → Create Service Token(画面の英語と日本語の表示は確かめていない)。作成の直後の画面で Client ID と Client Secret を控える。控えずに閉じたら、そのトークンを消して作り直す
+3. **ポリシーを 2 つ作る**。Zero Trust →「Access コントロール」→「ポリシー」→「ポリシーを追加する」(日本語の表示。英語の表示は未確認)
    - 管理画面に入る人: アクション「許可」、含めるのセレクター「メール」に、その人のメールアドレス(`owner_email` と招待する人)
    - エージェント: アクション「サービス認証」、含めるのセレクター `Service Token` に 2 で作ったトークン
-4. **アプリケーションを作る**。Zero Trust → Access controls(Access コントロール)→ Applications(アプリケーション)→「新規アプリケーションを作成」→「セルフホストとプライベート」(英語の表示は未確認)。宛先を `control.<運用者ドメイン>` にし、3 の 2 つのポリシーを付ける。アプリケーションの「認証」→「ID」で、「利用可能なすべての ID プロバイダーを受け入れる」がオンか、`One-time PIN` が選ばれていることを確かめる(英語の表示は未確認)
-5. **(Google ログインの 2 経路を Bypass にするとき)** 同じ宛先のパス `/auth/google/start` と `/auth/callback/google` のアプリケーションを 1 つずつ足し、アクション Bypass のポリシーを付ける。同じホストでは、細かいパスのアプリケーションが優先される
+4. **アプリケーションを作る**。Zero Trust → Access controls(Access コントロール)→ Applications(アプリケーション)→「新規アプリケーションを作成」→「セルフホストとプライベート」→「セルフホストとプライベートで続行」(この 3 つの英語の表示は未確認)。宛先を `control.<運用者ドメイン>` にし、3 の 2 つのポリシーを付ける。アプリケーションの「認証」→「ID」で、「利用可能なすべての ID プロバイダーを受け入れる」がオンか、`One-time PIN` が選ばれていることを確かめる(英語の表示は未確認)
+5. **(Google ログインの 2 経路を Bypass にするとき)** 4 と同じ手順で、宛先のパスを `auth/google/start` と `auth/callback/google` にしたアプリケーションを 1 つずつ足す(パスの欄の前には `/` が出ているので、先頭の `/` は入れない)。ポリシーは、アクション「バイパス」、含めるのセレクター「全員」で作り、2 つのアプリケーションに付ける(2 つ目は「既存のポリシーを追加」から選ぶ。日本語の表示。英語の表示は未確認)。同じホストでは、細かいパスのアプリケーションが優先される
 
 確かめたときは、アプリケーションを作った 2 分半後に適用され、消した 2 分半後には外れていた(それより早く切り替わるかは見ていない)。作った直後の確認でヘッダーの無い curl が Worker の応答を返す(または消した直後にまだ 302 になる)ときは、3 分待ってやり直す。
 
