@@ -2318,7 +2318,9 @@ curl -sS "$AB_CONTROL_URL/me" -H "Authorization: Bearer $AB_API_KEY" | jq '{emai
 
 ### 6.1 現在と目標の確認
 
-**先に導入先のアカウントを固定する**: `pnpm -C apps/control exec wrangler whoami` にアカウントが 2 つ以上出るなら、導入先を人に 1 問で選んでもらい、`export CLOUDFLARE_ACCOUNT_ID=<導入先>` を以後のすべてのシェルで設定する(0.4 と同じ)。更新は別の会話で始まるので、導入時に固定した値は残っていない。wrangler は非対話のとき導入先を選べず、6.3 の export と deploy が止まる。
+導入時のフォルダが無ければ、[導入時のフォルダが無い場合](#導入時のフォルダが無い場合)から始める。
+
+**先に導入先のアカウントを固定する**。`pnpm -C apps/control exec wrangler whoami` で Account ID を確かめる。アカウントが 2 つ以上出るなら、導入先を人に 1 問で選んでもらう。アカウントが 1 つの場合も `export CLOUDFLARE_ACCOUNT_ID=<導入先>` を以後のすべてのシェルで設定する。使う資格とアカウントが合っていることを確かめる。導入時のログイン期限が切れていれば、0.4 の「ログイン」の手順を行う。
 
 ```bash
 git describe --tags --exact-match          # 現在の tag(例 v0.9)。出ない場合は 0.3 のとおり tag を checkout していない
@@ -2337,6 +2339,46 @@ git tag --list 'v*' --sort=-v:refname | head -3   # 目標の tag(例 v1.0)
 - (c) **runtime の変更**
 
 CHANGELOG に次の目印があるリリースは、6.3 の該当する項も読む: 「配る設定の版(`schemaVersion`)が上がる」「計測用のデータベースを足す」「レート制限の既定値が変わる」。パスワードでログインしていた版からの更新も 6.3 に項がある。「レート制限の既定値が変わる」は 6.2 の衝突の項も読む。
+
+### 導入時のフォルダが無い場合
+
+導入当時の PC や `deploy-answers.yaml` が無くても、稼働中の Cloudflare のリソースを使って更新できる。作業の前に、稼働中の管理画面か control の URL、対象 Account ID、そこへの作業者のアクセス権限を確認する。
+
+1. [公開リポジトリ](https://github.com/AnalyticsDesign/ab-test-and-target-harness)を新しいフォルダに clone し、`git fetch --tags origin` でタグを取る。0.4 と目標 tag の要件に従って作業環境を揃え、`pnpm install` で Wrangler を使えるようにする。新しい作業者自身の資格でログインし、6.1 のとおり `CLOUDFLARE_ACCOUNT_ID` を固定する。Cloudflare API の読み取りで不足する権限は、対象アカウントまたはゾーンについて用意する。
+2. **稼働中のタグを確かめる**。表示できる導入では、管理画面の「設定」→「この導入について」の製品版を確認する。API キーが使える場合は 6.4 の `GET /capabilities` の `productVersion` でも確かめられる。公開 v0.9 には `productVersion` が無い。当時の deploy ログ、CI の記録、稼働中の Worker の version 注記に残したタグや公開 commit、または導入・更新を行った人が当時の作業から確認できるタグを手掛かりに、稼働環境と照合する。アカウントや Worker が一致するか、`wrangler deployments list --name <Worker 名>` の配備履歴、D1 の適用履歴なども見る。API の `x-wtt-api-version` と新しい clone の `git describe` は製品版の根拠に使わない。稼働タグを特定できない場合や、管理画面と control の版が食い違う場合はここで止まる。特定できたら 6.1 のとおり目標 tag の文書と CHANGELOG を読み、途中で適用が必要な版を確認する。
+3. **稼働中の設定を読む**。以下の GET と Wrangler の一覧を使う。既知の URL を実際に受ける Worker からたどり、control の URL と service binding の関係で同じ導入の 4 Worker と設置タグの配信先を確認する。公開 v0.9 の admin は `AB_CONTROL_URL` で control と照合する。権限エラーや候補が複数ある場合は、対象を確定できるまで先に進まない。
+
+   ```bash
+   AID="$CLOUDFLARE_ACCOUNT_ID"
+   T=$(pnpm -C apps/control exec wrangler auth token --json | jq -er '.token | strings | select(length > 0)')
+   cf_get() {
+     [ -n "$AID" ] && [ -n "$T" ] || return 1
+     curl -fsS "https://api.cloudflare.com/client/v4$1" -H "Authorization: Bearer $T" |
+       jq -e 'if .success == true then .result else error("Cloudflare API の読み取りに失敗") end'
+   }
+   # AID と T が空でないことを確かめてから実行する。T の値は表示・記録しない。
+   cf_get "/accounts/$AID/workers/scripts" | jq -r '.[].id'
+   # 以下は確認した実際の Worker 名を W に入れ、Worker ごとに実行する。
+   cf_get "/accounts/$AID/workers/scripts/$W/settings"
+   cf_get "/accounts/$AID/workers/scripts/$W/subdomain"
+   cf_get "/accounts/$AID/workers/scripts/$W/schedules"
+   cf_get "/accounts/$AID/workers/scripts/$W/secrets" | jq -r '.[].name'
+   ```
+
+   | 確かめる値 | 読み方 |
+   |---|---|
+   | Worker 名、vars、bindings、Cron | 上の一覧・設定・スケジュールを使う。edge/control の KV と計測 D1 は両側の ID を比べ、control の主 D1 は `DB` binding の ID で特定する。deployer の Account ID、`STATIC_SCRIPT_NAME`、control の `DEPLOYER` の宛先も確かめる |
+   | Route と公開先 | `cf_get "/zones/$ZID/workers/routes"` を対象ゾーンごとに行い、全ページで Worker に割り当てられた Route を見る。追加ホストの `/v1/*` と `/__ab/*` も含める。`cf_get "/accounts/$AID/workers/domains"` の Custom Domain、script の `subdomain` の有効状態、アカウントの `cf_get "/accounts/$AID/workers/subdomain"` を照合。配信専用 Worker の `/s/*` または workers.dev の URL も控える |
+   | KV、D1、R2 | 対象アカウントで Wrangler の `kv namespace list`、`d1 list --json`、必要なら `r2 bucket list` を実行して、上の bindings と名前・ID を照合する。R2 の独自ドメインは `cf_get "/accounts/$AID/r2/buckets/$BUCKET/domains/custom"` で確認。R2 が無い導入では `ASSETS` の R2 binding を持たせず、画像の公開ベースも省く |
+   | Rate Limiting と WAF | edge の設定の `DECISION_RATE_LIMITER` で稼働中の上限を確認する。ゾーンの WAF が上限の決定に関わる場合は 2.7 の GET で `/v1/sites/` を含む該当ルールのホスト、式、上限、有効状態を確認する。別用途のルールは数えない。必要な読み取り権限が無ければ人に確認する |
+   | secrets | 一覧で既存 Worker の secret 名を確かめる。通常の更新では同じアカウントの同名 Worker に deploy することで値を引き継ぐ。導入時の秘密のファイルは要らない。必要な secret が欠けている、または元担当者の資格に紐づくトークンが失効済みの場合は 2.9・3.3 に従って手当てを確認する |
+
+   最新の upload と稼働版が異なる場合や、複数版にトラフィックを分けている場合は、`wrangler deployments list --name <Worker 名>` と `wrangler versions view <version ID> --name <Worker 名>` で稼働版の設定を照合する。引き継ぐ値を確定できない場合は止まる。[Workers API](https://developers.cloudflare.com/api/resources/workers/) · [Wrangler の Workers コマンド](https://developers.cloudflare.com/workers/wrangler/commands/workers/)
+
+4. **目標 tag の雛形に稼働環境の値を入れる**。6.2 の stash ブロックは使わず、目標 tag を checkout して `pnpm install` を実行する。現在 tag の雛形は `git show <稼働 tag>:apps/<app>/wrangler.jsonc` で参照できる。確認した Worker 名、Route、vars、既存 bindings の ID と宛先、独自の設定を目標 tag の 4 ファイルに反映する。互換フラグ・移行の定義・新しい binding は目標 tag の文書と雛形に従う。たとえば旧 admin に service binding が無ければ、目標 tag の `CONTROL` の宛先だけを既存の control に合わせ、`ControlBff` の entrypoint を使う。計測 D1 を初めて足す更新では 6.3 の該当手順を使う。配信専用 Worker は既存のまま使う。
+5. **復元した値を確かめる**。4 Worker の名前、公開 URL と全 Route、共有 KV、D1・R2、サービス間の接続、Cron、secret 名を稼働環境と照合する。管理画面は 4.3 のビルド後の設定も確認する。元に戻す際に必要な設定と現在 tag は、更新前に私用の保管先に控える。6.2 の「更新前の設定確認」と Worker 名の確認から共通の手順に戻る。
+
+主 D1 を 10.3 の手順で読み戻したことがあるときは、稼働中の `DB` binding の ID と `d1 list --json` で、実際のデータベース名を確認する。6 節で `wtt-control` を指定する export・凍結・解除・SQL はその名前を使う。`pnpm -C apps/control d1:migrate:remote` の代わりに `pnpm -C apps/control exec wrangler d1 migrations apply <実際の DB 名> --remote` を使う。この読み替えは既存の clone での更新にも適用する。
 
 ### 6.2 取得
 
@@ -2362,7 +2404,7 @@ pnpm install
 
 期待と違うとき:
 
-- 差分なし(初回導入で `wrangler.jsonc` を編集していない = 通常あり得ない)→ stash を作らずに進む
+- 差分なし → どの設定が稼働先を指しているか確かめる。公開版の雛形だけがある場合は[導入時のフォルダが無い場合](#導入時のフォルダが無い場合)の手順で実際の値を入れる
 - apply で衝突 → 両方の変更を見て id・routes・vars・`ratelimits` の `limit` を残し、`git stash drop "$S"` を手で行う。解消後は `grep -n '<<<<<<<' apps/*/wrangler.jsonc` が空であることを確認し、`git restore --staged apps/edge/wrangler.jsonc apps/control/wrangler.jsonc apps/admin/wrangler.jsonc apps/deployer/wrangler.jsonc`(存在するものだけを並べる)で index を戻す(`git status --short` が ` M` の行だけになる)。計測用のデータベースを足すリリースでは `apps/control/wrangler.jsonc` の `d1_databases` で衝突することがある(解き方は 6.3 の該当の節の手順 3)
   - `name`・`services` の行の近くで衝突したら、名前と宛先は手元の値を残す。`preview_urls` は新しい版の `false` を使う
   - レート制限の既定値が変わる版(CHANGELOG の目印)への更新では、`apps/edge/wrangler.jsonc` の KV の id の行から `ratelimits` の行までの 3 行が 1 回衝突する。KV の id は手元の値にし、その下のコメントと `ratelimits` の行は新しい版の形にして、`limit` は 2.3 の規則で書く。Route などほかの行は自動で戻る
@@ -2370,10 +2412,18 @@ pnpm install
 - `git stash list` に `wtt-deploy-config` が残っている → 前回の更新の取りこぼし。中身を確認して drop
 - `git checkout` が `Your local changes to the following files would be overwritten` で失敗 → 表示されたファイルの差分を確認し、生成物なら `git checkout -- <file>` で捨て、設定ファイルなら stash の対象に加えてから 6.2 をやり直す(失敗したまま先に進まない。`git describe --tags --exact-match` が目標 tag でなければここに戻る)
 
-名前を保ったまま更新できることを、deploy の前に確かめる。上の stash の適用が済み、衝突を解いた後(`grep -n '<<<<<<<' apps/*/wrangler.jsonc` が空)に流す。正しい名前は手元の管理画面と control の `name` の行で、上の退避・適用によって次の版へ引き継ぐ。既定の名前の導入も、乱数の付いた名前の導入も同じブロックで確認する。
+**更新前の設定確認**。stash の適用・衝突の解消または新しい clone での設定の復元が済んだら、リポジトリ直下で流す。
 
 ```bash
-AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+node tools/check-update-config.mjs
+```
+
+`更新前の設定確認: OK` が出た場合だけ先へ進む。エラーに出たファイル・項目は、稼働中の設定と突き合わせて直す。使用状況を設定していない導入は、control 側の `vars.CF_ACCOUNT_ID` を省ける。**計測用の D1 を初めて足す場合のみ**、6.3 の作成前の確認には `node tools/check-update-config.mjs --new-results-db` を使う。この場合、計測用 D1 の両方の ID だけが雛形のままであることを確認し、作成・記入後は引数なしの検査を通してからマイグレーションする。
+
+名前を保ったまま更新できることを、deploy の前に確かめる。上の設定確認に通ってから流す。既定の名前の導入も、乱数の付いた名前の導入も同じブロックで確認する。
+
+```bash
+AID="$CLOUDFLARE_ACCOUNT_ID"
 T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
 wname() { sed -nE 's/^  "name": "([a-z0-9-]+)",[[:space:]]*$/\1/p' "apps/$1/wrangler.jsonc"; }
 role() { [ -n "$2" ] && [ "$2" = "$(printf '%s\n' "$2" | head -1)" ] && case "$2" in "$1" | "$1"-*) true ;; *) false ;; esac; }
@@ -2417,7 +2467,7 @@ printf '%s\naccount=%s\n' "$R" "$AID"   # 期待: <管理画面の Worker 名> f
 1. 6.6 の凍結を入れ、1 分待って有効になったことを確かめる(この節の先頭)
 2. 下の手順 0 のブロックで控えを取る。控えが取れなかったら、ここで止まる(2 つ目のブロックは控えのファイルが無いと動かない)
 3. `wrangler d1 create wtt-results` で作り、`database_id` を **`apps/edge/wrangler.jsonc` と `apps/control/wrangler.jsonc` の `RESULTS_DB` の行の両方**に書く(6.2 で戻した設定ファイルには、新しい版の仮の ID が入っている。control の行は新しい版で足した行で、退避した設定には無い)。新しい版で `apps/control/wrangler.jsonc` の `d1_databases` を 1 行から複数行に変えたので、更新前に `wtt-control` の `database_id` を書いた行と重なり、6.2 の stash の apply がこの部分で衝突することがある。衝突したら、`wtt-control` の行には退避した `database_id` を、`RESULTS_DB` の行にはここで作った `database_id` を書いて解消する(6.2 の「apply で衝突」)
-4. `pnpm -C apps/edge results:migrate:remote` で表を作る
+4. リポジトリ直下で `node tools/check-update-config.mjs && pnpm -C apps/edge results:migrate:remote` を実行し、設定の確認に成功した場合だけ表を作る
 5. `RESULTS_VISITOR_KEY` を登録する
 6. 2.2 の確認のブロックを流す
 7. 同じシェルで、下の 2 つ目のブロック(`pnpm runtime:build` から)を流す(`pnpm -C apps/edge results:migrate:remote`(4 で済んでいるので "No migrations to apply")→ edge → deployer → `pnpm -C apps/control d1:migrate:remote`(`wtt-control` に結果の記録・評価計画・採用の表を足す)→ control → admin)
@@ -2448,6 +2498,7 @@ fi
 ```bash
 # 1〜3。0 の控えのファイルが空でないときだけ動き、途中の手順が失敗したらそこで止まる
 if test -s "${BACKUP:-}"; then
+node tools/check-update-config.mjs &&                    # 雛形の仮値や対象アカウントの不一致があればここで止まる
 pnpm runtime:build &&                                   # (c) が無くても実行してよい(冪等)
 pnpm -C apps/edge results:migrate:remote &&             # 0.5 計測用のデータベースの (a) があれば。無ければ "No migrations to apply"(冪等)
 pnpm -C apps/edge exec wrangler deploy &&               # 1. edge
@@ -2595,8 +2646,10 @@ runtime を作り直したら control と deployer も必ず再デプロイす�
 手順 0 の控えと手順 1〜3 がすべて成功した場合だけ、次の管理画面の更新を実行してください。途中で失敗した場合は、管理画面の更新に進まず、失敗した手順の原因を解消してください。
 
 ```bash
-pnpm -C apps/admin build && pnpm -C apps/admin deploy:cf   # 4. admin
+pnpm -C apps/admin build
 ```
+
+4.3 の生成設定が期待どおりなら、`pnpm -C apps/admin deploy:cf` を実行する(手順 4)。
 
 ### 6.4 確認
 
@@ -2638,6 +2691,8 @@ curl -sS -X POST "<control URL>/workspaces" | jq -r '.error'   # 期待: "unauth
 ### 6.5 戻すとき
 
 目標 tag で問題が出たら、6.2 と同じ手順で現在 tag に戻して 6.3 を **同じ順序**で再実行する。戻す作業の間も 6.6 の凍結を入れておく(外すのは戻した版の確認が済んでから)。
+
+戻し先の tag に `tools/check-update-config.mjs` が無い場合は、戻し先で使う Worker 名・アカウント、D1・KV の ID、URL と Route を、更新前の控えに照らして手で確認する。すべて一致すれば、6.3 の検査コマンドを省き、戻し先の版で使えるコマンドとこの節の条件に従ってデプロイする。
 
 ただし (a) のマイグレーションは戻せない(D1 のスキーマは進んだまま)。戻す前に `CHANGELOG.md` でそのマイグレーションが後方互換かを確認し、後方互換でない、またはデータが壊れたときは、D1 を更新前の時点に戻す(10.2 の Time Travel。手順 0 の export からの読み戻しは 10.3)。
 

@@ -160,9 +160,11 @@ AB Test and Target Harness を私の Cloudflare アカウントに導入して�
 
 #### 更新する
 
+導入時のフォルダが見つからない場合も、稼働中の Cloudflare の設定を確認して、新しい clone から更新できます。手順は[導入時のフォルダが無い場合](docs/deploy.md#導入時のフォルダが無い場合)を参照してください。
+
 ```text
-AB Test and Target Harness を更新してください。作業ディレクトリは <clone した場所> です。
-1. git fetch --tags で最新のリリースタグを取り、現在のタグ(git describe --tags --exact-match)と目標のタグを私に示す
+AB Test and Target Harness を更新してください。導入時の clone は <clone した場所。無ければ「なし」> です。稼働中の管理画面または control の URL は <分かる方の URL> です。
+1. 既存の clone があれば git fetch --tags でリリースタグを取る。無ければ公開リポジトリを新規 clone し、目標タグの docs/deploy.md 6 節の「導入時のフォルダが無い場合」に従う。稼働中のタグと目標のタグを根拠とともに私に示す。稼働中のタグが特定できなければ更新を止める
 2. 目標タグの docs/deploy.md の 6 節(git show <目標タグ>:docs/deploy.md)を読む。更新手順は常に目標タグのものに従う
 3. CHANGELOG.md(目標タグのもの)でその間の変更(マイグレーション・サイト設定のフィールド追加・runtime の変更)を要約して私に示し、進めてよいか確認する
 4. 6 節の順序どおりに更新し、各「確認」を実行する。【人が行う】と【人に依頼】の箇所では止まって私に指示する
