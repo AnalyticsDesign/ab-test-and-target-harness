@@ -26,19 +26,19 @@ export function siteNav(caps: { imageUpload: boolean; imageUploader?: boolean })
   return SITE_NAV.filter((n) => n.segment !== "images" || caps.imageUpload || caps.imageUploader === true);
 }
 
-/** 設定のメニューの「個人」「システム」の節の項目(決定 54 (7))。system はシステム管理者だけに出す。読むのは settingsGroups だけ */
-const SETTINGS_NAV: Array<{ href: string; label: string; icon: IconName; section: "personal" | "system"; prefetch?: false }> = [
+/** 設定のメニューの「個人」「システム」の節の項目(決定 54 (7))。見せる人は項目ごとに決める。読むのは settingsGroups だけ */
+const SETTINGS_NAV: Array<{ href: string; label: string; icon: IconName; section: "personal" | "system"; instanceAdminOnly?: true; prefetch?: false }> = [
   { href: "/w/me/api-keys", label: "API キー", icon: "key", section: "personal" },
   { href: "/w/me/display", label: "画面表示", icon: "eye", section: "personal" },
-  { href: "/w/me/about", label: "この導入について", icon: "info", section: "personal" },
-  { href: "/w/me/instance-admins", label: "システム管理者", icon: "shield", section: "system" },
-  { href: "/w/me/workspaces", label: "ワークスペース", icon: "stack", section: "system" },
+  { href: "/w/me/about", label: "この導入について", icon: "info", section: "system" },
+  { href: "/w/me/instance-admins", label: "システム管理者", icon: "shield", section: "system", instanceAdminOnly: true },
+  { href: "/w/me/workspaces", label: "ワークスペース", icon: "stack", section: "system", instanceAdminOnly: true },
   // prefetch を止める: この画面は control の GET /usage(= Cloudflare の使用量の取得)を呼ぶ。先読みすると、測っている使用量そのものを増やしてしまう
-  { href: "/w/me/usage", label: "Cloudflare 使用状況", icon: "gauge", section: "system", prefetch: false },
+  { href: "/w/me/usage", label: "Cloudflare 使用状況", icon: "gauge", section: "system", instanceAdminOnly: true, prefetch: false },
   // 7o K14: prefetch を止める: この画面は control の GET /static/status(= デプロイ専用の Worker への問い合わせ)を呼ぶ
-  { href: "/w/me/static-delivery", label: "配信ファイル", icon: "upload", section: "system", prefetch: false },
+  { href: "/w/me/static-delivery", label: "配信ファイル", icon: "upload", section: "system", instanceAdminOnly: true, prefetch: false },
   // B129(spec §7.2): 導入全体の操作の記録。読むのは control の D1 だけ(外部の使用量を増やさない)なので先読みは止めない
-  { href: "/w/me/audit-events", label: "操作の記録", icon: "history", section: "system" },
+  { href: "/w/me/audit-events", label: "操作の記録", icon: "history", section: "system", instanceAdminOnly: true },
 ];
 
 const SITE_RE = /^\/w\/[^/]+\/sites\/[^/]+(?:\/([^/]+))?/;
@@ -234,7 +234,8 @@ type GroupCtx = { workspaces: WorkspaceSummary[]; instanceAdmin: boolean };
  * 設定のメニューの節。開いた階層の節が先頭で、上の階層が続く(site → workspace → personal → system)。
  * - workspace: 管理者以上だけ(メンバー・メンバーの API キー・操作の記録は管理者以上の機能)。満たさなければ節ごと出さない
  * - site の「危険な操作」: そのワークスペースのオーナーだけ
- * - system: システム管理者だけ
+ * - system: 「この導入について」は全員、管理の項目はシステム管理者だけ
+ * - 見える項目の無い節は出さない
  * - summary に無いサイト・ワークスペース(権限が無い・消えた)の節は出さない
  */
 export function settingsGroups(origin: SettingsOrigin, ctx: GroupCtx): SettingsGroup[] {
@@ -275,7 +276,7 @@ export function settingsGroups(origin: SettingsOrigin, ctx: GroupCtx): SettingsG
   }
 
   const fromNav = (section: "personal" | "system"): SettingsItem[] =>
-    SETTINGS_NAV.filter((n) => n.section === section).map((n) => ({
+    SETTINGS_NAV.filter((n) => n.section === section && (!n.instanceAdminOnly || ctx.instanceAdmin)).map((n) => ({
       key: n.href,
       href: n.href,
       label: n.label,
@@ -283,9 +284,9 @@ export function settingsGroups(origin: SettingsOrigin, ctx: GroupCtx): SettingsG
       ...(n.prefetch === false ? { prefetch: false as const } : {}),
     }));
   groups.push({ scope: "personal", heading: "個人", name: null, items: fromNav("personal") });
-  if (ctx.instanceAdmin) groups.push({ scope: "system", heading: "システム", name: null, items: fromNav("system") });
+  groups.push({ scope: "system", heading: "システム", name: null, items: fromNav("system") });
 
-  return groups;
+  return groups.filter((g) => g.items.length > 0);
 }
 
 /** 左メニューの「設定」から入るときの行き先 = 最初の空でない節の最初の項目(個人は必ずあるので常に決まる) */

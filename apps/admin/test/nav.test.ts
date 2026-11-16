@@ -180,9 +180,9 @@ describe("nav", () => {
 
   it("settings_groups_order_by_origin", () => {
     const ctx = { workspaces: wsOf("admin"), instanceAdmin: false };
-    expect(scopes(settingsGroups({ kind: "site", wid: "ws1", sid: "s1" }, ctx))).toEqual(["site", "workspace", "personal"]);
-    expect(scopes(settingsGroups({ kind: "workspace", wid: "ws1" }, ctx))).toEqual(["workspace", "personal"]);
-    expect(scopes(settingsGroups({ kind: "home" }, ctx))).toEqual(["personal"]);
+    expect(scopes(settingsGroups({ kind: "site", wid: "ws1", sid: "s1" }, ctx))).toEqual(["site", "workspace", "personal", "system"]);
+    expect(scopes(settingsGroups({ kind: "workspace", wid: "ws1" }, ctx))).toEqual(["workspace", "personal", "system"]);
+    expect(scopes(settingsGroups({ kind: "home" }, ctx))).toEqual(["personal", "system"]);
     const sys = { workspaces: wsOf("admin"), instanceAdmin: true };
     expect(scopes(settingsGroups({ kind: "site", wid: "ws1", sid: "s1" }, sys))).toEqual(["site", "workspace", "personal", "system"]);
     expect(scopes(settingsGroups({ kind: "home" }, sys))).toEqual(["personal", "system"]);
@@ -190,8 +190,8 @@ describe("nav", () => {
 
   it("settings_groups_hide_workspace_below_admin", () => {
     const ctx = { workspaces: wsOf("editor"), instanceAdmin: false };
-    expect(scopes(settingsGroups({ kind: "site", wid: "ws1", sid: "s1" }, ctx))).toEqual(["site", "personal"]);
-    expect(scopes(settingsGroups({ kind: "workspace", wid: "ws1" }, ctx))).toEqual(["personal"]);
+    expect(scopes(settingsGroups({ kind: "site", wid: "ws1", sid: "s1" }, ctx))).toEqual(["site", "personal", "system"]);
+    expect(scopes(settingsGroups({ kind: "workspace", wid: "ws1" }, ctx))).toEqual(["personal", "system"]);
   });
 
   it("settings_groups_site_items", () => {
@@ -209,18 +209,41 @@ describe("nav", () => {
     expect(admin.items).toHaveLength(6);
     expect(admin.items.map((i) => i.label)).not.toContain("危険な操作");
     // summary に無いサイト・ワークスペースは節を出さない
-    expect(scopes(settingsGroups({ kind: "site", wid: "ws1", sid: "nope" }, { workspaces: wsOf("admin"), instanceAdmin: false }))).toEqual(["workspace", "personal"]);
-    expect(scopes(settingsGroups({ kind: "workspace", wid: "nope" }, { workspaces: wsOf("admin"), instanceAdmin: false }))).toEqual(["personal"]);
+    expect(scopes(settingsGroups({ kind: "site", wid: "ws1", sid: "nope" }, { workspaces: wsOf("admin"), instanceAdmin: false }))).toEqual(["workspace", "personal", "system"]);
+    expect(scopes(settingsGroups({ kind: "workspace", wid: "nope" }, { workspaces: wsOf("admin"), instanceAdmin: false }))).toEqual(["personal", "system"]);
   });
 
   it("settings_groups_workspace_and_personal_items", () => {
     const gs = settingsGroups({ kind: "workspace", wid: "ws1" }, { workspaces: wsOf("admin"), instanceAdmin: true });
     expect(gs.map((g) => [g.heading, g.name])).toEqual([["ワークスペース", "ワークスペース1"], ["個人", null], ["システム", null]]);
     expect(gs[0]!.items.map((i) => i.href)).toEqual(["/w/ws1/members", "/w/ws1/api-keys", "/w/ws1/audit-events"]);
-    expect(gs[1]!.items.map((i) => i.href)).toEqual(["/w/me/api-keys", "/w/me/display", "/w/me/about"]);
+    expect(gs[1]!.items.map((i) => i.href)).toEqual(["/w/me/api-keys", "/w/me/display"]);
     const nonAdmin = settingsGroups({ kind: "workspace", wid: "ws1" }, { workspaces: wsOf("viewer"), instanceAdmin: false });
-    expect(nonAdmin.find((g) => g.scope === "personal")!.items.map((i) => i.href)).toEqual(["/w/me/api-keys", "/w/me/display", "/w/me/about"]);
-    expect(gs[2]!.items.map((i) => i.href)).toEqual(["/w/me/instance-admins", "/w/me/workspaces", "/w/me/usage", "/w/me/static-delivery", "/w/me/audit-events"]);
+    expect(nonAdmin.find((g) => g.scope === "personal")!.items.map((i) => i.href)).toEqual(["/w/me/api-keys", "/w/me/display"]);
+    expect(gs[2]!.items.map((i) => i.href)).toEqual(["/w/me/about", "/w/me/instance-admins", "/w/me/workspaces", "/w/me/usage", "/w/me/static-delivery", "/w/me/audit-events"]);
+  });
+
+  it.each(["owner", "admin", "editor", "viewer"] as const)("shows only installation information in the system group for non-system %s", (role) => {
+    const gs = settingsGroups({ kind: "workspace", wid: "ws1" }, { workspaces: wsOf(role), instanceAdmin: false });
+    expect(gs.find((g) => g.scope === "system")).toEqual({
+      scope: "system", heading: "システム", name: null,
+      items: [{ key: "/w/me/about", href: "/w/me/about", label: "この導入について", icon: "info" }],
+    });
+    expect(gs.find((g) => g.scope === "personal")!.items.map((i) => i.href)).toEqual(["/w/me/api-keys", "/w/me/display"]);
+    expect(gs.every((g) => g.items.length > 0)).toBe(true);
+  });
+
+  it("shows system administration items even without workspace summaries", () => {
+    const gs = settingsGroups({ kind: "home" }, { workspaces: [], instanceAdmin: true });
+    expect(gs.find((g) => g.scope === "system")!.items.map((i) => [i.label, i.href])).toEqual([
+      ["この導入について", "/w/me/about"],
+      ["システム管理者", "/w/me/instance-admins"],
+      ["ワークスペース", "/w/me/workspaces"],
+      ["Cloudflare 使用状況", "/w/me/usage"],
+      ["配信ファイル", "/w/me/static-delivery"],
+      ["操作の記録", "/w/me/audit-events"],
+    ]);
+    expect(gs.every((g) => g.items.length > 0)).toBe(true);
   });
 
   it("settings_entry_href_per_origin", () => {

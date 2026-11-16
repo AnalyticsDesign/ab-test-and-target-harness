@@ -155,14 +155,16 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await expect(editorMenu.getByRole("link", { name: "設定" })).toHaveCount(0);
   await editorMenu.locator("summary").click(); // 閉じる(開いたままだと下の操作に重なる)
   // 決定 54 (7)・B60: 編集者はこの時点でサイトの中にいるので、「設定」はサイト設定の一般を開く。
-  // 設定のメニューは「サイト設定」と「個人」の節。管理者未満には「ワークスペース」の節を見出しごと出さず(B60 Q2)、
-  // システム管理者でない人には「システム」の節が出ない。API でもワークスペースを作れない
+  // 設定のメニューは「サイト設定」「個人」「システム」の節。管理者未満には「ワークスペース」の節を見出しごと出さず(B60 Q2)、
+  // システム管理者でない人にも「この導入について」が出るが、管理の項目は出ない。API でもワークスペースを作れない
   await openSettings(editor);
   await expect(editor).toHaveURL(new RegExp(`/sites/${SITE.id}/settings$`));
   const editorNav = editor.getByRole("navigation", { name: "メインメニュー" });
   // 見出しは役割を持たない文字なので getByText で見る(パンくずにも「サイト設定」が出るので、メニューの中に絞る)
   await expect(editorNav.getByText("サイト設定", { exact: true })).toBeVisible();
   await expect(editorNav.getByText("個人", { exact: true })).toBeVisible();
+  await expect(editorNav.getByText("システム", { exact: true })).toBeVisible();
+  await expect(editorNav.getByRole("link", { name: "この導入について", exact: true })).toBeVisible();
   await expect(editorNav.getByText("ワークスペース", { exact: true })).toHaveCount(0);
   await expect(editorNav.getByRole("link", { name: "API キー", exact: true })).toBeVisible();
   await expect(editorNav.getByRole("link", { name: "画面表示" })).toBeVisible();

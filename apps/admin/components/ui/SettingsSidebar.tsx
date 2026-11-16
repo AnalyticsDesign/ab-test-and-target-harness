@@ -18,7 +18,7 @@ import styles from "./Sidebar.module.css";
  *
  * 上から: 戻るの行(設定を開く前の画面へ。右に戻り先の名前)/ 切り替えの枠(ホームから開いたときは出さない)/ 見出し「設定」/ 節。
  * 節の形は「設定を開いた場所」(provider の記憶。今の画面と合わなければ URL から決まる縮んだ形)で決まる。
- * instanceAdmin はシステムの節を出すかに使う(Sidebar が受け取ったセッションの値)
+ * instanceAdmin はシステムの節の管理の項目を出すかに使う(Sidebar が受け取ったセッションの値)
  */
 export function SettingsSidebar({ page, instanceAdmin }: { page: SettingsPage; instanceAdmin: boolean }) {
   const pathname = usePathname();
