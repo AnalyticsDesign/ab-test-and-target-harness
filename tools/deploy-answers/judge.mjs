@@ -128,11 +128,17 @@ export function summaryOf(c, host) {
   return parts.join(" × ");
 }
 
-/** 管理画面と control の置き場所(構成の要約には入らないので別の 1 行で出す。既定はどの構成でも *.workers.dev)。ゾーンのある構成(route・custom-domain)は同じ文 */
-export const placementOf = (c) =>
-  c.edge_address !== "workers-dev"
+/** 管理画面と control の置き場所。手で指定したホストがあれば、既定の置き場所と区別する */
+export function placementOf(c, values = {}) {
+  if (values.admin_address === "custom" || values.control_address === "custom") {
+    const admin = values.admin_address === "custom" ? values.admin_host ?? "指定した自分のドメイン" : "*.workers.dev";
+    const control = values.control_address === "custom" ? values.control_host ?? "指定した自分のドメイン" : "*.workers.dev";
+    return `管理画面は ${admin}、control(管理用の Worker)は ${control} に置く(デプロイガイド 3.6・4.2)`;
+  }
+  return c.edge_address !== "workers-dev"
     ? "管理画面と control(管理用の Worker)は *.workers.dev に置く(自分のドメインに載せるのは任意。デプロイガイド 3.6・4.2)"
-    : "管理画面と control(管理用の Worker)も *.workers.dev に置く";
+    : "管理画面と control(管理用の Worker)も *.workers.dev に置く(自分のドメインにもできる。デプロイガイド 4.2)";
+}
 
 /** 推奨構成を選んだ理由(答えごとに 1 行) */
 export function reasonsOf(values, c) {
@@ -246,6 +252,10 @@ export function billingOf(c) {
 export function notesOf(values, c) {
   const f = featuresOf(values);
   const n = [];
+  if (values.control_protection === "waf")
+    n.push("control に WAF を使う。人がデプロイガイド 7.2 の設定を行い、Free で使う前の確認を済ませる");
+  if (values.control_protection === "access")
+    n.push("control に Cloudflare Access を使う。人がデプロイガイド 7.3 のダッシュボードでの設定を行い、Google ログインとサービストークン付きの要求が通ることを確かめる");
   if (values.daily_pv === "unknown" && c.plan === "free")
     n.push(
       c.edge_address !== "workers-dev"

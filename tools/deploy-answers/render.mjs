@@ -85,7 +85,7 @@ export function renderConfigured(values, c) {
   const lines = [
     "## 指定された構成", "",
     `**${summaryOf(c, hostOfConfig(values, c))}**(${label})`, "",
-    placementOf(c), "",
+    placementOf(c, values), "",
     "### この構成でできないこと", "",
     list(cannotOf(values, c)), "",
     "## 人に頼む作業", "",

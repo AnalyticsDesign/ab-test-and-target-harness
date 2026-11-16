@@ -227,6 +227,43 @@ test("提示の推奨構成・最軽量構成の要約の下に、管理画面�
   assert.match(light, /管理画面と control\(管理用の Worker\)も \*\.workers\.dev に置く/);
 });
 
+test("管理画面と control を自分のドメインにも置ける案内は、ドメインなしの推奨でも出す", () => {
+  const r = run(answers());
+  assert.equal(r.code, 0);
+  const rec = r.output.slice(r.output.indexOf("## 推奨構成"), r.output.indexOf("## 最軽量構成"));
+  assert.match(rec, /管理画面と control.*workers\.dev.*自分のドメイン.*4\.2/);
+});
+
+test("手で指定した control と管理画面のホストを要約に反映する", () => {
+  for (const [control, admin] of [[true, false], [false, true], [true, true]]) {
+    const text = "owner_email: a@example.com\nedge_address: workers-dev\nasset_public_base: none\n"
+      + (control ? "control_address: custom\ncontrol_host: control.example.com\n" : "")
+      + (admin ? "admin_address: custom\nadmin_host: admin.example.com\n" : "");
+    for (const accept of [undefined, "manual"]) {
+      const r = run(text, { accept });
+      assert.equal(r.code, 0);
+      const placement = r.output.split("\n").find((line) => line.startsWith("管理画面"));
+      assert.match(placement, control ? /control.*control\.example\.com/ : /control.*\*\.workers\.dev/);
+      assert.match(placement, admin ? /管理画面.*admin\.example\.com/ : /管理画面.*\*\.workers\.dev/);
+      assert.doesNotMatch(placement, /管理画面と control/);
+    }
+  }
+});
+
+test("control の WAF と Access は、未検証ではなく必要な設定と確認を注意に出す", () => {
+  for (const [protection, guide] of [["waf", "7.2"], ["access", "7.3"]]) {
+    const r = run(`owner_email: a@example.com\nfeatures: [history]\nedge_address: workers-dev\nasset_public_base: none\ncontrol_address: custom\ncontrol_host: control.example.com\ncontrol_protection: ${protection}\n`, { accept: "manual" });
+    assert.equal(r.code, 0);
+    const notes = r.output.slice(r.output.indexOf("## 注意"));
+    assert.ok(notes.includes(guide));
+    assert.match(notes, /人.*設定/);
+    assert.match(notes, /確認|確かめ/);
+    assert.doesNotMatch(notes, /未検証|^- なし$/m);
+  }
+  const r = run("owner_email: a@example.com\nfeatures: [history]\nedge_address: workers-dev\nasset_public_base: none\ncontrol_protection: none\n");
+  assert.doesNotMatch(r.output.slice(r.output.indexOf("## 注意")), /7\.2|7\.3/);
+});
+
 test("アカウントが変わる構成の --accept は、--confirm-account-change が無ければ終了コード 2 で止まり、ファイルを変えない", () => {
   const text = answers({ cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "no", edge_host: "none", other_workers: "yes" });
   for (const accept of ["recommended", "lightest"]) {

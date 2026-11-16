@@ -160,7 +160,7 @@ test("summaryOf", () => {
 });
 
 test("placementOf: 管理画面と control の置き場所(ドメインありなら自分のドメインは任意)", () => {
-  assert.equal(placementOf(LIGHTEST), "管理画面と control(管理用の Worker)も *.workers.dev に置く");
+  assert.equal(placementOf(LIGHTEST), "管理画面と control(管理用の Worker)も *.workers.dev に置く(自分のドメインにもできる。デプロイガイド 4.2)");
   assert.equal(
     placementOf({ ...LIGHTEST, edge_address: "route", zone_name: "example.com" }),
     "管理画面と control(管理用の Worker)は *.workers.dev に置く(自分のドメインに載せるのは任意。デプロイガイド 3.6・4.2)",

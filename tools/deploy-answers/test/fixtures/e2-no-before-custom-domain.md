@@ -2,7 +2,7 @@
 
 **ドメインなし(*.workers.dev) × Free × 画像のアップロードなし**
 
-管理画面と control(管理用の Worker)も *.workers.dev に置く
+管理画面と control(管理用の Worker)も *.workers.dev に置く(自分のドメインにもできる。デプロイガイド 4.2)
 
 - タグを入れるサイトのドメインを Cloudflare で管理していないので、Cloudflare が用意するアドレス(*.workers.dev)で動かす。後からサイトのドメインを、導入した Cloudflare アカウントに移せば、そのドメインでの動作に切り替えられる(デプロイガイド 2.8)
 - A/B テストとゴールの計測は訪問者のブラウザの中で完結し、Workers の無料枠をほとんど使わないので Free で足りる
