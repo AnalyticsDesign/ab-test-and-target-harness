@@ -86,6 +86,7 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await editor.getByRole("button", { name: "保存(下書き)" }).click();
   await expect(editor.getByTestId("save-state")).toContainText("訪問者への反映にはサイトの公開が必要です");
   await expect(editor.getByTestId("saved-publish-guidance")).toContainText("管理者にサイトの公開を依頼してください");
+  await expect(editor.getByTestId("saved-publish-guidance")).toBeInViewport();
   await expect(editor.getByRole("link", { name: "公開画面へ", exact: true })).toHaveCount(0);
   // 共通のエクスペリエンス名を後続の E2E が使うので、元に戻して保存する。
   await editor.getByRole("region", { name: "基本", exact: true }).getByLabel("名前(100 字以内)").fill(EXPERIMENT.name);

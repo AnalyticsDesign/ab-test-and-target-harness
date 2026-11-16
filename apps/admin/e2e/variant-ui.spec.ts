@@ -51,11 +51,11 @@ test.describe.serial("pattern UI (B77)", () => {
   };
   const saveState = () => page.getByTestId("save-state");
   /** 「保存(下書き)」を押し、指定の要求の応答を待つ。成功なら保存バーが「保存しました」になる(保存の後の読み直しの反映)まで待つ */
-  const save = async (until: (r: Response) => boolean): Promise<Response> => {
+  const save = async (until: (r: Response) => boolean, message = "下書きに保存しました。訪問者への反映にはサイトの公開が必要です"): Promise<Response> => {
     const done = page.waitForResponse(until);
     await page.getByRole("button", { name: "保存(下書き)" }).click();
     const res = await done;
-    if (res.ok()) await expect(saveState()).toHaveText(res.request().method() === "PATCH" ? "保存しました" : "下書きに保存しました。訪問者への反映にはサイトの公開が必要です");
+    if (res.ok()) await expect(saveState()).toHaveText(message);
     return res;
   };
   const isWrite = (method: string, path: string) => (r: Response) => r.request().method() === method && new URL(r.url()).pathname === `/api/control${path}`;
@@ -220,7 +220,7 @@ test.describe.serial("pattern UI (B77)", () => {
     await b.getByLabel(memoLabel).fill("配信中に書いたメモ");
     await expect(saveState()).toHaveText("未保存の変更あり");
     let rec = recordWrites(page);
-    expect((await save(isWrite("PATCH", `${base(EXP_MAIN.id)}/variants/b`))).status()).toBe(200);
+    expect((await save(isWrite("PATCH", `${base(EXP_MAIN.id)}/variants/b`), "保存しました")).status()).toBe(200);
     rec.stop();
     expect(rec.writes).toEqual([{ method: "PATCH", path: `${base(EXP_MAIN.id)}/variants/b`, body: { description: "配信中に書いたメモ" } }]);
     await page.reload();

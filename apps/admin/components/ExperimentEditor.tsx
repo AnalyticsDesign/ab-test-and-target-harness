@@ -482,7 +482,7 @@ function ExperimentEditorBody({
     switch (outcome.kind) {
       case "saved":
         onRefreshed(outcome.refresh !== "done"); // 反映を確かめられたときだけ戻り先を捨てる(この保存は after: "refresh" なので skipped にはならない)
-        // 読み直しを待ち切れなかったときは、本文の先頭に再読み込みの案内を出す(文が「保存しました」で始まるので、帯の文は重ねない)
+        // 書き込みは済んでいるので、読み直しが時間切れでも保存結果と公開の案内を残す。再読み込みの案内は本文の先頭に出す
         if (outcome.refresh === "timeout") setError(REFRESH_TIMEOUT);
         setSavedNotice(saveSuccessNotice(steps));
         return;
@@ -651,12 +651,6 @@ function ExperimentEditorBody({
       ) : null}
       {/* 終了したエクスペリエンスはメモだけを編集できるので、メモを変えたときだけ保存バーを出す(評価計画の変更も帯で保存する)。
           保存の成功の文を持っている間も出す(保存で変更が無くなっても、帯の左の「保存しました」で成功を知らせるため。文は次に欄を変えたとき・破棄で消え、帯もそこで消える) */}
-      {savedNotice?.needsPublish && (role === "editor" || (isTest && (experiment.status === "running" || experiment.status === "paused"))) ? (
-        <p data-testid="saved-publish-guidance" className="muted">
-          {role === "editor" ? "公開は管理者以上が行います。管理者にサイトの公開を依頼してください。" : null}
-          {isTest && (experiment.status === "running" || experiment.status === "paused") ? "開始後に編集して公開しても、変更の前と後の結果は合算されます。大きく変える場合は、複製して新しいテストを開始してください。" : null}
-        </p>
-      ) : null}
       {canEdit && (experiment.status !== "archived" || memoChanged || planIsDirty || savedMessage !== null) ? (
         <SaveBar dirty={bodyDirty || planIsDirty} message={savedMessage}>
           {savedNotice?.needsPublish && (role === "owner" || role === "admin") ? (
@@ -680,6 +674,12 @@ function ExperimentEditorBody({
           <button type="button" className="btn btn-primary" disabled={busy || weightSum !== 100} onClick={() => void save()}>
             {experiment.status === "archived" ? "保存(メモ)" : "保存(下書き)"}
           </button>
+          {savedNotice?.needsPublish && (role === "editor" || (isTest && (experiment.status === "running" || experiment.status === "paused"))) ? (
+            <p data-testid="saved-publish-guidance" className="muted" style={{ flexBasis: "100%", margin: 0 }}>
+              {role === "editor" ? "公開は管理者以上が行います。管理者にサイトの公開を依頼してください。" : null}
+              {isTest && (experiment.status === "running" || experiment.status === "paused") ? "開始後に編集して公開しても、変更の前と後の結果は合算されます。大きく変える場合は、複製して新しいテストを開始してください。" : null}
+            </p>
+          ) : null}
         </SaveBar>
       ) : null}
     </div>

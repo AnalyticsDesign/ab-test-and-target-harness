@@ -294,7 +294,8 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
       expect((await first).postDataJSON()).toEqual({ name: "E2E disc B" });
       await expect(appAlert(page).filter({ hasText: REFRESH_TIMEOUT })).toBeVisible({ timeout: 15_000 });
       await expect(overlay()).toHaveCount(0);
-      await expect(saveState()).toHaveText("変更はありません");
+      // 書き込みは済んでいるため、読み直しが時間切れでも公開の案内を残す。
+      await expect(saveState()).toHaveText(SAVED);
       // C に編集してから破棄 → 保存した B に戻る(保存の前の値ではない)
       await nameInput().fill("E2E disc C");
       await expect(saveState()).toHaveText("未保存の変更あり");
@@ -410,6 +411,7 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
       await saveButton().click();
       await expect(saveState()).toHaveText(SAVED);
       await expect(page.getByTestId("saved-publish-guidance")).toContainText("変更の前と後の結果は合算されます");
+      await expect(page.getByTestId("saved-publish-guidance")).toBeInViewport();
     } finally {
       page.off("request", onRequest);
     }
