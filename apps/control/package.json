@@ -23,7 +23,7 @@
     "@wtt/runtime": "workspace:*",
     "@wtt/stats": "workspace:*",
     "better-auth": "1.7.15",
-    "hono": "^4.13.5",
+    "hono": "^4.13.16",
     "hono-openapi": "^1",
     "kysely": "^0.29.5",
     "kysely-d1": "^0.4.0",

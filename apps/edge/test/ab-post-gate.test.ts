@@ -125,6 +125,16 @@ describe("POST /__ab/* gate (B158, G05)", () => {
     expect(touched.do).toBe(0);
   });
 
+  it.each(["%0A", "%0D", "%E2%80%A8", "%E2%80%A9"])("an encoded line terminator (%s) does not bypass the gate on an unknown path", async (suffix) => {
+    const { touched, envOverride } = spies();
+    const path = `/__ab/unknown${suffix}`;
+    const rejected = await send(path, {}, { fetchSite: "same-site", envOverride });
+    expect(rejected.status).toBe(403);
+    expect(rejected.headers.getSetCookie()).toEqual([]);
+    expect((await send(path, {}, { fetchSite: "same-origin", envOverride })).status).toBe(404);
+    expect(touched).toEqual({ kv: 0, do: 0 });
+  });
+
   it("application/json from the same origin keeps working", async () => {
     const res = await send("/__ab/decision", decisionBody(), { fetchSite: "same-origin" });
     expect(res.status).toBe(200);

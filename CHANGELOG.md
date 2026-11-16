@@ -4,6 +4,8 @@
 
 ## 未リリース
 
+- **セキュリティの修正(Moderate)**: control・edge が使う Hono を 4.13.16 に更新した。control では、正当な追加パラメータ付きの画像アップロードが拒否される問題を修正した。影響する版 = v0.9〜v0.11。更新しない場合は、アップロードの `Content-Type` に `boundary` 以外のパラメータを付けない。edge では、Mode B の未登録のパスへの要求でも送信元と本文形式の検査が適用されるようにした。影響する版 = v0.11。この挙動に対する更新なしの緩和策は無し。[画像アップロードの Advisory](https://github.com/honojs/hono/security/advisories/GHSA-4h7h-rv7c-7m2v)・[ルーティングの Advisory](https://github.com/honojs/hono/security/advisories/GHSA-h7mg-cq63-vhpq)
+
 - **導入時のフォルダが無い場合の更新**: 公開リポジトリの新しい clone と、稼働中の Cloudflare の設定から更新の準備をする手順を足した。更新前に、接続先の ID・URL・アカウントに雛形の仮値が残っていないことを検査する。
 
 - **費用の目安の前提**: 静的配信と訪問者の API・DO・D1・KV・R2、管理操作・定期実行を分け、月間 PV の表の前提と公式料金の出典・確認日を明記した。新規 Profile の予算確認・期限切れ削除、結果記録の書込後の精算と CV の便乗を見込み、履歴ありの要求の込み量と記録可能な PV の説明を直した。Cloudflare の Workers の支出制限と、その対象外の料金・反映の遅延も案内する。デプロイガイドの公開アドレスの説明も合わせ、`*.workers.dev` を Free 前提とする理由を更新した。機能・既定の予算・料金プランの変更は無い。

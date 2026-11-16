@@ -215,6 +215,22 @@ describe("assets: upload (B68 spec §4.2)", () => {
     expect((await json<Uploaded>(res)).publicUrl).toContain(`/sites/${sid}/images/`);
   });
 
+  it("accepts multipart uploads with a charset parameter alongside the boundary", async () => {
+    const owner = await setupOwner();
+    const { id: sid } = await createSite(owner.token, owner.workspaceId);
+    const request = new Request("http://control.test", {
+      method: "POST",
+      body: form(PNG, "image/png", "hero.png"),
+    });
+    const res = await call("POST", `/sites/${sid}/assets`, {
+      token: owner.token,
+      raw: await request.arrayBuffer(),
+      headers: { "content-type": `${request.headers.get("content-type")}; charset=UTF-8` },
+    });
+    expect(res.status).toBe(201);
+    expect(await json<Uploaded>(res)).toMatchObject({ name: "hero.png", mime: "image/png", size: PNG.length });
+  });
+
   it("upload_rejects_experiment_id_field", async () => {
     const owner = await setupOwner();
     const { id: sid } = await createSite(owner.token, owner.workspaceId);
