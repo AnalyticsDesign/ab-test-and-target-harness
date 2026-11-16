@@ -43,7 +43,7 @@ test("d-lite applies changes based on the edge-owned cookie", async ({ context, 
   // exp_dlite は persistAssignment: true(Plan 10 B6)なので事前 Cookie の割当は DO にも保存される。variant / weight を変えると wrangler dev の残った DO が旧 variant を固定し得る → その場合は .wrangler/state を消す
   await preset(context, findVisitor("exp_dlite", "B"));
   await page.goto("/dlite.html");
-  await expect(page.locator(".hero-title")).toHaveText("D-lite B");
+  await expect(page.locator(".hero-title")).toHaveText("サーバー発行 Cookie: B パターン");
 });
 
 test("d-lite revoke posts consent body and clears the edge cookie", async ({ context, page }) => {
@@ -73,5 +73,5 @@ test("d_lite_goal_is_recorded_via_ab_event_with_cookie_identity_only", async ({ 
   expect((await req.response())?.status()).toBe(204);
   await expect.poll(async () => (await readDataLayer(page)).filter((e) => e.event === "ab_conversion").map((e) => e.ab_goal_id)).toEqual(["g_dlite_buy"]);
   await page.reload();
-  await expect(page.locator(".old-banner")).toHaveText("D-lite converted"); // DO に Goal が記録された証拠(黙殺なら「旧バナー」のまま)
+  await expect(page.locator(".old-banner")).toHaveText("サーバー発行 Cookie: 目標達成済み"); // DO に Goal が記録された証拠(黙殺なら「旧バナー」のまま)
 });

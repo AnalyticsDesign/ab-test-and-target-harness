@@ -290,7 +290,7 @@ Mode は「訪問者 ID を何で持つか」の違い。**迷ったら Mode A**
 |---|---|---|---|---|
 | **A: JS Cookie** | タグが JavaScript で Cookie を書く(毎ページビューで延長) | **7 日間サイトを訪れないと消える**([13 節](#13-ブラウザの制約)) | タグ 1 本 | 実サイトで検証済み |
 | **C: BYOID**(`訪問者 ID の取得元` = `cookie:<名>`) | サイトの既存 Cookie(会員 ID など)から作る。ツールは発行しない | 元の Cookie に依存。サイトが JavaScript で書いた Cookie なら A と同じ | タグ 1 本 + サイト設定 | E2E 検証済み(`fixtures/e2e-byoid.json`)・実サイト未検証 |
-| **B: サーバー発行 Cookie**(旧称 D-lite) | サイトと同じゾーンの Workers Route を通して、edge が HTTP の `Set-Cookie` で発行する(共有がオフなら HttpOnly) | 7 日ルールの対象外(同じゾーンの Route からの `Set-Cookie` が Safari で 7 日を超えて残ることを実機で確認済み。ただし確認したのは HttpOnly 付きの Cookie で、`サブドメインをまたいだ共有` がオンのときに発行する HttpOnly なしの Cookie は実機では未確認。どちらも edge の `Set-Cookie` なので同じ扱いになる見込み) | タグ 1 本 + `/__ab/*` の Route。サイトが Cloudflare のゾーン配下にあることが前提 | E2E 検証済み(`fixtures/demo-dlite.json`)・実サイトで検証済み(共有がオフの構成) |
+| **B: サーバー発行 Cookie** | サイトと同じゾーンの Workers Route を通して、edge が HTTP の `Set-Cookie` で発行する(共有がオフなら HttpOnly) | 7 日ルールの対象外(同じゾーンの Route からの `Set-Cookie` が Safari で 7 日を超えて残ることを実機で確認済み。ただし確認したのは HttpOnly 付きの Cookie で、`サブドメインをまたいだ共有` がオンのときに発行する HttpOnly なしの Cookie は実機では未確認。どちらも edge の `Set-Cookie` なので同じ扱いになる見込み) | タグ 1 本 + `/__ab/*` の Route。サイトが Cloudflare のゾーン配下にあることが前提 | E2E 検証済み(`fixtures/demo-dlite.json`)・実サイトで検証済み(共有がオフの構成) |
 
 A から B へは後から移せるが、Cookie の発行元が変わるので訪問者 ID は作り直しになる(全訪問者の割当がリセットされる)。
 

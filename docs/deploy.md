@@ -1412,7 +1412,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 
 - `/v1/*`(必須): decision / event。履歴条件または `persistAssignment` を使うサイト(`needsProfile`)、または結果を記録するサイトで使う。目標は `needsProfile` のサイトでだけ `/event` にも送られる(目標だけでは `needsProfile` にならず、`ab_conversion` は `dataLayer` にのみ出る)。結果を記録するサイトでは、テストの参加と目標の達成を `needsProfile` に関係なく `/event` に送る。設置タグのファイルに edge の宛先(control の `AB_EDGE_ORIGIN`)が書き込まれるので、runtime はそこへ送る
 - `/s/*`: **edge には書かない**。設置タグのファイルは配信専用の Worker `wtt-static` が配る。`/s/*` を `wtt-static` に向けるのは 2.9
-- `/__ab/*`: Mode B(サーバー発行 Cookie。旧称 D-lite)のサイトを置く場合に追加する。パターンは `<ページのホスト>/__ab/*`(Mode B ではタグがページのホストへ相対 URL で送るため。[サイト導入ガイド 8 節](site-install.md#8-mode-c-と-mode-b))。Mode B の `/__ab/decision` は Cookie の無い要求のたびに新しい visitorId を発行するため、2.7 の WAF ルールを**必ず**作る(`edge_waf_rate_limit: false` を選ばない。Mode B はゾーンの Route が前提なので、ルールは常に作れる)
+- `/__ab/*`: Mode B(サーバー発行 Cookie)のサイトを置く場合に追加する。パターンは `<ページのホスト>/__ab/*`(Mode B ではタグがページのホストへ相対 URL で送るため。[サイト導入ガイド 8 節](site-install.md#8-mode-c-と-mode-b))。Mode B の `/__ab/decision` は Cookie の無い要求のたびに新しい visitorId を発行するため、2.7 の WAF ルールを**必ず**作る(`edge_waf_rate_limit: false` を選ばない。Mode B はゾーンの Route が前提なので、ルールは常に作れる)
 
 **`routes` を書いたら `"dev": { "host": "localhost" }` も併記する。** 理由: `routes` があると `wrangler dev` のローカル origin host が route のホスト名になり(`--local-upstream` の既定が「dev.host or route」)、host からサイトを引く Mode B の経路がローカルで 404 になって `pnpm e2e` が失敗する。
 

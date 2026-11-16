@@ -11,12 +11,12 @@
   "goals": [{ "id": "g_results_dlite_buy", "name": "Buy click", "type": "CLICK", "config": { "selector": "#buy" } }],
   "experiments": [
     {
-      "id": "exp_results_dlite", "name": "Results D-lite hero",
+      "id": "exp_results_dlite", "name": "Mode B: サーバー発行 Cookie の結果デモ",
       "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/results-dlite.html" } }] },
       "trafficPercentage": 100, "persistAssignment": false,
       "variants": [
         { "id": "vA", "name": "A", "weight": 50, "changes": [] },
-        { "id": "vB", "name": "B", "weight": 50, "changes": [{ "id": "c_t", "type": "TEXT", "selector": ".hero-title", "payload": { "text": "結果 D-lite B" } }] }
+        { "id": "vB", "name": "B", "weight": 50, "changes": [{ "id": "c_t", "type": "TEXT", "selector": ".hero-title", "payload": { "text": "結果: サーバー発行 Cookie の B パターン" } }] }
       ]
     }
   ],

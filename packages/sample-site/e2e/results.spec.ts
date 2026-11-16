@@ -74,7 +74,7 @@ test("d_lite_participant_and_conversion_reach_results_d1_with_cookie_identity", 
   expect(body).toMatchObject({ runId: DLITE.run, variantId: "vB", device: "desktop", applied: "ok" });
   expect(body).not.toHaveProperty("visitorId"); // D-lite は Cookie が正(本文に ID を載せない)
   expect(await p.json()).toEqual({ result: "stored" });
-  await expect(page.locator(".hero-title")).toHaveText("結果 D-lite B");
+  await expect(page.locator(".hero-title")).toHaveText("結果: サーバー発行 Cookie の B パターン");
   const [c] = await Promise.all([waitResults(page, "conversion"), page.click("#buy")]);
   expect(c.request().postDataJSON()).toEqual({ type: "conversion", v: 2, goalIds: [DLITE.goal] }); // D-lite は Cookie が正(本文に visitorId を載せない)
   expect(await c.json()).toEqual({ result: "stored" });
@@ -85,7 +85,7 @@ test("d_lite_participant_and_conversion_reach_results_d1_with_cookie_identity", 
   // 開き直し: 印(i = decision の応答の vh)が同じ訪問者のものなので参加は送らない。CV は目標のたびに送り(印なし)、edge が重複を捨てて行は 1 つのまま
   const sent = trackResults(page);
   await page.reload();
-  await expect(page.locator(".hero-title")).toHaveText("結果 D-lite B");
+  await expect(page.locator(".hero-title")).toHaveText("結果: サーバー発行 Cookie の B パターン");
   await Promise.all([waitResults(page, "conversion"), page.click("#buy")]); // 2 回目の CV の応答を待ってから行を見る(固定の待ち時間にしない)
   expect(sent.filter((b) => b.includes('"type":"participant"'))).toEqual([]);
   expect(sent.filter((b) => b.includes('"type":"conversion"'))).toHaveLength(1);

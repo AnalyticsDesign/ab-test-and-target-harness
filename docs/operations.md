@@ -26,7 +26,7 @@
 | **基本設定** | `overview`(エクスペリエンスの編集のタブ) | 「基本」のカード(名前・メモ)、「配信条件」のカード(① どのページで = 対象 URL、② どの訪問者に = 訪問者の条件、③ そのうち何 % に = 配信率と割当の固定)と、エクスペリエンスの外部計測。もう 1 つのタブが「パターン」 |
 | **割当の固定** | `persistAssignment` | 初回の割当を訪問者ごとに保存し、配分を変えても再割当しない |
 | **訪問者 ID** | identity(`idSource`) | 訪問者を見分ける ID の取り方(サイト設定の「訪問者 ID」) |
-| **導入の形**(Mode A: JS Cookie / Mode B: サーバー発行 Cookie / Mode C: BYOID) | `mode`(`A` / `B`)と `idSource`。Mode B は旧称 D-lite(導入の入力ファイルの `dlite_hosts`) | 訪問者 ID の Cookie を誰が書くか。A はタグが JavaScript で書き、B はサイトと同じゾーンの Workers Route(`/__ab/*`)から edge が `Set-Cookie` で発行する(Safari の 7 日の制限を受けない。`サブドメインをまたいだ共有` がオフなら HttpOnly)。C はサイトの既存の Cookie を使う |
+| **導入の形**(Mode A: JS Cookie / Mode B: サーバー発行 Cookie / Mode C: BYOID) | `mode`(`A` / `B`)と `idSource`。Mode B のホストは導入の入力ファイルの `dlite_hosts` で指定 | 訪問者 ID の Cookie を誰が書くか。A はタグが JavaScript で書き、B はサイトと同じゾーンの Workers Route(`/__ab/*`)から edge が `Set-Cookie` で発行する(Safari の 7 日の制限を受けない。`サブドメインをまたいだ共有` がオフなら HttpOnly)。C はサイトの既存の Cookie を使う |
 | **サブドメインをまたいだ共有** | `shareSubdomains`(既定 on) | 訪問者 ID の Cookie を、登録ドメイン(サブドメインを付けないドメイン)の下のどのホストでも読めるように発行する。オンなら Mode B の Cookie は HttpOnly にならず、同じ登録ドメインのすべてのホストを信頼することになる([サイト導入ガイド 8 節](site-install.md#サブドメインをまたいで-id-を共有する))。確かめ方は[10 節](#10-トラブルシュート) |
 | **オーナー / 管理者 / 編集者 / 閲覧者** | `owner` / `admin` / `editor` / `viewer` | ワークスペースでのロール |
 | **システム管理者** | instance admin | この導入全体の管理者。すべてのワークスペースのオーナーを兼ねる |

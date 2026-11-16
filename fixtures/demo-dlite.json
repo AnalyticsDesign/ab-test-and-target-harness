@@ -6,22 +6,22 @@
   "settings": { "mode": "B", "hosts": ["www.example.test"], "allowedOrigins": ["https://form.example.test"], "shareSubdomains": true, "cookieDomains": ["example.test"] },
   "experiments": [
     {
-      "id": "exp_dlite", "name": "D-lite demo",
+      "id": "exp_dlite", "name": "Mode B: サーバー発行 Cookie のデモ",
       "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/" } }] },
       "trafficPercentage": 100, "persistAssignment": true,
       "variants": [
         { "id": "vA", "name": "A", "weight": 50, "changes": [] },
-        { "id": "vB", "name": "B", "weight": 50, "changes": [{ "id": "c_t", "type": "TEXT", "selector": ".hero-title", "payload": { "text": "D-lite B" } }] }
+        { "id": "vB", "name": "B", "weight": 50, "changes": [{ "id": "c_t", "type": "TEXT", "selector": ".hero-title", "payload": { "text": "サーバー発行 Cookie: B パターン" } }] }
       ]
     },
     {
-      "id": "exp_dlite_converted", "name": "D-lite converted",
+      "id": "exp_dlite_converted", "name": "サーバー発行 Cookie: 目標達成済み",
       "urlMatch": { "include": [{ "page": { "op": "contains", "value": "/dlite.html" } }] },
       "targeting": { "hist": "converted", "goal": "g_dlite_buy" },
       "trafficPercentage": 100, "persistAssignment": false,
       "variants": [
         { "id": "vA", "name": "A", "weight": 0, "changes": [] },
-        { "id": "vB", "name": "B", "weight": 100, "changes": [{ "id": "c_c", "type": "TEXT", "selector": ".old-banner", "payload": { "text": "D-lite converted" } }] }
+        { "id": "vB", "name": "B", "weight": 100, "changes": [{ "id": "c_c", "type": "TEXT", "selector": ".old-banner", "payload": { "text": "サーバー発行 Cookie: 目標達成済み" } }] }
       ]
     }
   ],

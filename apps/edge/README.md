@@ -10,7 +10,7 @@
 | `POST /v1/sites/:siteId/decision` | Mode A 直接経路。形式検証 → レート制限 → Origin 検証 → 評価。`needsProfile` なら URL 一致の部分集合を DO `VisitorProfile` に渡して 1 往復で評価。Experiment にも patterns にも不一致なら DO 非接触で空応答。DO 例外は 503 |
 | `POST /v1/sites/:siteId/event` | `{ type: "goal", goalId, visitorId }` で Profile の達成回数を加算、`{ type: "forget", visitorId }` で Profile を削除(撤回時)。常に 204。`goal` は `needsProfile=false` / 未知 goalId で DO 非接触、`forget` は config に依存せず常に DO に届き、`forgetOnRevoke` が false でなければ計測用 D1 のその訪問者の行も消す。順序・レート制限・Origin は decision と同じ。結果の送信 `{ type: "participant" \| "conversion", … }` は常に 200 + 本文 `{ result: "stored" \| "ignored" \| "stopped" \| "failed" }`(下の「結果の記録」) |
 | `OPTIONS /v1/sites/:siteId/{decision,event}` | CORS preflight |
-| `POST /__ab/decision` | Mode B(サーバー発行 Cookie、旧称 D-lite)の decision。応答に訪問者 ID の短いハッシュ `vh`(runtime の送信済みの印に使う)を足す。revoke は Profile の DO に非接触で、`forgetOnRevoke` が false でなく正本 Cookie があれば計測用 D1 のその訪問者の行を消す |
+| `POST /__ab/decision` | Mode B(サーバー発行 Cookie)の decision。応答に訪問者 ID の短いハッシュ `vh`(runtime の送信済みの印に使う)を足す。revoke は Profile の DO に非接触で、`forgetOnRevoke` が false でなく正本 Cookie があれば計測用 D1 のその訪問者の行を消す |
 | `POST /__ab/event` | Mode B の event。Cookie が Identity。Cookie 無し・不正は Cookie を発行せず DO 非接触で 204。結果の送信は Mode A と同じ判定・同じ応答(CORS なし) |
 | (`POST /__ab/*` の共通の検査) | 上の 2 経路の前に、KV と本文を読まずに断る。`Content-Type` のメディア型が `application/json` でなければ 415、`Sec-Fetch-Site` があって `same-origin` でなければ 403(どちらも Set-Cookie と CORS のヘッダーを付けない)。`Sec-Fetch-Site` が無い要求(ブラウザ以外・古いブラウザ)は通す。runtime は同じオリジンへ `application/json` で送るので影響しない。同じ登録ドメインの別のホストのページから、訪問者の Cookie を使って撤回や送信をさせないため |
 

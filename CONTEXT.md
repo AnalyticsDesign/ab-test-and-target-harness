@@ -52,7 +52,7 @@
 | **Deployment Mode** | 訪問者 ID の持続方法。A = JS Cookie、B = サーバー発行 Cookie(今は同一ゾーン Workers Route の Proxy Mode。Bridge 経由は Phase 2)、C = BYOID(既存 ID の流用) |
 | **Bridge** | サイト自身のサーバーに置く `/__ab/*` の実装(アダプタ)。Phase 2 |
 | **Proxy Mode** | edge Worker が Cookie の読取・発行を自ら行う動作モード |
-| **サーバー発行 Cookie**(旧称 D-lite) | Mode B の表示名。サイトが Cloudflare 配下のとき、同一ゾーンの Workers Route で Proxy Mode を使う構成。現在の ITP 対応手段。識別子(`mode: "B"`・`dlite_hosts`・`/__ab/*`・コードとテストの名前)には旧称の `dlite` が残る |
+| **サーバー発行 Cookie** | Mode B の表示名。サイトが Cloudflare 配下のとき、同一ゾーンの Workers Route で Proxy Mode を使う構成。現在の ITP 対応手段。識別子(`mode: "B"`・`dlite_hosts`・`/__ab/*`・コードとテストの名前)には旧称の `dlite` が残る |
 | **BYOID** | Bring Your Own ID。サイトの既存 Cookie 等を訪問者 ID として流用する方式(Mode C)。値はハッシュ化してから送る |
 
 ## 計測
