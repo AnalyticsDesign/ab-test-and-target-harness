@@ -86,7 +86,9 @@ function GoalAnalyticsFields({
   );
 }
 
-/** 行の下に開く編集パネル。名前と目標名を下書きに持ち、「保存」で PATCH を 1 回だけ送る(送る内容の決め方は lib/goal-analytics) */
+/** 行の下に開く編集パネル。名前・ページ条件・目標名を下書きに持ち、「保存」で PATCH を 1 回だけ送る(送る内容の決め方は lib/goal-analytics) */
+type GoalEditBody = { name: string; config?: Goal["config"]; analytics?: Goal["analytics"] };
+
 function GoalEditPanel({
   goal,
   names,
@@ -98,7 +100,7 @@ function GoalEditPanel({
   goal: Goal;
   names: AnalyticsSettings;
   fields: Record<string, string>;
-  onSave: (body: { name: string; analytics?: Goal["analytics"] }) => void;
+  onSave: (body: GoalEditBody) => void;
   onCancel: () => void;
   /** 欄を変えた(一覧のカードの成功の文を消す) */
   onEdit: () => void;
@@ -106,12 +108,16 @@ function GoalEditPanel({
   const savedGoalName = goalNameOf(goal.analytics);
   const [name, setName] = useState(goal.name);
   const [goalName, setGoalName] = useState(savedGoalName);
+  // 編集を開いた時点を比較の基準にする。一覧だけ更新されても、未編集の古い条件を送り戻さない。
+  const [initialPage] = useState(() => goal.type === "PAGEVIEW" ? (goal.config as { page: PageMatchValue }).page : null);
+  const [page, setPage] = useState(initialPage);
   const issue = goalNameIssue(goalName, goal.analytics);
   function save() {
     if (issue) return; // 問題のある値は送らない(欄に出ている)
     // 何も変えていなければ送らず閉じる(更新日時を進めない)
-    if (name === goal.name && goalName === savedGoalName) return onCancel();
-    onSave({ name, ...goalAnalyticsBody(goalName, goal.analytics) });
+    const pageChanged = page !== null && JSON.stringify(page) !== JSON.stringify(initialPage);
+    if (name === goal.name && goalName === savedGoalName && !pageChanged) return onCancel();
+    onSave({ name, ...(pageChanged ? { config: { ...goal.config, page } } : {}), ...goalAnalyticsBody(goalName, goal.analytics) });
   }
   // 保存の間は一覧のカードの覆い(inert)で押せないので、欄・ボタンを無効にしない
   return (
@@ -129,6 +135,11 @@ function GoalEditPanel({
           />
         </Field>
       </div>
+      {page !== null ? (
+        <Field label="ページ" error={fields["config.page.value"] ?? fields["config.page.op"] ?? fields["config.page.part"] ?? fields["config.page"]}>
+          <PageMatchField value={page} onChange={(next) => { setPage(next); onEdit(); }} />
+        </Field>
+      ) : null}
       <div className={styles.secHead}>
         <h3>外部計測(dataLayer 出力)</h3>
         <AnalyticsBadges count={goalName ? 1 : 0} countTitle="設定した項目の数" />
@@ -204,7 +215,7 @@ function GoalsList({ siteId, goals, canEdit, names }: { siteId: string; goals: G
     show(outcome, "削除しました");
   }
 
-  async function save(g: Goal, body: { name: string; analytics?: Goal["analytics"] }) {
+  async function save(g: Goal, body: GoalEditBody) {
     clear();
     setFields({});
     // D9 ③(設計書 §5.5、B77 の K14): 実行中・一時停止中のテストが使っている目標は、件数を添えて確認する(目標名の変更も対象)
@@ -212,7 +223,7 @@ function GoalsList({ siteId, goals, canEdit, names }: { siteId: string; goals: G
     const outcome = await run({
       label: "保存中…",
       confirm: lockNotice ? () => ask({ title: `目標「${g.name}」を保存しますか?`, body: lockNotice, confirmLabel: "保存する", tone: "primary" }) : undefined,
-      // 名前と外部計測を 1 回の PATCH で送る
+      // 名前・ページ条件・外部計測を 1 回の PATCH で送る
       write: (signal) => api("PATCH", `/sites/${siteId}/goals/${g.id}`, body, { signal }),
       after: "refresh",
     });
@@ -338,6 +349,11 @@ function GoalAddForm({ siteId, names }: { siteId: string; names: AnalyticsSettin
       className="card"
       data-testid="goal-add"
       onChange={clearStatus}
+      onKeyDown={(e) => {
+        // ページの値を入力した直後の Enter では追加しない。一致の仕方へは標準の Tab で進む。
+        // Picker 自身の Enter と、日本語入力の確定には干渉しない。
+        if (e.key === "Enter" && !e.nativeEvent.isComposing && e.target instanceof HTMLInputElement && e.target.name === "value") e.preventDefault();
+      }}
       onSubmit={(e) => {
         e.preventDefault();
         void add(e.currentTarget);

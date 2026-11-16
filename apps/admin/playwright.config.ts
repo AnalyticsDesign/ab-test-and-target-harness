@@ -90,6 +90,7 @@ export default defineConfig({
   ],
   // invite-flow は publish-flow が作った owner / Site / 実験に依存するため、projects の dependencies で順序を固定する
   projects: [
+    { name: "goal-page-edit", testMatch: /goal-page-edit\.spec\.ts$/, dependencies: ["publish"], use: { browserName: "chromium" } },
     { name: "publish", testMatch: /publish-flow/, use: { browserName: "chromium" } },
     { name: "invite", testMatch: /invite-flow/, dependencies: ["publish"], use: { browserName: "chromium" } },
     { name: "audience", testMatch: /audience-flow/, dependencies: ["publish"], use: { browserName: "chromium" } },
