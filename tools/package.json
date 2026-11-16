@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test \"deploy-answers/test/*.test.mjs\" \"asset-r2-check/test/*.test.mjs\" \"dev/test/*.test.mjs\" \"test/*.test.mjs\"",
+    "test": "node --test \"deploy-answers/test/*.test.mjs\" \"asset-r2-check/test/*.test.mjs\" \"dev/test/*.test.mjs\" \"deploy-tokens/test/*.test.mjs\" \"test/*.test.mjs\"",
     "typecheck": "tsc --noEmit -p fixture/tsconfig.json && (test ! -d s1-probe || tsc --noEmit -p s1-probe/tsconfig.json)"
   },
   "devDependencies": {

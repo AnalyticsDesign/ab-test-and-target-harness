@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { QUESTIONS, checkAnswers, checkConfigured, isConfigured, isBlank, hostProblem, hostInZone, featuresOf, approxZoneOf, extraHostsOf } from "../questions.mjs";
+import { QUESTIONS, TOKEN_MODES, tokenModeOf, checkAnswers, checkConfigured, isConfigured, isBlank, hostProblem, hostInZone, featuresOf, approxZoneOf, extraHostsOf } from "../questions.mjs";
 
 const ok = { features: ["ab"], daily_pv: "under_10k", image_upload: false, cloudflare_account: "none", site_on_cloudflare: "no_site", owner_email: "a@example.com" };
 const ids = (issues) => issues.map((i) => i.id);
 
-test("質問の表は 11 問で、ID の順が N1 N2 N3 E1 E1b E2 E2a E2d E2b E2c E3", () => {
-  assert.deepEqual(QUESTIONS.map((q) => q.id), ["N1", "N2", "N3", "E1", "E1b", "E2", "E2a", "E2d", "E2b", "E2c", "E3"]);
+test("質問の表は 12 問で、ID の順が N1 N2 N3 E1 E1b E1c E2 E2a E2d E2b E2c E3", () => {
+  assert.deepEqual(QUESTIONS.map((q) => q.id), ["N1", "N2", "N3", "E1", "E1b", "E1c", "E2", "E2a", "E2d", "E2b", "E2c", "E3"]);
 });
 
 test("すべて答えていれば問題なし", () => {
@@ -19,13 +19,13 @@ test("未記入(無い・空・プレースホルダ・空の配列)は未回答
   assert.ok(issues.every((i) => i.message === "未回答"));
 });
 
-test("条件付きの問い: E1b は existing のときだけ、E2a は yes のときだけ聞く", () => {
-  assert.deepEqual(ids(checkAnswers({ ...ok, cloudflare_account: "existing" })), ["E1b"]);
-  assert.deepEqual(ids(checkAnswers({ ...ok, cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "yes" })), ["E2a", "E2d"]);
+test("条件付きの問い: E1b・E1c は existing のときだけ、E2a は yes のときだけ聞く", () => {
+  assert.deepEqual(ids(checkAnswers({ ...ok, cloudflare_account: "existing" })), ["E1b", "E1c"]);
+  assert.deepEqual(ids(checkAnswers({ ...ok, cloudflare_account: "existing", existing_plan: "free", cloudflare_tokens: "manual-account", site_on_cloudflare: "yes" })), ["E2a", "E2d"]);
 });
 
 test("E2b(止まると困る Worker)は、既存の Free のアカウント × ドメインなし(no / no_site)のときだけ聞く", () => {
-  const free = { ...ok, cloudflare_account: "existing", existing_plan: "free" };
+  const free = { ...ok, cloudflare_account: "existing", existing_plan: "free", cloudflare_tokens: "manual-account" };
   assert.deepEqual(ids(checkAnswers({ ...free, site_on_cloudflare: "no", edge_host: "none" })), ["E2b"]);
   assert.deepEqual(ids(checkAnswers({ ...free, site_on_cloudflare: "no_site" })), ["E2b"]);
   assert.deepEqual(ids(checkAnswers({ ...free, site_on_cloudflare: "no", edge_host: "none", other_workers: "unknown" })), []);
@@ -44,7 +44,7 @@ test("選択肢に無い値は、選べる値を添えて返す", () => {
 });
 
 test("URL をそのまま貼ったホストは、候補を示して聞き直す", () => {
-  const [i] = checkAnswers({ ...ok, cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "yes", install_host: "https://www.Example.com/path?q=1", extra_hosts: "none" });
+  const [i] = checkAnswers({ ...ok, cloudflare_account: "existing", existing_plan: "free", cloudflare_tokens: "manual-account", site_on_cloudflare: "yes", install_host: "https://www.Example.com/path?q=1", extra_hosts: "none" });
   assert.equal(i.id, "E2a");
   assert.match(i.message, /候補: www\.example\.com/);
   assert.equal(hostProblem("www.example.com"), null);
@@ -136,7 +136,7 @@ test("E2c(別のドメインのホスト)は E2 = no のときだけ聞く。値
   const [url] = checkAnswers({ ...no, edge_host: "https://ab.example.net/" });
   assert.equal(url.id, "E2c");
   assert.match(url.message, /ホストだけを書く\(候補: ab\.example\.net\)/);
-  assert.deepEqual(ids(checkAnswers({ ...ok, site_on_cloudflare: "yes", cloudflare_account: "existing", existing_plan: "free", install_host: "www.example.com", extra_hosts: "none" })), []);
+  assert.deepEqual(ids(checkAnswers({ ...ok, site_on_cloudflare: "yes", cloudflare_account: "existing", existing_plan: "free", cloudflare_tokens: "manual-account", install_host: "www.example.com", extra_hosts: "none" })), []);
   assert.deepEqual(ids(checkAnswers({ ...ok, site_on_cloudflare: "no_site" })), []);
 });
 
@@ -169,7 +169,7 @@ test("checkConfigured: asset_public_base: auto はゾーンのある構成(route
 });
 
 // B138: タグを置くほかのホスト(E2d)と、Mode B の Route を作るホスト(dlite_hosts)
-const yes = { ...ok, cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "yes", install_host: "www.example.com" };
+const yes = { ...ok, cloudflare_account: "existing", existing_plan: "free", cloudflare_tokens: "manual-account", site_on_cloudflare: "yes", install_host: "www.example.com" };
 
 test("E2d asked only when site is on Cloudflare", () => {
   const [blank] = checkAnswers(yes);
@@ -235,4 +235,40 @@ test("delegated subdomain zone and hand-written dlite_hosts", () => {
   const [i] = checkConfigured({ ...base, dlite_hosts: ["www.shop.example.com", "www.example.com"] });
   assert.equal(i.id, "dlite_hosts");
   assert.match(i.message, /^www\.example\.com はゾーン shop\.example\.com に属していない/);
+});
+
+// B130: API トークンの用意の仕方(E1c)
+const configuredRoute = { edge_address: "workers-dev", asset_public_base: "none" };
+
+test("cloudflare_tokens: existing のときだけ聞き、値は 3 つ", () => {
+  const q = QUESTIONS.find((x) => x.key === "cloudflare_tokens");
+  assert.equal(q.id, "E1c");
+  assert.deepEqual(q.values, ["manual-account", "bootstrap", "manual-user"]);   // 並びは質問の (1)(2)(3)
+  assert.deepEqual(TOKEN_MODES, ["bootstrap", "manual-account", "manual-user"]);
+  assert.equal(q.when({ cloudflare_account: "existing" }), true);
+  assert.equal(q.when({ cloudflare_account: "none" }), false);
+});
+
+test("tokenModeOf: 新しいアカウントは bootstrap、既存は manual-account、書いてあればその値", () => {
+  assert.equal(tokenModeOf({ cloudflare_account: "none" }), "bootstrap");
+  assert.equal(tokenModeOf({ cloudflare_account: "separate" }), "bootstrap");
+  assert.equal(tokenModeOf({ cloudflare_account: "existing" }), "manual-account");
+  assert.equal(tokenModeOf({ cloudflare_account: "none", cloudflare_tokens: "manual-user" }), "manual-user");
+  assert.throws(() => tokenModeOf({ cloudflare_account: "none", cloudflare_tokens: "manual" }));
+});
+
+test("checkAnswers: 聞かない構成でも、書いた cloudflare_tokens の値が 3 つのどれでもなければ断る", () => {
+  const issues = checkAnswers({ ...ok, cloudflare_tokens: "manual" });
+  assert.ok(issues.some((i) => i.key === "cloudflare_tokens"));
+  assert.deepEqual(checkAnswers({ ...ok, cloudflare_tokens: "manual-user" }), []);
+});
+
+test("checkConfigured: 構成を書いた後も cloudflare_tokens の値を断る", () => {
+  const issues = checkConfigured({ ...ok, ...configuredRoute, cloudflare_tokens: "manual" });
+  assert.ok(issues.some((i) => i.key === "cloudflare_tokens"));
+  assert.deepEqual(checkConfigured({ ...ok, ...configuredRoute, cloudflare_tokens: "bootstrap" }), []);
+});
+
+test("cloudflare_tokens: existing で未回答なら E1c を聞き直す", () => {
+  assert.deepEqual(ids(checkAnswers({ ...ok, cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "no_site", other_workers: "no" })), ["E1c"]);
 });

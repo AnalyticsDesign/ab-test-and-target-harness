@@ -14,7 +14,7 @@
 #
 # 人が用意するもの(このファイルには書かない。docs/deploy.md 0.5 でエージェントがまとめて依頼する):
 #   - Google の OAuth クライアント(管理画面のログインに使う)。クライアント ID とクライアント シークレット
-#   - Cloudflare の API トークン: 配信ファイルのデプロイ用と使用状況の表示用(どちらも期限なし)。ドメインありの構成と、control か管理画面を自分のドメインに置くときは、ゾーンの設定用(期限 = 翌日)も
+#   - Cloudflare の API トークン(用意の仕方は cloudflare_tokens): bootstrap はトークンを作るためのトークン 1 本(期限 = 翌日。残りはエージェントが作る)。manual-account と manual-user は、配信ファイルのデプロイ用と使用状況用(どちらも期限なし)。ドメインありの構成と、control か管理画面を自分のドメインに置くときは、ゾーンの設定用(期限 = 翌日)も
 
 # --- 上段: 質問への答え(docs/install-questions.md の質問と同じ順) ---
 features: <ab / history / itp>                                   # N1 やりたいこと(複数可。例 [ab, history])。ab は必ず入る
@@ -22,6 +22,7 @@ daily_pv: <under_10k / 10k_30k / 30k_70k / over_70k / unknown>   # N2 1 日の P
 image_upload: <false / true>                                     # N3 false = 画像の URL を使う / true = 管理画面からアップロード
 cloudflare_account: <none / existing / separate>                 # E1 Cloudflare のアカウント
 existing_plan: <free / paid>                                     # E1b cloudflare_account: existing のときだけ。Workers Paid なら paid
+cloudflare_tokens: <manual-account / bootstrap / manual-user>   # E1c cloudflare_account: existing のときだけ。API トークンの用意の仕方。manual-account = 管理者が Account API Token を 2〜3 本作る / bootstrap = トークンを作るためのトークンを 1 本作り、残りはエージェントが作る / manual-user = 自分の User API Token を作る(非推奨。作った人がアカウントから外れると、デプロイと使用状況が止まる)。新しいアカウントは聞かずに bootstrap
 site_on_cloudflare: <yes / no / no_site>                         # E2 タグを入れるサイトのドメインを、導入するアカウントで管理しているか
 install_host: <www.example.com>                                  # E2a site_on_cloudflare: yes のときだけ。タグを入れるページのホスト
 extra_hosts: <[form.example.com] / none>                         # E2d site_on_cloudflare: yes のときだけ。E2a のほかにタグを入れるページのホストを並べる(例 [form.example.com, shop.example.com])。無ければ none。サイト設定の「タグを置くドメイン」に入る

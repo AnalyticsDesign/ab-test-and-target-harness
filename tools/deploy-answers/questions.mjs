@@ -7,6 +7,8 @@ export const QUESTIONS = [
   { id: "N3", key: "image_upload", kind: "bool" },
   { id: "E1", key: "cloudflare_account", kind: "enum", values: ["none", "existing", "separate"] },
   { id: "E1b", key: "existing_plan", kind: "enum", values: ["free", "paid"], when: (v) => v.cloudflare_account === "existing" },
+  // API トークンの用意の仕方。新しいアカウントは聞かずに bootstrap(tokenModeOf)。並びは質問の (1)(2)(3)
+  { id: "E1c", key: "cloudflare_tokens", kind: "enum", values: ["manual-account", "bootstrap", "manual-user"], when: (v) => v.cloudflare_account === "existing" },
   { id: "E2", key: "site_on_cloudflare", kind: "enum", values: ["yes", "no", "no_site"] },
   { id: "E2a", key: "install_host", kind: "host", when: (v) => v.site_on_cloudflare === "yes" },
   // E2a のほかにタグを置くページのホスト(無ければ none)。サイトの「タグを置くドメイン」に入れ、Safari 対策を選べば
@@ -23,6 +25,9 @@ export const QUESTIONS = [
   { id: "E2c", key: "edge_host", kind: "host_or_none", when: (v) => v.site_on_cloudflare === "no" },
   { id: "E3", key: "owner_email", kind: "email" },
 ];
+
+/** cloudflare_tokens の値(トークンの用意の仕方)。bootstrap = 親トークン 1 本から残りを作る / manual-account = 管理者が Account API Token を直接作る / manual-user = 人が User API Token を作る(非推奨) */
+export const TOKEN_MODES = ["bootstrap", "manual-account", "manual-user"];
 
 /** 下段(構成)のキー。1 つでも書かれていれば、推奨を作らずに書かれた構成を検査する */
 export const CONFIG_KEYS = ["edge_address", "zone_name", "asset_public_base", "dlite_hosts", "plan"];
@@ -114,6 +119,28 @@ function valueProblem(q, v) {
   return null;
 }
 
+/**
+ * トークンの用意の仕方。書いてあればその値、無ければ既存のアカウントは manual-account・それ以外(新しく作るアカウント)は bootstrap。
+ * TOKEN_MODES に無い値は例外にする(checkAnswers / checkConfigured が先に断る前提)
+ */
+export function tokenModeOf(values) {
+  const v = values.cloudflare_tokens;
+  if (isBlank(v)) return values.cloudflare_account === "existing" ? "manual-account" : "bootstrap";
+  if (!TOKEN_MODES.includes(v)) throw new Error(`cloudflare_tokens が ${TOKEN_MODES.join(" / ")} のどれでもない: ${v}`);
+  return v;
+}
+
+/**
+ * 書いた cloudflare_tokens の値の検査。聞かない構成(新しいアカウント)でも、値が書いてあれば 3 つのどれかでなければ断る。
+ * 構成を書いた後は run.mjs が checkConfigured しか通さないので、checkAnswers と checkConfigured の両方で呼ぶ
+ * @returns {string|null} 断る理由
+ */
+function tokenModeProblem(values) {
+  const v = values.cloudflare_tokens;
+  if (isBlank(v) || TOKEN_MODES.includes(v)) return null;
+  return `選択肢に無い値: ${v}(選べるのは ${QUESTIONS.find((q) => q.key === "cloudflare_tokens").values.join(" / ")})`;
+}
+
 /** 質問への答えの検査 */
 export function checkAnswers(values) {
   const issues = [];
@@ -127,6 +154,9 @@ export function checkAnswers(values) {
     const p = valueProblem(q, v);
     if (p) issues.push({ id: q.id, key: q.key, message: p });
   }
+  // 聞かない構成でも、書いてある値は断る(聞く構成の値は上のループが断ったので重ねない)
+  const tp = tokenModeProblem(values);
+  if (tp && !issues.some((i) => i.key === "cloudflare_tokens")) issues.push({ id: "E1c", key: "cloudflare_tokens", message: tp });
   if (values.site_on_cloudflare === "yes" && (values.cloudflare_account === "none" || values.cloudflare_account === "separate")) {
     const message =
       "ドメインを管理しているのは別のアカウントなので、新しいアカウントにはそのドメインを使った仕組みを置けない。既存のアカウントに入れる(E1 = existing)か、ドメインを使わずに始める(E2 = no)かを選び直す";
@@ -182,6 +212,8 @@ export function checkConfigured(values) {
     add("plan", "上段の答えでは、入れる既存のアカウントが Workers Paid(プランはアカウント単位)。そのアカウントに入れるなら plan: paid にし、Free で使うなら別のアカウントに入れる(cloudflare_account: separate)");
   if (!isBlank(values.accepted) && !ACCEPT_VALUES.includes(values.accepted))
     add("accepted", `${ACCEPT_VALUES.join(" / ")} のどれかで書く`);
+  const tp = tokenModeProblem(values);
+  if (tp) add("cloudflare_tokens", tp);
   if (isBlank(values.owner_email)) add("owner_email", "必須");
   else if (!EMAIL_RE.test(values.owner_email)) add("owner_email", "メールアドレスの形になっていない");
   return issues;

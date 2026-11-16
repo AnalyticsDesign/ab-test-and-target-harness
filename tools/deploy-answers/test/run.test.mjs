@@ -17,7 +17,9 @@ const LOWER = [
 const answers = (over = {}) => {
   // E2 = yes なら E2d(extra_hosts)も聞くので、指定が無ければ none にする
   const extra = over.site_on_cloudflare === "yes" ? { extra_hosts: "none" } : {};
-  const v = { features: "[ab]", daily_pv: "under_10k", image_upload: "false", cloudflare_account: "none", site_on_cloudflare: "no_site", owner_email: "a@example.com", ...extra, ...over };
+  // existing のときは E1c(cloudflare_tokens)も聞くので、指定が無ければ manual-account にする
+  const tokens = over.cloudflare_account === "existing" ? { cloudflare_tokens: "manual-account" } : {};
+  const v = { features: "[ab]", daily_pv: "under_10k", image_upload: "false", cloudflare_account: "none", site_on_cloudflare: "no_site", owner_email: "a@example.com", ...extra, ...tokens, ...over };
   return Object.entries(v).map(([k, x]) => `${k}: ${x}`).join("\n") + "\n" + LOWER;
 };
 
@@ -393,4 +395,29 @@ test("overwriteKey: 有効な行を値ごと書き換え、行末の説明のコ
   assert.equal(r.text, "a: 1\ndlite_hosts: [y.example.com, z.example.com]   # Mode B\n");
   assert.deepEqual(r.written, ["dlite_hosts: [y.example.com, z.example.com]"]);
   assert.deepEqual(overwriteKey("a: 1\n", "dlite_hosts", []).written, []);
+});
+
+// B130: API トークンの用意の仕方(cloudflare_tokens)
+test("configured_answers_with_bad_cloudflare_tokens_exit_2", () => {
+  const text = answers({ cloudflare_tokens: "manual" }) + "edge_address: workers-dev\nasset_public_base: none\naccepted: manual\n";
+  for (const opts of [{}, { accept: "manual" }]) {
+    const r = run(text, opts);
+    assert.equal(r.code, 2);
+    assert.equal(r.text, undefined);
+    assert.match(r.output, /- cloudflare_tokens\(cloudflare_tokens\)/);
+  }
+});
+
+test("account_change_keeps_cloudflare_tokens", () => {
+  const text = answers({ cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "no", edge_host: "none", other_workers: "yes", cloudflare_tokens: "manual-account" });
+  const r = run(text, { accept: "recommended", confirmAccountChange: true });
+  assert.equal(r.code, 0);
+  assert.match(r.text, /^cloudflare_account: separate   # 元の答え: existing/m);
+  // 人が答えた cloudflare_tokens は、アカウントを入れ替えても書き換えない
+  assert.equal(parseAnswers(r.text).values.cloudflare_tokens, "manual-account");
+  // 提示の人に頼む作業も manual-account の文(新しいアカウントでも bootstrap にならない)
+  const again = run(r.text);
+  assert.equal(again.code, 0);
+  assert.match(again.output, /Account API Token/);
+  assert.doesNotMatch(again.output, /トークンを作るためのトークン/);
 });

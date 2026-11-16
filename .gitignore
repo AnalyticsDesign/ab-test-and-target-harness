@@ -45,6 +45,9 @@ deploy-answers.yaml
 deploy-log.md
 # 導入時の秘密(ゾーン用 API トークン)。終わったら消す
 deploy-secrets.env
+# 書き換えの一時ファイルと、トークンを作るスクリプトの記録・ロック・一時ファイル(deploy-tokens.json など)
+deploy-secrets.env.*
+deploy-tokens.*
 # D1 の手元バックアップ(docs/deploy.md 10.1)。メールアドレスやハッシュを含むので追跡しない
 deploy-backups/
 

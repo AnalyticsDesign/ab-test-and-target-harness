@@ -1,5 +1,5 @@
 // 答えから推奨構成と最軽量構成を導く。理由・できないこと・人に頼む作業・課金と止まり方・注意の文言もここで決める
-import { featuresOf, hostProblem, hostInZone, approxZoneOf, extraHostsOf } from "./questions.mjs";
+import { featuresOf, hostProblem, hostInZone, approxZoneOf, extraHostsOf, tokenModeOf } from "./questions.mjs";
 
 /**
  * Free の上限に効く使い方と、Workers Paid を推奨する PV の区分(上限の 7 割を超えうる区分)。
@@ -194,6 +194,24 @@ export function cannotOf(values, c) {
   return out;
 }
 
+/**
+ * Cloudflare の API トークンを用意する作業(cloudflare_tokens ごと)。
+ * bootstrap は親トークン 1 本だけを人が作り、残りはエージェントが作る。manual-* は人が(管理者が)直接作る
+ */
+function tokenTaskOf(values, c) {
+  const zoned = c.edge_address !== "workers-dev";
+  const n = zoned ? 3 : 2;
+  const list = `設置タグの配信ファイルのデプロイ用・使用状況用(どちらも期限なし)${zoned ? "・ゾーンの設定用(期限 = 翌日)" : ""}`;
+  switch (tokenModeOf(values)) {
+    case "bootstrap":
+      return "Cloudflare の API トークンを 1 本作る: 残りのトークンをエージェントに作らせるための「トークンを作るためのトークン」(期限 = 翌日。エージェントが使い終わると消す)";
+    case "manual-account":
+      return `管理者(Super Administrator など。自分が管理者なら自分で)が Cloudflare の Account API Token を ${n} 本作る: ${list}`;
+    default:
+      return `Cloudflare の User API Token を ${n} 本作る(非推奨): ${list}。作った人がアカウントから外れると、デプロイと使用状況が止まる`;
+  }
+}
+
 /** 人に頼む作業(導入の途中でエージェントが依頼する) */
 export function tasksOf(values, c) {
   const t = [];
@@ -206,7 +224,7 @@ export function tasksOf(values, c) {
     t.push("まだ追加していなければ、別のドメインを導入に使うアカウントに追加する(そのドメインのネームサーバーを Cloudflare に切り替える)");
   t.push("`wrangler login` でブラウザに出る Cloudflare の画面で「Allow」を押す");
   t.push("Google の OAuth クライアント(管理画面のログイン用)を作る(画面ごとにエージェントが案内する)");
-  t.push(`Cloudflare の API トークンを作る: 設置タグの配信ファイルのデプロイ用・使用状況の表示用(どちらも期限なし)${c.edge_address !== "workers-dev" ? "・ゾーンの設定用(期限 = 翌日)" : ""}`);
+  t.push(tokenTaskOf(values, c));
   if (c.asset_public_base !== "none") t.push("R2(画像の置き場)を有効にする(支払い方法の登録を求められることがある。無料枠の中なら請求は無い)");
   if (c.plan === "paid" && !accountIsPaid(values)) t.push("ダッシュボードで Workers Paid に切り替える");
   if (c.plan === "paid") t.push("導入の後、管理画面の「設定」→「使用状況」でプランを Workers Paid にする");

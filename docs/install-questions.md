@@ -6,11 +6,11 @@ AI エージェントに導入を任せるとき、エージェントが最初�
 
 ## 1. 進め方の規則(エージェント向け)
 
-- 最初のメッセージで「質問は最大 9 つ。1 つずつ聞くが、分かっているならまとめて答えてもよい」と伝え、4 節の書式を示す
+- 最初のメッセージで「質問は最大 10 個。1 つずつ聞くが、分かっているならまとめて答えてもよい」と伝え、4 節の書式を示す
 - `deploy-answers.yaml` に答えが書かれている質問は飛ばす。`<` で始まる値は未記入として聞く
-- 1 問ずつ、表の順に聞く。E1b・E2a・E2d・E2b・E2c は、条件を満たすときだけ聞く
+- 1 問ずつ、表の順に聞く。E1b・E1c・E2a・E2d・E2b・E2c は、条件を満たすときだけ聞く
 - 質問文と選択肢は表の文言を使う。言い回しを相手に合わせて補ってよいが、選択肢を足したり減らしたりしない。用語は「補足」の列を添えて説明する
-- **構成を勧める判断をしない**。選択肢に推奨の印を付けず、構成の話は検査スクリプトの出力に任せる
+- **構成を勧める判断をしない**。選択肢に推奨の印を付けず(E1c の「おすすめ」は表の文言のとおり)、構成の話は検査スクリプトの出力に任せる
 - 答えが選択肢に当てはまらないときは、近い選択肢を示して選び直してもらう(自由に解釈して進めない)
 - 「分からない」を選べる問い(E1b・E2)は、確かめ方を示して答えを確定させる(エージェントが実行できる確かめ方は自分で実行する)
 - すべて聞き終えたら答えを上段に書き、検査スクリプトを実行する([デプロイガイド 0.2](deploy.md#02-構成を決める質問と入力ファイル-deploy-answersyaml))
@@ -29,6 +29,7 @@ AI エージェントに導入を任せるとき、エージェントが最初�
 |---|---|---|---|---|
 | E1 | Cloudflare のアカウントは | (a) 持っていない = `none` / (b) 持っていて、そこに入れる = `existing` / (c) 持っているが、この製品用に別に作る = `separate` | アカウント = Cloudflare の契約の単位。1 つのアカウントに入れられるのは、この製品 1 つまで。同じアカウントのほかの Worker(Cloudflare の上で動くプログラム)と無料枠を分け合う。(a)(c) は、この後に作り方を案内する | `cloudflare_account` |
 | E1b | (E1 = `existing` のとき)そのアカウントは有料の Workers Paid プランですか | (a) いいえ(無料)= `free` / (b) はい = `paid` / (c) 分からない → 確かめ方: Cloudflare のダッシュボードの Manage account(アカウントの管理)→ Billing(請求)→ Subscriptions(サブスクリプション)に Workers Paid があるか | ドメインなしの構成になる場合に、有料プランのアカウントを避けるために確かめる(理由は構成の提示で説明する) | `existing_plan` |
+| E1c | (E1 = `existing` のとき)この Cloudflare のアカウントで、導入に使う API トークンをどう用意しますか | (a) 管理者が Account API Token を 2〜3 本作る(おすすめ。会社のアカウント向け)= `manual-account` / (b) トークンを作るためのトークンを 1 本作り、残りはエージェントに作らせる(社内の規則で認められ、自分か管理者が作れるなら最も楽)= `bootstrap` / (c) 自分の User API Token を作る(管理者の権限が無く、頼めもしないとき)= `manual-user` | API トークン = Cloudflare の API をプログラムから使うための鍵。Account API Token はアカウントに属し、User API Token は作った人に属する。(a) をおすすめする理由: 既存のアカウントでは、トークンを作るためのトークンの権限がこのアカウントのほかのサービスにも届くので、それを避けるために、管理者が必要なトークンを直接作る道を勧める。作ったトークンはアカウントに属するので、作った人が外れても止まらない。(b) の注意: そのトークンの値が生きている数分の間(エージェントが残りを作って消すまで)に漏れると、このアカウントのほかのトークンやサービスにも影響しうる。(c) の注意: 作った人がアカウントから外れると、デプロイと使用状況が止まる。E1 = `none` / `separate`(新しく作るアカウント)のときは聞かず、(b) で進める(アカウントの持ち主は管理者なので作れる) | `cloudflare_tokens` |
 | E2 | タグを入れるサイトのドメインは、導入する Cloudflare アカウントで管理していますか | (a) している = `yes` / (b) していない = `no` / (c) 分からない → 確かめ方: `curl -sI https://<ホスト>/` の `server:` が `cloudflare` なら、Cloudflare を通っている(どのアカウントで管理しているかは、ダッシュボードのドメインの一覧で確かめる)/ (d) サイトはまだ無い・試すだけ = `no_site` | ドメイン = `www.example.com` の `example.com` の部分。Cloudflare で管理している = Cloudflare のダッシュボードにそのドメインが追加されていて(Cloudflare ではこれを「ゾーン」と呼ぶ)、サイトへのアクセスが Cloudflare を通っている状態。管理していなくても導入はできる(Cloudflare が用意するアドレスで動かす。後からサイトのドメインを、導入した Cloudflare アカウントに移せば、そのドメインでの動作に[切り替えられる](deploy.md#28-ドメインありへの移行workers-dev--route))。別のドメインを Cloudflare に置けるなら、そのドメインで動かせる(E2c) | `site_on_cloudflare` |
 | E2a | (E2 = `yes` のとき)タグを入れるページのホストは | 自由入力(例 `www.example.com`) | ホスト = ページの URL の `https://` の後ろから、最初の `/` の手前まで | `install_host` |
 | E2d | (E2 = `yes` のとき)タグを入れるページのホストは、E2a のほかにもありますか(複数可) | ホストを並べる(例 `[form.example.com, shop.example.com]`)/ 無ければ `none` | 申し込みフォームなど、別のホストのページにも目標やテストがあるなら書く。ここに書いたホストはサイト設定の「タグを置くドメイン」に入る。Safari 対策(N1 の (c))を選んだときは、E2a と同じゾーンにあるホストに `/__ab/*` の Route を作る。ゾーンの外のホスト(Cloudflare を通らないホスト)でもテストと目標は動くが、Safari での ID の持ちは Mode A と同じになる | `extra_hosts` |
@@ -46,6 +47,7 @@ daily_pv: unknown           # under_10k / 10k_30k / 30k_70k / over_70k / unknown
 image_upload: false         # false = 画像の URL を使う / true = 管理画面からアップロード
 cloudflare_account:         # none / existing / separate
 existing_plan:              # existing のとき: free / paid
+cloudflare_tokens:          # existing のとき: manual-account / bootstrap / manual-user(新しいアカウントは聞かずに bootstrap)
 site_on_cloudflare:         # yes / no / no_site
 install_host:               # site_on_cloudflare: yes のとき(例 www.example.com)
 extra_hosts:                # site_on_cloudflare: yes のとき: ほかにタグを入れるページのホストを並べる(例 [form.example.com, shop.example.com])/ none

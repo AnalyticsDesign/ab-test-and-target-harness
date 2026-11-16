@@ -27,7 +27,7 @@ Workers Paid で支出が上限に達したときに自動停止する機能は�
 
 この手順は設置サイトのゾーンに edge を置く構成のもの。ほかの構成では、次に挙げる節の手順を本文で読み、最短の手順の該当する手順をそれに置き換える:
 
-- 別のドメインに置く構成(`edge_address: custom-domain`): 0.4 のログインの後の確認の 4(ゾーンが有効になっているか)、0.5 の 2(`CF_TOKEN` が要る。DNS Read を含む)、2.3・2.4・2.9 (3)(4) の `custom-domain` のときの手順、3.4 の `AB_EDGE_ORIGIN`(`https://<edge のホスト>`)、5 節(`<設置タグのホスト>` = edge のホスト)と、1 節の制約 (3)
+- 別のドメインに置く構成(`edge_address: custom-domain`): 0.4 のログインの後の確認の 4(ゾーンが有効になっているか)、0.5 のゾーンの設定用のトークン(`wtt-setup-<アカウントのサブドメイン>`。`CF_TOKEN` に書く。DNS & Zones の DNS の Read を含む)、2.3・2.4・2.9 (3)(4) の `custom-domain` のときの手順、3.4 の `AB_EDGE_ORIGIN`(`https://<edge のホスト>`)、5 節(`<設置タグのホスト>` = edge のホスト)と、1 節の制約 (3)
 - `*.workers.dev` の構成(`edge_address: workers-dev`): 2.3・2.4・2.9 (3)(4)・3.4 の `workers-dev` のときの手順、5 節(`<設置タグのホスト>` = `wtt-static` の workers.dev のホスト)と、1 節の制約 (3)
 
 人が手で既定の構成(0.1 の表)を導入するための、いちばん短い手順。コマンドはすべて 0〜5 節にあるものと同じで、`pnpm docs:check` が一致を検査する。ここには確認を 1 行ずつと、期待と違ったときに読む先だけを添えた。AI エージェントに任せる場合、エージェントはここを使わず 0 節から読む(README のプロンプトのとおり)。
@@ -37,9 +37,9 @@ Windows の Git Bash で確認コマンドの出力が期待と違う場合は�
 ここで動かす構成と、外れるときに読む先:
 
 - 設置サイトのドメインが Cloudflare のゾーンにあり、DNS がプロキシ(オレンジの雲)になっている。edge と設置タグはそのゾーンの Workers Route で公開する(`<設置ホスト>/v1/*`・`/s/*`)。別のドメインに置く構成と `*.workers.dev` の構成で読む先は、上の 2 つの箇条
-- control と管理画面は `*.workers.dev` のアドレスで公開する。自分のドメインに置くなら 3.6・4.2・7.1(このときは 0.5 の 2 のトークンも要る)
+- control と管理画面は `*.workers.dev` のアドレスで公開する。自分のドメインに置くなら 3.6・4.2・7.1(このときは 0.5 のゾーンの設定用のトークン(`CF_TOKEN`)も要る)
 - 画像のアップロードに R2 を使う。使わない構成も手順 12 で選べる
-- ゾーンの Cache Rule(2.6)と WAF Rate Limiting Rule(2.7)は推奨の保護設定で、動いた後に足せる。ここでは作らない。作るときは 0.5 の 2 のトークンが要る。Mode B(サーバー発行 Cookie)のサイトを置くなら 2.7 は必須。WAF を作らないので、edge の Rate Limiting binding の値は手順 8 で 200 にする(後から 2.7 で WAF を作ったら、2.3 の規則で書き直す)
+- ゾーンの Cache Rule(2.6)と WAF Rate Limiting Rule(2.7)は推奨の保護設定で、動いた後に足せる。ここでは作らない。作るときは、0.5 の最後の段落の手順で作業用のトークン(`CF_TOKEN`)を作る。Mode B(サーバー発行 Cookie)のサイトを置くなら 2.7 は必須。WAF を作らないので、edge の Rate Limiting binding の値は手順 8 で 200 にする(後から 2.7 で WAF を作ったら、2.3 の規則で書き直す)
 
 ここで使う値。手を動かす前に控える。0.2 の入力ファイルはエージェントが質問の答えを記録するためのもので、手で進めるときは作らなくてよい。
 
@@ -176,23 +176,25 @@ CF_USAGE_TOKEN=<使用状況の表示用トークン>   # どの構成でも要�
 ```
 
 - **Google の OAuth クライアント**: `https://console.cloud.google.com/auth/overview` で、プロジェクト(新しく作るなら `wtt-auth`)→ Get started(開始)の 4 段の入力(新しいプロジェクトのときだけ)→ Audience(対象)→ Clients(クライアント)の順に進む。種類は Web application(ウェブ アプリケーション)、リダイレクト URI は `<control URL>/auth/callback/google` を 1 つ。画面ごとの決めることと推奨は 0.5 の 1 の表。Client ID と Client secret を `GOOGLE_CLIENT_ID=` / `GOOGLE_CLIENT_SECRET=` に書く
-- **配信ファイルのデプロイ用トークン**: ダッシュボードの右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)。Token name(トークン名)は `wtt-deploy-<アカウントのサブドメイン>`。Start from scratch(最初から作成)の Start with an Account policy(アカウント ポリシーから開始)→ Include(含む)の Account(アカウント)で導入先のアカウントを選ぶ → Developer Platform(開発者プラットフォーム)の Workers Scripts(Workers スクリプト)の Edit(編集)のチェックだけを入れる → Token expiration(トークンの有効期限)は No expiration(期限なし)→ Continue to summary(概要に進む)で確かめて作成。値を `CF_DEPLOY_TOKEN=` に書く(0.5 の 3)
-- **使用状況の表示用トークン**: 同じ画面で作る。Token name(トークン名)は `wtt-usage-<アカウントのサブドメイン>`。上と同じく Start with an Account policy(アカウント ポリシーから開始)で導入先のアカウントを選び、Analytics & Logs(分析とログ)の Account Analytics(アカウント分析)の Read(読み取り)のチェックだけを入れる。期限は No expiration(期限なし)。値を `CF_USAGE_TOKEN=` に書く(0.5 の 4)。作った直後の画面のタブは、値を書いたら閉じる
-- `CF_TOKEN` の行は 2.6・2.7 を後で足すときに使う(0.5 の 2)。ここでは空のままでよい
+- **配信ファイルのデプロイ用トークン**: ダッシュボードの Manage account(アカウントの管理)→ Account API tokens(アカウント API トークン)→ Create a token(トークンを作成)。Token name(トークン名)は `wtt-deploy-<アカウントのサブドメイン>`。Start from scratch(最初から作成)の Custom を押す(この Custom は日本語の表示でも英語のまま)→ Permission policies(権限ポリシー)の Edit policy(ポリシーを編集)で Entire Account(アカウント全体)を選び、Developer Platform の Workers Scripts(Legacy(レガシー))の Edit にだけチェックを入れる(分類・権限の名前と Edit は日本語の表示でも英語のまま。同じ分類の Workers という別の権限と取り違えない)→ Token expiration(トークンの有効期限)は No expiration(期限なし)→ Client IP address filtering(クライアント IP アドレス フィルタリング)は空のまま → Review token(トークンを確認)の Summary(概要)で権限と期限を確かめてから Create token(トークンを作成)を押す。値を `CF_DEPLOY_TOKEN=` に書く(0.5 の「管理者が Account API Token を作る」の表の `wtt-deploy-<識別子>` の行)
+- **使用状況の表示用トークン**: 同じ画面で作る。Token name(トークン名)は `wtt-usage-<アカウントのサブドメイン>`。上と同じく Entire Account(アカウント全体)を選び、Analytics & Logs の Account Analytics の Read にだけチェックを入れる。期限は No expiration(期限なし)。値を `CF_USAGE_TOKEN=` に書く(同じ表の `wtt-usage-<識別子>` の行)。作った直後の画面のタブは、値を書いたら閉じる
+- Account API Token を作れない(アカウントの管理者でない)ときは、管理者に頼むか、User API Token で作る(0.5 の「User API Token を作る」の 3・4)。User API Token では、作った人がアカウントから外れると、デプロイと使用状況が止まる
+- トークンを作る作業をエージェントに任せるなら、0.5 の親トークンの手順(基本の 2 と「親から残りのトークンを作る」)を使える。このときの `deploy-secrets.env` の形と確認は 0.5 の `bootstrap` のもの
+- `CF_TOKEN` の行は 2.6・2.7 を後で足すときに使う(0.5 の最後の段落の手順で作る)。ここでは空のままでよい
 
 確認。値は画面に出ない:
 
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
+AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+tv() { [ -n "$1" ] || { echo missing; return; }; for u in "accounts/$AID/tokens/verify" "user/tokens/verify"; do s=$(curl -sS "https://api.cloudflare.com/client/v4/$u" -H "Authorization: Bearer $1" | jq -r '.result.status // empty' 2>/dev/null); [ "$s" = active ] && { echo "active (${u%%/*})"; return; }; done; echo inactive; }
 { [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ]; } && echo google=ok || echo google=missing   # missing なら人に記入を頼み直す(この先で空の値を登録しない)
-[ -n "$CF_TOKEN" ] && echo cf_token=present || echo cf_token=missing   # edge_address が route か custom-domain、または control_address か admin_address が custom なら present が期待(それ以外は missing でよい)
-[ -z "$CF_TOKEN" ] || curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_TOKEN" | jq -r .result.status   # 期待: active
-[ -n "$CF_DEPLOY_TOKEN" ] && echo cf_deploy_token=present || echo cf_deploy_token=missing   # 期待: present(どの構成でも要る。missing なら人に頼み直す)
-[ -z "$CF_DEPLOY_TOKEN" ] || curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_DEPLOY_TOKEN" | jq -r .result.status   # 期待: active
-[ -n "$CF_USAGE_TOKEN" ] && echo cf_usage_token=present || echo cf_usage_token=missing   # 期待: present(missing なら人に頼み直す)
+echo "cf_token=$(tv "$CF_TOKEN")"                 # route・custom-domain、または control・管理画面を自分のドメインに置くとき: active。それ以外は missing でよい
+echo "cf_deploy_token=$(tv "$CF_DEPLOY_TOKEN")"   # 期待: active(どの構成でも要る)
+echo "cf_usage_token=$(tv "$CF_USAGE_TOKEN")"     # 期待: active(どの構成でも要る)
 ```
 
-期待: `google=ok`、`cf_deploy_token=present` と `active`、`cf_usage_token=present`。ここでは `cf_token=missing` で問題ない。
+期待: `google=ok`、`cf_deploy_token=active (accounts)`、`cf_usage_token=active (accounts)`(User API Token で作ったなら `active (user)`)。ここでは `cf_token=missing` で問題ない。違うときは 0.5 の確認の「期待と違うとき」を読む。
 
 **6. runtime を生成する**(2.1)
 
@@ -341,7 +343,7 @@ openssl rand -hex 32 | pnpm -C apps/control exec wrangler secret put BETTER_AUTH
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 if [ -n "$GOOGLE_CLIENT_SECRET" ]; then printf '%s' "$GOOGLE_CLIENT_SECRET" | pnpm -C apps/control exec wrangler secret put AB_GOOGLE_CLIENT_SECRET; else echo "GOOGLE_CLIENT_SECRET is empty: load deploy-secrets.env (0.5)"; fi
 
-# 管理画面の使用状況の表示用(0.5 の (4) で受け取った Account Analytics: Read のみのトークン)
+# 管理画面の使用状況の表示用(0.5 で作った(または受け取った)Account Analytics の Read だけのトークン)
 if [ -n "$CF_USAGE_TOKEN" ]; then printf '%s' "$CF_USAGE_TOKEN" | pnpm -C apps/control exec wrangler secret put CF_USAGE_TOKEN; else echo "CF_USAGE_TOKEN is empty: load deploy-secrets.env (0.5)"; fi
 ```
 
@@ -440,7 +442,7 @@ curl -s https://<設置タグのホスト>/s/<siteId>.js | head -c 400
 ここまでで導入は終わり。次に読むもの:
 
 - サイトにタグを置く: [サイト導入ガイド](site-install.md)
-- 動いた後に足す推奨の保護設定: 2.6 Cache Rule・2.7 WAF Rate Limiting Rule。先に 0.5 の 2 のトークンを作る。Mode B のサイトを置くなら 2.7 は必須
+- 動いた後に足す推奨の保護設定: 2.6 Cache Rule・2.7 WAF Rate Limiting Rule。先に、0.5 の最後の段落の手順で作業用のトークン(`CF_TOKEN`)を作る。Mode B のサイトを置くなら 2.7 は必須
 - AI エージェントに API を使わせる: 5.1
 - 版を上げる・保護する・戻す: 6 節以降(この文書の構成の表)
 
@@ -449,7 +451,7 @@ curl -s https://<設置タグのホスト>/s/<siteId>.js | head -c 400
 各手順は「実行するコマンド → 確認(期待する出力)→ 期待と違うとき(その対応)」の順に書いてある。エージェントは上から順に実行し、人に頼むのは **【人が行う】** と **【人に依頼】** のラベルが付いた工程だけ。
 
 - **【人が行う】** = 人だけができる操作(下の 1 つ目の表)。構成によって無いものもある。アカウントの作成と `plan: paid` の切り替えは構成しだいで、5.1 は断れば無い。8 節は持たなければ無い
-- **【人に依頼】** = ダッシュボードや端末での操作を頼むもの(下の 2 つ目の表)。0.5 節で一度に集めて頼む。どの構成でも要るのは Google の OAuth クライアント・配信ファイルのデプロイ用トークン・使用状況の表示用トークンの 3 つ。ゾーンありの構成ではこれに Cloudflare API トークン 1 本が加わる。それ以外は構成によって要否が変わる
+- **【人に依頼】** = ダッシュボードや端末での操作を頼むもの(下の 2 つ目の表)。0.5 節で一度に集めて頼む。基本(`cloudflare_tokens: bootstrap`)でどの構成でも要るのは、Google の OAuth クライアントと、Cloudflare のトークンを作るためのトークン(親トークン)1 本の 2 つ。残りの Cloudflare API トークンはエージェントが親トークンで作る。救済(`manual-account`・`manual-user`)では、親トークンの代わりに、配信ファイルのデプロイ用トークンと使用状況の表示用トークンを人が作り、ゾーンありの構成ではこれにゾーンの設定用のトークン 1 本が加わる。それ以外は構成によって要否が変わる
 
 | 工程 | 誰が | 理由 |
 |---|---|---|
@@ -466,15 +468,16 @@ curl -s https://<設置タグのホスト>/s/<siteId>.js | head -c 400
 |---|---|
 | Google Cloud で OAuth クライアントを作り、ID とシークレットを伝える。リダイレクト URI もこのとき登録する | 初回のみ。0.5 で一度に |
 | 別のドメインを導入に使うアカウントに追加する(そのドメインのネームサーバーを Cloudflare に切り替える) | `edge_address: custom-domain` で、まだ追加していないとき。0.4 のログインの後の確認で分かる |
-| ゾーンの設定用の Cloudflare API トークン(Cache Rules / WAF / Zone Read / DNS Read、期限 = 翌日、ゾーン限定)を発行して伝える | ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のときと、control か管理画面を自分のドメインに置くとき(`control_address` か `admin_address` が `custom`)。0.5 で一度に。失効は期限切れに任せる |
-| 配信ファイルのデプロイ用トークンと使用状況の表示用トークンを発行して伝える。権限は前者が Workers Scripts の Edit のみ、後者が Account Analytics の Read のみ。どちらもアカウント単位で、期限なし | 初回のみ(どの構成でも)。0.5 で一度に |
+| 基本(`cloudflare_tokens: bootstrap`): Cloudflare のトークンを作るためのトークン(親トークン)を 1 本作り、`deploy-secrets.env` に書く。Account API Token で、権限は Account API Tokens の Edit だけ、導入先のアカウントだけ、期限 = 翌日。残りのトークンはエージェントがこれで作り、使い終わりにスクリプトが親トークンを消す | 初回のみ(どの構成でも)。0.5 で一度に |
+| 救済(`manual-account`・`manual-user`): ゾーンの設定用の Cloudflare API トークン(Cache Settings(User API Token では Cache Rules)/ Zone WAF / Zone Read / DNS Read、期限 = 翌日、ゾーン限定)を作って伝える。管理者が Account API Token で作る。作れなければ User API Token(作った人がアカウントから外れると、デプロイと使用状況が止まる) | ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のときと、control か管理画面を自分のドメインに置くとき(`control_address` か `admin_address` が `custom`)。0.5 で一度に。失効は期限切れに任せる |
+| 救済(`manual-account`・`manual-user`): 配信ファイルのデプロイ用トークンと使用状況の表示用トークンを作って伝える。権限は前者が Workers Scripts の Edit のみ、後者が Account Analytics の Read のみ。どちらもアカウント単位で、期限なし。管理者が Account API Token で作る。作れなければ User API Token(作った人がアカウントから外れると、デプロイと使用状況が止まる) | 初回のみ(どの構成でも)。0.5 で一度に |
 | R2 の有効化 | 初回のみ。`code: 10042` が出たとき |
 | 画像の公開用のホストに、同じ名前の DNS レコードが無いかをダッシュボードで確かめる | 3.2 で、`CF_TOKEN` が無い構成(またはそのゾーンが `CF_TOKEN` の対象に無いとき)に、画像をカスタムドメインで配るとき |
 | ダッシュボードで Workers Paid に切り替える | `plan: paid` で、アカウントがまだ Free のとき。0.5 で一度に |
 | ダッシュボードの Workers & Pages を一度開く | 0.5 でサブドメインを API で作れなかったときだけ |
 | 更新時の設定の再保存 | 6.4 で (b) があるとき |
-| ゾーンのレート制限ルールを書き換えるための作業用のトークン(Zone WAF Edit / Zone Read、期限 = 翌日、ゾーン限定)を発行して伝える。書き換えはエージェントが API で行う(2.7 の「1 本のルールを書き換える」) | 導入の後に、2.7・7.2 のルールの式や回数を変えるとき。導入の途中は 0.5 の 2 のトークンを使う |
-| 撤去時の R2 の中身の削除、OAuth クライアント・API トークン・Access の削除。別のドメインに置く構成では、DNS レコードが消えたことの確認と証明書の削除 | 10.4 |
+| ゾーンのレート制限ルールを書き換えるための作業用のトークンを 1 本作って伝える。作り方は 0.5 の最後の段落(Account API Token で App Security の Zone WAF Rules の Edit と DNS & Zones の Zone の Read、ゾーン限定、期限 = 今日から翌日まで。作れなければ User API Token)。書き換えはエージェントが API で行う(2.7 の「1 本のルールを書き換える」) | 導入の後に、2.7・7.2 のルールの式や回数を変えるとき。導入の途中は 0.5 で作った作業用のトークン(`CF_TOKEN`)を使う |
+| 撤去時の R2 の中身の削除、OAuth クライアント・API トークン(Account API tokens(アカウント API トークン)の一覧のもの。User API Token で作ったものは My Profile の一覧)・Access の削除。別のドメインに置く構成では、DNS レコードが消えたことの確認と証明書の削除 | 10.4 |
 
 **ダッシュボードの画面名の書き方**(この文書と、エージェントが人に示す依頼文の両方):
 
@@ -585,10 +588,10 @@ node tools/deploy-answers/cli.mjs; echo "exit=$?"   # 期待: exit=0、「## 指
 | `edge_address` | 2.3(`route` なら Route、`custom-domain` なら Custom Domain、`workers-dev` なら `workers_dev: true`)、2.4 の確認 URL、2.6 / 2.7(`route` と `custom-domain` では行い、`workers-dev` では飛ばす)、3.4 `AB_EDGE_ORIGIN`(`custom-domain` なら `https://<edge_host>`)、5 節のスモーク |
 | `asset_public_base` / `asset_max_mb` | 3.2、3.4。`dev-assets` は 3.5 の初回 deploy で control の URL が分かった後に `<control URL>/dev-assets` に展開して `AB_ASSET_PUBLIC_BASE` に書く(literal のまま書かない)。none なら 3.2 の R2 の手順を飛ばし、3.4 の AB_ASSET_PUBLIC_BASE を書かない。`auto` は 0.4 のログインの後の確認で `https://wtt-assets.<zone_name>` に展開される |
 | `release_tag` | 0.3 |
-| `control_address` / `control_host` | 0.5 の 2(`custom` ならゾーンの設定用トークンを作り、`control_host` のゾーンを含める)、3.4 `AB_CONTROL_URL`、3.6、7.1 |
+| `control_address` / `control_host` | 0.5 のゾーンの設定用のトークン(`custom` なら作業用のトークンを作り、対象に `control_host` のゾーンを含める)、3.4 `AB_CONTROL_URL`、3.6、7.1 |
 | `control_protection` | 7 節 |
 | `edge_waf_rate_limit` / `edge_waf_requests_per_10s` | 2.3(Rate Limiting binding)、2.7 |
-| `admin_address` / `admin_host` | 0.5 の 2(`custom` ならゾーンの設定用トークンを作り、`admin_host` のゾーンを含める)、3.4 `AB_ADMIN_URL`、4.2 |
+| `admin_address` / `admin_host` | 0.5 のゾーンの設定用のトークン(`custom` なら作業用のトークンを作り、対象に `admin_host` のゾーンを含める)、3.4 `AB_ADMIN_URL`、4.2 |
 | `extra_hosts` | 5 節のサイトの作成の後に、サイト設定の「タグを置くドメイン」に足す。`--accept recommended` で Safari 対策ありなら、ゾーンの中のホストは `dlite_hosts` にも入る |
 | `dlite_hosts` | 2.3 の `/__ab/*` Route。後から足すときは 6.7 |
 | `owner_email` / `workspace_name` | 5 節の初回セットアップ(`POST /setup`)。`owner_email` はログインに使う Google アカウントと同じメールアドレス。`workspace_name` は質問の表に無く、0.5 の人への依頼で一緒に聞いて書く |
@@ -801,17 +804,17 @@ fi
 
 1. control の URL を確定する(リダイレクト URI に要る)。workers.dev のサブドメインが無ければエージェントが作る
 2. エージェントが `deploy-secrets.env` を空の値で作り、エディタで開く
-3. 下の (1)〜(5) のうち構成で要るものだけを 1 つの依頼文にまとめ、人に示す。依頼文には必要な値(リダイレクト URI・権限・期限)を埋めておく。最初のワークスペースの名前も同じ依頼文で聞く
-4. 人が受け取った値を `deploy-secrets.env` に書く。エージェントは中身を表示せずに確認する
+3. 下の【人に依頼】の 1〜5 のうち、構成と `cloudflare_tokens`(下の「Cloudflare の API トークンの用意の仕方」)で要るものだけを 1 つの依頼文にまとめ、人に示す。依頼文には必要な値(リダイレクト URI・名前・権限・期限)を埋めておく。最初のワークスペースの名前も同じ依頼文で聞く
+4. 人が受け取った値を `deploy-secrets.env` に書く。`bootstrap` では、エージェントが親トークンから残りのトークンを作る(下の「親から残りのトークンを作る」)。エージェントは中身を表示せずに確認する
 
 **`deploy-secrets.env` の作り方**(依頼文を示す前に、エージェントが作る):
 
 - リポジトリ直下に、要る行だけ・値は空で作る(形は下の「`deploy-secrets.env` の形」)。git 管理外
-- 作るときは、所有者だけが読める権限にする。同じ端末に別のアカウントがあると、既定の権限では他のアカウントからも読めるため。macOS / Linux / Git Bash の例: `[ -e deploy-secrets.env ] || (umask 077 && printf 'GOOGLE_CLIENT_ID=\nGOOGLE_CLIENT_SECRET=\nCF_DEPLOY_TOKEN=\nCF_USAGE_TOKEN=\n' > deploy-secrets.env); chmod 600 deploy-secrets.env`(要る行は構成に合わせる。既にあれば上書きしない(貼った値を消さない)。`chmod` は前からあるファイルの権限も直す)。Windows の PowerShell では、ホームのフォルダの既定の権限に任せる
+- 作るときは、所有者だけが読める権限にする。同じ端末に別のアカウントがあると、既定の権限では他のアカウントからも読めるため。macOS / Linux / Git Bash の例は、`bootstrap` では `[ -e deploy-secrets.env ] || (umask 077 && printf 'GOOGLE_CLIENT_ID=\nGOOGLE_CLIENT_SECRET=\nCF_BOOTSTRAP_TOKEN=\n' > deploy-secrets.env); chmod 600 deploy-secrets.env`、救済(`manual-account`・`manual-user`)では `[ -e deploy-secrets.env ] || (umask 077 && printf 'GOOGLE_CLIENT_ID=\nGOOGLE_CLIENT_SECRET=\nCF_DEPLOY_TOKEN=\nCF_USAGE_TOKEN=\n' > deploy-secrets.env); chmod 600 deploy-secrets.env`(救済では要る行を構成に合わせ、`CF_TOKEN` が要る構成では `CF_TOKEN=\n` も足す。既にあれば上書きしない(貼った値を消さない)。`chmod` は前からあるファイルの権限も直す)。Windows の PowerShell では、ホームのフォルダの既定の権限に任せる
 - 人にはファイルを作らせない。Windows のエクスプローラやメモ帳から新しく作ると、拡張子だけのファイル名に `.txt` が付きやすいため。人は開いて `=` の右に貼るだけにする
 - ファイルはエージェントがエディタで開き、人にシェルを開かせない。まず `pwd` で絶対パスを確かめる。Windows の Git Bash では `pwd -W` が `C:/…` の形を返す。次に Windows = `notepad "<絶対パス>"`、macOS = `open -e "<絶対パス>"`、Linux = `xdg-open "<絶対パス>"` を自分で実行する
 - エディタは閉じるのを待たない形で開き、開いた後に依頼文を出す。閉じるまで戻らない形で開くと、依頼文を出す前にエージェントが次の処理に進めなくなる。人は何を書くか分からないまま、エディタを前に待つことになる
-- 依頼文には絶対パスと「エディタで開いたので `=` の右に貼って保存する」を書く。エディタが人の画面に開かなかったときだけ、絶対パスを示して人に開いてもらう。エージェントの実行環境と人の端末が違うときなどに起きる
+- 依頼文には絶対パスと「エディタで開いたので `=` の右に貼り、保存してエディタを閉じてから伝える」を書く。エディタが人の画面に開かなかったときだけ、絶対パスを示して人に開いてもらう。エージェントの実行環境と人の端末が違うときなどに起きる
 - エージェントはこのファイルの中身を表示せず、環境変数に読み込む(下の「確認」)。会話・`deploy-log.md` に値が出ない
 
 **管理画面と control の Worker の名前を決める**(新しい導入だけ):
@@ -938,19 +941,28 @@ fi
 
 **Cloudflare の API トークンの名前**(エージェントが名前を埋めて依頼文に書く):
 
-| 用途 | 名前 | 下の項目 |
-|---|---|---|
-| ゾーンの設定用 | `wtt-setup-<識別子>` | 2 |
-| 配信ファイルのデプロイ用 | `wtt-deploy-<識別子>` | 3 |
-| 使用状況の表示用 | `wtt-usage-<識別子>` | 4 |
+| 用途 | 名前 | `deploy-secrets.env` の行 | 作る人(下の項目) |
+|---|---|---|---|
+| トークンを作るためのトークン(親トークン) | `wtt-bootstrap-<識別子>` | `CF_BOOTSTRAP_TOKEN` | 人(基本の 2)。救済では作らない |
+| ゾーンの設定用(作業用) | `wtt-setup-<識別子>` | `CF_TOKEN` | 基本ではスクリプト(下の「親から残りのトークンを作る」)。救済では人(2〜4) |
+| 配信ファイルのデプロイ用 | `wtt-deploy-<識別子>` | `CF_DEPLOY_TOKEN` | 同上 |
+| 使用状況の表示用 | `wtt-usage-<識別子>` | `CF_USAGE_TOKEN` | 同上 |
 
 識別子 = 上で確かめたアカウントの workers.dev のサブドメイン。サブドメインを取っていない構成では、`zone_name` の `.` を `-` にしたもの。
 
-識別子を付ける理由: API トークンは Cloudflare のアカウントではなくユーザー(My Profile)に属する。そのため、別のアカウントに入れた導入のトークンも同じ一覧に並ぶ(1 つのアカウントに入れられる導入は 1 つまで。1 節)。Cloudflare は同じ名前のトークンを拒まないため、識別子が無いと、撤去のときにどの導入のトークンか名前から分からない。
+識別子を付ける理由: Account API Token は導入先のアカウントの一覧に並び、1 つのアカウントに入れられる導入は 1 つまで(1 節)なので、その一覧の中では識別子が無くても見分けられる。それでも、下の 3 通りのどれでも同じ名前の付け方にそろえる。User API Token は作った人(My Profile)に属するので、一人の一覧に、別のアカウントに入れた導入のトークンも並ぶ。Cloudflare は同じ名前のトークンを拒まないため、識別子が無いと、撤去のときにどの導入のトークンか名前から分からない。
 
 **名前は必ず表のとおりに付ける。** 依頼文の Token name(トークン名)には識別子を埋めた名前をそのまま書き、`wtt-deploy` のような識別子の無い名前や、`CF_DEPLOY_TOKEN` のような控えの変数名を名前にしない。作成の後、人に一覧の名前が依頼文と同じかを確かめてもらう。違っていたら、そのトークンを作り直してから値を控える(撤去のときに別の導入のトークンと取り違えないため。10.4 の 5)。
 
-**【人に依頼】**(構成で要るものだけ)
+**Cloudflare の API トークンの用意の仕方**(`deploy-answers.yaml` の `cloudflare_tokens`。次の 3 通り):
+
+- `bootstrap`(基本): 人はトークンを作るためのトークン(親トークン)を 1 本だけ作る。残りの 2〜3 本は、エージェントがスクリプトで親トークンから作り、使い終わった親トークンを消す(下の基本の 2(親トークン)と「親から残りのトークンを作る」)
+- `manual-account`(救済): 管理者が Account API Token を 2〜3 本直接作る(下の「管理者が Account API Token を作る」)
+- `manual-user`(救済。非推奨): 導入する人が自分の User API Token を 2〜3 本作る(下の「User API Token を作る」)。作った人がアカウントから外れると、デプロイと使用状況が止まる
+
+新しく作ったアカウント(`cloudflare_account: none / separate`)では、聞かずに親トークンにする(アカウントの持ち主は管理者なので、親トークンを作れる)。既存のアカウント(`existing`)では、管理者が直接作る `manual-account` が既定。親トークンの権限は、そのアカウントのどのトークンも作り・書き換え・消せるので、値が漏れるとそのアカウントのほかのサービスにも届くため。
+
+**【人に依頼】**(構成と `cloudflare_tokens` で要るものだけ)
 
 1. **Google の OAuth クライアント**(どの構成でも要る)。エージェントは次の表を 1 画面ずつ案内し、登録するリダイレクト URI `<control URL>/auth/callback/google` を伝える。Google はこの作成を API で行う手段を提供していないため、この工程だけは人が行う。開くリンク = `https://console.cloud.google.com/auth/overview`
 
@@ -974,6 +986,46 @@ fi
 - (a) シークレットを足して、古いものを消す: Clients(クライアント)の一覧でクライアントの名前を押して詳細を開く。Client secrets(クライアント シークレット)の Add secret(日本語の表示でも英語のまま)で新しいシークレットを作り、その行のコピーのアイコンで値をコピーして `deploy-secrets.env` に書く。画面を離れるとコピーできなくなる。次に、古いシークレットの行で Disable(無効にする)を押してから、ごみ箱のアイコンで削除する。無効にする前は削除できない。1 つのクライアントに置けるシークレットは 2 つまで
 - (b) クライアントを作り直す: Clients(クライアント)の一覧でそのクライアントにチェックを入れ、Delete(削除)を押す。表の Clients(クライアント)の行から作り直す(リダイレクト URI も登録し直す)。消したクライアントは、30 日以内なら Restore deleted OAuth clients(削除した OAuth クライアントを復元)で戻せる
 
+2. **トークンを作るためのトークン(親トークン)**(基本。`cloudflare_tokens: bootstrap` のとき。どの構成でも 1 本)
+   - 画面: ダッシュボードの Manage account(アカウントの管理)→ Account API tokens(アカウント API トークン)→ Create a token(トークンを作成)
+   - Token name(トークン名)= `wtt-bootstrap-<識別子>`
+   - テンプレートは選ばず、Start from scratch(最初から作成)の Custom を押す(この Custom は日本語の表示でも英語のまま。説明は Create a custom permission policy.(カスタム権限ポリシーを作成))
+   - Permission policies(権限ポリシー)の Edit policy(ポリシーを編集)で Entire Account(アカウント全体)を選び、Account & Billing の Account API Tokens の Edit にだけチェックを入れる(分類・権限の名前と Edit は日本語の表示でも英語のまま)
+   - Token expiration(トークンの有効期限)= Custom(カスタム)。カレンダーで今日の日付を押してから翌日の日付を押し、Start(開始)が今日・End(終了)が翌日になったことを確かめてから Apply(適用)を押す。翌日だけを押すと Start(開始)も翌日になり、今日はこのトークンを使えない。この押し方の結果は英語の画面と日本語の画面で確かめた
+   - Client IP address filtering(クライアント IP アドレス フィルタリング)は空のままにする
+   - Review token(トークンを確認)を押す。出た Review token(トークンを確認)の画面(日本語の表示では、説明の文は「作成前に設定を確認してください」)の Summary(概要)で、Permission policies(権限ポリシー)の権限が Account API Tokens の 1 つだけであることと、EXPIRATION(有効期限)を確かめてから Create token(トークンを作成)を押す。違っていたら Back to edit(編集に戻る)で直す
+   - 作成の直後の画面に出る値を `deploy-secrets.env` の `CF_BOOTSTRAP_TOKEN=` の右に貼り、**保存してエディタを閉じてから**エージェントに伝える。エディタを開いたままにして後で保存すると、エージェントがこのファイルに書いた残りのトークンの値が消える。値を貼ったら、作成の直後の画面のタブを閉じる
+
+**親トークンの方法が取れないとき(救済)**
+
+次のどれかに当たるときは、親トークンを作らず、人がトークンを 1 本ずつ直接作る。この文書とスクリプトの出力で「救済の手順」と言うときは、下の 2 つ(「管理者が Account API Token を作る」と「User API Token を作る」)の手順を指す。`deploy-answers.yaml` の `cloudflare_tokens` を、使う手順の値にする:
+
+- 社内の規則で、トークンを作るためのトークンが認められない
+- 既存のアカウントで、親トークンの権限がそのアカウントのほかのサービスに届くのを避けたい
+- Account API Token を作る権限が無い(管理者に頼めるなら `manual-account`、頼めなければ `manual-user`。`manual-user` では、作った人がアカウントから外れると、デプロイと使用状況が止まる)
+
+どちらの手順でも、名前・権限・期限は親トークンから作るときと同じ。違うのは、作る画面と、画面の権限の名前(トークンの種類で違う)だけ。
+
+**2〜4. 管理者が Account API Token を作る**(`cloudflare_tokens: manual-account`)
+
+- 作るのは、導入先のアカウントの Super Administrator などの、Account API Token を作れる管理者。導入する人が管理者でなければ、この依頼を管理者に渡してもらう。Account API Token はアカウントに属するので、作った人がアカウントから外れても止まらない
+- 画面は基本の 2(親トークン)と同じ: Manage account(アカウントの管理)→ Account API tokens(アカウント API トークン)→ Create a token(トークンを作成)→ Start from scratch(最初から作成)の Custom。下の表の 1 行ごとに 1 本作る。作るのは「要るとき」に当たる行だけ
+- 権限は Permission policies(権限ポリシー)の Edit policy(ポリシーを編集)で選ぶ。分類・権限の名前と Read / Edit は日本語の表示でも英語のまま。チェックを入れるのは表の権限だけにする
+
+| Token name(トークン名) | 要るとき | Edit policy(ポリシーを編集)で選ぶもの | Token expiration(トークンの有効期限) | 値を書く行 |
+|---|---|---|---|---|
+| `wtt-setup-<識別子>` | ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のときと、control か管理画面を自分のドメインに置くとき(`control_address` か `admin_address` が `custom`) | Specified Domains(指定ドメイン)にして Select domains...(ドメインを選択...)で対象のゾーン(表の下の箇条)を選び、Cache & Performance の Cache Settings の Edit、App Security の Zone WAF Rules の Edit、DNS & Zones の Zone の Read、DNS & Zones の DNS の Read | Custom(カスタム)で今日 → 翌日(基本の 2(親トークン)と同じ押し方)。失効の手間をなくすため。導入が翌日までに終わらなければ作り直す | `CF_TOKEN=` |
+| `wtt-deploy-<識別子>` | どの構成でも | Entire Account(アカウント全体)で、Developer Platform の Workers Scripts(Legacy(レガシー))の Edit だけ。同じ分類に Workers という別の権限があるので、取り違えない | No expiration(期限なし)。デプロイ専用の Worker の secret として常設する。アカウント内のすべての Worker を書き換えられるので、ほかの場所に置かない | `CF_DEPLOY_TOKEN=` |
+| `wtt-usage-<識別子>` | どの構成でも | Entire Account(アカウント全体)で、Analytics & Logs の Account Analytics の Read だけ | No expiration(期限なし)。権限は使用状況の読み取りだけで、漏れても設定やデータは書き換えられない。失効は撤去のとき(10.4)に行う | `CF_USAGE_TOKEN=` |
+
+- `wtt-setup-<識別子>` の対象のゾーン: 設置サイトのゾーンに置く構成(`route`)では設置サイトのゾーン、別のドメインに置く構成(`custom-domain`)では `edge_host` のゾーン(`zone_name`)。`workers-dev` の構成で control か管理画面を自分のドメインに置くときは、`control_host`・`admin_host` のゾーンだけにする。`control_host`・`admin_host` のゾーンの名前は、依頼文を出す前にエージェントが確かめる: ホストの末尾から候補の名前(`admin.example.co.jp` なら `example.co.jp`・`co.jp`)を作り、`wrangler login` の資格情報で `GET /zones?name=<候補>` を引いて、導入先のアカウントの有効なゾーンが返った名前にする
+- `control_host`・`admin_host` のゾーンが上のゾーンと違うとき: Select domains...(ドメインを選択...)で 2 つ目のゾーンを選べるかは、画面で確かめていない。選べなければ、Add policy(ポリシーを追加)を押し、次に出る Edit policy(ポリシーを編集)で Specified Domains(指定ドメイン)にして 2 つ目のゾーンを選び、同じ 4 つの権限にチェックを入れる(Add policy(ポリシーを追加)を押しても、先のポリシーは残る)
+- 1 本ごとに、Client IP address filtering(クライアント IP アドレス フィルタリング)は空のままにし、Review token(トークンを確認)の Summary(概要)で権限と期限を確かめてから Create token(トークンを作成)を押す(基本の 2(親トークン)と同じ)。値は表の「値を書く行」に書く
+
+**2〜4. User API Token を作る**(非推奨。`cloudflare_tokens: manual-user`)
+
+作った人がアカウントから外れると、デプロイと使用状況が止まる。User API Token は作った人に属するため。管理者に頼めず、Account API Token を作れないときだけ使う。
+
 2. **ゾーンの設定用の Cloudflare API トークン**(ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のときと、control か管理画面を自分のドメインに置くとき(`control_address` か `admin_address` が `custom`)だけ。どれにも当たらなければ不要)
    - 画面: ダッシュボードの右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)
    - Token name(トークン名)= `wtt-setup-<識別子>`
@@ -987,7 +1039,7 @@ fi
    - Token expiration(トークンの有効期限)= Custom(カスタム)で、終了を翌日にする。失効の手間をなくすため。導入が翌日までに終わらなければ発行し直す。カレンダーで翌日を 1 回押すと、End(終了)だけでなく Start(開始)も翌日の 00:00 になり、そのままでは今日はこのトークンを使えない。Start(開始)の日時を今日の今の時刻より前に直してから Apply(適用)を押す。直す操作は画面で確かめていないので、直せないときは作成せずにエージェントに伝えてもらう
    - Continue to summary(概要に進む)で、権限と期限の開始・終了を確かめてから作成し、値を `CF_TOKEN=` に書く
 3. **配信ファイルのデプロイ用トークン**(どの構成でも要る)
-   - 画面: 2 と同じ。ゾーンのある構成(`route`・`custom-domain`)では 2 と同じ画面で続けて作る
+   - 画面: この手順の 2 と同じ。ゾーンのある構成(`route`・`custom-domain`)では、この手順の 2 と同じ画面で続けて作る
    - Token name(トークン名)= `wtt-deploy-<識別子>`
    - Start from scratch(最初から作成)の Start with an Account policy(アカウント ポリシーから開始)を押す
    - Include(含む)の Account(アカウント)で、導入先のアカウントを選ぶ(初めは All accounts(すべてのアカウント)になっているので、選び直す)
@@ -1002,7 +1054,7 @@ fi
    - Token expiration(トークンの有効期限)= No expiration(期限なし)。権限は使用状況の読み取りだけで、漏れても設定やデータは書き換えられない。期限を付けると、切れた日から管理画面の使用状況に「使用状況を取得できませんでした」と出る。その場合はトークンの作り直しと 3.3 の secret の入れ直しが要る。ほかの機能には影響しない。失効は撤去のとき(10.4)に行う
    - Continue to summary(概要に進む)で確かめてから作成し、値を `CF_USAGE_TOKEN=` に書く。Cloudflare のアカウント ID も一緒に控える(3.4 の `CF_ACCOUNT_ID` に入れる)
 
-トークンを作った直後の画面には、トークンの値が出る。値を `deploy-secrets.env` に書いたら、その画面のタブを閉じてもらう(画面を共有している・画面を取り込む道具を使っているときに、値が人の目や記録に残らないようにするため)。
+どの手順でも、トークンを作った直後の画面には、トークンの値が出る。値を `deploy-secrets.env` に書いたら、保存してエディタを閉じてからエージェントに伝え、その画面のタブを閉じてもらう(画面を共有している・画面を取り込む道具を使っているときに、値が人の目や記録に残らないようにするため)。
 
 5. **Workers Paid への切り替え**(`plan: paid` で、アカウントがまだ Free のときだけ)。ダッシュボードの Compute(コンピュート)→ Workers plans(Workers のプラン)で Workers Paid を選ぶ。料金は月 $5 からで、支払い方法の登録が要る
 
@@ -1012,7 +1064,66 @@ fi
 - 答えを `workspace_name` の行の `#` を外して書く(5 節の `POST /setup` で使う)
 - 決めないと答えたときだけ、既定の名前にする。設置サイトのゾーンに置く構成(`edge_address: route`)ではゾーン名(`zone_name`。例 `example.com`)、別のドメインに置く構成(`custom-domain`)とドメインなしの構成(`workers-dev`)では `Default Workspace`。別のドメインのゾーン名は、サイトの名前にならないため
 
-`deploy-secrets.env` の形(要る行だけ):
+**親から残りのトークンを作る**(`bootstrap` のとき。人が `CF_BOOTSTRAP_TOKEN` に値を書き、保存してエディタを閉じたと伝えた後に、エージェントが行う)
+
+エージェントがリポジトリのルートで次を 1 回打つ。`<0.4 の ID>` は 0.4 で確かめた導入先の Account ID、`<識別子>` は上の「Cloudflare の API トークンの名前」の識別子:
+
+```bash
+CLOUDFLARE_ACCOUNT_ID=<0.4 の ID> node tools/deploy-tokens/run.mjs --ident <識別子>
+```
+
+スクリプト(`tools/deploy-tokens/run.mjs`。Node の組み込みだけで動き、npm の依存は無い)は、まず親トークンの名前・権限(Account API Tokens の Edit だけ)・対象(導入先のアカウントだけ)・期限(今から 48 時間以内に切れ、開始が今より前)を確かめる。次に構成で要る子のトークンを作り、値を `deploy-secrets.env` に書く。子がそれぞれの届き先に届くことを確かめたら、親トークンを消し、`CF_BOOTSTRAP_TOKEN` の値を空にする。トークンの値は、画面・記録ファイル・`deploy-log.md` のどれにも出さない。
+
+呼ぶ API(`https://api.cloudflare.com/client/v4`。`<ID>` は `CLOUDFLARE_ACCOUNT_ID`):
+
+| 使う資格情報 | API | 何のため |
+|---|---|---|
+| 親トークン | `GET /accounts/<ID>/tokens/verify` | 親トークンの状態(`active` か) |
+| 親トークン | `GET /accounts/<ID>/tokens/<トークンの ID>` | 親トークンの詳細(名前・権限・対象・期限) |
+| 親トークン | `GET /accounts/<ID>/tokens/permission_groups` | 権限の一覧(権限の名前から ID を引く) |
+| 親トークン | `GET /accounts/<ID>/tokens` | トークンの一覧(同じ名前のトークンが無いか、作った子が一覧にあるか) |
+| 親トークン | `POST /accounts/<ID>/tokens` | 子を作る |
+| 親トークン | `DELETE /accounts/<ID>/tokens/<トークンの ID>` | 親トークンを消す。済む前の打ち直しと `--reset` では、記録にある子も消す |
+| `wrangler login` の資格情報 | `GET /zones?name=<ゾーン名>` | 作業用の対象のゾーンの ID(要るゾーンがあるときだけ) |
+| 子のトークン | `GET /accounts/<ID>/tokens/verify` | 子の状態(`active` か) |
+| 作業用 | `GET /zones/<ゾーンの ID>/rulesets/phases/http_ratelimit/entrypoint` | 届き先の読み取り(対象のゾーンに届くか。ルールがまだ無いゾーンで返るエラー `10003` は届いた扱い) |
+| デプロイ用 | `GET /accounts/<ID>/workers/scripts` | 届き先の読み取り(Worker の一覧) |
+| 使用状況用 | `POST /graphql` | 届き先の読み取り(使用状況の照会が受け付けられるか) |
+
+作るトークン(権限は API の権限の名前。画面の Edit は API では Write):
+
+| 役割 | 名前 | `deploy-secrets.env` の行 | 権限 | 対象 | 期限 |
+|---|---|---|---|---|---|
+| 作業用 | `wtt-setup-<識別子>` | `CF_TOKEN` | Zone Read・DNS Read・Cache Settings Write・Zone WAF Write | 要るゾーンごと | 作成から 24 時間 |
+| デプロイ用 | `wtt-deploy-<識別子>` | `CF_DEPLOY_TOKEN` | Workers Scripts Write | 導入先のアカウント | なし |
+| 使用状況用 | `wtt-usage-<識別子>` | `CF_USAGE_TOKEN` | Account Analytics Read | 導入先のアカウント | なし |
+
+作業用は、要るゾーン(`zone_name`、または control・管理画面を自分のドメインに置くときのホストのゾーン)があるときだけ作る。
+
+出力には、子 1 本ごとの `token <役割> name=<名前> id=<ID> expires=<期限>` の行、親トークンの `parent <状態> name=<名前> id=<ID>` の行、次にすることの文が出て、最後の 1 行が `deploy-tokens: done`・`deploy-tokens: human`・`deploy-tokens: error` のどれかになる(終了コードは順に 0・3・1。Ctrl+C などのシグナルで止めたときは 130・143)。`done` 以外のときは、最後の行の直前に、下の「親トークンの値が漏れたとき」を指す 1 行が入る。出た名前と ID を `deploy-log.md` に書く(ID は秘密ではない)。
+
+- 引数なし(または `--parent-deleted`)で打ったときの `deploy-tokens: done` → 済んだ。子を作って確かめ、親トークンが消え、`CF_BOOTSTRAP_TOKEN` が空になったときだけ出る。次の手順へ進む
+- `--reset` を付けて打ったときの `deploy-tokens: done` → 消し終えたことを示す(子は 1 本も残っていない)。最後の行より前の文に従い、`cloudflare_tokens` を書き換えて救済の手順へ進む
+- `deploy-tokens: human`・`deploy-tokens: error` → 最後の行より前の文に従う。人に頼む操作は、文の中の名前と ID を依頼文に書いて人に示す
+- 途中で止まったときは、同じコマンドを打ち直す。子を確かめる前に止まっていれば、作った子を消してから最初から作り直す。子を確かめた後・親トークンを消す前に止まっていれば、子は作り直さず、親トークンを消して確かめるだけ。記録に ID の無い同じ名前のトークンが一覧にあれば、ほかの導入のトークンかもしれないので、消さずに止まる
+- **`deploy-tokens: done` が出るまで、`CF_TOKEN`・`CF_DEPLOY_TOKEN`・`CF_USAGE_TOKEN` を後ろの手順で使わない。** 打ち直すと子が作り直され、前の値は使えなくなるため
+- 子が届き先に届かずに止まったときは、親トークンがまだ生きていると出る。原因を直して打ち直すか、やめるなら `--reset` を付けて打つ(作った子と親トークンを消し、記録を消す)
+- 救済の手順に切り替えるときは、スクリプトが済む前だけ、先に `--reset` を付けて打ってから、`cloudflare_tokens` を `manual-account` か `manual-user` に書き換える(`manual-user` では、作った人がアカウントから外れると、デプロイと使用状況が止まる)。`--reset` の後の `deploy-secrets.env` は `bootstrap` の形のままなので、救済の形の行(`CF_DEPLOY_TOKEN=` など)が無ければ足す。済んだ後は `--reset` は使えず、切り替えにも使わない
+- 名前と ID を出して止まったときは、人に Account API tokens(アカウント API トークン)の一覧で、出力の名前のトークンを Name(名前)と Created(作成日)で見分けてもらい、出力の文のとおりに消すか残すかを決める(一覧の列に ID は無い。ID は `deploy-log.md` と `deploy-tokens.json` に残し、エージェントが照らす)。Created(作成日)には日時ではなく、何時間前のような作成からの経過(相対表示)が出る。Name(名前)の欄には、名前と一緒に Expires soon(まもなく期限切れ)・Expired(期限切れ)などの状態も出る。同じ名前のトークンが 2 本以上あって作成日でも見分けられないときは、消さずにエージェントに伝えてもらう。消すときは、そのトークンの Token actions(トークンのアクション)→ Delete(削除)→ 確認の画面の Delete token(トークンを削除)
+- `--parent-deleted` は、記録の親トークンが一覧から消えたのを人が見たときに使う。`CF_BOOTSTRAP_TOKEN` を空にしてから `--parent-deleted` を付けて打つ(値があると、引数ではなく値で進み方を決める)
+- 記録ファイル `deploy-tokens.json`(作ったトークンの名前・ID・期限。値は入っていない)から、打ち直しの続きを決める。動いている間はロック `deploy-tokens.json.lock` を置き、同じフォルダの 2 つ目の実行は止まる。前の実行が動いていなければ、スクリプトがロックを外す
+
+`deploy-secrets.env` の形(要る行だけ)。`bootstrap` のとき:
+
+```bash
+GOOGLE_CLIENT_ID=<クライアント ID>          # 秘密ではないが受け渡しをまとめるためここに書く。3.4 の vars に入る
+GOOGLE_CLIENT_SECRET=<クライアント シークレット>
+CF_BOOTSTRAP_TOKEN=<トークンを作るためのトークン>
+```
+
+子の行(`CF_TOKEN`・`CF_DEPLOY_TOKEN`・`CF_USAGE_TOKEN`)は、スクリプトが足して値を書く。人は書かない。スクリプトが読み書きする `CF_` の 4 つの行は `キー=値` の形だけにし、行の後ろにコメントを付けない(付けると、スクリプトが行の形の違いで止まる)。
+
+救済(`manual-account`・`manual-user`)のとき:
 
 ```bash
 GOOGLE_CLIENT_ID=<クライアント ID>          # 秘密ではないが受け渡しをまとめるためここに書く。3.4 の vars に入る
@@ -1022,19 +1133,40 @@ CF_DEPLOY_TOKEN=<配信ファイルのデプロイ用トークン>   # どの構
 CF_USAGE_TOKEN=<使用状況の表示用トークン>   # どの構成でも要る
 ```
 
-確認。値は表示しない。Windows のエディタで書くと行末に CR が付くので、取り除いて読む:
+確認(救済のとき)。値は表示しない。Windows のエディタで書くと行末に CR が付くので、取り除いて読む。トークンは、Account API Token の確かめ先(`/accounts/<ID>/tokens/verify`)、User API Token の確かめ先(`/user/tokens/verify`)の順に確かめ、`active` になった方の種類を添えて出す:
 
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
+AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+tv() { [ -n "$1" ] || { echo missing; return; }; for u in "accounts/$AID/tokens/verify" "user/tokens/verify"; do s=$(curl -sS "https://api.cloudflare.com/client/v4/$u" -H "Authorization: Bearer $1" | jq -r '.result.status // empty' 2>/dev/null); [ "$s" = active ] && { echo "active (${u%%/*})"; return; }; done; echo inactive; }
 { [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ]; } && echo google=ok || echo google=missing   # missing なら人に記入を頼み直す(この先で空の値を登録しない)
-[ -n "$CF_TOKEN" ] && echo cf_token=present || echo cf_token=missing   # edge_address が route か custom-domain、または control_address か admin_address が custom なら present が期待(それ以外は missing でよい)
-[ -z "$CF_TOKEN" ] || curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_TOKEN" | jq -r .result.status   # 期待: active
-[ -n "$CF_DEPLOY_TOKEN" ] && echo cf_deploy_token=present || echo cf_deploy_token=missing   # 期待: present(どの構成でも要る。missing なら人に頼み直す)
-[ -z "$CF_DEPLOY_TOKEN" ] || curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_DEPLOY_TOKEN" | jq -r .result.status   # 期待: active
-[ -n "$CF_USAGE_TOKEN" ] && echo cf_usage_token=present || echo cf_usage_token=missing   # 期待: present(missing なら人に頼み直す)
+echo "cf_token=$(tv "$CF_TOKEN")"                 # route・custom-domain、または control・管理画面を自分のドメインに置くとき: active。それ以外は missing でよい
+echo "cf_deploy_token=$(tv "$CF_DEPLOY_TOKEN")"   # 期待: active(どの構成でも要る)
+echo "cf_usage_token=$(tv "$CF_USAGE_TOKEN")"     # 期待: active(どの構成でも要る)
 ```
 
-導入が終わったら(5 節の後)`rm deploy-secrets.env` を実行する。`CF_TOKEN` は期限切れで無効になるので失効の操作は要らない。導入の後に control か管理画面を自分のドメインに移すときは、4.2・7.1 の空きの確認のために作業用のトークンを作り直す。0.5 の手順で `deploy-secrets.env` を `CF_TOKEN=` の行だけで作り直し、そのホストのゾーンに限ったトークンを人に作ってもらって書く。作り方は上の 2 と同じで、チェックを入れるのは DNS & Zones(DNS とゾーン)の Zone(ゾーン)の Read(読み取り)と DNS の Read(読み取り)の 2 つだけ、期限は翌日。確認が済んだらファイルを消す。`CF_DEPLOY_TOKEN` と `CF_USAGE_TOKEN` は期限が無く、それぞれデプロイ専用の Worker と control の secret として使い続ける。失効は撤去のときに行う(10.4)。
+期待と違うとき:
+
+- `google=missing` → 人に記入を頼み直す
+- `cf_deploy_token`・`cf_usage_token`(と、要る構成の `cf_token`)の期待は、`manual-account` なら `active (accounts)`、`manual-user` なら `active (user)`。違う種類が出たら、作る画面を取り違えている(撤去でトークンを消す一覧が変わる)ので、人に確かめる
+- `missing` → 値が書かれていない。人に頼み直す。`inactive` → 値の貼り間違いか、トークンが消えた・期限が切れた。人に確かめて、作り直してもらう
+- Account API Token の verify は、期限の Start(開始)がまだ来ていないトークンにも `active` を返す。作業用の Start(開始)が翌日になっていると、`active` でも今日の作業には使えないので、作った人に期限を確かめてもらう
+- `bootstrap` では、このブロックで見るのは `google=` の行だけ。Cloudflare のトークンはスクリプトが確かめる(`deploy-tokens: done`)
+
+導入が終わったら(5 節の後)`rm deploy-secrets.env` を実行する。`bootstrap` で残る `deploy-tokens.json`(作ったトークンの名前と ID。値は入っていない)は、撤去と、親トークンの値が漏れたときの手当てに使うので残す。`CF_TOKEN` は期限切れで無効になるので失効の操作は要らない。`CF_DEPLOY_TOKEN` と `CF_USAGE_TOKEN` は期限が無く、それぞれデプロイ専用の Worker と control の secret として使い続ける。失効は撤去のときに行う(10.4)。
+
+**親トークンの値が漏れたとき**(親トークンが生きている間に、値が会話・画面の共有・ファイルなどから人に知られたおそれがあるとき。親トークンを消した後や期限の後なら、使えないので手当ては要らない)
+
+親トークンは、アカウントの中のどの権限のトークンも作れ(期限なしのものも)、既存のトークンの書き換え・削除・値の再発行もできる。作られた・書き換えられたトークンは、親トークンを消しても残る。そのため、人が次の 4 つを順に行う:
+
+1. すぐ親トークンを消す。Manage account(アカウントの管理)→ Account API tokens(アカウント API トークン)の一覧で、Name(名前)が `wtt-bootstrap-<識別子>` のトークンの Token actions(トークンのアクション)→ Delete(削除)→ 確認の画面の Delete token(トークンを削除)。一覧の Name(名前)の欄には、名前と一緒に Expires soon(まもなく期限切れ)・Expired(期限切れ)などの状態も出る。Created(作成日)には日時ではなく、何時間前のような作成からの経過(相対表示)が出る
+2. 同じ一覧で、この導入が作った 2〜3 本(Name(名前)が `deploy-log.md` の名前で、Created(作成日)の相対表示が導入のころのもの)と、ほかの用途で知っているトークンのほかに、Created(作成日)の相対表示が漏れた時刻より後のものがあれば、同じく Token actions(トークンのアクション)→ Delete(削除)→ 確認の画面の Delete token(トークンを削除)で消す。一覧の列に ID は無いので、名前と作成日で見分ける(ID は `deploy-log.md` と `deploy-tokens.json` に残っていて、エージェントが照らす)。同じ名前のトークンが 2 本以上あって作成日でも見分けられないときは、消さずにエージェントに伝える。加えて、Manage account(アカウントの管理)→ Audit logs(監査ログ)で、その間にトークンの書き換えや値の再発行が無いかを見る(作成日の古い、知っているトークンも見落とさない)
+3. デプロイ用と使用状況用を作り直す(知っている ID のトークンでも、値が再発行されているおそれがあるため)。作り方は救済の手順の「管理者が Account API Token を作る」の表の 2 行。新しい値をデプロイ専用の Worker の secret(2.9)と control の secret(3.3)に入れ直し、古い 2 本を一覧から消す。作り直したトークンと同じ Name(名前)で並ぶので、1・2 と同じく Created(作成日)で見分け、古い方を消す。見分けられないときは、消さずにエージェントに伝える。既存のアカウントでは、書き換え・再発行されたほかの用途のトークンがあれば、その持ち主に知らせる
+4. Manage account(アカウントの管理)→ Audit logs(監査ログ)で、その間に知らない操作が無いかを見る
+
+`deploy-secrets.env` そのものが漏れたときは、上の 4 つに加えて、Google のクライアント シークレットを作り直す(上の「シークレットを控える前に閉じたとき」の (a) か (b))。作業用(`CF_TOKEN`)は対象のゾーンの Cache Rule・WAF を書き換えられるので、一覧から消す(作成から 24 時間で切れるのを待ってもよい)。
+
+**導入の後や途中で、作業用のトークンが要るとき**(4.2・7.1 で control か管理画面を自分のドメインに移す、7.2 で control の WAF を後から足す、6.7 で Mode B のホストを後から足す、2.6・2.7 のルールを導入の後に作る・書き換える、導入の途中で作業用の期限が切れた): `cloudflare_tokens` の値にかかわらず、作業用 1 本を人が直接作る。Account API Token で作り(上の「管理者が Account API Token を作る」の `wtt-setup-<識別子>` の行と同じ画面)、作れなければ User API Token で作る(上の「User API Token を作る」の 2 と同じ画面。権限はその画面の名前で選ぶ)。権限はその作業に要るものだけにする。ホストの空きの確認なら DNS & Zones の Zone の Read と DNS の Read、WAF のルールを作る・書き換えるだけなら DNS & Zones の Zone の Read と App Security の Zone WAF Rules の Edit、2.6 の Cache Rule を作るなら DNS & Zones の Zone の Read と Cache & Performance の Cache Settings の Edit(いくつかの作業をするなら、それぞれの権限を合わせる)。導入の途中で作業用の期限が切れたときは、残りの手順に要るものを選ぶ。残りの手順に 2.6 の Cache Rule があるなら、上の表の `wtt-setup-<識別子>` の行の 4 つにする。対象はそのホストのゾーン(導入の途中なら、上の表の下の箇条のゾーン)。期限は、Account API Token なら Custom(カスタム)で今日 → 翌日(基本の 2(親トークン)と同じ押し方)、User API Token なら上の「User API Token を作る」の 2 の期限の手順。名前は `wtt-setup-<識別子>` のままで、期限の切れた同じ名前のものは一覧に残っていてよい。親トークンは使わない。要るのが 1 本だけなら、親トークンを使っても人の手間は減らず、トークンを作れるトークンが一時的にあるリスクだけが残るため。導入の後なら、`deploy-secrets.env` を `CF_TOKEN=` の行だけで作り直して(上の「`deploy-secrets.env` の作り方」と同じ権限で作る)人に値を書いてもらい、上の確認のブロックで `cf_token` が `active` になることを確かめてから使い、済んだらファイルを消す。導入の途中(スクリプトが済んだ後)で作業用が切れたときも、この手順で作り、今の `deploy-secrets.env` の `CF_TOKEN=` の値を書き換える(スクリプトもこの段落を示して止まる)。
 
 ## 1. 前提と全体像
 
@@ -1225,7 +1357,7 @@ grep -n '"limit"' apps/edge/wrangler.jsonc   # 期待: 書いた値の行が 1 �
 
 **`custom-domain` のとき**: 別のドメインのホスト(`<edge のホスト>` = `edge_host`)を edge の Custom Domain にする。設置タグを配る `wtt-static` も、2.9 で同じホストの `/s/*` に置く。
 
-先に、そのホストが空いていることを API で確かめる。非対話で実行した `wrangler deploy` は、Custom Domain を作るときに、同じ名前の既存の DNS レコードと、ほかの Worker への割り当てを確認なしに上書きするため。確かめるのは 2 つ: (1) ゾーンにそのホストと同じ名前の DNS レコードが無い(種類を問わない)(2) そのホストがほかの Worker の Custom Domain に使われていない。`*.<ゾーン>` のようなワイルドカードのレコードは上書きされないので見ない。
+先に、そのホストが空いていることを API で確かめる。非対話で実行した `wrangler deploy` は、Custom Domain を作るときに、同じ名前の既存の DNS レコードと、ほかの Worker への割り当てを確認なしに上書きするため。確かめるのは 2 つ: (1) ゾーンにそのホストと同じ名前の DNS レコードが無い(種類を問わない)(2) そのホストがほかの Worker の Custom Domain に使われていない。`*.<ゾーン>` のようなワイルドカードのレコードは上書きされないので見ない。`CF_TOKEN` は 0.5 で作った作業用のトークン(`wtt-setup-<識別子>`)。
 
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
@@ -1234,6 +1366,7 @@ ZONE=<ゾーン名>                 # zone_name(例 example.net)
 T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
 AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
 ZID=$(curl -sS "https://api.cloudflare.com/client/v4/zones?name=$ZONE" -H "Authorization: Bearer $CF_TOKEN" | jq -r '.result[0].id')
+echo "ZID=$ZID"   # 期待: 32 桁の ID(null なら、ZONE の名前が違うか、CF_TOKEN の対象のゾーンに入っていない)
 
 # 1. 同じ名前の DNS レコードが無い(CF_TOKEN の DNS Read を使う)
 curl -sS "https://api.cloudflare.com/client/v4/zones/$ZID/dns_records?name=$HOST" -H "Authorization: Bearer $CF_TOKEN" | jq '{ok: .success, n: (.result | length)}'   # 期待: {"ok": true, "n": 0}
@@ -1243,7 +1376,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 
 期待と違うとき:
 
-- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に DNS & Zones(DNS とゾーン)の DNS の Read(読み取り)が無いときに出る(0.5 の 2)
+- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に DNS & Zones の DNS の Read が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 で作った作業用のトークンの対象のゾーン)
 - `n` が 1 以上 → そのホストは使われている。別のホストにする(0.2 の E2c を答え直す)か、使っていないことを人に確かめてから人に消してもらう。消した後に、このブロックをやり直す
 
 確かめたら、`apps/edge/wrangler.jsonc` の `routes` を次にする(`workers_dev` の行は書かない):
@@ -1343,16 +1476,22 @@ curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "https://<edge のホ�
 
 #### 既定: API で作る(エージェントはこちら)
 
-使うのは 0.5 で受け取った `CF_TOKEN`(Cache Rules Edit + Zone WAF Edit + Zone Read + DNS Read、ゾーン限定、期限 = 翌日)。
+使うのは 0.5 で作った(または受け取った)`CF_TOKEN`。作業用のトークン(権限は 0.5 の表の `wtt-setup-<識別子>` の行、ゾーン限定、期限 = 翌日)。導入の後に 2.6 を足すときは、導入のときの作業用は期限が切れているので、0.5 の最後の段落の手順で作る。
 
 2.6 / 2.7 の bash ブロックは同じシェルで続けて実行する。別々に実行する場合は、各ブロックの前に `set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a` と `HOST=… ZONE=… H=… ZID=…` の定義を入れ直す。
 
-期待と違うとき(2.6 / 2.7 共通): API が `403` または `errors` に `not entitled` / `permission` を含む応答を返す → トークンに、Start with an Account policy(アカウント ポリシーから開始)で導入先のアカウントを選んだポリシーを足し、Rules & Configuration(ルールと構成)の Account Rulesets(アカウント ルールセット)の Edit(編集)を入れて再発行する(Add new policy(新しいポリシーを追加)→ Add new Account policy(新しいアカウント ポリシーを追加))。Cloudflare の文書には、Cache Rules の管理に Account Rulesets Edit を挙げる版がある。必要な権限の最小集合は環境で確認する。
+期待と違うとき(2.6 / 2.7 共通): API が `403` または `errors` に `not entitled` / `permission` を含む応答を返す → トークンに導入先のアカウントを対象にしたポリシーを足し、Account Rulesets の Edit を入れて再発行する。Account API Token の画面では、Add policy(ポリシーを追加)を押し、次に出る Edit policy(ポリシーを編集)で Entire Account(アカウント全体)を選び、Rules & Configuration の Account Rulesets の Edit にチェックを入れる(Add policy(ポリシーを追加)を押しても、先のポリシーは残る。分類・権限の名前と Read / Edit は日本語の表示でも英語のまま)。User API Token の画面では、Add new policy(新しいポリシーを追加)→ Add new Account policy(新しいアカウント ポリシーを追加)で、Start with an Account policy(アカウント ポリシーから開始)で導入先のアカウントを選び、Rules & Configuration(ルールと構成)の Account Rulesets(アカウント ルールセット)の Edit(編集)を入れる。Cloudflare の文書には、Cache Rules の管理に Account Rulesets Edit を挙げる版がある。必要な権限の最小集合は環境で確認する。確かめた環境では、親トークンから作った `wtt-setup-<識別子>` で 2.6 と 2.7 のルールを作れ、`403` にならなかった。
+
+トークンは 0.5 の確認と同じく、Account API Token の確かめ先、User API Token の確かめ先の順に確かめる:
 
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
-curl -sS https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_TOKEN" | jq -r .result.status   # 期待: active
+AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
+tv() { [ -n "$1" ] || { echo missing; return; }; for u in "accounts/$AID/tokens/verify" "user/tokens/verify"; do s=$(curl -sS "https://api.cloudflare.com/client/v4/$u" -H "Authorization: Bearer $1" | jq -r '.result.status // empty' 2>/dev/null); [ "$s" = active ] && { echo "active (${u%%/*})"; return; }; done; echo inactive; }
+echo "cf_token=$(tv "$CF_TOKEN")"   # 期待: active (accounts)。User API Token で作ったなら active (user)
 ```
+
+`missing`・`inactive` のときと、`active` でも期限の Start(開始)が翌日になっているおそれがあるときは、0.5 の確認の「期待と違うとき」を読む。
 
 ```bash
 HOST=<設置タグのホスト>         # route なら設置ホスト(install_host。例 www.example.com)、custom-domain なら edge のホスト(edge_host。例 ab.example.net)
@@ -1429,7 +1568,7 @@ WAF を作るとき・値を変えるときは、edge の Rate Limiting binding 
 
 #### 既定: API で作る(エージェントはこちら)
 
-`edge_waf_rate_limit: true`(既定)のとき。トークンは 2.6 と同じ `CF_TOKEN`(App Security(アプリのセキュリティ)の Zone WAF(ゾーン WAF)の Edit(編集)を含む)。
+`edge_waf_rate_limit: true`(既定)のとき。トークンは 2.6 と同じ作業用の `CF_TOKEN`(App Security の Zone WAF Rules の Edit を含む。User API Token では Zone WAF の Edit)。
 
 ```bash
 LIMIT=200    # edge_waf_requests_per_10s
@@ -1469,7 +1608,16 @@ BODY=$(printf '%s' "$EP" | jq -c --arg rid "$RID" --arg add "$ADD" --arg andadd 
 
 PATCH では、変えない項目も含めてルールのすべての項目を送る(Cloudflare の文書の指定)。上のブロックは今のルールを読み、`description`・`expression`・`action`・`ratelimit`・`enabled` の 5 つを、変える項目だけ書き換えて送る(2.7 と 7.2 で作るルールの項目はこの 5 つだけ)。`rule not found` で止まったら `RID` が違うので、上の GET で読み直す。PATCH の後に上の GET で、同じ `id` のルールの式と回数が変わったことを確かめる。
 
-導入の後に書き換えるときは、0.5 の 2 の `CF_TOKEN` が期限切れになっている。そのゾーンに限ったトークンを人に作ってもらい(作り方は 0.5 の 2 と同じで、チェックを入れるのは App Security(アプリのセキュリティ)の Zone WAF(ゾーン WAF)の Edit(編集)と、DNS & Zones(DNS とゾーン)の Zone(ゾーン)の Read(読み取り)、期限は翌日)、`deploy-secrets.env` の `CF_TOKEN=` に書いてから、上の 2.6 の `HOST=… ZONE=… H=… ZID=…` を定義し直して流す。
+導入の後に書き換えるときは、導入のときの作業用の `CF_TOKEN` が期限切れになっている。0.5 の最後の段落の手順で、そのゾーンに限った作業用 1 本を人に作ってもらう。Account API Token で作り、作れなければ User API Token で作る(User API Token では、0.5 の「User API Token を作る」の 2 と同じ画面で、チェックを入れるのは App Security(アプリのセキュリティ)の Zone WAF(ゾーン WAF)の Edit(編集)と、DNS & Zones(DNS とゾーン)の Zone(ゾーン)の Read(読み取り)だけ)。Account API Token の手順:
+
+- 画面: ダッシュボードの Manage account(アカウントの管理)→ Account API tokens(アカウント API トークン)→ Create a token(トークンを作成)
+- Token name(トークン名)= `wtt-setup-<識別子>`(期限の切れた同じ名前のものは一覧に残っていてよい)
+- Start from scratch(最初から作成)の Custom を押す(この Custom は日本語の表示でも英語のまま)
+- Permission policies(権限ポリシー)の Edit policy(ポリシーを編集)で Specified Domains(指定ドメイン)にし、Select domains...(ドメインを選択...)でそのゾーンを選ぶ。App Security の Zone WAF Rules の Edit と、DNS & Zones の Zone の Read にだけチェックを入れる(分類・権限の名前と Read / Edit は日本語の表示でも英語のまま)
+- Token expiration(トークンの有効期限)= Custom(カスタム)で今日 → 翌日(0.5 の基本の 2(親トークン)と同じ押し方)
+- Client IP address filtering(クライアント IP アドレス フィルタリング)は空のままにし、Review token(トークンを確認)の Summary(概要)で権限と期限を確かめてから Create token(トークンを作成)を押す
+
+値は `deploy-secrets.env` の `CF_TOKEN=` に書き、保存してエディタを閉じてから伝え、作成の直後の画面のタブを閉じてもらう(ファイルの作り方は 0.5 の最後の段落)。伝えられたら、上の 2.6 の確認のブロック(`tv`)から流し、`cf_token` が `active` になったことを確かめてから、2.6 の `HOST=… ZONE=… H=… ZID=…` を定義し直して流す。
 
 ```bash
 RL=$(cat <<JSON
@@ -1601,7 +1749,7 @@ pnpm -C apps/deployer setup-static -- --workers-dev off   # 期待: script: exis
 
 (1) `apps/deployer/wrangler.jsonc` の `vars.CF_ACCOUNT_ID` を導入先の Account ID(0.4 で確かめたもの)にする。確認: `grep -c 00000000000000000000000000000000 apps/deployer/wrangler.jsonc || true` が `0`(雛形の値が残っていない)。
 
-(2) デプロイ用トークンを secret に入れて `wtt-deployer` をデプロイする(2.1 の `pnpm runtime:build` の後。値は画面に出さず、パイプで直接入力する):
+(2) 0.5 で作った(または受け取った)デプロイ用トークン(`CF_DEPLOY_TOKEN`)を secret に入れて `wtt-deployer` をデプロイする(2.1 の `pnpm runtime:build` の後。値は画面に出さず、パイプで直接入力する):
 
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
@@ -1627,7 +1775,7 @@ pnpm -C apps/deployer setup-static -- --route "<設置ホスト>/s/*" --zone "<�
 
 - `route … : moved from <名前>` が出たら、そのパターンのルートが別の Worker に向いていた。前の構成(設置タグを edge が配っていた導入)から移すときは期待どおり。そうでなければ人に確認する
 - `script: exists (kept)` なら既に作ってある(中身のファイルは消さない)。続けてよい
-- `zone not found` は `<ゾーン名>` と 0.5 の確認(`CF_TOKEN` のゾーンの範囲)を見直す
+- `zone not found` は `<ゾーン名>` と、そのゾーンがこのアカウントにあって `active` の状態か(0.4 のログインの後の確認)を見直す。ここで使うのは `wrangler login` の資格情報で、`CF_TOKEN` ではない
 
 (4) 確認(ファイルは最初の公開のあとに入る。ここでは、プレビュー用のファイルと 404 だけを見る):
 
@@ -1724,7 +1872,7 @@ AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/
 curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hostname=$HOST" -H "Authorization: Bearer $T" | jq '{ok: .success, n: (.result | length)}'   # 期待: {"ok": true, "n": 0}
 ```
 
-続けて、ゾーンに同じ名前の DNS レコードが無いことを確かめる(種類を問わない)。`CF_TOKEN`(0.5 の 2。DNS & Zones(DNS とゾーン)の DNS の Read(読み取り)を含む)がある構成では API で見る:
+続けて、ゾーンに同じ名前の DNS レコードが無いことを確かめる(種類を問わない)。`CF_TOKEN`(0.5 で作った作業用のトークン。DNS & Zones の DNS の Read を含む)がある構成では API で見る:
 
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
@@ -1788,7 +1936,7 @@ openssl rand -hex 32 | pnpm -C apps/control exec wrangler secret put BETTER_AUTH
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 if [ -n "$GOOGLE_CLIENT_SECRET" ]; then printf '%s' "$GOOGLE_CLIENT_SECRET" | pnpm -C apps/control exec wrangler secret put AB_GOOGLE_CLIENT_SECRET; else echo "GOOGLE_CLIENT_SECRET is empty: load deploy-secrets.env (0.5)"; fi
 
-# 管理画面の使用状況の表示用(0.5 の (4) で受け取った Account Analytics: Read のみのトークン)
+# 管理画面の使用状況の表示用(0.5 で作った(または受け取った)Account Analytics の Read だけのトークン)
 if [ -n "$CF_USAGE_TOKEN" ]; then printf '%s' "$CF_USAGE_TOKEN" | pnpm -C apps/control exec wrangler secret put CF_USAGE_TOKEN; else echo "CF_USAGE_TOKEN is empty: load deploy-secrets.env (0.5)"; fi
 ```
 
@@ -1922,7 +2070,7 @@ control は `*.workers.dev` のままでも動く(ゾーンのキャッシュや
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 HOST=<admin_host>               # 例 admin.example.com
-ZONE=<そのホストのゾーン名>      # 0.5 の 2 で確かめたゾーン(例 example.com)
+ZONE=<そのホストのゾーン名>      # 0.5 で確かめたゾーン。作業用のトークンの対象(例 example.com)
 T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
 AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
 ZID=$(curl -sS "https://api.cloudflare.com/client/v4/zones?name=$ZONE" -H "Authorization: Bearer $CF_TOKEN" | jq -r '.result[0].id')
@@ -1936,7 +2084,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 
 期待と違うとき:
 
-- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に DNS & Zones(DNS とゾーン)の DNS の Read(読み取り)が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 の 2)
+- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に DNS & Zones の DNS の Read が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 で作った作業用のトークンの対象のゾーン)
 - `n` が 1 以上 → そのホストは使われている。別のホストにする(`admin_host` を変える)か、使っていないことを人に確かめてから人に消してもらう。消した後に、このブロックをやり直す
 
 **(1) `apps/admin/wrangler.jsonc` を編集する。** `workers_dev` と `dev` は**既存の行を置き換え**、`preview_urls` は既存の `false` を残し、`routes` は**足す**(同じキーを二重に書くと後ろの行が勝ち、`host: localhost` が失われる)。
@@ -2600,7 +2748,7 @@ Route を置けるのは、導入のゾーン(`zone_name`)の中のホストだ�
    curl -sI "https://<足すホスト>/" | grep -i '^server:'   # 期待: server: cloudflare
    ```
 
-2. **2.7 の WAF のルールの式を確かめる。** 式に `/__ab/` が入っていれば、足すホストもルールに入る(式はパスだけで書くため)。入っていなければ、[2.7](#27-waf-rate-limiting-rule推奨) の「期待と違うとき」の `/__ab/` を足す手順を行う(人に依頼する手順なので、待つことがある)。Route より先に行う。Route を置いてから待つと、その間 Route があるのにどのサイトも持っていないホストができる(この節の最後の段落)。
+2. **2.7 の WAF のルールの式を確かめる。** 式に `/__ab/` が入っていれば、足すホストもルールに入る(式はパスだけで書くため)。入っていなければ、[2.7](#27-waf-rate-limiting-rule推奨) の「期待と違うとき」の `/__ab/` を足す手順を行う(人に依頼する手順なので、待つことがある)。2.7 の確かめと書き換えには作業用のトークン(`CF_TOKEN`)を使う。作業用が切れていれば、0.5 の最後の段落の手順で作り直す。Route より先に行う。Route を置いてから待つと、その間 Route があるのにどのサイトも持っていないホストができる(この節の最後の段落)。
 
 3. **edge の `apps/edge/wrangler.jsonc` に Route を足して、edge を deploy する。** `routes` に `{ "pattern": "<足すホスト>/__ab/*", "zone_name": "<ゾーン名>" }` を足す(ワイルドカードでまとめる書き方は [2.3](#23-route-を書く))。Route はダッシュボードだけで足さない。ダッシュボードで足した Route は、次の `wrangler deploy`(更新のときの edge の deploy を含む)で設定ファイルの内容に置き換わり、消える(Cloudflare の資料のとおり)。設定ファイルに書いておけば、更新のときも 6.2 の退避で残る。deploy は、今動いている版の tag を checkout したまま行う(`git describe --tags --exact-match` が今の版を返すこと。ここで版を変えない)。導入とは別の会話や端末で行うときは、先に 6.1 の先頭のとおり導入先のアカウントを固定し、`pnpm install` を済ませておく:
 
@@ -2662,10 +2810,12 @@ Workers 内の Rate Limiting binding は本番で制限として働いていな�
 
 先に、`control.<運用者ドメイン>`(`control_host`)が空いていることを API で確かめる。非対話で実行した `wrangler deploy` は Custom Domain を作るときに、同じ名前の既存の DNS レコードとほかの Worker への割り当てを確認なしに上書きするため(2.3 の `custom-domain` のときと同じ確認)。既にこのホストに control を置いていて、デプロイし直すだけのときは行わない(自分の割り当てがあるので `n` が 1 になる)。
 
+`CF_TOKEN` は作業用のトークン。導入の後に行うなら、導入のときの作業用は期限が切れているので、0.5 の最後の段落の手順で作り直す(ホストの空きの確認なので DNS & Zones の Zone の Read と DNS の Read)。続けて 7.2(control の WAF を後から足す)も行うなら、同じ作業用に App Security の Zone WAF Rules の Edit を足しておけば、1 本で済む。
+
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 HOST=<control_host>             # 例 control.example.com
-ZONE=<そのホストのゾーン名>      # 0.5 の 2 で確かめたゾーン(例 example.com)
+ZONE=<そのホストのゾーン名>      # 0.5 で確かめたゾーン。作業用のトークンの対象(例 example.com)
 T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
 AID=${CLOUDFLARE_ACCOUNT_ID:-$(pnpm -C apps/control exec wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1)}
 ZID=$(curl -sS "https://api.cloudflare.com/client/v4/zones?name=$ZONE" -H "Authorization: Bearer $CF_TOKEN" | jq -r '.result[0].id')
@@ -2679,7 +2829,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 
 期待と違うとき:
 
-- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に DNS & Zones(DNS とゾーン)の DNS の Read(読み取り)が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 の 2)
+- `ok` が `true` でない・権限のエラーが出る・jq がエラーになる(応答が JSON でない)→ 空いているとはみなさず、作業を中断して人に聞く。1 の権限のエラーは、`CF_TOKEN` に DNS & Zones の DNS の Read が無いときに出る。`ZID` が null のときは、`ZONE` の名前が違うか、`ZONE` が `CF_TOKEN` の対象のゾーンに入っていない(0.5 で作った作業用のトークンの対象のゾーン)
 - `n` が 1 以上 → そのホストは使われている。別のホストにする(`control_host` を変える)か、使っていないことを人に確かめてから消してもらう。消した後に、このブロックをやり直す
 
 確かめたら、`apps/control/wrangler.jsonc` に `workers_dev: false` と `routes` を**足し**、`preview_urls` は既存の `false` を残し、既存の `dev` の行を下の `dev` で**置き換えて**(同じキーを二重に書くと後ろの行が勝つ)再デプロイする。DNS レコードと証明書は wrangler が自動で作る。
@@ -2887,7 +3037,13 @@ Workers の実行回数・失敗と、訪問者に返った 5xx を GraphQL Anal
 
 用意するもの:
 
-- **【人に依頼】** 稼働確認用のトークン `CF_ANALYTICS_TOKEN`。稼働確認は導入の数日後に行うので、0.5 の導入用トークンは期限切れになっている。作り方は 0.5 の Cloudflare API トークンと同じ画面で、ポリシーを 2 つ入れる: Start with an Account policy(アカウント ポリシーから開始)で導入先のアカウントを選び、Analytics & Logs(分析とログ)の Account Analytics(アカウント分析)の Read(読み取り)。続けて Add new policy(新しいポリシーを追加)→ Add new Zone policy(新しいゾーン ポリシーを追加)で Specific zone(特定のゾーン)に対象のゾーンを選び、Analytics & Logs(分析とログ)の Analytics の Read(読み取り)(Analytics は日本語の表示でも英語のまま)。期限は短く(Custom(カスタム)。0.5 の 2 の期限の注意)。control に入れる `CF_USAGE_TOKEN` とは別物
+- **【人に依頼】** 稼働確認用のトークン `CF_ANALYTICS_TOKEN`。導入の日のトークンには、ここで使う 2 つの Analytics の権限をそろえたものが無い(作業用はゾーンの設定だけ、使用状況用はアカウントの Analytics だけで、ゾーンの Analytics は無い)。control に入れる `CF_USAGE_TOKEN` とは別物。Account API Token で作る。1 本にアカウントとゾーンの 2 つのポリシーを入れる:
+  - 画面: ダッシュボードの Manage account(アカウントの管理)→ Account API tokens(アカウント API トークン)→ Create a token(トークンを作成)→ Start from scratch(最初から作成)の Custom(この Custom は日本語の表示でも英語のまま)
+  - Permission policies(権限ポリシー)の Edit policy(ポリシーを編集)で Entire Account(アカウント全体)を選び、Analytics & Logs の Account Analytics の Read にチェックを入れる(分類・権限の名前と Read は日本語の表示でも英語のまま)
+  - Add policy(ポリシーを追加)を押す。先のポリシーは残り、次の Edit policy(ポリシーを編集)が出る。そこで Specified Domains(指定ドメイン)にし、Select domains...(ドメインを選択...)で対象のゾーンを選び、Analytics & Logs の Zone Analytics の Read にチェックを入れる(Specified Domains(指定ドメイン)にした後の Zone Analytics の行の日本語の表示は未確認)
+  - Token expiration(トークンの有効期限)= Custom(カスタム)で短く(数日)する。カレンダーで今日の日付を押してから終わりの日付を押し、Start(開始)が今日・End(終了)が終わりの日になったことを確かめてから Apply(適用)を押す(0.5 の基本の 2(親トークン)と同じ押し方。押した結果を確かめたのは、英語の画面で今日 → 翌日を押したときだけ)
+  - Client IP address filtering(クライアント IP アドレス フィルタリング)は空のままにし、Review token(トークンを確認)の Summary(概要)で権限と期限を確かめてから Create token(トークンを作成)を押す。値を控えたら、作成の直後の画面のタブを閉じる
+  - Account API Token を作れないときは User API Token で作る: 0.5 の「User API Token を作る」の 2 と同じ画面で、ポリシーを 2 つ入れる。Start with an Account policy(アカウント ポリシーから開始)で導入先のアカウントを選び、Analytics & Logs(分析とログ)の Account Analytics(アカウント分析)の Read(読み取り)。続けて Add new policy(新しいポリシーを追加)→ Add new Zone policy(新しいゾーン ポリシーを追加)で Specific zone(特定のゾーン)に対象のゾーンを選び、Analytics & Logs(分析とログ)の Analytics の Read(読み取り)(Analytics は日本語の表示でも英語のまま)。期限は短く(Custom(カスタム)。0.5 の「User API Token を作る」の 2 の期限の手順)
 - アカウント ID = `pnpm -C apps/control exec wrangler whoami`
 - ゾーン ID = `wrangler login` の資格情報で API から取る(ダッシュボードを開かなくてよい):
 
@@ -2898,7 +3054,7 @@ echo "${#CF_ZONE_ID}"   # 期待: 32
 ```
 
 ```bash
-# CF_ANALYTICS_TOKEN: アカウントの Account Analytics の Read と、ゾーンの Analytics の Read だけのトークン / CF_ACCOUNT_ID: pnpm -C apps/control exec wrangler whoami の Account ID / CF_ZONE_ID: zone_name のゾーンの ID
+# CF_ANALYTICS_TOKEN: アカウントの Account Analytics の Read と、ゾーンの Zone Analytics(User API Token では Analytics)の Read だけのトークン / CF_ACCOUNT_ID: pnpm -C apps/control exec wrangler whoami の Account ID / CF_ZONE_ID: zone_name のゾーンの ID
 # 半開区間 [SINCE, UNTIL)。UNTIL を過ぎた実時刻になってから実行する
 G=https://api.cloudflare.com/client/v4/graphql; H=(-H "Authorization: Bearer $CF_ANALYTICS_TOKEN" -H 'content-type: application/json')
 SINCE=<開始 UTC> UNTIL=<終了 UTC>
@@ -3114,12 +3270,20 @@ K が 0 なら、この段はここで終わる。
 grep -q '^CLOUDFLARE_API_TOKEN=' deploy-secrets.env || printf 'CLOUDFLARE_API_TOKEN=\n' >> deploy-secrets.env
 ```
 
-- **【人に依頼】** API トークンを作り、値を `CLOUDFLARE_API_TOKEN=` の右に貼って保存してもらう。画面: ダッシュボードの右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)。Token name(トークン名)= `wtt-restore-<識別子>`(識別子は 0.5 の「Cloudflare の API トークンの名前」と同じ)。Start from scratch(最初から作成)の Start with an Account policy(アカウント ポリシーから開始)→ Include(含む)の Account(アカウント)で導入先のアカウントを選ぶ → Developer Platform(開発者プラットフォーム)の Workers R2 Storage の Read(読み取り)と D1 の Edit(編集)のチェックを入れる(Workers R2 Storage と D1 は日本語の表示でも英語のまま)。D1 の編集も要るのは、道具の中で動く wrangler も、`CLOUDFLARE_API_TOKEN` があれば `wrangler login` より優先してそのトークンを使い、D1 を読み書きするため。Token expiration(トークンの有効期限)= Custom(カスタム)で終了を翌日にする(Start(開始)も翌日になるので直す。0.5 の 2 の期限の注意)→ Continue to summary(概要に進む)で確かめて作成
-- 読み込んで、値を表示せずに確かめ、上の (2) から流し直す:
+- **【人に依頼】** API トークンを作り、値を `CLOUDFLARE_API_TOKEN=` の右に貼って、保存してエディタを閉じてから伝えてもらう。値を貼ったら、作成の直後の画面のタブを閉じてもらう。Account API Token で作る:
+  - 画面: ダッシュボードの Manage account(アカウントの管理)→ Account API tokens(アカウント API トークン)→ Create a token(トークンを作成)
+  - Token name(トークン名)= `wtt-restore-<識別子>`(識別子は 0.5 の「Cloudflare の API トークンの名前」と同じ)
+  - Start from scratch(最初から作成)の Custom を押す(この Custom は日本語の表示でも英語のまま)
+  - Permission policies(権限ポリシー)の Edit policy(ポリシーを編集)で Entire Account(アカウント全体)を選び、Developer Platform の Workers R2 Storage の Read と、Developer Platform の D1 の Edit にチェックを入れる(分類・権限の名前と Read / Edit は日本語の表示でも英語のまま)。D1 の編集も要るのは、道具の中で動く wrangler も、`CLOUDFLARE_API_TOKEN` があれば `wrangler login` より優先してそのトークンを使い、D1 を読み書きするため
+  - Token expiration(トークンの有効期限)= Custom(カスタム)で今日 → 翌日(0.5 の基本の 2(親トークン)と同じ押し方)
+  - Client IP address filtering(クライアント IP アドレス フィルタリング)は空のままにし、Review token(トークンを確認)の Summary(概要)で権限と期限を確かめてから Create token(トークンを作成)を押す
+  - Account API Token を作れないときは User API Token で作る: ダッシュボードの右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)。Token name(トークン名)は上と同じ。Start from scratch(最初から作成)の Start with an Account policy(アカウント ポリシーから開始)→ Include(含む)の Account(アカウント)で導入先のアカウントを選ぶ → Developer Platform(開発者プラットフォーム)の Workers R2 Storage の Read(読み取り)と D1 の Edit(編集)のチェックを入れる(Workers R2 Storage と D1 は日本語の表示でも英語のまま)。Token expiration(トークンの有効期限)は 0.5 の「User API Token を作る」の 2 の期限の手順で翌日までにする → Continue to summary(概要に進む)で確かめて作成
+- 読み込んで、値を表示せずに確かめ、上の (2) から流し直す。このトークンで流すときは、`CLOUDFLARE_ACCOUNT_ID` を 0.4 のとおり export しておく(必須)。道具は (1) の `apps/control/wrangler.jsonc` の値を道具の中で使うだけで、道具の中で動く wrangler には渡さないので、Account API Token では wrangler がアカウントを決められないおそれがあるため:
 
 ```bash
 set -a; eval "$(tr -d '\r' < deploy-secrets.env)"; set +a
 [ -n "$CLOUDFLARE_API_TOKEN" ] && echo cloudflare_api_token=present || echo cloudflare_api_token=missing   # 期待: present(missing なら人に記入を頼み直す)
+[ -n "$CLOUDFLARE_ACCOUNT_ID" ] && echo account_id=present || echo account_id=missing   # 期待: present(missing なら 0.4 のとおり export CLOUDFLARE_ACCOUNT_ID=<導入先の Account ID> を設定してから流す)
 ```
 
 - 終わったら、環境変数を消し、ファイルからは足した `CLOUDFLARE_API_TOKEN=` の行だけを消す(0.5 の値が残っていれば、それは消さない。ほかの行が無ければファイルごと消す)。環境変数を残したままにすると、この後の wrangler のコマンドもこのトークンを使い、D1 以外の操作(10.3 の `wrangler deploy` など)が権限のエラーになるため:
@@ -3221,12 +3385,13 @@ curl -sS -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RI
 5. 外部の資格情報を片づける(**【人に依頼】**):
 
 - Google Cloud の OAuth クライアント `wtt-control-<識別子>`(0.5)を削除する。control の Worker 名(`wtt-control-<16 桁の 16 進>`)とは別で、識別子はアカウントのサブドメイン。プロジェクト `wtt-auth` をほかの導入と共有していなければ、プロジェクトごと消してよい
-- Cloudflare の API トークンのうち残っているものを失効する: 配信ファイルのデプロイ用 `wtt-deploy-<識別子>` と使用状況の表示用 `wtt-usage-<識別子>`(識別子は 0.5)。ゾーンの設定用 `wtt-setup-<識別子>` と稼働確認用は期限切れなら何もしなくてよい
-  - **失効する前に、名前だけで決めず、撤去する導入のトークンかを確かめる。** API トークンはユーザーに属するので、ほかの導入(別のアカウントに入れた導入や試しの導入)のトークンも同じ一覧に並ぶ(0.5)。名前は人が付けるので、重なったり、手順と違う名前になったりする。一覧でトークンを開き、対象のアカウントが撤去するアカウントだけであること(トークンの詳細の画面の名前は確かめていない)と、作成日がその導入を入れた日(`deploy-log.md` の日付)と合うことを確かめる
-  - どちらかが合わない、または確かめられないトークンは失効しない。失効は取り消せず、まだ使っている導入のデプロイ用のトークンを失効すると、その導入では公開や設定の保存をしても設置タグのファイルが作り直されなくなる(使用状況の表示用なら、管理画面の使用状況が取れなくなる)
+- Cloudflare の API トークンのうち残っているものを消す: 配信ファイルのデプロイ用 `wtt-deploy-<識別子>` と使用状況の表示用 `wtt-usage-<識別子>`(識別子は 0.5)。基本(`bootstrap`)の導入で親トークン `wtt-bootstrap-<識別子>` が一覧に残っていれば、それも消す。ゾーンの設定用 `wtt-setup-<識別子>`・`wtt-restore-<識別子>`(10.2)・稼働確認用(9 節)は、期限切れなら何もしなくてよい(期限の切れたものも一覧に残る)。消す一覧は、導入のときのトークンの作り方で変わる:
+  - 基本(`bootstrap`)と `manual-account` の導入: トークンは Account API Token。撤去するアカウントの Manage account(アカウントの管理)→ Account API tokens(アカウント API トークン)の一覧で、Name(名前)が上の名前のトークンを、Token actions(トークンのアクション)→ Delete(削除)→ 確認の画面の Delete token(トークンを削除)で消す。Account API Token はアカウントに属するので、この一覧には、ほかのアカウントに入れた導入のトークンは並ばない。開いている一覧が撤去するアカウントのものかを先に確かめる(ほかのアカウントの一覧にも、そのアカウントに入れた導入の、同じ形の名前のトークンがありうる)。同じ名前のトークンが 2 本以上あるときは、0.5 の「親トークンの値が漏れたとき」と同じく Name(名前)と Created(作成日)で見分け、見分けられなければ消さずにエージェントに伝える
+  - `manual-user` の導入: トークンは User API Token で、作った人の My Profile の一覧(ダッシュボードの右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン))にある。**消す前に、名前だけで決めず、撤去する導入のトークンかを確かめる。** User API Token はユーザーに属するので、ほかの導入(別のアカウントに入れた導入や試しの導入)のトークンも同じ一覧に並ぶ(0.5)。名前は人が付けるので、重なったり、手順と違う名前になったりする。一覧でトークンを開き、対象のアカウントが撤去するアカウントだけであること(トークンの詳細の画面の名前は確かめていない)と、作成日がその導入を入れた日(`deploy-log.md` の日付)と合うことを確かめる
+  - どちらの一覧でも、撤去する導入のものと確かめられないトークンは消さない。消すと取り消せず、まだ使っている導入のデプロイ用のトークンを消すと、その導入では公開や設定の保存をしても設置タグのファイルが作り直されなくなる(使用状況の表示用なら、管理画面の使用状況が取れなくなる)
 - Cloudflare Access のアプリケーション(4.5 / 7.3)を削除する
 - GTM のタグ・トリガー・変数を削除する
-- 手元では `deploy-secrets.env` と `.env.agent`(5.1。API キーは control と一緒に無効になっている)を消し、`deploy-backups/` は保管方針に従って扱う
+- 手元では `deploy-secrets.env` と `.env.agent`(5.1。API キーは control と一緒に無効になっている)を消し、`deploy-backups/` は保管方針に従って扱う。基本(`bootstrap`)の導入で残した `deploy-tokens.json`(作ったトークンの名前と ID)は、上の Cloudflare のトークンを消し終えてから消す
 
 6. 確認:
 

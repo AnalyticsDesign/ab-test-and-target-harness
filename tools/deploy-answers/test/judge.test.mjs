@@ -27,7 +27,7 @@ test("history × 3〜7 万 × ドメインあり → route × Paid、zone_name �
   assert.ok(has(reasonsOf(v, r), /約 5 万 PV\/日/));
   assert.ok(has(tasksOf(v, r), /Workers Paid に切り替える/));
   assert.ok(has(tasksOf(v, r), /ゾーンの設定用\(期限 = 翌日\)/));
-  assert.ok(has(tasksOf(v, r), /デプロイ用・使用状況の表示用\(どちらも期限なし\)/));
+  assert.ok(has(tasksOf(v, r), /デプロイ用・使用状況用\(どちらも期限なし\)/));
 });
 
 test("history × 1〜3 万 → Free(上限の 7 割に届かない)", () => {
@@ -256,7 +256,8 @@ test("custom-domain の文: 要約・置き場所・理由・人に頼む作業�
     reasonsOf(custom, r)[0],
     "タグを入れるサイトのドメインは Cloudflare に無いが、Cloudflare に置ける別のドメインがあるので、そのドメインで動かす(WAF・キャッシュが使える。Safari 対策の Mode B は使えない)",
   );
-  assert.ok(has(tasksOf(custom, r), /ゾーンの設定用\(期限 = 翌日\)/));
+  // 作業用のトークンを人が作るのは manual-account / manual-user のとき(bootstrap はエージェントが作る)
+  assert.ok(has(tasksOf({ ...custom, cloudflare_tokens: "manual-account" }, r), /ゾーンの設定用\(期限 = 翌日\)/));
   for (const cloudflare_account of ["existing", "none", "separate"]) {
     const v = { ...custom, cloudflare_account, existing_plan: "free" };
     assert.ok(has(tasksOf(v, recommend(v)), /まだ追加していなければ、別のドメインを導入に使うアカウントに追加する/), cloudflare_account);
@@ -305,4 +306,39 @@ test("dliteHostsFor: 決まったゾーンで導き直す(委譲されたサブ�
   assert.deepEqual(recommend(v).dlite_hosts, ["www.shop.example.com", "form.shop.example.com", "www.example.com"]);
   assert.deepEqual(dliteHostsFor(v, "shop.example.com"), ["www.shop.example.com", "form.shop.example.com"]);
   assert.deepEqual(dliteHostsFor({ ...v, features: ["ab"] }, "shop.example.com"), []);
+});
+
+// B130: API トークンの用意の仕方(cloudflare_tokens)ごとの、人に頼む作業
+const tokenLine = (v, c) => tasksOf(v, c).find((x) => /API Token|API トークン/.test(x));
+
+test("tasksOf: bootstrap は親トークン 1 本だけを頼み、デプロイ用などはエージェントが作る", () => {
+  for (const v of [base, { ...zone, cloudflare_tokens: "bootstrap" }]) {
+    const line = tokenLine(v, recommend(v));
+    assert.match(line, /トークンを作るためのトークン/);
+    assert.match(line, /1 本/);
+    assert.match(line, /期限 = 翌日/);
+    assert.doesNotMatch(line, /デプロイ用/);
+  }
+});
+
+test("tasksOf: manual-account は管理者が Account API Token を作る。ゾーンのある構成は作業用も", () => {
+  const v = { ...base, cloudflare_account: "existing", cloudflare_tokens: "manual-account" };
+  const line = tokenLine(v, LIGHTEST);
+  assert.match(line, /管理者/);
+  assert.match(line, /Account API Token/);
+  assert.match(line, /デプロイ用・使用状況用/);
+  assert.doesNotMatch(line, /ゾーンの設定用/);
+  const z = { ...base, ...zone, cloudflare_tokens: "manual-account" };
+  assert.match(tokenLine(z, recommend(z)), /ゾーンの設定用\(期限 = 翌日\)/);
+  // 書いていない既存のアカウントは manual-account
+  assert.match(tokenLine({ ...base, ...zone }, recommend({ ...base, ...zone })), /Account API Token/);
+});
+
+test("tasksOf: manual-user は User API Token と、作った人が外れたときに止まることを書く", () => {
+  const v = { ...base, ...zone, cloudflare_tokens: "manual-user" };
+  const line = tokenLine(v, recommend(v));
+  assert.match(line, /User API Token/);
+  assert.match(line, /作った人がアカウントから外れると、デプロイと使用状況が止まる/);
+  assert.match(line, /ゾーンの設定用\(期限 = 翌日\)/);
+  assert.doesNotMatch(tokenLine({ ...v, cloudflare_account: "none" }, LIGHTEST), /ゾーンの設定用/);
 });

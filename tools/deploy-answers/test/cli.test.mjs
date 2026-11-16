@@ -39,7 +39,7 @@ test("ファイルが無い・不明な引数・空の値・--accept と --resol
 
 test("--confirm-account-change は値を取らないフラグとして --accept と一緒に使える", () => {
   const dir = mkdtempSync(join(tmpdir(), "wtt-answers-"));
-  const text = ANSWERS.replace("cloudflare_account: none\nsite_on_cloudflare: no_site", "cloudflare_account: existing\nexisting_plan: paid\nsite_on_cloudflare: no\nedge_host: none");
+  const text = ANSWERS.replace("cloudflare_account: none\nsite_on_cloudflare: no_site", "cloudflare_account: existing\nexisting_plan: paid\ncloudflare_tokens: manual-account\nsite_on_cloudflare: no\nedge_host: none");
   writeFileSync(join(dir, "deploy-answers.yaml"), text);
   assert.equal(runCli(["--accept", "lightest"], dir).status, 2);
   assert.equal(readFileSync(join(dir, "deploy-answers.yaml"), "utf8"), text);
