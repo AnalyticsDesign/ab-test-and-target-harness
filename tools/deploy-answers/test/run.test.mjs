@@ -130,6 +130,39 @@ test("--resolve-zone は auto を確定し、再実行では何もしない。�
   assert.equal(again.text, undefined);
 });
 
+test("画像を R2 から配る構成は、提示・要約で画像ホストの空きの確認を案内する", () => {
+  const proposal = run(answers({ cloudflare_account: "existing", existing_plan: "free", site_on_cloudflare: "yes", install_host: "www.example.com", image_upload: "true" }));
+  const manual = run("owner_email: a@example.com\nedge_address: route\ninstall_host: www.example.com\nzone_name: example.com\nasset_public_base: https://images.example.com\n");
+  for (const [r, host] of [[proposal, "wtt-assets.<ゾーン名>"], [manual, "images.example.com"]]) {
+    assert.equal(r.code, 0);
+    const notes = r.output.slice(r.output.indexOf("## 注意"));
+    assert.ok(notes.includes(host));
+    assert.match(notes, /DNS レコード/);
+    assert.match(notes, /ほかの Worker.*Custom Domain/);
+    assert.match(notes, /3\.2/);
+    assert.match(notes, /使っていない|空き/);
+  }
+});
+
+test("--resolve-zone で画像のホストを決めた直後にも、具体的なホストと空きの確認を案内する", () => {
+  const text = "owner_email: a@example.com\nedge_address: route\ninstall_host: www.example.com\nzone_name: auto\nasset_public_base: auto\naccepted: manual\n";
+  const r = run(text, { resolveZone: "example.com" });
+  assert.equal(r.code, 0);
+  assert.match(r.output, /wtt-assets\.example\.com.*DNS レコード.*ほかの Worker.*Custom Domain.*3\.2/);
+  const kept = run(text.replace("asset_public_base: auto", "asset_public_base: https://images.example.com"), { resolveZone: "example.com" });
+  assert.doesNotMatch(kept.output, /空き|DNS レコード/);
+});
+
+test("画像なし・管理用 Worker 経由の配信では、画像ホストの空きの確認を出さない", () => {
+  for (const asset of ["none", "dev-assets"]) {
+    const text = `owner_email: a@example.com\nedge_address: workers-dev\nasset_public_base: ${asset}\n`;
+    assert.doesNotMatch(run(text).output, /DNS レコード|ほかの Worker.*Custom Domain/);
+    const resolved = run(text.replace("edge_address: workers-dev", "edge_address: route\ninstall_host: www.example.com\nzone_name: auto"), { resolveZone: "example.com" });
+    assert.equal(resolved.code, 0);
+    assert.doesNotMatch(resolved.output, /DNS レコード|ほかの Worker.*Custom Domain/);
+  }
+});
+
 test("CRLF のファイルは CRLF のまま書き戻す", () => {
   const r = run(answers().replace(/\n/g, "\r\n"), { accept: "lightest" });
   assert.equal(r.code, 0);

@@ -1,7 +1,7 @@
 // 入口の処理(cli.mjs から呼ぶ純粋関数)。終了コード 0 = 提示・要約・書き込み / 1 = 書式や引数の誤り / 2 = 聞き直す問い・断り
 import { parseAnswers } from "./parse.mjs";
 import { checkAnswers, checkConfigured, isConfigured, isBlank, hostInZone, hostProblem, extraHostsOf, dliteOutsideZone, ACCEPT_VALUES } from "./questions.mjs";
-import { recommend, dliteHostsFor, LIGHTEST, configOf, accountChangeOf } from "./judge.mjs";
+import { recommend, dliteHostsFor, LIGHTEST, configOf, accountChangeOf, assetHostNote } from "./judge.mjs";
 import { renderProposals, renderConfigured, renderIssues, renderParseErrors, renderWritten, renderAccountChange } from "./render.mjs";
 import { writeKeys, resolveZone, replaceAnswer, overwriteKey } from "./yaml-edit.mjs";
 
@@ -67,7 +67,9 @@ export function run(text, opts = {}) {
     const d = resolveDliteHosts(text, values, zone);
     if (d.code) return d;
     const r = resolveZone(d.text, zone);
-    return { code: 0, output: renderWritten([...r.written, ...d.written]) + d.notes, text: r.text };
+    const asset = values.asset_public_base === "auto" ? assetHostNote(configOf(parseAnswers(r.text).values)) : null;
+    const assetNote = asset ? `\n## 画像のホストの確認\n\n- ${asset}\n` : "";
+    return { code: 0, output: renderWritten([...r.written, ...d.written]) + d.notes + assetNote, text: r.text };
   }
 
   if (isConfigured(values)) {

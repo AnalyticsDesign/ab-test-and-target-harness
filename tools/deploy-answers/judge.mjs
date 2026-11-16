@@ -249,9 +249,20 @@ export function billingOf(c) {
   return b;
 }
 
+/** R2 にドメインを接続する前の確認。URL の自動決定は、ホストが未使用であることを保証しない */
+export function assetHostNote(c) {
+  if (!c.asset_public_base || c.asset_public_base === "none" || c.asset_public_base === "dev-assets") return null;
+  const base = c.asset_public_base === "auto"
+    ? `https://wtt-assets.${c.zone_name && c.zone_name !== "auto" ? c.zone_name : "<ゾーン名>"}`
+    : c.asset_public_base;
+  return `画像のホスト(${base})は使っていないものにする。同じ名前の DNS レコードが無く、ほかの Worker の Custom Domain にも使われていないことを、デプロイガイド 3.2 の手順で接続前に確かめる。使われていたら、別のホストを選んで asset_public_base を書き直す`;
+}
+
 export function notesOf(values, c) {
   const f = featuresOf(values);
   const n = [];
+  const asset = assetHostNote(c);
+  if (asset) n.push(asset);
   if (values.control_protection === "waf")
     n.push("control に WAF を使う。人がデプロイガイド 7.2 の設定を行い、Free で使う前の確認を済ませる");
   if (values.control_protection === "access")
