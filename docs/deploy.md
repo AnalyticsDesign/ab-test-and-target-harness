@@ -3345,7 +3345,9 @@ pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --com
 Cloudflare アカウントから本ツールをすべて取り除く。**取り消せない**ので、必要なら先に 10.1 の export を取る。順序は「訪問者に見える側から」= 設置サイトのタグ → admin → control → edge → データ → ゾーンのルール → 外部の資格情報(edge は、edge の Durable Object を参照する control の後に消す)。
 
 1. **【人が行う】設置サイトからタグを外す**(GTM のタグを一時停止して公開、または `<script src=".../s/<siteId>.js">` を削除)。先に Worker を消すと、タグが残ったページで設置タグのファイルが 404 / 522 になる(ページ自体は壊れない: 読み込みに失敗しても元のページが出るだけ)
-2. Worker を 5 つ消す。先に 6.2 の名前の確かめのブロックを流し、2 行とも `found` であることを確かめる(管理画面と control は手元の `name` の Worker を消すため)。途中まで消した後にやり直すときは、消し終えた Worker の行が `missing` になるので、残っている方の行が `found` であることを確かめる。Route・Custom Domain・Durable Objects(Visitor Profile の全データ)は Worker と一緒に消える。`wtt-deployer` を消すと設置タグのファイルの作り直しが止まるので、`wtt-static` より後に消す:
+2. Worker を 5 つ消す。先に 6.2 の名前の確かめのブロックを流し、2 行とも `found` であることを確かめる(管理画面と control は手元の `name` の Worker を消すため)。途中まで消した後にやり直すときは、消し終えた Worker の行が `missing` になるので、残っている方の行が `found` であることを確かめる。Route・Custom Domain・Durable Objects(Visitor Profile の全データ)は Worker と一緒に消える。`wtt-deployer` を消すと設置タグのファイルの作り直しが止まるので、`wtt-static` より後に消す。
+
+**流す前に確かめること**: 消す Worker の名前・アカウントが撤去する導入のものであることと、その Worker を参照する別の導入の service binding・Durable Object の binding が無いことを確かめる。別の導入から参照されていたら、その導入で binding を外すまで消さない。下のコマンドは上から 1 本ずつ流し、成功を確かめてから次へ進む。**エージェントなどの非対話の実行では、`wrangler delete` は依存する Worker の警告にも自動で yes と答え、`--force` が無くても binding 先を消す**。確認の問いで止まることを前提にせず、admin → control → edge の順を必ず守る。
 
 ```bash
 pnpm -C apps/admin exec wrangler delete --config dist/server/wrangler.json    # <管理画面の Worker 名>(dist が無ければ先に pnpm -C apps/admin build。または --config を付けず wrangler delete <管理画面の Worker 名>)
@@ -3355,7 +3357,7 @@ pnpm -C apps/deployer exec wrangler delete wtt-static         # 配信専用の 
 pnpm -C apps/deployer exec wrangler delete                    # wtt-deployer。secret(CF_DEPLOY_TOKEN)と Durable Objects も一緒に消える
 ```
 
-それぞれ `y` で確認する。期待: `Successfully deleted <name>`。DO を持つ edge で `--force` を求められたら、付けて再実行する(edge の Durable Object を参照する control は先に消してある)。
+対話の実行ではそれぞれ `y` で確認する。期待: `Successfully deleted <name>`。依存する Worker の警告が出たら、その場で続行せず、参照元と削除の順序を確かめ直す。DO を持つ edge で `--force` を求められたら、control が消え、ほかの参照元も無いことを確かめてから、付けて再実行する。
 
 `custom-domain` の構成では、edge の Custom Domain を消した後に、`<edge のホスト>` の DNS レコードが残っていないことを確かめる。API で確かめるなら 2.3 のホストの空きの確認の 1(`CF_TOKEN` が期限切れなら使えない)で `n` が 0。**【人に依頼】** ダッシュボードで確かめるなら、対象ゾーンの DNS → Records(レコード)に `<edge のホスト>` の行が無いこと。残っていれば、そのレコードを消してもらう。
 
