@@ -104,7 +104,7 @@ test.describe.serial("experiment history tab and the operation log (B129)", () =
     try {
       const reloaded = page.waitForResponse(isHistoryResponse);
       await page.getByRole("button", { name: "保存(下書き)" }).click();
-      await expect(page.getByTestId("save-state")).toHaveText("保存しました");
+      await expect(page.getByTestId("save-state")).toHaveText("下書きに保存しました。訪問者への反映にはサイトの公開が必要です");
       expect((await reloaded).status()).toBe(200);
       // 表はタブの中の 1 本で読み直す(保存の router.refresh は今までどおり走る)。新しい行が出る
       const row = table(page).locator('tr[data-op="experiment.update"]').first();

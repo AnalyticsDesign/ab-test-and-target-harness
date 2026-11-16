@@ -254,7 +254,7 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     await page.getByRole("button", { name: "保存(下書き)" }).click();
     expect((await saved).status()).toBe(200);
     // 保存の後の読み直しまで待つ(その間に左メニューを押すと「保存の途中です」の確認が出る。B173 第 1 段)
-    await expect(page.getByTestId("save-state")).toHaveText("保存しました");
+    await expect(page.getByTestId("save-state")).toHaveText("下書きに保存しました。訪問者への反映にはサイトの公開が必要です");
     expect((await changeStatus(page, SITE_AUD.id, EXP_AUD.id, /^開始/)).publish.ok).toBe(true);
 
     // 実行中のエクスペリエンスが参照するオーディエンスを編集すると、保存の前に確認を挟む(設計書 §5.3)
@@ -340,7 +340,7 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
     await page.getByRole("button", { name: "保存(下書き)" }).click();
     expect((await saved).status()).toBe(200);
     // 保存の後の読み直しまで待つ(その間に上部バーの「公開」を押すと「保存の途中です」の確認が出る。B173 第 1 段)
-    await expect(page.getByTestId("save-state")).toHaveText("保存しました");
+    await expect(page.getByTestId("save-state")).toHaveText("下書きに保存しました。訪問者への反映にはサイトの公開が必要です");
     expect((await changeStatus(page, SITE_AUD.id, EXP_VP.id, /^開始/)).publish.ok).toBe(true);
     await openPublish(page);
     await expect(page.getByTestId("publish-viewport")).toContainText(EXP_VP.name);

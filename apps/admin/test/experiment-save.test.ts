@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiClientError } from "../lib/client";
-import { historyStaleAfterSave, saveErrorMessage } from "../lib/experiment-save";
+import { historyStaleAfterSave, saveErrorMessage, saveSuccessNotice } from "../lib/experiment-save";
 
 // backlog D13 / 決定 56 (5): エクスペリエンスの保存は 3 段の要求。凍結で途中から断られたら「再読み込み」ではなく「もう一度保存」を案内する
 // (再読み込みすると、まだ保存されていない入力が消える)
@@ -63,5 +63,27 @@ describe("historyStaleAfterSave", () => {
     expect(historyStaleAfterSave({ kind: "failed" }, false)).toBe(false);
     // 成功は onWritten が進める(ここでは二重に進めない)
     for (const kind of ["saved", "navigated", "cancelled", "discarded", "ignored"] as const) expect(historyStaleAfterSave({ kind }, true), kind).toBe(false);
+  });
+});
+
+// 配信の保存をメモ・評価計画の保存と取り違えて、公開が必要/不要な案内を逆にしない。
+describe("saveSuccessNotice", () => {
+  const memo = { patchExperiment: false, experimentMemo: true, putVariants: false, variantMemos: [], putChanges: [], putPlan: false };
+  it("delivery edits require publication, including changes-only and variant-set saves", () => {
+    for (const step of [{ patchExperiment: true }, { putVariants: true }, { putChanges: ["b"] }]) {
+      const notice = saveSuccessNotice({ ...memo, ...step });
+      expect(notice.needsPublish).toBe(true);
+      expect(notice.message).toContain("訪問者への反映にはサイトの公開が必要です");
+    }
+  });
+  it("memo-only and plan-only saves do not ask for publication", () => {
+    expect(saveSuccessNotice(memo)).toEqual({ message: "保存しました", needsPublish: false });
+    expect(saveSuccessNotice({ ...memo, experimentMemo: false, putPlan: true })).toEqual({ message: "保存しました。評価計画は反映済みです", needsPublish: false });
+  });
+  it("mixed delivery and plan saves explain both reflection paths", () => {
+    const notice = saveSuccessNotice({ ...memo, patchExperiment: true, putPlan: true });
+    expect(notice.needsPublish).toBe(true);
+    expect(notice.message).toContain("サイトの公開が必要です");
+    expect(notice.message).toContain("評価計画は反映済みです");
   });
 });

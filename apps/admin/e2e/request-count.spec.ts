@@ -694,7 +694,7 @@ test("experience save: one write and one refresh stay within the control request
     const browser = watchBrowserRequests(page);
     const from = Date.now();
     await press();
-    await expect(page.getByTestId("save-state")).toHaveText("保存しました");
+    await expect(page.getByTestId("save-state")).toHaveText("下書きに保存しました。訪問者への反映にはサイトの公開が必要です");
     await expect(heading(page, newName)).toBeVisible();
     // 帯の文と画面の名前を確かめた後、遅れて来る要求も含めて落ち着くまで待ってから閉じる
     const reqs = await adminRequests(from, await waitQuiet(from));

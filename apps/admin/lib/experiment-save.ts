@@ -32,3 +32,10 @@ export function saveErrorMessage(e: unknown, savedSomething: boolean): string {
 export function historyStaleAfterSave(outcome: { kind: BusyOutcome<unknown>["kind"] }, savedSomething: boolean): boolean {
   return outcome.kind === "unknown" || (outcome.kind === "failed" && savedSomething);
 }
+
+/** 保存した段から、訪問者への反映に公開が要るかを案内する。メモと評価計画は公開不要。 */
+export function saveSuccessNotice(steps: import("./experiment-draft").SaveSteps): { message: string; needsPublish: boolean } {
+  const needsPublish = steps.patchExperiment || steps.putVariants || steps.putChanges.length > 0;
+  const message = needsPublish ? "下書きに保存しました。訪問者への反映にはサイトの公開が必要です" : "保存しました";
+  return { message: message + (steps.putPlan ? "。評価計画は反映済みです" : ""), needsPublish };
+}

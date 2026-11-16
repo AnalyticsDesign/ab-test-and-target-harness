@@ -55,7 +55,7 @@ test.describe.serial("pattern UI (B77)", () => {
     const done = page.waitForResponse(until);
     await page.getByRole("button", { name: "保存(下書き)" }).click();
     const res = await done;
-    if (res.ok()) await expect(saveState()).toHaveText("保存しました");
+    if (res.ok()) await expect(saveState()).toHaveText(res.request().method() === "PATCH" ? "保存しました" : "下書きに保存しました。訪問者への反映にはサイトの公開が必要です");
     return res;
   };
   const isWrite = (method: string, path: string) => (r: Response) => r.request().method() === method && new URL(r.url()).pathname === `/api/control${path}`;

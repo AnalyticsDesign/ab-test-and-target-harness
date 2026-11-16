@@ -364,7 +364,7 @@ test("experience: picking an image and saving shows 使用 1 in the library; dro
   const saved = page.waitForResponse((r) => r.request().method() === "PUT" && r.url().includes(`/experiments/${EXP_PICK.id}/variants/b/changes`));
   await page.getByRole("button", { name: "保存(下書き)" }).click();
   expect((await saved).status()).toBe(200);
-  await expect(page.getByTestId("save-state")).toHaveText("保存しました");
+  await expect(page.getByTestId("save-state")).toHaveText("下書きに保存しました。訪問者への反映にはサイトの公開が必要です");
 
   await open(page, imagesPath(`?q=${target.name}`));
   await expect(tile(page, target.name)).toContainText("使用 1");

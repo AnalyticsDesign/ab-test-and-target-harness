@@ -81,6 +81,16 @@ test("invited editor can edit but cannot publish; the API refuses status changes
   await expect(editor.getByRole("button", { name: "保存(下書き)" })).toBeVisible();
   await expect(editor.getByText("開始・一時停止・終了(本番化)は管理者以上が行います")).toBeVisible();
   await expect(editor.getByRole("button", { name: "一時停止" })).toHaveCount(0);
+  // 保存後も編集者に公開を依頼する手順が分かり、公開画面への権限外リンクは出ない。
+  await editor.getByRole("region", { name: "基本", exact: true }).getByLabel("名前(100 字以内)").fill("E2E editor saved experience");
+  await editor.getByRole("button", { name: "保存(下書き)" }).click();
+  await expect(editor.getByTestId("save-state")).toContainText("訪問者への反映にはサイトの公開が必要です");
+  await expect(editor.getByTestId("saved-publish-guidance")).toContainText("管理者にサイトの公開を依頼してください");
+  await expect(editor.getByRole("link", { name: "公開画面へ", exact: true })).toHaveCount(0);
+  // 共通のエクスペリエンス名を後続の E2E が使うので、元に戻して保存する。
+  await editor.getByRole("region", { name: "基本", exact: true }).getByLabel("名前(100 字以内)").fill(EXPERIMENT.name);
+  await editor.getByRole("button", { name: "保存(下書き)" }).click();
+  await expect(editor.getByTestId("save-state")).toContainText("訪問者への反映にはサイトの公開が必要です");
   // B31 ②: 上部バーの「公開」は押せず、理由は見える文で添える(title だけにしない)。ボタンはその文を説明として指す
   await expect(editor.locator("#topbar-publish-reason")).toHaveText("公開は管理者以上が行います");
   await expect(editor.getByTestId("topbar-publish")).toBeDisabled();

@@ -215,6 +215,7 @@ goalRoutes.patch(
   describeRoute({
     tags: ["goals"],
     summary: "目標を更新(編集者以上)。name / config / analytics のみ。type は不変",
+    description: "保存だけでは訪問者への配信は変わらない。次のサイトの公開、または同じサイトのエクスペリエンスの開始・再開・一時停止・終了による自動公開で、配信中のエクスペリエンスの保存済み編集とサイト共通の目標・オーディエンスが一緒に反映される。開始後のテストの結果は変更の前と後を合算する。大きく変える場合は複製して新しいテストを開始する。",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "更新後の目標", content: { "application/json": { schema: resolver(GoalJsonSchema) } } },

@@ -655,6 +655,7 @@ experimentRoutes.patch(
     tags: ["experiments"],
     summary:
       "エクスペリエンスを更新(編集者以上)。id は不変、status は変更できない(status は /status で変更する)。メモ(description)だけの更新は状態にかかわらず可で、公開の対象にならない。テストの開始後は配信率を下げる・割当の固定を変えると 409 test_setting_locked、終了したテストはメモ以外 409 experiment_archived_readonly",
+    description: "保存だけでは訪問者への配信は変わらない。次のサイトの公開、または同じサイトのエクスペリエンスの開始・再開・一時停止・終了による自動公開で、配信中のエクスペリエンスの保存済み編集とサイト共通の目標・オーディエンスが一緒に反映される。開始後のテストの結果は変更の前と後を合算する。大きく変える場合は複製して新しいテストを開始する。メモだけの更新は公開の対象にならない。",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "更新後のエクスペリエンス", content: { "application/json": { schema: resolver(ExperimentJsonSchema) } } },
@@ -837,6 +838,7 @@ experimentRoutes.put(
     tags: ["experiments"],
     summary:
       "パターンの集合を全置換(編集者以上)。テストは 2 つ以上、パーソナライズは 1 つ。weight の合計 100。残るパターンの変更は保持される(オリジナルにしたパターンの変更は消す)。original / description を省いたパターンは保存済みの値を保つ。下書きのときだけ可",
+    description: "保存だけでは訪問者への配信は変わらない。次のサイトの公開、または同じサイトのエクスペリエンスの開始・再開・一時停止・終了による自動公開で、配信中のエクスペリエンスの保存済み編集とサイト共通の目標・オーディエンスが一緒に反映される。開始後のテストの結果は変更の前と後を合算する。大きく変える場合は複製して新しいテストを開始する。",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "置換した", content: { "application/json": { schema: resolver(z.object({ ok: z.literal(true) })) } } },
@@ -959,6 +961,7 @@ experimentRoutes.put(
     tags: ["experiments"],
     summary:
       "パターンの変更を全置換(編集者以上)。1 件でも保存時検証に落ちれば何も書かない。オリジナルのパターンには変更を保存できない(空配列は受けて何もしない)。終了したテストには保存できない(空配列も 409 experiment_archived_readonly)",
+    description: "保存だけでは訪問者への配信は変わらない。次のサイトの公開、または同じサイトのエクスペリエンスの開始・再開・一時停止・終了による自動公開で、配信中のエクスペリエンスの保存済み編集とサイト共通の目標・オーディエンスが一緒に反映される。開始後のテストの結果は変更の前と後を合算する。大きく変える場合は複製して新しいテストを開始する。",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "置換した", content: { "application/json": { schema: resolver(z.object({ ok: z.literal(true), count: z.number().int() })) } } },

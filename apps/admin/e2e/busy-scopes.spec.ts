@@ -110,7 +110,7 @@ test.describe.serial("busy scopes and confirms (B173 stage 2)", () => {
       await expect(confirm).toBeVisible();
       expect(patches.count()).toBe(0);
       await confirm.getByRole("button", { name: "保存する", exact: true }).press("Enter");
-      await expect(page.getByTestId("save-state")).toHaveText("保存しました");
+      await expect(page.getByTestId("save-state")).toHaveText("下書きに保存しました。訪問者への反映にはサイトの公開が必要です");
       await expect(page.getByRole("alertdialog")).toHaveCount(0);
       expect(patches.count()).toBe(1);
     } finally {

@@ -16,8 +16,8 @@ import { appAlert, changeStatus, controlHeaders, createExperiment, createSite, l
 const SITE = { id: "site_e2e_xsave", name: "E2E Experiment Save" };
 const EXP = { id: "exp_e2e_xsave", name: "E2E save experience" };
 const EXP_RUN = { id: "exp_e2e_xsave_run", name: "E2E save running" };
-const SAVED = "保存しました";
-const SAVED_WITH_PLAN = "保存しました。評価計画は反映済みです";
+const SAVED = "下書きに保存しました。訪問者への反映にはサイトの公開が必要です";
+const SAVED_WITH_PLAN = "下書きに保存しました。訪問者への反映にはサイトの公開が必要です。評価計画は反映済みです";
 const REFRESH_TIMEOUT = "保存しました。画面の表示が古い可能性があります。再読み込みしてください";
 const SERVER_UPDATED = "この画面を開いた後に、内容が更新されました";
 
@@ -126,6 +126,7 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
       await page.keyboard.type("zz");
       await expect(nameInput()).toHaveValue("E2E save 1");
       await expect(saveState()).toHaveText(SAVED);
+      await expect(page.getByRole("link", { name: "公開画面へ", exact: true })).toHaveAttribute("href", `${new URL(siteUrl).pathname}/publish`);
       await expect(overlay()).toHaveCount(0);
       expect(patches.count()).toBe(1);
       expect(rsc.count()).toBe(1);
@@ -408,6 +409,7 @@ test.describe.serial("experiment save (B173 stage 1)", () => {
     try {
       await saveButton().click();
       await expect(saveState()).toHaveText(SAVED);
+      await expect(page.getByTestId("saved-publish-guidance")).toContainText("変更の前と後の結果は合算されます");
     } finally {
       page.off("request", onRequest);
     }

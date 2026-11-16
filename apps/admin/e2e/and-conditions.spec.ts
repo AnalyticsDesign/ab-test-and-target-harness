@@ -17,7 +17,7 @@ const SITE = { id: "site_e2e_and", name: "E2E And Conditions" };
 const EXP = { id: "exp_e2e_and", name: "E2E and conditions" };
 const HOST = "shop.example.com";
 const AND_PATH = "/sale/";
-const SAVED = "保存しました";
+const SAVED = "下書きに保存しました。訪問者への反映にはサイトの公開が必要です";
 const GUIDANCE = "ページの条件を入れてください(すべてのページなら『パスが / で始まる』)";
 
 /** 画面を通さずに BFF を呼ぶ(保存された値の確かめ) */

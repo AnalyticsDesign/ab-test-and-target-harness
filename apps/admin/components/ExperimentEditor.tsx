@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { api, ApiClientError, fieldErrors } from "@/lib/client";
 import { toChangeWire } from "@/lib/change-wire";
-import { historyStaleAfterSave, saveErrorMessage } from "@/lib/experiment-save";
+import { historyStaleAfterSave, saveErrorMessage, saveSuccessNotice } from "@/lib/experiment-save";
 import { tabsFor, discardTarget, draftOf, savedAfter, draftValueErrors, experimentPatchBody, failedTab, hasSteps, isDirty, isTrafficSent, acceptSavedDraft, reconcileServerUpdate, saveSteps, type Draft, type EditorTab } from "@/lib/experiment-draft";
 import { extensionErrors, planDirty, planFormErrors, planFormState, planMode, planPutBody, syncPlanState, type PlanForm, type PlanView } from "@/lib/evaluation-plan";
 import { archivedTestBanner, lockedFieldChanges, needsRunningTestConfirm, preSaveLockProblem, RUNNING_TEST_CONFIRM } from "@/lib/test-locks";
@@ -17,6 +17,7 @@ import { ErrorBox } from "./ErrorBox";
 import { useNow } from "./LocalTime";
 import { BusyScope, useBusyAction } from "./ui/BusyScope";
 import { TabPanel, Tabs } from "./ui/Tabs";
+import { AppLink } from "./ui/AppLink";
 import { SaveBar } from "./ui/SaveBar";
 import { OverviewTab } from "./experiment/OverviewTab";
 import { VariantsTab } from "./experiment/VariantsTab";
@@ -30,8 +31,6 @@ import type { StopMessage } from "@/lib/stop-dialog";
 import { useStatusChangeGuard } from "@/lib/status-guard";
 
 /** 保存の結果の文(帯の左・本文の先頭) */
-const SAVED = "保存しました";
-const SAVED_WITH_PLAN = "保存しました。評価計画は反映済みです";
 const REFRESH_TIMEOUT = "保存しました。画面の表示が古い可能性があります。再読み込みしてください";
 const WRITE_UNKNOWN = "保存できたか分かりません。再読み込みして確かめてください";
 const SERVER_UPDATED = "この画面を開いた後に、内容が更新されました";
@@ -267,12 +266,13 @@ function ExperimentEditorBody({
   // B8: 保存の前に見つけた空の HTML の変更。利用者がその欄を直したら消す(位置がずれても追えるよう変更の id で持つ)
   const [emptyHtml, setEmptyHtml] = useState<{ variantId: string; changeId: string } | null>(null);
   // 保存の成功の文(帯の左。変更が無い間だけ出る)。次に欄を変えたら消す
-  const [savedMessage, setSavedMessage] = useState<string | null>(null);
+  const [savedNotice, setSavedNotice] = useState<ReturnType<typeof saveSuccessNotice> | null>(null);
+  const savedMessage = savedNotice?.message ?? null;
   // 評価計画の段で control が返した欄のエラー(評価計画のタブの欄の下に出す)
   const [planServerFields, setPlanServerFields] = useState<Record<string, string>>({});
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((d) => ({ ...d, [key]: value }));
-    setSavedMessage(null);
+    setSavedNotice(null);
     if (key === "variants" && emptyHtml && emptyHtmlIndex(value as Draft["variants"], emptyHtml) === null) setEmptyHtml(null);
   };
   const { urlMatch, variants } = draft;
@@ -312,7 +312,7 @@ function ExperimentEditorBody({
   function discard() {
     onResetToServer();
     resetLocal();
-    setSavedMessage(null);
+    setSavedNotice(null);
   }
 
   /**
@@ -367,7 +367,7 @@ function ExperimentEditorBody({
     setError(null);
     setErrorTabs([]);
     setAttrHint(null);
-    setSavedMessage(null);
+    setSavedNotice(null);
     setPlanServerFields({});
     setSaveTried(true);
     if (blockedBeforeSave()) return;
@@ -484,7 +484,7 @@ function ExperimentEditorBody({
         onRefreshed(outcome.refresh !== "done"); // 反映を確かめられたときだけ戻り先を捨てる(この保存は after: "refresh" なので skipped にはならない)
         // 読み直しを待ち切れなかったときは、本文の先頭に再読み込みの案内を出す(文が「保存しました」で始まるので、帯の文は重ねない)
         if (outcome.refresh === "timeout") setError(REFRESH_TIMEOUT);
-        else setSavedMessage(planBody ? SAVED_WITH_PLAN : SAVED);
+        setSavedNotice(saveSuccessNotice(steps));
         return;
       case "failed": {
         // 途中の段の失敗ではページの読み直し(router.refresh)はしない(変更履歴のタブは onHistoryStale で読み直す):
@@ -586,7 +586,7 @@ function ExperimentEditorBody({
             form={plan.form}
             onForm={(f) => {
               onPlan({ view: plan.view, form: f });
-              setSavedMessage(null);
+              setSavedNotice(null);
             }}
             reason={planReason}
             onReason={onPlanReason}
@@ -651,8 +651,17 @@ function ExperimentEditorBody({
       ) : null}
       {/* 終了したエクスペリエンスはメモだけを編集できるので、メモを変えたときだけ保存バーを出す(評価計画の変更も帯で保存する)。
           保存の成功の文を持っている間も出す(保存で変更が無くなっても、帯の左の「保存しました」で成功を知らせるため。文は次に欄を変えたとき・破棄で消え、帯もそこで消える) */}
+      {savedNotice?.needsPublish && (role === "editor" || (isTest && (experiment.status === "running" || experiment.status === "paused"))) ? (
+        <p data-testid="saved-publish-guidance" className="muted">
+          {role === "editor" ? "公開は管理者以上が行います。管理者にサイトの公開を依頼してください。" : null}
+          {isTest && (experiment.status === "running" || experiment.status === "paused") ? "開始後に編集して公開しても、変更の前と後の結果は合算されます。大きく変える場合は、複製して新しいテストを開始してください。" : null}
+        </p>
+      ) : null}
       {canEdit && (experiment.status !== "archived" || memoChanged || planIsDirty || savedMessage !== null) ? (
         <SaveBar dirty={bodyDirty || planIsDirty} message={savedMessage}>
+          {savedNotice?.needsPublish && (role === "owner" || role === "admin") ? (
+            <AppLink href={`/w/${wid}/sites/${site.id}/publish`} className="btn">公開画面へ</AppLink>
+          ) : null}
           {notice ? (
             <span className="muted" data-testid="server-updated">
               {SERVER_UPDATED}

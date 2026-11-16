@@ -204,6 +204,7 @@ audienceRoutes.patch(
   describeRoute({
     tags: ["audiences"],
     summary: "オーディエンスを更新(編集者以上)。id は不変。定義の変更は次の公開で、参照するすべてのエクスペリエンスに効く",
+    description: "保存だけでは訪問者への配信は変わらない。次のサイトの公開、または同じサイトのエクスペリエンスの開始・再開・一時停止・終了による自動公開で、配信中のエクスペリエンスの保存済み編集とサイト共通の目標・オーディエンスが一緒に反映される。開始後のテストの結果は変更の前と後を合算する。大きく変える場合は複製して新しいテストを開始する。",
     security: [{ bearer: [] }],
     responses: {
       200: { description: "更新後のオーディエンス", content: { "application/json": { schema: resolver(AudienceJsonSchema) } } },
