@@ -33,6 +33,9 @@ const usesEdge = (features, c) => features.has("history") || c.dlite_hosts.lengt
 export const WHY_ANYONE = "(タグのアドレスはサイトの HTML に書かれるので、誰でも知ることができる)";
 export const FLOOD = `万が一、悪意のある人がプログラムで大量のアクセスを送ってきた場合${WHY_ANYONE}、ドメインなしの構成にはアクセスを制限する仕組み(WAF)を置けないため`;
 export const FLOOD_PAID = `${FLOOD}、そのアクセスの分もすべて請求に含まれる(支出の上限も掛けられない)`;
+/** Workers Free の CPU 時間の上限(1 回 10 ms)の注意。README・デプロイガイド冒頭と同じ意味(Q703・Q704。2026-11 の実測は B278) */
+export const FREE_CPU_NOTE =
+  "Workers Free の CPU 時間の上限は 1 回 10 ms。本製品は開発の段階で Worker の負荷が大きく、2026-11 の実測では管理画面のふつうの表示もほぼ毎回これを超えていた。今は止められていないが、上限が厳密に適用されると管理画面が使えなくなりうる。そのため Free での導入は評価のために使うことを勧め、安定して使うなら Workers Paid にする";
 
 const accountIsPaid = (values) => values.cloudflare_account === "existing" && values.existing_plan === "paid";
 
@@ -153,13 +156,13 @@ export function reasonsOf(values, c) {
   ];
   // アカウントの入れ替えの理由は、提示の確認の段落(render.mjs の accountChangeNote)に書く
   if (accountIsPaid(values)) r.push("このアカウントは既に Workers Paid なので、Paid として扱う");
-  else if (!limit && f.has("itp")) r.push("この構成では Safari 対策(Mode B: サーバー発行 Cookie)を使えないので、割り当てとゴールの計測は訪問者のブラウザの中で完結し、Free で足りる");
-  else if (!limit) r.push("A/B テストとゴールの計測は訪問者のブラウザの中で完結し、Workers の無料枠をほとんど使わないので Free で足りる");
+  else if (!limit && f.has("itp")) r.push("この構成では Safari 対策(Mode B: サーバー発行 Cookie)を使えないので、割り当てとゴールの計測は訪問者のブラウザの中で完結し、要求数の上では Free で足りる(管理画面の CPU 時間は「注意」)");
+  else if (!limit) r.push("A/B テストとゴールの計測は訪問者のブラウザの中で完結し、Workers の無料枠をほとんど使わないので、要求数の上では Free で足りる(管理画面の CPU 時間は「注意」)");
   else if (c.plan === "paid") r.push(`${limit.what}を使い、多い日の PV が Free の上限(${limit.label})の 7 割を超えうるので Workers Paid にする`);
   else if (values.daily_pv === "unknown") r.push(`PV が分からないので Free で始める(${limit.what}を使うので、上限は ${limit.label})`);
   else if (exceedsFree(f, values.daily_pv, c))
     r.push(`多い日の PV が Free の上限(${limit.label})の 7 割を超えうるが、Free にする。Workers Paid にすると、${FLOOD_PAID}`);
-  else r.push(`多い日の PV が Free の上限(${limit.label})に収まる見込みなので Free で足りる`);
+  else r.push(`多い日の PV が Free の上限(${limit.label})に収まる見込みなので、要求数の上では Free で足りる(管理画面の CPU 時間は「注意」)`);
   r.push(
     c.asset_public_base === "none"
       ? "画像は、サイトなどに置いた画像の URL を ATTRIBUTE の src に書いて差し替えるので、画像の置き場(R2)を使わない(支払い方法の登録が要らない)"
@@ -277,6 +280,8 @@ export function notesOf(values, c) {
     n.push("多い日に止めたくないなら、ドメインを Cloudflare に追加してから Workers Paid にする(デプロイガイド 2.8 でドメインありの構成に移れる)");
   if (c.edge_address === "workers-dev" && c.plan === "paid")
     n.push(`このアカウントは Workers Paid。${FLOOD_PAID}。この製品用に Free のアカウントを別に作り、そこに入れることを勧める`);
+  if (c.plan === "free")
+    n.push(c.edge_address === "workers-dev" ? `${FREE_CPU_NOTE}(ドメインなしの構成では、先にドメインを Cloudflare に追加する。デプロイガイド 2.8)` : FREE_CPU_NOTE);
   // 履歴を選んでいれば、上限の話は構成の理由に既に出ているので、重ねて言わない
   if (!f.has("history")) n.push(`導入の後に管理画面で履歴の条件や割り当ての固定を使い始めると、Free の上限が${FREE_LIMITS.history.label}(予算確認などの分だけ下がる)になる`);
   return n;

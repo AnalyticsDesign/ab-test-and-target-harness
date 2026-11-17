@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { recommend, dliteHostsFor, LIGHTEST, configOf, sameConfig, exceedsFree, summaryOf, placementOf, reasonsOf, cannotOf, tasksOf, billingOf, notesOf, accountChangeOf, answersFor, hostOfConfig, FLOOD } from "../judge.mjs";
+import { recommend, dliteHostsFor, LIGHTEST, configOf, sameConfig, exceedsFree, summaryOf, placementOf, reasonsOf, cannotOf, tasksOf, billingOf, notesOf, accountChangeOf, answersFor, hostOfConfig, FLOOD, FREE_CPU_NOTE } from "../judge.mjs";
 import { renderProposals } from "../render.mjs";
 
 const base = { features: ["ab"], daily_pv: "under_10k", image_upload: false, cloudflare_account: "none", site_on_cloudflare: "no_site", owner_email: "a@example.com" };
@@ -341,4 +341,22 @@ test("tasksOf: manual-user は User API Token と、作った人が外れたと�
   assert.match(line, /作った人がアカウントから外れると、デプロイと使用状況が止まる/);
   assert.match(line, /ゾーンの設定用\(期限 = 翌日\)/);
   assert.doesNotMatch(tokenLine({ ...v, cloudflare_account: "none" }, LIGHTEST), /ゾーンの設定用/);
+});
+
+// Q703・Q704: Free の構成では、管理画面の CPU 時間の注意を出し、評価のための導入を勧める。Paid では出さない
+test("Free の構成の「注意」に CPU 時間の注意が出て、Paid では出ない", () => {
+  const free = recommend(base);
+  assert.equal(free.plan, "free");
+  const n = notesOf(base, free);
+  assert.ok(n.some((x) => x.startsWith(FREE_CPU_NOTE) && /デプロイガイド 2\.8/.test(x)));
+  const zoned = { ...base, ...zone };
+  const zf = recommend(zoned);
+  assert.equal(zf.plan, "free");
+  assert.ok(notesOf(zoned, zf).includes(FREE_CPU_NOTE));
+  assert.match(FREE_CPU_NOTE, /評価のために使うことを勧め/);
+  const paidV = { ...zoned, features: ["ab", "history"], daily_pv: "over_70k" };
+  const paid = recommend(paidV);
+  assert.equal(paid.plan, "paid");
+  assert.ok(!notesOf(paidV, paid).some((x) => x.startsWith(FREE_CPU_NOTE)));
+  assert.ok(!has(reasonsOf(base, free), /ので Free で足りる$/));
 });
