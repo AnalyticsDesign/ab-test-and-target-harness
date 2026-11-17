@@ -301,8 +301,8 @@ export function DomainsSection({
             </p>
             <ol>
               <li>
-                対象ゾーンに Workers Route <code>&lt;ドメイン&gt;/__ab/*</code> → <code>wtt-edge</code> を、タグを置くドメインごとに追加する(Cloudflare のダッシュボードでは、ゾーンの Workers Routes の Add
-                route。日本語の表示の名前は確かめていません)。Cloudflare 側の Route は <code>*.example.com/__ab/*</code> のようなワイルドカード 1 本でまとめてもよい(apex の <code>example.com</code> は含まないので、apex にも置くなら <code>example.com/__ab/*</code> を別に足す)。この画面の一覧には、ワイルドカードではなくドメインを 1 つずつ書く
+                対象ゾーンの Workers Route <code>&lt;ドメイン&gt;/__ab/*</code> → <code>wtt-edge</code> を、タグを置くドメインごとに、<code>apps/edge/wrangler.jsonc</code> の <code>routes</code> に足して edge をデプロイする(デプロイガイド
+                6.7)。Cloudflare のダッシュボードだけで足した Route は、次の edge のデプロイで設定ファイルの内容に置き換わり、消える。設定ファイルの Route は <code>*.example.com/__ab/*</code> のようなワイルドカード 1 本でまとめてもよい(apex の <code>example.com</code> は含まないので、apex にも置くなら <code>example.com/__ab/*</code> を別に足す)。この画面の一覧には、ワイルドカードではなくドメインを 1 つずつ書く
               </li>
               <li>Route を足したら、この画面で保存する。保存のときに各ドメインを確かめ、行の右の札が「Cloudflare 経由」になる</li>
               <li>
