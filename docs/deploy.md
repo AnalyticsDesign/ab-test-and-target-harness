@@ -6,9 +6,9 @@ AB Test and Target Harness を運用者自身の Cloudflare アカウントへ�
 - **前提知識**: Cloudflare と GA4 の基本操作。エージェントに任せる場合は、0 節の「人が行う」の表だけ分かればよい
 - **この文書に無いもの**: 設置サイト側の作業(タグ・consent・GA4 の受け側)は[設置ガイド](site-install.md)。構成(ドメインの有無・料金プランなど)の判断の根拠は[導入構成の選び方](install-patterns.md)。構成そのものは 0.2 の質問と検査スクリプトで決まる
 
-Workers Free では、本製品の重い管理操作が CPU 時間の上限(1 回 10 ms)を超えて動作しているため、今後、上限によって失敗する可能性があります。管理操作で CPU 時間の上限によるエラーが出た場合は、Workers Paid に切り替えてください。
+Workers Free の CPU 時間の上限は 1 回 10 ms である。本製品の重い管理操作は、今もこれを超えることがある。今は Cloudflare がこの超過で処理を止めていないので動いているが、上限が厳密に適用されると失敗することがある。管理操作で CPU 時間の上限によるエラーが出たら、Workers Paid に切り替える。
 
-Workers Paid で支出が上限に達したときに自動停止する機能はまだないため、管理画面の「[使用状況](operations.md#11-使用状況cloudflare-の上限)」で使用量を確認してください。
+この製品には、Workers Paid で支出が上限に達したときに自動で止める機能は無い。Cloudflare の Workers の支出制限([1 節](#1-前提と全体像))は Workers の要求・CPU の超過料金だけが対象で、請求総額の上限にはならない。使用量は管理画面の「[使用状況](operations.md#11-使用状況cloudflare-の上限)」で確認する。
 
 この文書の構成:
 
@@ -32,7 +32,7 @@ Workers Paid で支出が上限に達したときに自動停止する機能は�
 
 人が手で既定の構成(0.1 の表)を導入するための、いちばん短い手順。コマンドはすべて 0〜5 節にあるものと同じで、`pnpm docs:check` が一致を検査する。ここには確認を 1 行ずつと、期待と違ったときに読む先だけを添えた。AI エージェントに任せる場合、エージェントはここを使わず 0 節から読む(README のプロンプトのとおり)。
 
-Windows の Git Bash で確認コマンドの出力が期待と違う場合は、[引数のパスの書き換えの確認と対処](#git-bash-で確認コマンドの出力が期待と違うとき)も読んでください。
+Windows の Git Bash で確認コマンドの出力が期待と違う場合は、[引数のパスの書き換えの確認と対処](#git-bash-で確認コマンドの出力が期待と違うとき)も読む。
 
 ここで動かす構成と、外れるときに読む先:
 
@@ -79,7 +79,7 @@ openssl version            # 乱数の生成に使う
 git clone https://github.com/AnalyticsDesign/ab-test-and-target-harness.git
 cd ab-test-and-target-harness
 git tag --list 'v*' --sort=-v:refname | head -5     # 使える tag。release_tag が latest なら先頭
-git checkout v0.9                                    # 入れる tag に読み替える
+git checkout v1.0                                    # 入れる tag に読み替える
 git describe --tags --exact-match                    # 期待: 今 checkout した tag 名。それ以外なら checkout に失敗している
 pnpm install
 ```
@@ -450,7 +450,7 @@ curl -s https://<設置タグのホスト>/s/<siteId>.js | head -c 400
 
 各手順は「実行するコマンド → 確認(期待する出力)→ 期待と違うとき(その対応)」の順に書いてある。エージェントは上から順に実行し、人に頼むのは **【人が行う】** と **【人に依頼】** のラベルが付いた工程だけ。
 
-- **【人が行う】** = 人だけができる操作(下の 1 つ目の表)。構成によって無いものもある。アカウントの作成と `plan: paid` の切り替えは構成しだいで、5.1 は断れば無い。8 節は持たなければ無い
+- **【人が行う】** = 人だけができる操作(下の 1 つ目の表)。構成によって無いものもある。アカウントの作成と `plan: paid` の切り替えは構成しだいで、5.1 は断れば無い。8 節(非常時の入り方)は、Google でログインできなくなったときと、6.3 でパスワードでログインしていた版から更新するときにだけ行う
 - **【人に依頼】** = ダッシュボードや端末での操作を頼むもの(下の 2 つ目の表)。0.5 節で一度に集めて頼む。基本(`cloudflare_tokens: bootstrap`)でどの構成でも要るのは、Google の OAuth クライアントと、Cloudflare のトークンを作るためのトークン(親トークン)1 本の 2 つ。残りの Cloudflare API トークンはエージェントが親トークンで作る。救済(`manual-account`・`manual-user`)では、親トークンの代わりに、配信ファイルのデプロイ用トークンと使用状況の表示用トークンを人が作り、ゾーンありの構成ではこれにゾーンの設定用のトークン 1 本が加わる。それ以外は構成によって要否が変わる
 
 | 工程 | 誰が | 理由 |
@@ -477,7 +477,7 @@ curl -s https://<設置タグのホスト>/s/<siteId>.js | head -c 400
 | ダッシュボードの Workers & Pages を一度開く | 0.5 でサブドメインを API で作れなかったときだけ |
 | 更新時の設定の再保存 | 6.4 で (b) があるとき |
 | ゾーンのレート制限ルールを書き換えるための作業用のトークンを 1 本作って伝える。作り方は 0.5 の最後の段落(Account API Token で App Security の Zone WAF Rules の Edit と DNS & Zones の Zone の Read、ゾーン限定、期限 = 今日から翌日まで。作れなければ User API Token)。書き換えはエージェントが API で行う(2.7 の「1 本のルールを書き換える」) | 導入の後に、2.7・7.2 のルールの式や回数を変えるとき。導入の途中は 0.5 で作った作業用のトークン(`CF_TOKEN`)を使う |
-| 撤去時の R2 の中身の削除、OAuth クライアント・API トークン(Account API tokens(アカウント API トークン)の一覧のもの。User API Token で作ったものは My Profile の一覧)・Access の削除。別のドメインに置く構成では、DNS レコードが消えたことの確認と証明書の削除 | 10.4 |
+| 撤去時の R2 の中身の削除、OAuth クライアント・API トークン(Account API tokens(アカウント API トークン)の一覧のもの。User API Token で作ったものは右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン)の一覧)・Access の削除。別のドメインに置く構成では、DNS レコードが消えたことの確認と証明書の削除 | 10.4 |
 
 **ダッシュボードの画面名の書き方**(この文書と、エージェントが人に示す依頼文の両方):
 
@@ -538,7 +538,7 @@ AI エージェントに任せる場合、構成は 0.2 の質問と検査スク
 | control の公開アドレス | `https://<control の Worker 名>.<アカウントのサブドメイン>.workers.dev` | 自分のドメインに置いて WAF / Access を掛けたい | 3.6 / 7.1 |
 | control の無認証入口の防御 | (1) 何もしない(ログインは Google アカウントで、パスワードの経路は普段閉じている) | 複数人で使う、外部エージェントに API を呼び出させる | 7 節 |
 | edge の WAF Rate Limiting Rule | 作る(200 回 / 10 秒) | 既に別のレート制限ルールで Free の 1 枠を使っている | 2.7 |
-| 画像の公開ベース | 必ず指定する。R2 のカスタムドメイン、暫定の dev-assets、または none(R2 を使わない)。検査スクリプトは `auto` = `https://wtt-assets.<ゾーン名>` を書く。`dev-assets` では画像から control のアドレスが分かり、control の名前の乱数による補助は適用されない(管理画面のアドレスは control からは分からない) | 支払い方法を登録せずに導入したい(none) | 3.2 |
+| 画像の公開ベース | 必ず指定する。R2 のカスタムドメイン、暫定の dev-assets、または none(R2 を使わない)。検査スクリプトは `auto` = `https://wtt-assets.<ゾーン名>` を書く。`dev-assets` では画像の URL に control のアドレスが出るので、control の名前に付けた乱数による補助(0.5)は control には適用されない。管理画面の名前の乱数による補助は適用される(管理画面のアドレスは control からは分からない) | 支払い方法を登録せずに導入したい(none) | 3.2 |
 | 管理画面の公開アドレス | `https://<管理画面の Worker 名>.<アカウントのサブドメイン>.workers.dev` | 自分のドメインに置いてリンクの見た目を整える / Access・WAF を掛ける | 4.2 |
 
 ### 0.2 構成を決める(質問と入力ファイル `deploy-answers.yaml`)
@@ -608,12 +608,12 @@ node tools/deploy-answers/cli.mjs; echo "exit=$?"   # 期待: exit=0、「## 指
 git clone https://github.com/AnalyticsDesign/ab-test-and-target-harness.git
 cd ab-test-and-target-harness
 git tag --list 'v*' --sort=-v:refname | head -5     # 使える tag。release_tag が latest なら先頭
-git checkout v0.9                                    # 入れる tag に読み替える
+git checkout v1.0                                    # 入れる tag に読み替える
 git describe --tags --exact-match                    # 期待: 今 checkout した tag 名。それ以外なら checkout に失敗している
 pnpm install
 ```
 
-`latest` は、上の `git tag` の版の順の先頭で決める。GitHub Releases の API(`/releases/latest`)は使わない。リリースは tag で定義しており、API が 404 を返しても「tag が無い」という意味ではない。認証・ネットワークの制限でも 404 になる。
+`release_tag` が `latest` のときは、上の `git tag --list 'v*' --sort=-v:refname` の出力の 1 行目(版の番号がいちばん大きい tag)を入れる。GitHub Releases の API(`/releases/latest`)は使わない。リリースは tag で定義しており、API が 404 を返しても「tag が無い」という意味ではない。認証・ネットワークの制限でも 404 になる。
 
 `Corepack` の案内が出たら `corepack enable` を先に実行する。`corepack: command not found` なら 0.4 の「期待と違うとき」を読む。
 
@@ -665,21 +665,21 @@ openssl version            # 乱数の生成に使う
 
 #### Git Bash で確認コマンドの出力が期待と違うとき
 
-Git Bash は Windows のプログラムに渡す `/s/...` のような引数を、Windows のファイルのパスに書き換えることがあります。この文書の curl の URL は `https://` から始まる形のまま使ってください。HTTP コードや本文が期待と違う場合は、その結果だけで導入が成功したと判断せず、`type -a curl` と `curl --version` で使っている curl を確認してください。URL のパスなどが書き換わっていた場合は、そのコマンドだけに `MSYS_NO_PATHCONV=1` を付けて確認し直してください。ファイルの入出力先も引数に含まれるときは、そのパスも確認してください。
+Git Bash は Windows のプログラムに渡す `/s/...` のような引数を、Windows のファイルのパスに書き換えることがある。この文書の curl の URL は `https://` から始まる形のまま使う。HTTP コードや本文が期待と違う場合は、その結果だけで導入が成功したと判断せず、`type -a curl` と `curl --version` で使っている curl を確認する。URL のパスなどが書き換わっていた場合は、そのコマンドだけに `MSYS_NO_PATHCONV=1` を付けて確認し直す。ファイルの入出力先も引数に含まれるときは、そのパスも確認する。
 
 ```bash
 # Git Bash でパスの書き換えが確認されたときだけ使う例
 MSYS_NO_PATHCONV=1 curl -sSI "https://<設置タグのホスト>/s/<siteId>.js"
 ```
 
-Windows の curl で HTTP コードだけを確かめるときは、次のようにします。`-o /dev/null` の引数も書き換えが止まるため、Windows の curl の出力先には `NUL` を使います。シェルが処理する `>/dev/null` はそのままにし、`>NUL` には変えないでください。
+Windows の curl で HTTP コードだけを確かめるときは、次のようにする。`-o /dev/null` の引数も書き換えが止まるため、Windows の curl の出力先には `NUL` を使う。シェルが処理する `>/dev/null` はそのままにし、`>NUL` には変えない。
 
 ```bash
 # Windows の curl で HTTP コードだけを確かめる例
 MSYS_NO_PATHCONV=1 curl -sS -o NUL -w '%{http_code}\n' "https://<設置タグのホスト>/s/<siteId>.js"
 ```
 
-書き換えを止めるのは、影響が確認されたコマンドだけにしてください。`export MSYS_NO_PATHCONV=1` で以後の全コマンドの書き換えを止めると、ローカルファイルのパスを Windows のプログラムに渡す処理まで変わります。コマンドを引用符で囲むだけ、または `.sh` ファイルに保存するだけでは、この書き換えを避けられません。
+書き換えを止めるのは、影響が確認されたコマンドだけにする。`export MSYS_NO_PATHCONV=1` で以後の全コマンドの書き換えを止めると、ローカルファイルのパスを Windows のプログラムに渡す処理まで変わる。コマンドを引用符で囲むだけ、または `.sh` ファイルに保存するだけでは、この書き換えを避けられない。
 
 #### アカウントを作る(`cloudflare_account: none / separate` のとき)
 
@@ -827,7 +827,7 @@ Worker の名前が証明書の公開の記録(Certificate Transparency のロ�
 
 この製品は Cloudflare の版ごとの Preview URL を使わないので、管理画面と control の設定で `"preview_urls": false` を明示している。通常の workers.dev の公開アドレスは使える。この設定で Certificate Transparency のログへの名前の掲載を防げるとは限らず、既に載った名前も消えない。管理画面のビルドが出す設定(`dist/server/wrangler.json`)でも `preview_urls` が `false` であることを、初回の deploy の前に 4.3 で確かめる。
 
-0.4 でも前の導入が無いかを見るが、手で入れる最短の手順と、アカウントを選び直した場合も確かめるため、ここで Worker の一覧を見直す。次のブロックが `names: ok …` を出した場合だけ先に進む。出た 2 つの名前は `deploy-log.md` と最後の報告に控える。
+前の導入が無いかは 0.4 でも見る。ただし手で入れる最短の手順は 0.4 のその確認を通らないことがあり、0.4 の後にアカウントを選び直すこともあるので、ここで Worker の一覧をもう一度見る。次のブロックが `names: ok …` を出した場合だけ先に進む。出た 2 つの名前は `deploy-log.md` と最後の報告に控える。
 
 ```bash
 T=$(pnpm -C apps/control exec wrangler auth token --json 2>/dev/null | jq -r .token)
@@ -950,7 +950,7 @@ fi
 
 識別子 = 上で確かめたアカウントの workers.dev のサブドメイン。サブドメインを取っていない構成では、`zone_name` の `.` を `-` にしたもの。
 
-識別子を付ける理由: Account API Token は導入先のアカウントの一覧に並び、1 つのアカウントに入れられる導入は 1 つまで(1 節)なので、その一覧の中では識別子が無くても見分けられる。それでも、下の 3 通りのどれでも同じ名前の付け方にそろえる。User API Token は作った人(My Profile)に属するので、一人の一覧に、別のアカウントに入れた導入のトークンも並ぶ。Cloudflare は同じ名前のトークンを拒まないため、識別子が無いと、撤去のときにどの導入のトークンか名前から分からない。
+識別子を付ける理由: Account API Token は導入先のアカウントの一覧に並び、1 つのアカウントに入れられる導入は 1 つまで(1 節)なので、その一覧の中では識別子が無くても見分けられる。それでも、下の 3 通りのどれでも同じ名前の付け方にそろえる。User API Token は作った人に属するので、その人の一覧(右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン))に、別のアカウントに入れた導入のトークンも並ぶ。Cloudflare は同じ名前のトークンを拒まないため、識別子が無いと、撤去のときにどの導入のトークンか名前から分からない。
 
 **名前は必ず表のとおりに付ける。** 依頼文の Token name(トークン名)には識別子を埋めた名前をそのまま書き、`wtt-deploy` のような識別子の無い名前や、`CF_DEPLOY_TOKEN` のような控えの変数名を名前にしない。作成の後、人に一覧の名前が依頼文と同じかを確かめてもらう。違っていたら、そのトークンを作り直してから値を控える(撤去のときに別の導入のトークンと取り違えないため。10.4 の 5)。
 
@@ -974,7 +974,7 @@ fi
 
 | 画面 | 決めること | 推奨 |
 |---|---|---|
-| プロジェクト(画面の上部のプロジェクトの選択) | 新しく作るか、既存のものを使うか | 初めてなら、この製品専用に新しく作る(名前 = `wtt-auth`)。ほかの用途の設定と混ざらない。既存のものを使う場合、次のアプリ名がログインの画面に出る。同じ組織で 2 つ目以降を導入するときは、同じプロジェクトを使い、Clients(クライアント)だけ増やす。同意の画面の設定はプロジェクトに 1 つで、ログインできる人は各導入の招待で決まるため。組織が違う導入(別の会社のために入れるなど)ではプロジェクトを分け、名前を `wtt-auth-<組織名>` にする。アプリ名と Internal / External はプロジェクトに 1 つで、Internal にできるのはプロジェクトと同じ組織のアカウントだけのため |
+| プロジェクト(画面の上部のプロジェクトの選択) | 新しく作るか、既存のものを使うか | 初めてなら、この製品専用に新しく作る(名前 = `wtt-auth`)。ほかの用途の設定と混ざらない。既存のプロジェクトを使うと、そのプロジェクトに設定済みのアプリ名(この表の Branding(ブランディング)の行の App name(アプリ名))が、この製品のログインの画面にも出る(アプリ名はプロジェクトに 1 つ)。同じ組織で 2 つ目以降を導入するときは、同じプロジェクトを使い、Clients(クライアント)だけ増やす。同意の画面の設定はプロジェクトに 1 つで、ログインできる人は各導入の招待で決まるため。組織が違う導入(別の会社のために入れるなど)ではプロジェクトを分け、名前を `wtt-auth-<組織名>` にする。アプリ名と Internal / External はプロジェクトに 1 つで、Internal にできるのはプロジェクトと同じ組織のアカウントだけのため |
 | Get started(開始)。新しく作ったプロジェクトのときだけ | アプリの情報・対象・連絡先 | 新しいプロジェクトでは、開くリンクの画面に Google Auth Platform not configured yet(Google Auth Platform はまだ構成されていません)と出る。先に Get started(開始)を押し、Project configuration(プロジェクト構成)の 4 段を上から入れる。App Information(アプリ情報)で App name(アプリ名)と User support email(ユーザー サポートメール)、Audience(対象)で Internal(内部)か External(外部)を選ぶ(決め方は次の 2 行)。Contact Information(連絡先情報)の Email addresses(メールアドレス)は、Google がプロジェクトの変更を知らせる宛先で、`owner_email` でよい。Finish(終了)で I agree to the Google API Services: User Data Policy.(Google API サービス: ユーザーデータに関するポリシー に同意します。)にチェックを入れて Continue(続行)を押し、最後に Create(作成)で作る。設定済みのプロジェクトではこの画面は出ず、左メニューの Branding(ブランディング)と Audience(対象)で同じ項目を確かめる |
 | Branding(ブランディング) | App name(アプリ名)・User support email(ユーザー サポートメール) | アプリ名 = Google のログインの画面に出る名前(例 `AB Test and Target Harness`)。組織名を付けてもよい。サポートのメールは選ぶ形で、選べるのはログイン中の Google アカウントと、そのアカウントが管理する Google グループだけ。`owner_email` でログインして作業し、それを選ぶ |
 | Audience(対象) | User type(ユーザーの種類): Internal(内部)/ External(外部)。設定済みのプロジェクトでは、Audience(対象)の画面に Make internal(内部に公開)のボタンが出る | 管理画面を使う人が全員、同じ Google Workspace の組織のアカウントなら Internal(内部)。個人の Gmail を含む・組織の外の人を招待するなら External(外部)。本ツールの Google ログインは基本プロフィールのスコープ(`openid`・`email`・`profile`)だけを求めるので、External(外部)でも Publishing status(公開ステータス)は Testing(テスト中)のままでよく、Test users(テストユーザー)への登録と公開状態の変更は要らない(表の下の注記) |
@@ -997,6 +997,8 @@ fi
    - Client IP address filtering(クライアント IP アドレス フィルタリング)は空のままにする
    - Review token(トークンを確認)を押す。出た Review token(トークンを確認)の画面(日本語の表示では、説明の文は「作成前に設定を確認してください」)の Summary(概要)で、Permission policies(権限ポリシー)の権限が Account API Tokens の 1 つだけであることと、EXPIRATION(有効期限)を確かめてから Create token(トークンを作成)を押す。違っていたら Back to edit(編集に戻る)で直す
    - 作成の直後の画面に出る値を `deploy-secrets.env` の `CF_BOOTSTRAP_TOKEN=` の右に貼り、**保存してエディタを閉じてから**エージェントに伝える。エディタを開いたままにして後で保存すると、エージェントがこのファイルに書いた残りのトークンの値が消える。値を貼ったら、作成の直後の画面のタブを閉じる
+
+5. **Workers Paid への切り替え**(`cloudflare_tokens` にかかわらず、`plan: paid` で、アカウントがまだ Free のときだけ)。ダッシュボードの Compute(コンピュート)→ Workers plans(Workers のプラン)で Workers Paid を選ぶ。料金は月 $5 からで、支払い方法の登録が要る
 
 **親トークンの方法が取れないとき(救済)**
 
@@ -1057,8 +1059,6 @@ fi
    - Continue to summary(概要に進む)で確かめてから作成し、値を `CF_USAGE_TOKEN=` に書く。Cloudflare のアカウント ID も一緒に控える(3.4 の `CF_ACCOUNT_ID` に入れる)
 
 どの手順でも、トークンを作った直後の画面には、トークンの値が出る。値を `deploy-secrets.env` に書いたら、保存してエディタを閉じてからエージェントに伝え、その画面のタブを閉じてもらう(画面を共有している・画面を取り込む道具を使っているときに、値が人の目や記録に残らないようにするため)。
-
-5. **Workers Paid への切り替え**(`plan: paid` で、アカウントがまだ Free のときだけ)。ダッシュボードの Compute(コンピュート)→ Workers plans(Workers のプラン)で Workers Paid を選ぶ。料金は月 $5 からで、支払い方法の登録が要る
 
 **同じ依頼文で、最初のワークスペースの名前を聞く**(`deploy-answers.yaml` の `workspace_name` が `#` で始まる未記入のとき)。別の機会に聞き直すと、人に確認を求める回数が増える。必ずこの依頼文に含める。
 
@@ -1168,7 +1168,7 @@ echo "cf_usage_token=$(tv "$CF_USAGE_TOKEN")"     # 期待: active(どの構成�
 
 `deploy-secrets.env` そのものが漏れたときは、上の 4 つに加えて、Google のクライアント シークレットを作り直す(上の「シークレットを控える前に閉じたとき」の (a) か (b))。作業用(`CF_TOKEN`)は対象のゾーンの Cache Rule・WAF を書き換えられるので、一覧から消す(作成から 24 時間で切れるのを待ってもよい)。
 
-**導入の後や途中で、作業用のトークンが要るとき**(4.2・7.1 で control か管理画面を自分のドメインに移す、7.2 で control の WAF を後から足す、6.7 で Mode B のホストを後から足す、2.6・2.7 のルールを導入の後に作る・書き換える、導入の途中で作業用の期限が切れた): `cloudflare_tokens` の値にかかわらず、作業用 1 本を人が直接作る。Account API Token で作り(上の「管理者が Account API Token を作る」の `wtt-setup-<識別子>` の行と同じ画面)、作れなければ User API Token で作る(上の「User API Token を作る」の 2 と同じ画面。権限はその画面の名前で選ぶ)。権限はその作業に要るものだけにする。ホストの空きの確認なら DNS & Zones の Zone の Read と DNS の Read、WAF のルールを作る・書き換えるだけなら DNS & Zones の Zone の Read と App Security の Zone WAF Rules の Edit、2.6 の Cache Rule を作るなら DNS & Zones の Zone の Read と Cache & Performance の Cache Settings の Edit(いくつかの作業をするなら、それぞれの権限を合わせる)。導入の途中で作業用の期限が切れたときは、残りの手順に要るものを選ぶ。残りの手順に 2.6 の Cache Rule があるなら、上の表の `wtt-setup-<識別子>` の行の 4 つにする。対象はそのホストのゾーン(導入の途中なら、上の表の下の箇条のゾーン)。期限は、Account API Token なら Custom(カスタム)で今日 → 翌日(基本の 2(親トークン)と同じ押し方)、User API Token なら上の「User API Token を作る」の 2 の期限の手順。名前は `wtt-setup-<識別子>` のままで、期限の切れた同じ名前のものは一覧に残っていてよい。親トークンは使わない。要るのが 1 本だけなら、親トークンを使っても人の手間は減らず、トークンを作れるトークンが一時的にあるリスクだけが残るため。導入の後なら、`deploy-secrets.env` を `CF_TOKEN=` の行だけで作り直して(上の「`deploy-secrets.env` の作り方」と同じ権限で作る)人に値を書いてもらい、上の確認のブロックで `cf_token` が `active` になることを確かめてから使い、済んだらファイルを消す。導入の途中(スクリプトが済んだ後)で作業用が切れたときも、この手順で作り、今の `deploy-secrets.env` の `CF_TOKEN=` の値を書き換える(スクリプトもこの段落を示して止まる)。
+**導入の後や途中で、作業用のトークンが要るとき**(4.2・7.1 で control か管理画面を自分のドメインに移す、7.2 で control の WAF を後から足す、6.7 で Mode B のホストを後から足す、2.6・2.7 のルールを導入の後に作る・書き換える、導入の途中で作業用の期限が切れた): `cloudflare_tokens` の値にかかわらず、作業用 1 本を人が直接作る。Account API Token で作り(上の「管理者が Account API Token を作る」の `wtt-setup-<識別子>` の行と同じ画面)、作れなければ User API Token で作る(上の「User API Token を作る」の 2 と同じ画面。権限はその画面の名前で選ぶ)。権限はその作業に要るものだけにする。ホストの空きの確認なら DNS & Zones の Zone の Read と DNS の Read、WAF のルールを作る・書き換えるだけなら DNS & Zones の Zone の Read と App Security の Zone WAF Rules の Edit、2.6 の Cache Rule を作るなら DNS & Zones の Zone の Read と Cache & Performance の Cache Settings の Edit(いくつかの作業をするなら、それぞれの権限を合わせる)。導入の途中で作業用の期限が切れたときは、残りの手順に要るものを選ぶ。残りの手順に 2.6 の Cache Rule があるなら、上の表の `wtt-setup-<識別子>` の行の 4 つにする。対象はそのホストのゾーン(導入の途中なら、上の表の下の箇条のゾーン)。期限は、Account API Token なら Custom(カスタム)で今日 → 翌日(基本の 2(親トークン)と同じ押し方)、User API Token なら上の「User API Token を作る」の 2 の期限の手順。名前は `wtt-setup-<識別子>` のままで、期限の切れた同じ名前のものは一覧に残っていてよい。親トークンは使わない。要るのが 1 本だけなら、親トークンを使っても人の手間は減らず、トークンを作れるトークンが一時的にあるリスクだけが残るため。導入の後なら、`deploy-secrets.env` を `CF_TOKEN=` の行だけで作り直して(上の「`deploy-secrets.env` の作り方」と同じく、所有者だけが読めるファイルの権限で作る)人に値を書いてもらい、上の確認のブロックで `cf_token` が `active` になることを確かめてから使い、済んだらファイルを消す。導入の途中(スクリプトが済んだ後)で作業用が切れたときも、この手順で作り、今の `deploy-secrets.env` の `CF_TOKEN=` の値を書き換える(スクリプトもこの段落を示して止まる)。
 
 ## 1. 前提と全体像
 
@@ -1329,7 +1329,7 @@ pnpm -C apps/edge exec wrangler secret list | jq -r '.[].name'   # 期待: RESUL
 | `RESULTS_LEASE_ROWS` | `"200"` | edge が予算から 1 回に受け取る行数。大きいほど予算の確認の回数が減るが、使われずに捨てる行が増える |
 
 - 値は正の整数を文字列で書く。`"0"`・数でない値・省略は既定値として扱う(0 にしても記録は止まらない。記録を止めるのはサイト設定の「結果を記録する」)
-- `wrangler.jsonc` の `vars` は、デプロイのたびにダッシュボードで変えた値を上書きする。変えるときはこのファイルを直してデプロイする
+- ダッシュボードで `vars` の値を変えても、次の `wrangler deploy` で `apps/edge/wrangler.jsonc` の値に戻る。値を変えるときは、このファイルを直してデプロイする
 - 予算は導入全体で 1 つで、サイトごとには分けない。1 つのサイトへの送信が集中すると、ほかのサイトの記録もその日の残りは止まる
 
 ### 2.3 Route を書く
@@ -1461,7 +1461,7 @@ curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "https://<edge のホ�
 
 サイトのドメインが Cloudflare に無いときは、Cloudflare に置ける別のドメインのホスト(`<edge のホスト>`。例 `ab.example.net`)に置く(`edge_address: custom-domain`)。1 つのホストに、edge を Custom Domain で、`wtt-static` を `<edge のホスト>/s/*` の Route で置く。設置タグと decision / event はページと別オリジンになるので、サイト設定の「タグを置くドメイン」にページのホストが要る(サイトを作ると作成のときに入れたドメインが入る)。代償は 1 節の制約 (3)。どちらも無いときは `*.workers.dev`(`edge_address: workers-dev`)。
 
-`*.workers.dev` を選ぶときは、[1 節の前提条件](#1-前提と全体像)も確認する。Workers の要求・CPU に支出制限を設定しても、DO などや月額最低額は対象外で、請求総額を保証するものではない。
+`*.workers.dev` を選ぶときは、[1 節の前提条件](#1-前提と全体像)(支出制限の限界を含む)も確認する。
 
 ### 2.6 ゾーン側の Cache Rule(念のため。推奨)
 
@@ -1680,7 +1680,7 @@ edge の設定で `CF_TOKEN` を使うのは 2.7 まで(control か管理画面�
 
 IP with NAT support は Cloudflare の画面の名前で、日本語の表示は未確認。
 
-**IPv6 の数え方**: Free のゾーンで、同じ回線の同じ /64 の 2 つの IPv6 アドレスから送って確かめたところ、レート制限ルールの IP の単位(`ip.src`)は IPv6 をアドレスごとに数えた(/64 にまとめなかった)。一方のアドレスが遮断されている間も、もう一方のアドレスの要求は通った。確かめたのは 1 つの回線・1 日だけ。
+**IPv6 の数え方**: Free のゾーンで、同じ回線の同じ /64 の 2 つの IPv6 アドレスから送って確かめたところ、レート制限ルールの IP の単位(`ip.src`)は IPv6 をアドレスごとに数えた(/64 にまとめなかった)。一方のアドレスが遮断されている間も、もう一方のアドレスの要求は通った。確かめたのは 1 つの回線・1 日(2026-11-13)だけ。
 
 人数の目安の前提: `needsProfile` のサイトでは 1 PV で decision 1 回と event 約 1 回を送り、閲覧中の人は 30 秒に 1 PV 程度とした(1 人あたり 10 秒に約 0.7 回)。これは結果を記録しないサイトの値。同じページでページビューの目標が 2 つ一致すると、閲覧中も 1 PV で 3 回(decision 1 回と目標ごとの event)になり、既定の 200 回 / 10 秒で通る人数の目安は約 200 人になる。結果を記録するサイトでは、テストの参加(参加したテストごとに 1 回)と目標の達成の送信が足される。送信済みの印をブラウザに保存できれば同じ訪問者 × テスト(目標)には 1 回だけで、続けて閲覧している間は増えないが、保存できない環境(`localStorage` が使えないなど)ではページごとに送り直す。1 テスト・1 目標のページを初めて開くと 1 PV で 4 回程度になり、テストや目標が多いページではさらに増える。多くの人が同時に初めて開く場面(朝礼で同じページを案内するなど)では目安より少ない人数で当たるので、表の人数をそのまま当てはめない。
 
@@ -1693,7 +1693,7 @@ IP with NAT support は Cloudflare の画面の名前で、日本語の表示は
 
 429 は本文で判別する。`error code: 1015` は Cloudflare の遮断で、上の確認が検出するのはこの遮断。edge の binding が返す平文の 429 `rate limited` とは、本文で区別する。
 
-**遮断を見る**: しきい値が合っているかは、遮断が起きたかを見て判断する。上限に触れても訪問者には何も表示されないので、見に行かないと気づけない。ダッシュボード → 対象ゾーン → Security(セキュリティ)→ Analytics → Events のタブで、Cloudflare が遮断した要求を見られる(Security Events。Analytics・Events・Sampled logs の日本語の表示は未確認)。ゾーンを選んだ状態で `https://dash.cloudflare.com/?to=/:account/:zone/security/analytics` を開いても同じ画面に着く。
+**遮断を見る**: しきい値が合っているかは、遮断が起きたかを見て判断する。上限に触れても訪問者には何も表示されないので、見に行かないと気づけない。ダッシュボード → 対象ゾーン → Security(セキュリティ)→ Analytics(アナリティクス)→ Events のタブで、Cloudflare が遮断した要求を見られる(Security Events。Events・Sampled logs の日本語の表示は未確認)。ゾーンを選んだ状態で `https://dash.cloudflare.com/?to=/:account/:zone/security/analytics` を開いても同じ画面に着く。
 
 - Free で見られるのは Sampled logs(遮断の記録の抜き出し)だけ。行を開くと、送信元の IP・時刻・当たったルールが分かる。IP ごとの回数の集計とグラフは Pro 以上で出る
 - 記録は過去 31 日分
@@ -1712,13 +1712,13 @@ IP with NAT support は Cloudflare の画面の名前で、日本語の表示は
 
 edge と設置タグには、bot を見分けて除く処理が無い。ゾーンのある構成では、Cloudflare の次の 2 つを足せる。どちらも既定では使わない。
 
-**Bot Fight Mode**: ゾーン全体に掛かる設定。ダッシュボード → 対象ゾーン →「セキュリティ」→「設定」→「DDoS 攻撃」の下の「Bot Fight モード」(日本語の表示。英語の表示は未確認)。
+**Bot Fight Mode**: ゾーン全体に掛かる設定。ダッシュボード → 対象ゾーン → Security(セキュリティ)→「設定」→「DDoS 攻撃」の下の「Bot Fight モード」(「設定」から後は日本語の表示。英語の表示は未確認)。
 
-- 確かめた範囲(macOS・1 つの回線): オンのまま、Safari で開いたテストのページで、設置タグのファイル(`/s/*`)・decision・event がどれも確認の画面(challenge)を出さずに返り、テストが表示された。1 秒に 1 回 × 50 回の curl でも `/v1/*` は Worker の応答を返した。Chrome での管理画面からの Google ログイン(ブラウザが control を直接開く 2 経路)も確認の画面なしで通った。ゾーンの「セキュリティ」→「アナリティクス」(日本語の表示。英語の表示は未確認)にも、Bot Fight モードが止めた要求は出なかった
+- 確かめた範囲(2026-11-14。macOS・1 つの回線): オンのまま、Safari で開いたテストのページで、設置タグのファイル(`/s/*`)・decision・event がどれも確認の画面(challenge)を出さずに返り、テストが表示された。1 秒に 1 回 × 50 回の curl でも `/v1/*` は Worker の応答を返した。Chrome での管理画面からの Google ログイン(ブラウザが control を直接開く 2 経路)も確認の画面なしで通った。ゾーンの Security(セキュリティ)→ Analytics(アナリティクス)にも、Bot Fight モードが止めた要求は出なかった
 - これは、この条件で止めなかったというだけである。ほかのブラウザ・回線・送り方で、正しい訪問者の `/v1/*` や管理画面のログインに確認の画面を出さないとは言えない。Cloudflare の文書は、API の通信にも確認の画面を出しうるとしている
 - 経路ごとには外せない。WAF のカスタムルールの Skip でも Page Rules でも外せず、外れるのは IP Access rules に当たる要求だけ(Cloudflare の文書)。正しい訪問者が止められたら、ゾーン全体でオフにする
-- Bot Fight Mode が止めた要求が Workers のリクエストの数に入るかは、確かめられていない(確かめたときに止められた要求が無かったため)
-- 使うなら、オンにした後に、設置サイトの実際のページでテストが出ることと、管理画面に Google でログインできることを確かめ、しばらくは上の「アナリティクス」で止められた要求を見る
+- Bot Fight Mode が止めた要求が Workers のリクエストの数に入るかは、確かめられていない(2026-11-14 に確かめたときは止められた要求が無かったため)
+- 使うなら、オンにした後に、設置サイトの実際のページでテストが出ることと、管理画面に Google でログインできることを確かめ、しばらくは上の Analytics(アナリティクス)で止められた要求を見る
 
 **レート制限ルールで検証済みの bot を数えない**: 2.7 のルールに、上の「1 本のルールを書き換える」の PATCH で `ANDADD` に `not cf.client.bot` を入れると、Cloudflare が検証済みとする bot(検索エンジンなど)の要求をこのルールで数えなくなる。Free のゾーンでも、API はこの式を受け付けた(同じ意味の `not cf.bot_management.verified_bot` も受け付けたが、Cloudflare の文書はこのフィールドを上位のプランのものとしているので、`cf.client.bot` を使う)。式が受け付けられることを確かめただけで、検証済みの bot が実際に数えられなくなるかは確かめていない。
 
@@ -1857,7 +1857,7 @@ pnpm -C apps/control exec wrangler r2 bucket create wtt-assets </dev/null   # 2.
 (3) 公開ベースを決める。`asset_public_base` の値を変えずに 3.4 の `AB_ASSET_PUBLIC_BASE` に使う。
 
 - **本番ではカスタムドメインを勧める**。カスタムドメインなら、訪問者と管理画面は R2 から直接画像を読み、Worker は動かない(Cloudflare のキャッシュも使われる)。`dev-assets` は、R2 にドメインを接続できない間の暫定と、手元の開発のためのもの
-- `dev-assets` を選んだ場合: 画像の URL に control のアドレスが出るので、control の名前の乱数による保護の補助は適用されない(管理画面のアドレスは control からは分からない)。実値は `<control URL>/dev-assets`。control URL は 3.5 の初回 deploy で分かる。control 自身が R2 を読んで画像を返すので、アップロードと IMAGE の変更は動作する。ただし、訪問者のページと管理画面の画像の一覧で画像を 1 枚表示するたびに control が 1 回動き、Workers Free の 1 日のリクエスト数(アカウント全体で 10 万)を edge・管理画面と分け合う。Cloudflare のキャッシュも使われない(ブラウザのキャッシュだけ)。訪問者の多いサイトで IMAGE の変更を配信すると、この枠を先に使い切るおそれがある。R2 から直接配信するより遅くもなる
+- `dev-assets` を選んだ場合: 画像の URL に control のアドレスが出るので、control の名前に付けた乱数による補助(0.5)は control には適用されない。管理画面の名前の乱数による補助は適用される(管理画面のアドレスは control からは分からない)。実値は `<control URL>/dev-assets`。control URL は 3.5 の初回 deploy で分かる。control 自身が R2 を読んで画像を返すので、アップロードと IMAGE の変更は動作する。ただし、訪問者のページと管理画面の画像の一覧で画像を 1 枚表示するたびに control が 1 回動き、Workers Free の 1 日のリクエスト数(アカウント全体で 10 万)を edge・管理画面と分け合う。Cloudflare のキャッシュも使われない(ブラウザのキャッシュだけ)。訪問者の多いサイトで IMAGE の変更を配信すると、この枠を先に使い切るおそれがある。R2 から直接配信するより遅くもなる
 - `dev-assets` からカスタムドメインに変えるなら、**画像を使い始める前に**変える。`AB_ASSET_PUBLIC_BASE` をカスタムドメインに変えると `GET /dev-assets/*` は自動的に閉じ、それまでに上げた画像の URL(`…/dev-assets/sites/…`)は読めなくなる。画像の一覧の URL・保存済みの変更・公開した設定の URL は書き換わらないので、前の画像は一覧でも表示されなくなり、その画像を使うパターンでは画像を上げ直して選び直すことになる
 - カスタムドメイン(例 `assets.<運用者ドメイン>`)を選んだ場合: 先にホストが空いていることを確かめてから、下のコマンドでバケットに接続し、`vars.AB_ASSET_PUBLIC_BASE` をその URL にして再デプロイする。DNS レコードと証明書は Cloudflare が作る。ドメインのゾーンが同じアカウントにあること。権限で拒否されたときだけ人に頼む(下の「期待と違うとき」)
 
@@ -2101,7 +2101,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 "dev": { "port": 3000, "host": "localhost" }
 ```
 
-`workers_dev` / `preview_urls` を false にしないと `https://<管理画面の Worker 名>.<アカウントのサブドメイン>.workers.dev` と Preview URL が残り、Access / WAF を迂回できる。
+`workers_dev` / `preview_urls` を false にしないと `https://<管理画面の Worker 名>.<アカウントのサブドメイン>.workers.dev` と Preview URL が残る。そのアドレスを知った人は、自分のドメインに掛けた Access・WAF を通らずに管理画面に届く。
 
 **(2) ゾーン側で「Always Use HTTPS」を有効にする**(http で開くとセッション Cookie に `Secure` が付かない)。管理画面は https では `__Host-` で始まる名前の Cookie だけを使い、同じドメインの別のホストから置かれた同じ名前の Cookie を受け付けない。この保護も Always Use HTTPS が前提で、無効だと、管理画面を http で開かせて、今の名前(`__Host-` の無い名前)の Cookie を使わせることができる。
 
@@ -2299,7 +2299,7 @@ set -a; eval "$(tr -d '\r' < .env.agent)"; set +a
 curl -sS "$AB_CONTROL_URL/me" -H "Authorization: Bearer $AB_API_KEY" | jq '{email, roleCap, keyScope, keyWorkspaceId}'   # 期待: owner_email と、1 で選んだ権限(小文字。「本人と同じ」を選んだなら null)と範囲(workspace とその ID /「すべてのワークスペース」なら full と null)
 ```
 
-5. 以後の使い方として、エージェント向けガイドの「レシピ」を案内する。レシピはエクスペリエンスを作って公開まで / 下書きの検証 / 結果を読む / 配信条件の what-if / オーディエンス / 使用状況の監視 / 複製。鍵が漏れたときは、同じ画面か「メンバーの API キー」画面で失効させる
+5. 以後の使い方として、エージェント向けガイドの「レシピ」を案内する。レシピはエクスペリエンスを作って公開まで / 下書きの検証 / 結果を読む / 配信条件の what-if / オーディエンス / 使用状況の監視 / 複製 / 操作の記録と変更履歴。鍵が漏れたときは、同じ画面か「メンバーの API キー」画面で失効させる
 
 ## 6. 更新(リリースタグ単位)
 
@@ -2314,7 +2314,7 @@ curl -sS "$AB_CONTROL_URL/me" -H "Authorization: Bearer $AB_API_KEY" | jq '{emai
 - **GitHub の通知**: 公開リポジトリ(https://github.com/AnalyticsDesign/ab-test-and-target-harness)の画面の右上の **Watch** → **Custom** で **Releases** にチェックを入れ、**Apply** を押す(GitHub の画面は英語の表示だけを書いている)。新しい版の Release が出るたびに、GitHub の通知(設定によってはメール)が届く
 - **フィード**: GitHub のアカウントを使わない場合や、社内のチャットに流したい場合は、Releases のフィード `https://github.com/AnalyticsDesign/ab-test-and-target-harness/releases.atom` を RSS リーダーやチャットの RSS 連携に登録する
 
-届いたら、Release の本文(`CHANGELOG.md` のその版の節と同じ)を読む。版の節の先頭に **「セキュリティの修正」** の項がある版は、脆弱性を直した版で、深刻度・影響する版・更新しない場合の緩和策が書いてある。影響する版を使っているなら、ほかの版より先に、早めに入れ替える。修正は最新のリリースに対して出すので、古い版向けの修正版は無い。
+届いたら、Release の本文(`CHANGELOG.md` のその版の節と同じ)を読む。版の節の先頭に **「セキュリティの修正」** の項がある版は、脆弱性を直した版で、深刻度・影響する版・更新しない場合の緩和策が書いてある。今使っている版が「影響する版」に入っているなら、ほかの作業より優先して、修正を含む最新のリリースへ早めに更新する。修正は最新のリリースに対して出すので、古い版向けの修正版は無い。
 
 ### 6.1 現在と目標の確認
 
@@ -2338,15 +2338,15 @@ git tag --list 'v*' --sort=-v:refname | head -3   # 目標の tag(例 v1.0)
 - (b) **サイト設定のフィールド追加**(既存サイトの record を書き直す必要)
 - (c) **runtime の変更**
 
-CHANGELOG に次の目印があるリリースは、6.3 の該当する項も読む: 「配る設定の版(`schemaVersion`)が上がる」「計測用のデータベースを足す」「レート制限の既定値が変わる」。パスワードでログインしていた版からの更新も 6.3 に項がある。「レート制限の既定値が変わる」は 6.2 の衝突の項も読む。
+CHANGELOG に目印があるリリースは、6.3 の太字の項の見出しに書いた目印とすべて照らし、当たる項を読む。目印には次のものがある: 「配る設定の版(`schemaVersion`)が上がる」「計測用のデータベースを足す」「レート制限の既定値が変わる」「データベースの形が変わる」「公開の本体の保持を足す」「操作の記録を足す」「タグを置くドメインの一覧(壊れる変更)」「非常口で作った人は Google に自動で結びつかない」。パスワードでログインしていた版からの更新も 6.3 に項がある。「レート制限の既定値が変わる」は 6.2 の衝突の項も読む。
 
 ### 導入時のフォルダが無い場合
 
 導入当時の PC や `deploy-answers.yaml` が無くても、稼働中の Cloudflare のリソースを使って更新できる。作業の前に、稼働中の管理画面か control の URL、対象 Account ID、そこへの作業者のアクセス権限を確認する。
 
-1. [公開リポジトリ](https://github.com/AnalyticsDesign/ab-test-and-target-harness)を新しいフォルダに clone し、`git fetch --tags origin` でタグを取る。0.4 と目標 tag の要件に従って作業環境を揃え、`pnpm install` で Wrangler を使えるようにする。新しい作業者自身の資格でログインし、6.1 のとおり `CLOUDFLARE_ACCOUNT_ID` を固定する。Cloudflare API の読み取りで不足する権限は、対象アカウントまたはゾーンについて用意する。
-2. **稼働中のタグを確かめる**。表示できる導入では、管理画面の「設定」→「この導入について」の製品版を確認する。API キーが使える場合は 6.4 の `GET /capabilities` の `productVersion` でも確かめられる。公開 v0.9 には `productVersion` が無い。当時の deploy ログ、CI の記録、稼働中の Worker の version 注記に残したタグや公開 commit、または導入・更新を行った人が当時の作業から確認できるタグを手掛かりに、稼働環境と照合する。アカウントや Worker が一致するか、`wrangler deployments list --name <Worker 名>` の配備履歴、D1 の適用履歴なども見る。API の `x-wtt-api-version` と新しい clone の `git describe` は製品版の根拠に使わない。稼働タグを特定できない場合や、管理画面と control の版が食い違う場合はここで止まる。特定できたら 6.1 のとおり目標 tag の文書と CHANGELOG を読み、途中で適用が必要な版を確認する。
-3. **稼働中の設定を読む**。以下の GET と Wrangler の一覧を使う。既知の URL を実際に受ける Worker からたどり、control の URL と service binding の関係で同じ導入の 4 Worker と設置タグの配信先を確認する。公開 v0.9 の admin は `AB_CONTROL_URL` で control と照合する。権限エラーや候補が複数ある場合は、対象を確定できるまで先に進まない。
+1. [公開リポジトリ](https://github.com/AnalyticsDesign/ab-test-and-target-harness)を新しいフォルダに clone し、`git fetch --tags origin` でタグを取る。0.4 と目標 tag の要件に従って作業環境をそろえ、`pnpm install` で Wrangler を使えるようにする。新しい作業者自身の資格でログインし、6.1 のとおり `CLOUDFLARE_ACCOUNT_ID` を固定する。Cloudflare API の読み取りで不足する権限は、対象アカウントまたはゾーンについて用意する。
+2. **稼働中のタグを確かめる**。表示できる導入では、管理画面の「設定」→「この導入について」の製品版を確認する。API キーが使える場合は 6.4 の `GET /capabilities` の `productVersion` でも確かめられる。v1.0 より前の版(v0.11 まで)には `productVersion` が無く、管理画面にも「この導入について」は無い。当時の deploy ログ、CI の記録、稼働中の Worker の version 注記に残したタグや公開 commit、または導入・更新を行った人が当時の作業から確認できるタグを手掛かりに、稼働環境と照合する。アカウントや Worker が一致するか、`wrangler deployments list --name <Worker 名>` の配備履歴、D1 の適用履歴なども見る。API の `x-wtt-api-version` と新しい clone の `git describe` は製品版の根拠に使わない。稼働タグを特定できない場合や、管理画面と control の版が食い違う場合はここで止まる。特定できたら 6.1 のとおり目標 tag の文書と CHANGELOG を読み、途中で適用が必要な版を確認する。
+3. **稼働中の設定を読む**。以下の GET と Wrangler の一覧を使う。既知の URL を実際に受ける Worker からたどり、control の URL と service binding の関係で、同じ導入の edge・deployer・control・管理画面の 4 つの Worker(と配信専用の `wtt-static`)と設置タグの配信先を確認する。v0.11 より前(v0.10.1 まで)の admin は service binding を持たないので、`AB_CONTROL_URL` で control と照合する。権限エラーや候補が複数ある場合は、対象を確定できるまで先に進まない。
 
    ```bash
    AID="$CLOUDFLARE_ACCOUNT_ID"
@@ -2375,8 +2375,8 @@ CHANGELOG に次の目印があるリリースは、6.3 の該当する項も読
 
    最新の upload と稼働版が異なる場合や、複数版にトラフィックを分けている場合は、`wrangler deployments list --name <Worker 名>` と `wrangler versions view <version ID> --name <Worker 名>` で稼働版の設定を照合する。引き継ぐ値を確定できない場合は止まる。[Workers API](https://developers.cloudflare.com/api/resources/workers/) · [Wrangler の Workers コマンド](https://developers.cloudflare.com/workers/wrangler/commands/workers/)
 
-4. **目標 tag の雛形に稼働環境の値を入れる**。6.2 の stash ブロックは使わず、目標 tag を checkout して `pnpm install` を実行する。現在 tag の雛形は `git show <稼働 tag>:apps/<app>/wrangler.jsonc` で参照できる。確認した Worker 名、Route、vars、既存 bindings の ID と宛先、独自の設定を目標 tag の 4 ファイルに反映する。互換フラグ・移行の定義・新しい binding は目標 tag の文書と雛形に従う。たとえば旧 admin に service binding が無ければ、目標 tag の `CONTROL` の宛先だけを既存の control に合わせ、`ControlBff` の entrypoint を使う。計測 D1 を初めて足す更新では 6.3 の該当手順を使う。配信専用 Worker は既存のまま使う。
-5. **復元した値を確かめる**。4 Worker の名前、公開 URL と全 Route、共有 KV、D1・R2、サービス間の接続、Cron、secret 名を稼働環境と照合する。管理画面は 4.3 のビルド後の設定も確認する。元に戻す際に必要な設定と現在 tag は、更新前に私用の保管先に控える。6.2 の「更新前の設定確認」と Worker 名の確認から共通の手順に戻る。
+4. **目標 tag の雛形に稼働環境の値を入れる**。6.2 の stash ブロックは使わず、目標 tag を checkout して `pnpm install` を実行する。現在 tag の雛形は `git show <稼働 tag>:apps/<app>/wrangler.jsonc` で参照できる。確認した Worker 名、Route、vars、既存 bindings の ID と宛先、独自の設定を目標 tag の 4 ファイルに反映する。互換フラグ・移行の定義・新しい binding は目標 tag の文書と雛形に従う。たとえば v0.11 より前の admin で service binding が無ければ、目標 tag の `CONTROL` の宛先だけを既存の control に合わせ、`ControlBff` の entrypoint を使う。計測 D1 を初めて足す更新では 6.3 の該当手順を使う。配信専用 Worker は既存のまま使う。
+5. **復元した値を確かめる**。4 つの Worker(と `wtt-static`)の名前、公開 URL と全 Route、共有 KV、D1・R2、サービス間の接続、Cron、secret 名を稼働環境と照合する。管理画面は 4.3 のビルド後の設定も確認する。元に戻す際に必要な設定と現在 tag は、更新前に `deploy-backups/` に控える。6.2 の「更新前の設定確認」と Worker 名の確認から共通の手順に戻る。
 
 主 D1 を 10.3 の手順で読み戻したことがあるときは、稼働中の `DB` binding の ID と `d1 list --json` で、実際のデータベース名を確認する。6 節で `wtt-control` を指定する export・凍結・解除・SQL はその名前を使う。`pnpm -C apps/control d1:migrate:remote` の代わりに `pnpm -C apps/control exec wrangler d1 migrations apply <実際の DB 名> --remote` を使う。この読み替えは既存の clone での更新にも適用する。
 
@@ -2460,7 +2460,7 @@ printf '%s\naccount=%s\n' "$R" "$AID"   # 期待: <管理画面の Worker 名> f
 
 **公開の本体の保持を足すリリースの更新**(CHANGELOG の目印「公開の本体の保持を足す」): `0027_publish_body_pruned_at.sql` を control より前に当てる(下のマイグレーション → control の順のまま)。列を 1 つ足すだけで、前の版へ戻すときにデータベースを戻す必要は無い。順を誤ると、公開履歴の一覧と版ごとの本体の取得が 500 になり、定期処理の本体の掃除は失敗する(KV の掃除は続く)。更新の後の日次の定期処理(UTC 1 時以降の最初の回。その日の処理がまだ終わっていなければ当日の回)から古い本体が消え始める。消した本体はコードを戻しても戻らない(6.5)。
 
-**公開履歴と配信確認の読み取りを減らす索引**: `0028_publish_retention_indexes.sql` は、本体のある公開・入力の照合値の無い配信依頼・確認がまだ要りうる届く定義・KV のキーを消していない公開・世代をまだ記録していない届く定義の部分索引 5 本を足す。続く `0029_delivery_confirmation_reads.sql` は、テスト中の変更の記録に索引を足し、確認がまだ要りうる届く定義の索引を同じ名前のままテストごとに並ぶ形に作り直し、入力の照合値の無い配信依頼の索引を外す。作り直しは届く定義の全行を、テスト中の変更の記録の索引の作成はその記録の全行を、それぞれ 1 回読む。どちらも既存の行は書き換えない。索引の作成・作り直しの間はデータベースへの書き込みが待たされるため、両方とも通常どおり凍結中に当てる。control とこれらの索引の適用順が逆でも結果は変わらず、索引を当てるまでは読み取りは減らない。ただし、マイグレーション同士は必ず 0028 → 0029 の番号順に当てる。逆順では、0029 で外すはずの索引が後の 0028 で作られて残る。前の版に戻すときも索引はそのままでよい(6.5)。
+**公開履歴と配信確認の読み取りを減らす索引**: `0028_publish_retention_indexes.sql` は、本体のある公開・入力の照合値の無い配信依頼・確認がまだ要りうる届く定義・KV のキーを消していない公開・世代をまだ記録していない届く定義の部分索引 5 本を足す。続く `0029_delivery_confirmation_reads.sql` は、テスト中の変更の記録に索引を足し、確認がまだ要りうる届く定義の索引を同じ名前のままテストごとに並ぶ形に作り直し、入力の照合値の無い配信依頼の索引を外す。作り直しは届く定義の全行を、テスト中の変更の記録の索引の作成はその記録の全行を、それぞれ 1 回読む。どちらも既存の行は書き換えない。索引の作成・作り直しの間はデータベースへの書き込みが待たされるため、両方とも通常どおり凍結中に当てる。control とこれらの索引の適用順が逆でも結果は変わらず、索引を当てるまでは読み取りは減らない。前の版に戻すときも索引はそのままでよい(6.5)。
 
 **計測用のデータベースを足すリリースの更新**(CHANGELOG の目印「計測用のデータベースを足す」。この 1 回だけ): 新しい版の edge は計測用のデータベース `wtt-results` と鍵 `RESULTS_VISITOR_KEY` を使い、新しい版の control は同じデータベースを結果の集計のために読む。下の手順 0(控え)の後、`pnpm runtime:build` と手順 1(edge)の前に、2.2 の「計測用のデータベース」を上から行う。全体の順は次のとおり:
 
@@ -2485,13 +2485,13 @@ printf '%s\naccount=%s\n' "$R" "$AID"   # 期待: <管理画面の Worker 名> f
 BACKUP="$PWD/deploy-backups/wtt-control-$(date -u +%Y%m%dT%H%M%SZ).sql" && mkdir -p "$PWD/deploy-backups" && chmod 700 "$PWD/deploy-backups" && WRANGLER_WRITE_LOGS=false pnpm -C apps/control exec wrangler d1 export wtt-control --remote --output "$BACKUP" >/dev/null && test -s "$BACKUP" && echo "控え: $BACKUP" || unset BACKUP
 ```
 
-手順 0 で「控え: <ファイル名>」と表示され、今回作ったファイルが存在して空でないことを確認してから、手順 1 以降へ進んでください。export が失敗した場合、ファイルが無い場合、または空の場合は、手順 4 の管理画面のデプロイも含めて更新を中止し、凍結を外さずに原因を調べ、手順 0 からやり直してください。
+手順 0 で「控え: <ファイル名>」と表示され、今回作ったファイルが存在して空でないことを確認してから、手順 1 以降へ進む。export が失敗した場合、ファイルが無い場合、または空の場合は、手順 4 の管理画面のデプロイも含めて更新を中止し、凍結を外さずに原因を調べ、手順 0 からやり直す。
 
 ```bash
 if test -s "${BACKUP:-}"; then
   ls -l "$BACKUP"   # 期待: 今回の控えのファイルがあり、サイズが 0 でない
 else
-  echo "控えがありません。更新を中止し、手順 0 をやり直してください"
+  echo "控えがありません。更新を中止し、手順 0 をやり直す"
 fi
 ```
 
@@ -2506,14 +2506,14 @@ pnpm -C apps/deployer exec wrangler deploy &&           # 1.5 デプロイ専用
 pnpm -C apps/control d1:migrate:remote &&               # 2. (a) があれば。無ければ "No migrations to apply"
 pnpm -C apps/control guide:build &&                     # エージェント向けガイド本文の再生成(冪等)
 pnpm -C apps/control exec wrangler deploy               # 3. control
-else echo "控えがありません。手順 0 をやり直してください(マイグレーションとデプロイには進まない)"; fi
+else echo "控えがありません。手順 0 をやり直す(マイグレーションとデプロイには進まない)"; fi
 ```
 
 runtime を作り直したら control と deployer も必ず再デプロイする。control は下書きプレビュー用に同じ runtime 文字列を配るので、古い runtime を検証に配らないようにする。deployer は設置タグのファイルに runtime を書き込むので、更新しないと古い runtime を配り続ける。`wtt-static` には `wrangler deploy` を使わない(2.9)。
 
 ここから手順 4(admin)の前までは、特定のリリースにだけ要る追加の手順。対象のリリースは CHANGELOG に目印がある。該当しなければ飛ばして手順 4 へ進む。
 
-**配る設定の版(`schemaVersion`)が上がるリリースの更新**。公開の最初の版は配る設定の版 2 で、版 3 に上げたのは下の「ページの条件を対象 URL にまとめるリリース」。この手順が要るのは、版を上げるリリースだけ:
+**配る設定の版(`schemaVersion`)が上がるリリースの更新**。公開の最初の版は配る設定の版 2 で、版 3 に上げたのは下の「ページの条件を対象 URL にまとめるリリース」(v1.0)。この手順が要るのは、版を上げるリリースだけ:
 
 - 更新した後、6.6 の凍結を外してから、各サイトで 1 回公開する。配る設定を新しい形に置き換えるため。1 つ前の版の設定も読めるが、新しい規則は公開した設定から適用される(1 つ前の版の設定のままでは配れないものがあるリリースは、そのリリースの項に書く)。公開は API(`POST /sites/<siteId>/publish`、権限が管理者以上の鍵)か、管理画面の上部の「公開」で行う。エージェントは両方を示して人に選んでもらう(0 節の「管理画面での操作が要る工程の進め方」)
 - 配る設定の版を上げたリリースを飛ばして更新しない。edge と control は 1 つ前の版までしか読めない。CHANGELOG の目印を確かめ、版を上げたリリースが間にあれば 1 つずつ順に更新する
@@ -2540,7 +2540,7 @@ runtime を作り直したら control と deployer も必ず再デプロイす�
 - 凍結中に、6.4 の確認と一緒に、上の SQL を流し直して配信中(`running`)の行が無いことを確かめる。あれば凍結を外さずに調べる
 - 凍結を外した後: 各サイトで 1 回公開する(上の「配る設定の版が上がるリリースの更新」)。一時停止になったエクスペリエンスは、管理画面の「配信条件」のカードで、警告の色の条件の行の内容を「① どのページで(対象 URL)」に書き、その行を「この条件を消す」で消して保存してから再開する(API では、エージェント向けガイドの「ページの条件を対象 URL に移す」)。古い条件が、更新の前の対象 URL と組み合わせて(「すべて満たす」で)使われていたときは、新しい行を足さずに、その対象 URL の行と同じ行に入れる(パラメータの条件も、ホスト・パス・URL の条件も、その行の「+ 条件(かつ)」で足す。API では、パラメータの条件は行の `params` に、ホスト・パス・URL の条件は行の `and` に入れる)。別の行に足すと「または」になり、配信先が広がる。オーディエンスに残った条件は、オーディエンスの画面で消し、参照するエクスペリエンスごとに対象 URL に書く。再開の後の公開で、そのテストの結果に「テスト中の変更」が 1 件記録される(届く定義の書き方が変わるため。判定は止まらない)
 - **v1.0 より前に開いた管理画面のタブは、凍結を外した後の最初の保存で「管理画面が古い版です」(426)になる**。ページを再読み込みすれば直る(未保存の入力は消えるので、必要なら控えてから)。更新の前に利用者に伝えておく。API で対象 URL を古い形で書き込んでいるエージェントや手順は、新しい形に書き換える(古い形は 422 `invalid_input`)
-- 6.4 では、`curl -sSI "<control URL>/llms.txt" | grep -i x-wtt-min-client-version` が `x-wtt-min-client-version: 6` を返すことも確かめる
+- 6.4 では、`curl -sSI "<control URL>/llms.txt" | grep -i x-wtt-min-client-version` が目標 tag の値(v1.0 では `x-wtt-min-client-version: 7`)を返すことも確かめる
 - このマイグレーションは後方互換ではない(前の版の control は新しい形の対象 URL を読めない)。前の版に戻すときは 6.5 の「ページの条件を対象 URL にまとめるリリースより前の版へ戻すとき」に従う
 
 **システム管理者を導入するリリースの更新**。更新すると、最初に作られたワークスペースのオーナー全員がシステム管理者になり、すべてのワークスペースのオーナーになる:
@@ -2576,7 +2576,7 @@ runtime を作り直したら control と deployer も必ず再デプロイす�
 **管理画面の版の確認と service binding を足すリリースの更新**(CHANGELOG の目印「この版より前に開いたタブは再読み込みが要る」「オーナーと非常口でパスワードを使った人が 1 回ログアウトされる」「admin の設定に binding が増える」):
 
 - 順は上の 2 つ目のブロックと手順 4 のまま(edge → deployer → マイグレーション → control → admin)。**edge は control より先にデプロイする**。新しい版の control は、各サイトのサイト設定の記録(KV)に新しい訪問者の記録の上限を書く。前の版の edge はこの項目を知らないので、その記録を読めないものとして扱い、そのサイトの判定と送信が 404 になる。**admin は control より後にデプロイする**。admin の binding の宛先(control の `ControlBff`)が要るため
-- 手順 4 の出力の bindings に `env.CONTROL (<control の Worker 名>#ControlBff)` が出ることを確かめる(4.3)。6.4 では、`curl -sSI "<control URL>/llms.txt" | grep -i x-wtt-min-client-version` が `x-wtt-min-client-version: 1` を返すことも確かめる
+- 手順 4 の出力の bindings に `env.CONTROL (<control の Worker 名>#ControlBff)` が出ることを確かめる(4.3)。6.4 では、`curl -sSI "<control URL>/llms.txt" | grep -i x-wtt-min-client-version` が `x-wtt-min-client-version: 1`(v0.11 の値。それより後の版へ一度に上げるときは目標 tag の値)を返すことも確かめる
 - **v0.11 より前に開いた管理画面のタブは、凍結を外した後の最初の保存で「管理画面が古い版です」(426)になる**。ページを再読み込みすれば直る(未保存の入力は消えるので、必要なら控えてから)。更新の前に利用者に伝えておく
 - **更新の後、オーナーと、これまでに非常口(8 節)でパスワードを使った人が 1 回ログアウトされる**。Google でログインし直せばよい。新しい版は、非常口が閉じている間、パスワードの記録とその持ち主のログイン状態を 15 分ごとに消す(8 節)。既存の導入では、初回セットアップがオーナーに誰も知らない乱数のパスワードの記録を残しているので、オーナーも対象になる。非常口が閉じていれば凍結を外してから通常 15 分以内に、非常口を開けたまま更新したら閉じた後の最初の定期処理で消える。作業者自身もログアウトされうるので、先に伝えておく
 - 新しい訪問者の記録の上限(運用ガイド 7 節)は、凍結を外した後の control の定期処理(15 分ごと)が、1 回に 10 サイトずつ各サイトのサイト設定の記録に入れる。入るまでは上限なしで今までどおり動く。翌日に `pnpm -C apps/control exec wrangler kv key get "site:<siteId>:settings" --namespace-id <namespace ID> --remote` で `newProfileBudget` が入ったことを確かめる。すぐに入れたいサイトは、管理画面でサイト設定を一度保存する
@@ -2599,7 +2599,7 @@ runtime を作り直したら control と deployer も必ず再デプロイす�
 
 - マイグレーション(D1 の `0023_audit_events.sql`)は control の deploy(手順 3)より前に当てる。2 つ目のブロックの順のままでよい。順を誤って control を先にデプロイすると、新しい control は記録の表が無いので、記録を伴う変更操作(保存・公開・メンバーの操作など)がすべて 500 になる
 - このマイグレーションは、操作の記録の表 `audit_events`(と索引)と、保持の定期処理が 1 日に消した数を持つ 1 行の表 `audit_retention_state` を作る。`sites`・`experiments` には世代の列 `generation` を足し、既存の行を乱数で埋める(同じ ID で作り直したサイト・エクスペリエンスの前の記録を、変更履歴に混ぜないため)。既存の行で書き換えるのはこの列だけ。トリガーを 4 つ作る: `audit_events_no_update`(記録の書き換えを断る)・`audit_events_keep_365d`(365 日より新しい記録の削除を断る)・`sites_fill_generation`・`experiments_fill_generation`(世代を入れずに作られた行に世代を入れる。凍結を入れる前に届いていた前の版の control の作成や、前の版に戻しているあいだの作成で起きる)
-- admin は control より後にデプロイする(手順 4 の順のまま)。逆にすると、エクスペリエンスの「変更履歴」タブと設定の「操作の記録」が開けない案内になる(ほかは壊れない)
+- admin は control より後にデプロイする(手順 4 の順のまま)。逆にすると、エクスペリエンスの「変更履歴」タブに「変更履歴を読めませんでした。」で始まるエラーが、設定の「操作の記録」に「操作の記録を取得できませんでした(HTTP 404)」が出る(ほかの画面は動く)
 - 凍結中に、6.4 の確認と一緒に次を確かめる。期待と違えば凍結を外さずに調べる:
 
   ```bash
@@ -2643,7 +2643,7 @@ runtime を作り直したら control と deployer も必ず再デプロイす�
 - API キーはそのまま使える。更新の後、エージェントの鍵で `GET /me` が 200 を返すことを確かめる
 - API の契約の版は変わらない(開いたままの管理画面のタブが、この更新で 426 になることは無い)
 
-手順 0 の控えと手順 1〜3 がすべて成功した場合だけ、次の管理画面の更新を実行してください。途中で失敗した場合は、管理画面の更新に進まず、失敗した手順の原因を解消してください。
+手順 0 の控えと手順 1〜3 がすべて成功した場合だけ、次の管理画面の更新を実行する。途中で失敗した場合は、管理画面の更新に進まず、失敗した手順の原因を解消する。
 
 ```bash
 pnpm -C apps/admin build
@@ -2696,7 +2696,7 @@ curl -sS -X POST "<control URL>/workspaces" | jq -r '.error'   # 期待: "unauth
 
 ただし (a) のマイグレーションは戻せない(D1 のスキーマは進んだまま)。戻す前に `CHANGELOG.md` でそのマイグレーションが後方互換かを確認し、後方互換でない、またはデータが壊れたときは、D1 を更新前の時点に戻す(10.2 の Time Travel。手順 0 の export からの読み戻しは 10.3)。
 
-**公開履歴と配信確認の読み取りを減らす索引を足したリリースから戻すとき**: `0028_publish_retention_indexes.sql` は索引を足すだけなので、前の版へ戻すためにデータベースを戻す必要は無い。`0029_delivery_confirmation_reads.sql` も索引の追加・作り直し・削除だけで、データベースを戻す必要は無い。作り直した索引も残してよい。前の版の control は、索引の変更後も同じ版を保護し、同じ行を返す(索引は読み取りの経路を変えるだけで、結果を変えない)。
+**公開履歴と配信確認の読み取りを減らす索引を足したリリースから戻すとき**: `0028_publish_retention_indexes.sql` は索引を足すだけなので、前の版へ戻すためにデータベースを戻す必要は無い。`0029_delivery_confirmation_reads.sql` も索引の追加・作り直し・削除だけで、データベースを戻す必要は無い。作り直した索引も残してよい。索引は読み取りの経路を変えるだけで、結果は変えない。前の版の control も、索引を足した後のデータベースで前と同じ結果を読む。
 
 **公開の本体の保持を足したリリースから戻すとき**: 列を足すだけのマイグレーションなので、前の版へ戻すためにデータベースを戻す必要は無い。ただし、保存の上限を過ぎて消した公開の本体は、コードを戻しても戻らない。必要な本体を取り戻すときは、データベースを更新前の時点に戻す(10.2)。`AB_PUBLISH_BODY_KEEP` を下げた後で上げても、消えた本体は戻らない。
 
@@ -2730,16 +2730,6 @@ curl -sS -X POST "<control URL>/workspaces" | jq -r '.error'   # 期待: "unauth
   - 記録が食い違っているサイトの一覧は、同じ世代で中身が違うかを ID の順に先頭の 25 サイトまでしか比べない(10.2 の手順 8 の注意)。それより多いサイトのある導入では、残りのサイトも上の 2 つ(runtime のハッシュと設定の版)をサイトごとに確かめる
 - 前の版の edge にした後も、開いたままのページと、ブラウザに残った設置タグのファイル(最大約 60 秒)は、版 3 の公開の版を指して判定を求めることがある。前の版の edge はこれを読めず空の応答を返す(ページは元の表示のまま)。配信先は広がらないので、この間は待つ。KV の書き込みが全拠点に届くまでの遅れも同じ
 - この手順は、版 3 で 2 回以上公開したサイトを持つ試験用の導入で一度通してから、本番の導入で使う
-- **対象 URL の行の「かつ」のページの一致(`and`)を読めない版へ、データベースを戻さずに戻すとき**: 上の 2 つの手順のようにデータベースを更新の前の時点に戻すときは、`and` もデータベースから消え、公開し直しで公開中の設定からも消えるので、この手当ては要らない。データベースを戻さずに、対象 URL の行は読めるが `and` を読めない版へコードだけを戻すときは、次の順で行う。前の版の edge・デプロイ専用の Worker・control は `and` を持つ設定を読めない(edge は判定を返さない。デプロイ専用の Worker は配信ファイルの作り直しに失敗して前のファイルを残し、最後のエラーに `rebake_failed` を記録する)ので、`and` を配る設定から先に消してから戻す:
-  1. `and` が残っているかは、データベースだけで判断しない(データベースで `and` を消して保存しても、公開しなければ、公開中の設定・デプロイ専用の Worker が保存した入力・配信ファイルには残る)。次の 2 つを両方見る。どちらにも無いサイトだけ、手当て無しで戻してよい
-     - データベースの今の値(状態を問わない。読むだけの SQL): `pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select distinct e.site_id, e.id, e.status from experiments e, json_tree(e.url_match_json) t where t.key = 'and' order by e.status, e.site_id, e.id"`
-     - 各サイトの公開中の設定の本文: `pnpm -C apps/control exec wrangler kv key get "site:<siteId>:active" --namespace-id <namespace ID> --remote` の値を `<N>` として、`pnpm -C apps/control exec wrangler kv key get "site:<siteId>:config:v<N>" --namespace-id <namespace ID> --remote | jq '[.experiments[] | (.urlMatch.include + (.urlMatch.exclude // []))[] | select(has("and"))] | length'` が `0`
-  2. どちらかにあるサイトでは、行の条件を外す・`and` を外して最初の条件だけにする書き換えはしない(条件が緩み、配信先が広がる。除く行なら、除いていたページが対象に戻る)。代わりに、新しい版のまま、データベースで `and` を持つ配信中(`running`)のエクスペリエンスを管理画面か API で一時停止にし、そのサイトで公開する(公開はデータベースの今の値から配る設定を作るので、データベースから消えた `and` も公開中の設定から消える)。続いて、公開の応答と配信ファイルの画面(か `GET /static/status`)で、更新待ち(`pending`)のサイトと最後のエラーが `rebake_failed` のサイトが無いことを確かめる(静的配信のサイトでは、デプロイ専用の Worker が保存した入力と配信ファイルまで、新しい公開の設定に置き換わったことになる)
-  3. 6.6 の凍結を入れ、1 分待って有効なことを確かめてから、全サイトについて次の 3 つを確かめる。1 つでも合わなければ前の版に切り替えない(凍結を外して 2 からやり直す)。凍結の間は新しい公開が割り込まない。合えば、凍結のまま前の版を 6.3 と同じ順でデプロイする
-     - データベースで、`and` を持つ配信中(`running`)のエクスペリエンスが 0 件(読むだけの SQL。1 の SQL に `e.status = 'running'` の条件を足したもの): `pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select distinct e.site_id, e.id, e.status from experiments e, json_tree(e.url_match_json) t where t.key = 'and' and e.status = 'running' order by e.status, e.site_id, e.id"`。`and` を持つ一時停止・下書きのエクスペリエンスは、2 で一時停止にしたものも含めて残ってよい(1 の SQL では出るが、ここでは数えない)。これらは下の 4 のとおり、前の版の管理画面で編集・開始しないことで扱う
-     - 公開中の設定の本文: 1 と同じコマンドの値が `0`
-     - 配信ファイルの画面(か `GET /static/status`)に、更新待ちのサイトと最後のエラーが `rebake_failed` のサイトが無い
-  4. 戻した後も、`and` を持つ下書き・一時停止のエクスペリエンスはデータベースに残る。前の版の管理画面では、これらを編集しない・開始しない(前の版の管理画面は、パラメータの条件を全部消すと行を最初の条件だけに組み直し、`and` を落として保存する。前の版の control は `and` を持つ行を公開で断るので開始・再開は失敗するが、編集で `and` が落ちた後なら通ってしまい、配信先が広がる)。新しい版に上げ直してから直す
 
 ### 6.6 書き込みの凍結(メンテナンス中)
 
@@ -2831,7 +2821,7 @@ control の無認証の入口をどう防御するかは、**導入時に次の 
 - 常時開いている: `/auth/google/start`(Google へ送り出す)/ `/auth/callback/google`(Google からの戻り)/ `/auth/handoff/exchange`(ログイン直後に管理画面がセッションを受け取る使い捨てコードの交換)/ `/login-options`(この導入で使えるログイン方法)/ `/break-glass/reset-link`(非常用トークンの照合)/ `/setup`(ユーザー 0 件のときだけ)/ `/invitations/:id/accept`(招待の受諾)/ `/auth/sign-out`(ログアウト。control の公開のアドレスに直接届いたものだけ回数を数える)/ `/auth/get-session`(ログインの状態。ログインしていない人には何も返さない。回数は数えない)
 - **非常時だけ開く**: `/auth/sign-in/email` / `/auth/sign-up/email` / `/auth/request-password-reset` / `/auth/reset-password` の 4 つ(非常用トークンを置いているあいだだけ。置いていなければ 404。8 節)
 
-無認証の入口はログインしていない人に管理画面のアドレスを返さない。Google ログインの失敗は control の上の「ログインできませんでした」の画面で終わり、管理画面へ戻すのは、招待された人のログインが成功したときだけである。
+無認証の入口はログインしていない人に管理画面のアドレスを返さない。Google ログインの失敗は control が出す「ログインできませんでした」の画面で終わり、管理画面へ戻すのは、招待された人のログインが成功したときだけである。
 
 Workers 内の Rate Limiting binding は本番で制限として働いていなかったという実測があるため、補助としては残すが防御の中心にはしない(管理画面経由の要求も、操作した人の IP ごとに数える。[運用ガイド 7 節](operations.md#7-レート制限の実効))。
 
@@ -2895,7 +2885,7 @@ curl -sS "https://api.cloudflare.com/client/v4/accounts/$AID/workers/domains?hos
 
 確かめたら、`apps/control/wrangler.jsonc` に `workers_dev: false` と `routes` を**足し**、`preview_urls` は既存の `false` を残し、既存の `dev` の行を下の `dev` で**置き換えて**(同じキーを二重に書くと後ろの行が勝つ)再デプロイする。DNS レコードと証明書は wrangler が自動で作る。
 
-`workers_dev` / `preview_urls` を `false` にしないと `https://<control の Worker 名>.<アカウントのサブドメイン>.workers.dev` と Preview URL が開いたままになり、(2)(3) の防御を迂回できる。
+`workers_dev` / `preview_urls` を `false` にしないと `https://<control の Worker 名>.<アカウントのサブドメイン>.workers.dev` と Preview URL が開いたままになる。そのアドレスを知った人は、自分のドメインに掛けた (2)(3) の防御を通らずに control に届く。
 
 確認: `wrangler deploy` の出力の `Deployed <control の Worker 名> triggers` に `control.<運用者ドメイン>` だけが並び、workers.dev の行が**無い**こと。
 
@@ -2974,25 +2964,25 @@ hit=0 なら 1 分後に 1 回だけやり直す。それでも hit=0 なら人�
 
 管理画面の BFF の通信は service binding で control に届き、control のゾーンを経由しないので、この WAF には数えられない(7 節の冒頭)。WAF が数えるのは、上の式に当たる要求のうち、ブラウザが直接開く Google ログインの 2 経路・非常口のトークンの照合・5 節でエージェントが curl で送る `POST /setup` と、無認証の入口を直接呼ぶ第三者の要求。API キーを使う呼び出しは式に当たらないので数えない。管理画面からのログインの回数は、control の binding が利用者の IP ごとに数える。CI や運用スクリプトから無認証の入口(ログイン・`/setup` など)を連続して呼ぶ場合は、この WAF の回数に入る。
 
-Free のゾーンで、2.7 と 1 本にしたルール(上の Free の式)を作り、edge の `/v1/sites/*` と control の `POST /setup`・`GET /auth/google/start` の両方で本文 `error code: 1015` の遮断が出ること、管理画面の BFF の要求がこの WAF に数えられないことを確かめてある。
+Free のゾーンで、2.7 と 1 本にしたルール(上の Free の式)を作り、edge の `/v1/sites/*` と control の `POST /setup`・`GET /auth/google/start` の両方で本文 `error code: 1015` の遮断が出ること、管理画面の BFF の要求がこの WAF に数えられないことを確かめてある(2026-11-13)。
 
 ### 7.3 (3) Cloudflare Access
 
 Zero Trust(Free で 50 ユーザーまで)の Access アプリケーション(Self-hosted)を `control.<運用者ドメイン>` に作り、ポリシーで許可する相手を決める。ブラウザからの直接のアクセスにはメールのワンタイム PIN や Google ログインを要求できる。
 
-Free のアカウントで、この節の形(control に Access を掛け、エージェントはサービストークンで通し、Google ログインの 2 経路を Bypass にする)が動くことを確かめてある。Free でも、Zero Trust を始めるときに支払い方法の登録を求められる(請求はされない)。
+Free のアカウントで、この節の形(control に Access を掛け、エージェントはサービストークンで通し、Google ログインの 2 経路を Bypass にする)が動くことを確かめてある(2026-11-14)。Free でも、Zero Trust を始めるときに支払い方法の登録を求められる(請求はされない)。
 
 **作り方**(**【人に依頼】**。画面の日本語の表示は確かめたもの。英語の表示は、確かめていないものに「英語の表示は未確認」と書いた):
 
-1. **ログインの方法に One-time PIN を足す**。Zero Trust を有効にしただけでは、Access のログインの方法は `Cloudflare`(Cloudflare のアカウントのメンバーのログイン)だけで、アカウントのメンバーでないメールアドレスは通れない。このとき Access のログインの画面は「Cloudflare sign-in is restricted to members of the account.」と出て、コードを送る方法が無い。Zero Trust →「インテグレーション」→「ID プロバイダー」→「ID プロバイダーを追加する」→「ログイン方法を追加する」→ `One-time PIN`(英語の表示は未確認)
+1. **ログインの方法に One-time PIN を足す**。Zero Trust を有効にしただけでは、Access のログインの方法は `Cloudflare`(Cloudflare のアカウントのメンバーのログイン)だけで、アカウントのメンバーでないメールアドレスは通れない。このとき Access のログインの画面は「Cloudflare sign-in is restricted to members of the account.」と出て、コードを送る方法が無い。Zero Trust →「インテグレーション」→「ID プロバイダー」→「ID プロバイダーを追加する」→「ログイン方法を追加する」→ `One-time PIN`(`One-time PIN` は日本語の表示でも英語のまま。ほかの項目の英語の表示は未確認)
 2. **サービストークンを作る**(エージェント・非常口の curl 用)。Cloudflare の文書では Zero Trust → Access controls → Service credentials → Service Tokens → Create Service Token(画面の英語と日本語の表示は確かめていない)。作成の直後の画面で Client ID と Client Secret を控える。控えずに閉じたら、そのトークンを消して作り直す
-3. **ポリシーを 2 つ作る**。Zero Trust →「Access コントロール」→「ポリシー」→「ポリシーを追加する」(日本語の表示。英語の表示は未確認)
+3. **ポリシーを 2 つ作る**。Zero Trust → Access controls(Access コントロール)→「ポリシー」→「ポリシーを追加する」(「ポリシー」と「ポリシーを追加する」は日本語の表示。英語の表示は未確認)
    - 管理画面に入る人: アクション「許可」、含めるのセレクター「メール」に、その人のメールアドレス(`owner_email` と招待する人)
    - エージェント: アクション「サービス認証」、含めるのセレクター `Service Token` に 2 で作ったトークン
-4. **アプリケーションを作る**。Zero Trust → Access controls(Access コントロール)→ Applications(アプリケーション)→「新規アプリケーションを作成」→「セルフホストとプライベート」→「セルフホストとプライベートで続行」(この 3 つの英語の表示は未確認)。宛先を `control.<運用者ドメイン>` にし、3 の 2 つのポリシーを付ける。アプリケーションの「認証」→「ID」で、「利用可能なすべての ID プロバイダーを受け入れる」がオンか、`One-time PIN` が選ばれていることを確かめる(英語の表示は未確認)
+4. **アプリケーションを作る**。Zero Trust → Access controls(Access コントロール)→ Applications(アプリケーション)→「新規アプリケーションを作成」→「セルフホストとプライベート」→「セルフホストとプライベートで続行」(この 3 つの英語の表示は未確認)。宛先を `control.<運用者ドメイン>` にし、3 の 2 つのポリシーを付ける。アプリケーションの「認証」→「ID」で、「利用可能なすべての ID プロバイダーを受け入れる」がオンか、`One-time PIN` が選ばれていることを確かめる(`One-time PIN` は日本語の表示でも英語のまま。ほかの項目の英語の表示は未確認)
 5. **(Google ログインの 2 経路を Bypass にするとき)** 4 と同じ手順で、宛先のパスを `auth/google/start` と `auth/callback/google` にしたアプリケーションを 1 つずつ足す(パスの欄の前には `/` が出ているので、先頭の `/` は入れない)。ポリシーは、アクション「バイパス」、含めるのセレクター「全員」で作り、2 つのアプリケーションに付ける(2 つ目は「既存のポリシーを追加」から選ぶ。日本語の表示。英語の表示は未確認)。同じホストでは、細かいパスのアプリケーションが優先される
 
-確かめたときは、アプリケーションを作った 2 分半後に適用され、消した 2 分半後には外れていた(それより早く切り替わるかは見ていない)。作った直後の確認でヘッダーの無い curl が Worker の応答を返す(または消した直後にまだ 302 になる)ときは、3 分待ってやり直す。
+確かめたとき(2026-11-14)は、アプリケーションを作った 2 分半後に適用され、消した 2 分半後には外れていた(それより早く切り替わるかは見ていない)。作った直後の確認でヘッダーの無い curl が Worker の応答を返す(または消した直後にまだ 302 になる)ときは、3 分待ってやり直す。
 
 **この構成での注意**: Access の判定を受けるのは、control の公開アドレスに直接届く要求だけ(7 節の冒頭)。
 
@@ -3015,7 +3005,7 @@ Free のアカウントで、この節の形(control に Access を掛け、エ�
 - 使えるのは **Cloudflare アカウントで control の secret を設定できる人だけ**。その人は D1 も触れるので、この入口で権限が増えることはない
 - **ここは人が自分の端末で行う**(エージェントに頼まない)。非常用トークンと再設定リンクは、持っていればオーナーのアカウントに入れる秘密なので、エージェントの会話・作業ログ・CI の出力に残さない。端末の画面に出した場合は、使い終わったら scrollback を消す(多くのターミナルで Cmd/Ctrl + K)
 
-別の端末や新しい clone から行うときは、先に 6.2 の名前の確かめのブロックを流し、2 行とも `found` であることを確かめる。乱数の名前の導入では、手元の `apps/control/wrangler.jsonc` の `name` が導入した Worker の名前でないと、次のコマンドが別の Worker を宛先にする。
+別の端末や新しい clone から行うときは、先に 6.1 のとおり `CLOUDFLARE_ACCOUNT_ID` を設定してから、6.2 の名前の確かめのブロックを流し、2 行とも `found` であることを確かめる。乱数の名前の導入では、手元の `apps/control/wrangler.jsonc` の `name` が導入した Worker の名前でないと、次のコマンドが別の Worker を宛先にする。
 
 1. 非常用トークンを置く(16 文字以上。短い値は無視される)。secret にするのは、vars は次の `wrangler deploy` で設定ファイルの内容に上書きされて消えるため。ダッシュボードで置くなら Compute(コンピュート)→ Workers & Pages → `<control の Worker 名>` → Settings(設定)→ Runtime variables and secrets(ランタイム変数とシークレット)→ Add variable(変数を追加する)で種類を secret にして → Add variable and deploy(変数を追加してデプロイ)
 
@@ -3335,7 +3325,7 @@ grep -q '^CLOUDFLARE_API_TOKEN=' deploy-secrets.env || printf 'CLOUDFLARE_API_TO
   - 画面: ダッシュボードの Manage account(アカウントの管理)→ Account API tokens(アカウント API トークン)→ Create a token(トークンを作成)
   - Token name(トークン名)= `wtt-restore-<識別子>`(識別子は 0.5 の「Cloudflare の API トークンの名前」と同じ)
   - Start from scratch(最初から作成)の Custom を押す(この Custom は日本語の表示でも英語のまま)
-  - Permission policies(権限ポリシー)の Edit policy(ポリシーを編集)で Entire Account(アカウント全体)を選び、Developer Platform の Workers R2 Storage の Read と、Developer Platform の D1 の Edit にチェックを入れる(分類・権限の名前と Read / Edit は日本語の表示でも英語のまま)。D1 の編集も要るのは、道具の中で動く wrangler も、`CLOUDFLARE_API_TOKEN` があれば `wrangler login` より優先してそのトークンを使い、D1 を読み書きするため
+  - Permission policies(権限ポリシー)の Edit policy(ポリシーを編集)で Entire Account(アカウント全体)を選び、Developer Platform の Workers R2 Storage の Read と、Developer Platform の D1 の Edit にチェックを入れる(分類・権限の名前と Read / Edit は日本語の表示でも英語のまま。Account API Token の画面での分類・名前は未確認)。D1 の編集も要るのは、道具の中で動く wrangler も、`CLOUDFLARE_API_TOKEN` があれば `wrangler login` より優先してそのトークンを使い、D1 を読み書きするため
   - Token expiration(トークンの有効期限)= Custom(カスタム)で今日 → 翌日(0.5 の基本の 2(親トークン)と同じ押し方)
   - Client IP address filtering(クライアント IP アドレス フィルタリング)は空のままにし、Review token(トークンを確認)の Summary(概要)で権限と期限を確かめてから Create token(トークンを作成)を押す
   - Account API Token を作れないときは User API Token で作る: ダッシュボードの右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン)→ Create Token(トークンを作成する)。Token name(トークン名)は上と同じ。Start from scratch(最初から作成)の Start with an Account policy(アカウント ポリシーから開始)→ Include(含む)の Account(アカウント)で導入先のアカウントを選ぶ → Developer Platform(開発者プラットフォーム)の Workers R2 Storage の Read(読み取り)と D1 の Edit(編集)のチェックを入れる(Workers R2 Storage と D1 は日本語の表示でも英語のまま)。Token expiration(トークンの有効期限)は 0.5 の「User API Token を作る」の 2 の期限の手順で翌日までにする → Continue to summary(概要に進む)で確かめて作成
@@ -3372,7 +3362,7 @@ sed -i.bak '/^CLOUDFLARE_API_TOKEN=/d' deploy-secrets.env && rm -f deploy-secret
 
 Time Travel の保持期間より前に戻すとき、または D1 を消してしまったとき。export の `.sql` は `CREATE TABLE` を含むので、**今の DB に上書きせず、空の DB を新しく作ってそこに読み込み、control の向き先を切り替える**(切り替える前に中身を確かめられる)。
 
-今のデータベースが残っているなら、読み戻しの前に、今の `wtt-control` に 10.2 の手順 3・4 を行う(6.6 の凍結を入れる・非常口が開いていれば閉じる・人とアクセス権の一覧を `access-before.tsv` に控える)。凍結を入れるのは、切り替えの前に入った書き込みが新しいデータベースに入らないようにするため。今のデータベースが無いときは一覧を控えられないので、切り替えの手順 4 では、読み戻した一覧を人に見せて確かめる。
+今のデータベースが残っているなら、読み戻しの前に、今の `wtt-control` に 10.2 の手順 3・4 を行う(6.6 の凍結を入れる・非常口が開いていれば閉じる・人とアクセス権の一覧を `access-before.tsv` に控える)。控えの後に今のデータベースに入った書き込みは新しいデータベースに移らず、切り替えで失われる。凍結は、その間に書き込みを受け付けないようにするため。今のデータベースが無いときは一覧を控えられないので、切り替えの手順 4 では、読み戻した一覧を人に見せて確かめる。
 
 次のコマンドも 10.1 と同じく**リポジトリ直下で**流し、控えのファイルは絶対パス(`$PWD/deploy-backups/…`)で渡す。
 
@@ -3406,7 +3396,7 @@ pnpm -C apps/control exec wrangler d1 execute wtt-control-restore --remote --com
 Cloudflare アカウントから本ツールをすべて取り除く。**取り消せない**ので、必要なら先に 10.1 の export を取る。順序は「訪問者に見える側から」= 設置サイトのタグ → admin → control → edge → データ → ゾーンのルール → 外部の資格情報(edge は、edge の Durable Object を参照する control の後に消す)。
 
 1. **【人が行う】設置サイトからタグを外す**(GTM のタグを一時停止して公開、または `<script src=".../s/<siteId>.js">` を削除)。先に Worker を消すと、タグが残ったページで設置タグのファイルが 404 / 522 になる(ページ自体は壊れない: 読み込みに失敗しても元のページが出るだけ)
-2. Worker を 5 つ消す。先に 6.2 の名前の確かめのブロックを流し、2 行とも `found` であることを確かめる(管理画面と control は手元の `name` の Worker を消すため)。途中まで消した後にやり直すときは、消し終えた Worker の行が `missing` になるので、残っている方の行が `found` であることを確かめる。Route・Custom Domain・Durable Objects(Visitor Profile の全データ)は Worker と一緒に消える。`wtt-deployer` を消すと設置タグのファイルの作り直しが止まるので、`wtt-static` より後に消す。
+2. Worker を 5 つ消す。先に 6.1 のとおり `CLOUDFLARE_ACCOUNT_ID` を設定してから、6.2 の名前の確かめのブロックを流し、2 行とも `found` であることを確かめる(管理画面と control は手元の `name` の Worker を消すため)。途中まで消した後にやり直すときは、消し終えた Worker の行が `missing` になるので、残っている方の行が `found` であることを確かめる。Route・Custom Domain・Durable Objects(Visitor Profile の全データ)は Worker と一緒に消える。`wtt-deployer` を消すと設置タグのファイルの作り直しが止まるので、`wtt-static` より後に消す。
 
 **流す前に確かめること**: 消す Worker の名前・アカウントが撤去する導入のものであることと、その Worker を参照する別の導入の service binding・Durable Object の binding が無いことを確かめる。別の導入から参照されていたら、その導入で binding を外すまで消さない。下のコマンドは上から 1 本ずつ流し、成功を確かめてから次へ進む。**エージェントなどの非対話の実行では、`wrangler delete` は依存する Worker の警告にも自動で yes と答え、`--force` が無くても binding 先を消す**。確認の問いで止まることを前提にせず、admin → control → edge の順を必ず守る。
 
@@ -3450,7 +3440,7 @@ curl -sS -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RI
 - Google Cloud の OAuth クライアント `wtt-control-<識別子>`(0.5)を削除する。control の Worker 名(`wtt-control-<16 桁の 16 進>`)とは別で、識別子はアカウントのサブドメイン。プロジェクト `wtt-auth` をほかの導入と共有していなければ、プロジェクトごと消してよい
 - Cloudflare の API トークンのうち残っているものを消す: 配信ファイルのデプロイ用 `wtt-deploy-<識別子>` と使用状況の表示用 `wtt-usage-<識別子>`(識別子は 0.5)。基本(`bootstrap`)の導入で親トークン `wtt-bootstrap-<識別子>` が一覧に残っていれば、それも消す。ゾーンの設定用 `wtt-setup-<識別子>`・`wtt-restore-<識別子>`(10.2)・稼働確認用(9 節)は、期限切れなら何もしなくてよい(期限の切れたものも一覧に残る)。消す一覧は、導入のときのトークンの作り方で変わる:
   - 基本(`bootstrap`)と `manual-account` の導入: トークンは Account API Token。撤去するアカウントの Manage account(アカウントの管理)→ Account API tokens(アカウント API トークン)の一覧で、Name(名前)が上の名前のトークンを、Token actions(トークンのアクション)→ Delete(削除)→ 確認の画面の Delete token(トークンを削除)で消す。Account API Token はアカウントに属するので、この一覧には、ほかのアカウントに入れた導入のトークンは並ばない。開いている一覧が撤去するアカウントのものかを先に確かめる(ほかのアカウントの一覧にも、そのアカウントに入れた導入の、同じ形の名前のトークンがありうる)。同じ名前のトークンが 2 本以上あるときは、0.5 の「親トークンの値が漏れたとき」と同じく Name(名前)と Created(作成日)で見分け、見分けられなければ消さずにエージェントに伝える
-  - `manual-user` の導入: トークンは User API Token で、作った人の My Profile の一覧(ダッシュボードの右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン))にある。**消す前に、名前だけで決めず、撤去する導入のトークンかを確かめる。** User API Token はユーザーに属するので、ほかの導入(別のアカウントに入れた導入や試しの導入)のトークンも同じ一覧に並ぶ(0.5)。名前は人が付けるので、重なったり、手順と違う名前になったりする。一覧でトークンを開き、対象のアカウントが撤去するアカウントだけであること(トークンの詳細の画面の名前は確かめていない)と、作成日がその導入を入れた日(`deploy-log.md` の日付)と合うことを確かめる
+  - `manual-user` の導入: トークンは User API Token で、作った人の一覧(ダッシュボードの右上のユーザーのアイコン → Profile(プロフィール)→ API Tokens(API トークン))にある。**消す前に、名前だけで決めず、撤去する導入のトークンかを確かめる。** User API Token はユーザーに属するので、ほかの導入(別のアカウントに入れた導入や試しの導入)のトークンも同じ一覧に並ぶ(0.5)。名前は人が付けるので、重なったり、手順と違う名前になったりする。一覧でトークンを開き、対象のアカウントが撤去するアカウントだけであること(トークンの詳細の画面の名前は確かめていない)と、作成日がその導入を入れた日(`deploy-log.md` の日付)と合うことを確かめる
   - どちらの一覧でも、撤去する導入のものと確かめられないトークンは消さない。消すと取り消せず、まだ使っている導入のデプロイ用のトークンを消すと、その導入では公開や設定の保存をしても設置タグのファイルが作り直されなくなる(使用状況の表示用なら、管理画面の使用状況が取れなくなる)
 - Cloudflare Access のアプリケーション(4.5 / 7.3)を削除する
 - GTM のタグ・トリガー・変数を削除する
@@ -3466,4 +3456,4 @@ curl -sS -o /dev/null -w '%{http_code}\n' "https://<設置タグのホスト>/s/
 
 `<設置タグのホスト>` は 2.9 の (4) のとおり。`custom-domain` では DNS レコードが無くなるので、最後の `curl` が名前を引けずに失敗する(`Could not resolve host`)のが期待。ゾーンにワイルドカードのレコード(`*.example.net` など)があると名前は引けて、そのレコードの先のサーバーの応答が返る。その場合も、200 の JS でなければ消えている。`workers-dev` では最後の `curl` は行わない。workers.dev を無効にした後にどんな応答が返るかを、Cloudflare は保証していないため。
 
-Free プランの料金はリソースを消した時点で止まる(Workers Paid にしていた場合、プランの解約はダッシュボードの Compute(コンピュート)→ Workers plans(Workers のプラン)から)。
+Workers Free では Workers の料金はかからない(R2 の無料枠を超えた分の料金は、バケットを消した時点で止まる)。Workers Paid では従量の料金は止まるが、月額は解約まで続く。プランの解約はダッシュボードの Compute(コンピュート)→ Workers plans(Workers のプラン)から行う。

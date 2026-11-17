@@ -15,12 +15,14 @@
 | **Workspace** | ユーザーと Site を束ねるテナント単位。メンバーは 1 つの Role を持つ |
 | **Role** | OWNER / ADMIN / EDITOR / VIEWER の 4 種。EDITOR は作成・編集のみで本番化はできない(本番化 = Publish / Start / Pause / Stop は ADMIN 以上) |
 | **Site** | エクスペリエンスを配信する対象サイト。Deployment Mode・consentMode などの設定を持つ |
+| **タグを置くドメイン**(`domains`) | Site の設定。タグを置くページのドメインの一覧(50 件まで。1 行目が代表のドメイン)。受け付ける Origin と Cloudflare 経由のドメインはこの一覧から決まる。Mode B の Site では、保存のたびにドメインごとに edge が応答するか(Cloudflare 経由か)を確かめる |
+| **操作の記録** | 人とアクセス権の操作と、Site・Experiment・Goal・Audience の変更と Publish を、1 回の操作ごとに、誰が・いつ・どのログイン方法か API キーで行ったかとともに要約で残す記録。365 日残り、管理画面と API からは変えたり消したりできない。変更の中身(HTML・CSS・JS・配信条件)の前後の違いは持たない。Experiment ごとに見る画面の表記は「変更履歴」 |
 
 ## エクスペリエンス
 
 | 用語 | 定義 |
 |---|---|
-| **Experiment** | エクスペリエンス(画面の表記)。サイトに出す変更のまとまりで、種別(`kind`: テスト = `test` / パーソナライズ = `single`)・対象 URL(`urlMatch`。含める・除くの行と、各行の URL のパラメータの条件)・Targeting・Variant を持つ。テストは 2 つ以上の Variant に振り分け、パーソナライズは Variant 1 つ(重み 100)を条件に合う訪問者全員に出す。種別は作成後に変えられない(変えるときは複製する)。状態は draft / running / paused / archived |
+| **Experiment** | エクスペリエンス(画面の表記)。サイトに出す変更のまとまりで、種別(`kind`: テスト = `test` / パーソナライズ = `single`)・対象 URL(`urlMatch`。含める・除くの行と、各行に「かつ」で付けるページの一致と URL のパラメータの条件)・Targeting・Variant を持つ。テストは 2 つ以上の Variant に振り分け、パーソナライズは Variant 1 つ(重み 100)を条件に合う訪問者全員に出す。種別は作成後に変えられない(変えるときは複製する)。状態は draft / running / paused / archived |
 | **Desired Status** | 運用者が意図した Experiment の状態(D1 上の `status`) |
 | **Published Status** | 本番に反映済みの Snapshot におけるその Experiment の状態。Desired Status とズレたら UI が差分を表示する |
 | **Variant** | Experiment 内の 1 パターン。重み(配分)と Change の集合を持つ。`original`(画面の表記は「オリジナル」)のパターンは Change を持たず、元のページをそのまま表示する(テストだけ。作成したテストの `a` はオリジナル) |
@@ -29,7 +31,7 @@
 | **Code Change** | HTML / CSS / CUSTOM_JS の Change の総称。任意コードを訪問者のブラウザで実行できる。下書きは全編集 Role が作成でき、本番化は ADMIN の Publish を経由することで統制する(旧称「特権 Change / 特権 Experiment」は廃止)。実行は `<script>` 要素の挿入(`new Function` / `eval` 不使用)で、設置タグの nonce を引き継ぐ。CUSTOM_JS は `function(element, ctx)`、`this` も `element`、`ctx = { experimentId, variantId, changeId }` |
 | **Goal** | コンバージョン定義(PAGEVIEW / CLICK / CUSTOM)。外部計測で dataLayer に出す目標名(`goalName`)を指定できる |
 | **Targeting** | 配信対象の条件。Context 条件(device / ブラウザ / OS / 画面の幅 / referrer / 曜日と時間帯 / 初回の訪問からの経過。ページの URL / パス / ホスト / パラメータは Targeting ではなく対象 URL で書く)と履歴条件(閲覧したページ・目標の達成。期間も指定できる)がある |
-| **Audience** | Site ごとの名前付きの配信条件(例: 料金ページを 2 回以上見て、資料請求が未達成の人)。エクスペリエンスの Targeting から参照され、編集は次の Publish で参照するすべてのエクスペリエンスに効く。閲覧したページの条件はページの一致(URL / パス / ホスト)を直接書く |
+| **Audience** | Site ごとの名前付きの配信条件(例: 料金ページを 2 回以上見て、資料請求が未達成の人)。エクスペリエンスの Targeting から参照され、編集は次の Publish で参照するすべてのエクスペリエンスに効く。ページの URL / パス / ホスト / パラメータの条件は書けない(エクスペリエンスの対象 URL に書く)。閲覧したページの条件はページの一致(URL / パス / ホスト)を直接書く |
 
 ## 本番化と配信
 
@@ -49,8 +51,8 @@
 |---|---|
 | **Visitor** | opaque な ID で識別される訪問者。PII は持たない |
 | **Visitor Profile** | Durable Object 上に置く訪問者ごとの集計値(Goal 達成回数・パターン別閲覧回数・割当)。生イベントは保存しない。最終訪問から retentionDays で全削除 |
-| **Deployment Mode** | 訪問者 ID の持続方法。A = JS Cookie、B = サーバー発行 Cookie(今は同一ゾーン Workers Route の Proxy Mode。Bridge 経由は Phase 2)、C = BYOID(既存 ID の流用) |
-| **Bridge** | サイト自身のサーバーに置く `/__ab/*` の実装(アダプタ)。Phase 2 |
+| **Deployment Mode** | 訪問者 ID の持続方法。A = JS Cookie、B = サーバー発行 Cookie(今は同一ゾーン Workers Route の Proxy Mode。Bridge 経由は時期が未定)、C = BYOID(既存 ID の流用) |
+| **Bridge** | サイト自身のサーバーに置く `/__ab/*` の実装(アダプタ)。時期は未定 |
 | **Proxy Mode** | edge Worker が Cookie の読取・発行を自ら行う動作モード |
 | **サーバー発行 Cookie** | Mode B の表示名。サイトが Cloudflare 配下のとき、同一ゾーンの Workers Route で Proxy Mode を使う構成。現在の ITP 対応手段。識別子(`mode: "B"`・`dlite_hosts`・`/__ab/*`・コードとテストの名前)には旧称の `dlite` が残る |
 | **BYOID** | Bring Your Own ID。サイトの既存 Cookie 等を訪問者 ID として流用する方式(Mode C)。値はハッシュ化してから送る |
@@ -87,13 +89,13 @@
 
 | 用語 | 定義 |
 |---|---|
-| **エージェント面** | 外部の AI エージェント(別プロジェクトの横断エージェント)が control を MCP / REST で直接操作するための面。本製品は LLM を呼ばず、GA4 / BQ の照会もヘッドレスブラウザも持たない。正は REST + OpenAPI、MCP は 1:1 の薄いラッパ、CLI は作らない |
+| **エージェント面** | 外部の AI エージェント(別プロジェクトの横断エージェント)が control を REST で直接操作するための面。本製品は LLM を呼ばず、GA4 / BQ の照会もヘッドレスブラウザも持たない。正は REST + OpenAPI。MCP(1:1 の薄いラッパ)は v1.1 の予定。CLI は作らない |
 | **API キー** | 非ブラウザから control を叩く鍵(Better Auth `apiKey`、接頭辞 `wtt_`)。必ずユーザーに紐づく。発行時に範囲(1 つのワークスペース / すべてのワークスペース = `full`。`full` はシステム管理者だけ)・権限(API の `roleCap`。実際の権限は持ち主の Role との低い方)・有効期限を決める。人とアクセス権の書き込み(鍵・招待・メンバー・ワークスペース)は鍵ではできない(403 `session_required`) |
 | **エラー封筒** | control の全エラー応答の形 `{ error, message, hint?, path?, ...details }`。`error` は機械可読コード |
 | **evaluate** | 割当の dry-run。URL / device / referrer / visitorId / 履歴を入力で与え、Experiment ごとに eligible と `reason`、variantId を返す |
 | **draft-bootstrap** | 下書き Experiment を compile + bake した bootstrap JS。エージェントがヘッドレスブラウザに注入し `#__ab_preview` で Variant を固定して検証する |
 | **analytics-recipe** | その Experiment の命名設定・期間・外部 ID を埋めた GA4 Data API リクエストと BigQuery SQL。数値は返さない(照会はエージェント側) |
-| **agent-guide** | `docs/agent-guide.md`。人間向けの繋ぎ方とエージェント向けレシピ 7 本。control が `/llms.txt` として配る |
+| **agent-guide** | `docs/agent-guide.md`。人間向けの繋ぎ方とエージェント向けレシピ 8 本。control が `/llms.txt` として配る |
 | **preview モード** | 対象ページを `#__ab_preview=<エクスペリエンス ID>:<Variant ID>` で開いたときの runtime の動作。指定したエクスペリエンスだけを強制適用し、Cookie・consent・decision 通信・Goals・Exposure に触れない完全隔離。計測に混ざらない |
 | **PreviewReport** | `window.AB.getPreviewReport()` が返す Change ごとの適用結果(`matched` / `applied` / `error`)。通常表示では `null` |
 

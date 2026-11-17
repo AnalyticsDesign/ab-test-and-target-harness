@@ -46,7 +46,7 @@
 
 API で、確かめた内容に操作を固定する手順は次のとおりです。公開する場合は `GET /sites/{sid}/publish-preview` を読み、内容を確かめ、応答の `digest` を `POST /sites/{sid}/publish` の本文 `{ "expectDigest": "<digest>" }` に入れて送ります。状態を変更する場合は `GET /sites/{sid}/publish-preview?transition=<experimentId>:<running|paused|archived>` を読み、`transitionDigest` を状態の変更(`POST /sites/{sid}/experiments/{experimentId}/status`)の `expectDigest` に入れます。公開が `200` + `ok: false, error: "stale_preview"`、状態の変更が `409 stale_preview` なら、確認した後に内容が変わっています。状態の変更の 409 では何も変わっていません。確認画面を読み直し、変わった内容を確かめてから送り直してください。状態の変更が `200` で `publish.error` が `stale_preview` だった場合は、確かめの直後に保存が割り込んで、状態は変わり公開だけが済んでいません。確認画面を読み直して、`POST /sites/{sid}/publish` で公開してください。
 
-`expectDigest` は API では任意です。付けなければ、操作した時点の保存内容がすべて公開されます。API キーで呼ぶエージェントは版を名乗らないので、契約の版が上がっても 426 にはならず、`expectDigest` を付けない呼び方は今までどおりです。
+`expectDigest` は API では任意です。付けなければ、操作した時点の保存内容がすべて公開されます。`x-wtt-client-version` を付けないエージェントは版の判定を受けないので、契約の版が上がっても 426 にはならず、`expectDigest` を付けずに呼べます(付けている場合は下の「API の版と 426」)。
 
 手順(管理画面): 左メニューの下の「設定」→「API キー」(`/w/me/api-keys`)の「新しい API キーを発行」で、名前と**範囲**と**権限**と**有効期限**(期限なし / 1・7・30・90 日。API の `expiresInDays` は 1〜365 の整数で、省略すると期限なし。管理画面で選べるのは上の 5 つだけ)を選んで発行します。キーは発行の直後に 1 度だけ表示されます。**個人で運用するなら、自分の鍵の権限を「編集者」にするだけで「人間が公開する運用」になります**(専用ユーザーは要りません)。更新や確認のためだけに使う鍵は有効期限を 1 日にします。期限を過ぎた鍵は 401 になり、`hint` に「この API キーは有効期限を過ぎています。管理画面で発行し直してください」と出ます。エージェントを別のユーザーとして分けたい(誰の操作かをメンバーの一覧で見分けたい)ときは、招待リンクを発行 → エージェント用の Google アカウントのメールアドレスで受諾(受諾もログインも Google アカウントで行うので、招待するのは Google アカウントのあるメールアドレスにします)→ その利用者でログインして鍵を発行します。鍵の発行は人が行う操作で、エージェントが自分で作ることはできません。管理者以上は、左メニューの下の「設定」→「メンバーの API キー」(`/w/<ワークスペース ID>/api-keys`。ワークスペースかサイトの画面から開いたときに出る)で、そのワークスペースで使える鍵(そのワークスペースの鍵と、システム管理者の「すべてのワークスペース」の鍵)を持ち主付きで一覧し、失効させられます(鍵が漏れたときの止め方)。
 
@@ -155,18 +155,18 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/status" \
 
 目標(`goal`)の `PAGEVIEW` は 1 つのページの一致のままで、`config` は `{ "page": { "part": "path", "op": "equals", "value": "/thanks/" } }` です(行・除く・パラメータは使えません)。目標の古い形 `{ "urlOp", "urlValue" }` は受け付けず 422 です。
 
-**ページの条件を対象 URL に移す**(配信条件・オーディエンスからページの条件を外した版で変わった点):
+**ページの条件を対象 URL に移す**(v1.0 で変わった点。v0.11 以前から更新した導入向け):
 
-- 配信条件(`targeting`)とオーディエンスの定義(`definition`)で、ページの URL・ホスト・パス・パラメータの条件(`ctx` が `url` / `host` / `path` / `query`)は使えなくなりました。送ると 422 で、配信条件は `invalid_experiment_targeting`、オーディエンスは `invalid_audience_definition` です(`hint` に対象 URL での書き方)。閲覧したページ(`hist: "visited"` の `page`)・リファラー・目標の `PAGEVIEW` は今までどおりです
-- 更新の前に保存した古い条件は残っていて、エクスペリエンスとオーディエンスの取得・一覧・複製の応答の `targeting` / `definition` に出ることがあります(`/openapi.json` では「使えなくなった条件」と説明しています)。そのままでは、`targeting`(`definition`)を送る保存と、開始・再開が 422 です。開始・再開は、配信条件が参照する同じサイトのオーディエンスに古い条件が残っているときも 422 です。`targeting` を送らない `PATCH`(名前・メモ・配信率など)・一時停止・終了・削除・複製はできます。複製は古い条件ごと写すので、写した下書きも直します
-- 直し方: 古い条件の意味を対象 URL の行に書き、配信条件(オーディエンスの定義)からその条件を消して保存します。一時停止になっていれば、その後に再開します。**古い条件が、更新の前の対象 URL と「かつ」で組み合わさっていたときは、新しい行を足さずに同じ行に入れます**(パラメータの条件は行の `params` に、ホスト・パス・URL の条件は行の `and` に入れる)。別の行に足すと「または」になり、配信先が広がります
-- 更新のとき、古い条件を持っていた配信中のエクスペリエンス(直接、または参照するオーディエンスに持っていたもの)は、データベースの更新で一時停止になっています。変更履歴に `via: "system"` の `experiment.status` の行(`detail.reason` が `page_condition_moved`)が残ります。直して再開すると、その後の公開で、結果に「テスト中の変更」が 1 件記録されます(届く定義の書き方が変わるため。判定は止まりません)
+- 配信条件(`targeting`)とオーディエンスの定義(`definition`)で、ページの URL・ホスト・パス・パラメータの条件(`ctx` が `url` / `host` / `path` / `query`)は使えなくなりました。送ると 422 で、配信条件は `invalid_experiment_targeting`、オーディエンスは `invalid_audience_definition` です(`hint` に対象 URL での書き方)。閲覧したページ(`hist: "visited"` の `page`)・リファラー・目標の `PAGEVIEW` は変わりません
+- v1.0 への更新の前に保存した古い条件は残っていて、エクスペリエンスとオーディエンスの取得・一覧・複製の応答の `targeting` / `definition` に出ることがあります(`/openapi.json` では「使えなくなった条件」と説明しています)。そのままでは、`targeting`(`definition`)を送る保存と、開始・再開が 422 です。開始・再開は、配信条件が参照する同じサイトのオーディエンスに古い条件が残っているときも 422 です。`targeting` を送らない `PATCH`(名前・メモ・配信率など)・一時停止・終了・削除・複製はできます。複製は古い条件ごと写すので、写した下書きも直します
+- 直し方: 古い条件の意味を対象 URL の行に書き、配信条件(オーディエンスの定義)からその条件を消して保存します。一時停止になっていれば、その後に再開します。**古い条件が、v1.0 への更新の前の対象 URL と「かつ」で組み合わさっていたときは、新しい行を足さずに同じ行に入れます**(パラメータの条件は行の `params` に、ホスト・パス・URL の条件は行の `and` に入れる)。別の行に足すと「または」になり、配信先が広がります
+- v1.0 への更新のとき、古い条件を持っていた配信中のエクスペリエンス(直接、または参照するオーディエンスに持っていたもの)は、データベースの更新で一時停止になっています。変更履歴に `via: "system"` の `experiment.status` の行(`detail.reason` が `page_condition_moved`)が残ります。直して再開すると、その後の公開で、結果に「テスト中の変更」が 1 件記録されます(届く定義の書き方が変わるため。判定は止まりません)
 - 対象 URL では書けない形と、代わりの書き方:
   - ページの条件と訪問者の条件を `or` でまたぐ形(例: 「`/lp/` のページ、またはスマートフォンの訪問者」)→ エクスペリエンスを 2 つに分けます(片方は対象 URL を `/lp/` に、もう片方は対象 URL をサイト全体・配信条件を端末に)。両方に当たるページでは、重なったときの優先(下の「踏みやすい制約」)で表示が決まります
   - オーディエンスの中の `not` の下のページの条件(例: 「`/cart/` 以外のページで、料金ページを見た人」)→ ページの部分は、エクスペリエンスの対象 URL の除く行で書きます
   - ページの条件を持つオーディエンスを、いくつものエクスペリエンスで使い回す形 → ページの条件はエクスペリエンスごとに対象 URL に書き、オーディエンスには訪問者の条件だけを残します
 - 配信条件の確かめ(`POST /sites/{sid}/evaluate`)は `query` を受けなくなりました。対象 URL のパラメータは `url` から読みます
-- この変更で API 契約の版(`GET /capabilities` の `apiVersion`)は 6 になりました(行の `and` も同じリリースで足しました)。版 5 より前の手順や保存済みの要求の本文は、`/openapi.json` を読み直して新しい形に直してください
+- この変更は API 契約の版(`GET /capabilities` の `apiVersion`)6 で入りました(行の `and` も同じ版です。v1.0 の版は 7)。版 5 以前を前提にした手順や保存済みの要求の本文は、`/openapi.json` を読み直して新しい形に直してください
 
 変更の型(`type`)は `TEXT` / `IMAGE` / `HIDE` / `ATTRIBUTE` / `HTML` / `CSS` / `CUSTOM_JS` の 7 種で、正確な形は `/openapi.json` にあります。
 
@@ -207,7 +207,7 @@ curl -sS -X DELETE "$AB_CONTROL_URL/sites/$SID/assets/<画像の id>" -H "Author
 
 - **名前**は管理用で、公開 URL には入りません(URL に入るのはサイトの ID とランダムな画像の ID だけ)。100 字まで。サイトの中で重なると、アップロードでは `hero_q1 (2).png` のように番号を付け、応答の `renamedFrom` に元の名前が入ります。アップロードでも、同じ名前の画像が同時に上がり続けたときと、同じ名前(番号違いを含む)の画像が多すぎて番号を付けられないときは 409 `asset_name_taken` で、画像は置かれません(別の名前を `name` に付けて送り直してください)。名前の変更で重なると 409 `asset_name_taken` です(削除待ちの画像の名前も、消えるまで数えます)
 - アップロードに `experimentId` などほかの項目を付けると 422 です。サイトの上限(枚数・合計)を超えると 409 `asset_quota_exceeded`(`usage` を添えます。削除待ちの画像も消えるまで数えます)、1 枚の上限を超えると 413 `asset_too_large` です。アップロード・名前の変更・削除の応答の `usage` に、サイトの使用量が入ります
-- **IMAGE の `src` に書けるのは**、そのサイトの画像の一覧にある画像の公開 URL(アップロード・名前の変更の応答の `publicUrl`、一覧では `urlPrefix` + `path`)と、R2 なしの画像アップローダーで上げたそのサイトの画像の URL だけです。一覧に無い・削除待ちの画像の URL と、縮小版(`thumbnailUrl`)の URL は 422 `asset_not_found` で、その保存では何も書かれません
+- **IMAGE の `src` に書けるのは**、そのサイトの画像の一覧にある画像の公開 URL(アップロード・名前の変更の応答の `publicUrl`、一覧では `urlPrefix` + `path`)だけです。一覧に無い・削除待ちの画像の URL と、縮小版(`thumbnailUrl`)の URL は 422 `asset_not_found` で、その保存では何も書かれません
 - サイトの画像の URL を、文字参照(`&#…;`)・CSS のエスケープ(`\…`)・`%` の形で書いた変更は、種類を問わず 422 `asset_ref_encoded` です。HTML・CSS・ATTRIBUTE の変更に画像の URL を書くときも、そのままの形で書いてください
 - 一覧の `usedBy`(と `inUse`)は、下書きの IMAGE と ATTRIBUTE の `src` だけを見ます。HTML・CSS の変更の中だけで使っている画像は「使っていない」と出て削除待ちにできますが、24 時間の後の確かめで使われていると分かれば消えずに戻ります
 - **公開の確かめ**: 公開する内容(HTML・CSS・属性の値を含む)に、削除した画像・削除の途中の画像・同じ導入の別のサイトの画像の URL があると、公開は失敗します(`ok: false`、`error` が `asset_missing` か `asset_other_site`。`assetProblems` に URL・理由・`experimentId`・`variantId`・`changeId` が入ります)。公開の確認(`GET /sites/:sid/publish-preview`)の `assetProblems` で、公開の前に同じ一覧を見られます
@@ -321,7 +321,7 @@ curl -sS "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/results" -H "Author
 - 注記は `notes: [{ key, params }]` の形で、文言を持ちません。各鍵の意味は下の「注記の鍵」の表にあり、数値の読み方は表の「説明の項目」(`docs/experiment-results.md` の見出し)にあります(`helpKeys` は、その応答に関係する説明の項目の鍵)。人に報告するときは、品質の注記(`quality_blocked_*`・`collection_failures`・`collection_stops`・`apply_failures`)と `stopped_early`(評価時点前に終了)も必ず伝えてください
 - 速報は 5 分間同じ値を返します。読み取りが混み合っているか今日の読み取りの上限に達したときは、前に計算した速報に注記 `interim_stale` を付けて返します(繰り返し読み直さないでください)
 - 下書きは 409 `results_not_started`、パーソナライズは 404 `results_not_applicable` です
-- 記録に写した定義(`definition`)の `urlMatch` は、対象 URL が含める・除くの行の形になる前に作られた記録では、古い形(1 つのページの一致 `{ "part", "op", "value" }`)のままです。両方の形を読めるようにしてください
+- 記録に写した定義(`definition`)の `urlMatch` は、v1.0 より前に作られた記録では、古い形(1 つのページの一致 `{ "part", "op", "value" }`)のままです。両方の形を読めるようにしてください
 
 **注記の鍵**(`notes[].key`)。`params` の割合は 0〜1 の小数、時刻は epoch ミリ秒、時間は時間(h)です。「説明の項目」は `docs/experiment-results.md` の見出しです(`helpKeys` に入る鍵の項目)。
 
@@ -531,7 +531,7 @@ done
 | 画面の幅 | `{"ctx":"viewport","minWidth":768,"maxWidth":1200}` | px。`minWidth` 以上 `maxWidth` 未満。片方だけでもよい。ページを開いた時点の幅で判定し、viewport の meta が無い・タグが meta より前にあるページでは判定できず配信されません |
 | 曜日と時間帯 | `{"ctx":"time","days":["sat","sun"],"from":"09:00","to":"18:00"}` | サイトのタイムゾーンで判定。`from` / `to` は 1 時間刻み(`to` は `24:00` も可)で、両方か、どちらも付けない(終日)。`to` が `from` より前なら日をまたぐ(曜日は開始時刻の曜日で数える) |
 | 初回の訪問からの経過 | `{"ctx":"sinceFirstVisit","op":"gte","days":7}` | `op` は `gte`(以上)/ `lt`(未満)。`hours` か `days` のどちらか 1 つ |
-| 端末・リファラー | `{"ctx":"device","op":"in","value":["mobile"]}` / `{"ctx":"referrer","op":"contains","value":"google"}` | 従来どおり |
+| 端末・リファラー | `{"ctx":"device","op":"in","value":["mobile"]}` / `{"ctx":"referrer","op":"contains","value":"google"}` | `device` は `in`(`mobile` / `tablet` / `desktop`)。`referrer` は `equals` / `contains` / `isEmpty` |
 | 閲覧したページ | `{"hist":"visited","page":{"part":"path","op":"startsWith","value":"/pricing/"},"min":2,"withinDays":30}` | `min` と `withinDays` は省略できる。`page` の `part` は `url` / `path` / `host` |
 | 目標の達成 | `{"hist":"converted","goal":"g_lead","withinDays":30}` | `withinDays` は省略できる |
 | オーディエンス | `{"audience":"aud_pricing"}` | サイトのオーディエンスを参照する(エクスペリエンスの `targeting` だけ。オーディエンスの中では使えない) |

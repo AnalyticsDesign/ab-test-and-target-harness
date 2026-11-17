@@ -43,13 +43,13 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 | ルート | Role | 内容 |
 |---|---|---|
 | `POST /setup` | — | 初回セットアップ。システム管理者(最初のオーナー)と最初のワークスペースを作る(`x-setup-token`。user が 1 件でもあれば拒否)。パスワードは受け取らず、セッションも返さない |
-| `GET /auth/google/start` | — | Google ログインの入口。管理画面が開く top-level 遷移で、Google の認可画面へ 302。flow が無い・形が違うときは control の失敗画面で止まる |
-| `GET /auth/callback/google` | — | Google からの戻り。成功なら使い捨てコードを付けて管理画面へ 302(control のオリジンにセッション Cookie を残さない)。失敗は control の上の画面で終え、管理画面の URL を返さない |
+| `GET /auth/google/start` | — | Google ログインの入口。管理画面が開く top-level 遷移で、Google の認可画面へ 302。クエリ `flow` が無い・形が違うときは、control が出す「ログインできませんでした」の画面(400)で止まる |
+| `GET /auth/callback/google` | — | Google からの戻り。成功なら使い捨てコードを付けて管理画面へ 302(control のオリジンにセッション Cookie を残さない)。失敗は control が出す「ログインできませんでした」の画面で終え、管理画面の URL を返さない |
 | `POST /auth/handoff/exchange` | — | 使い捨てコードをセッショントークンに引き換える(管理画面のサーバー側が呼ぶ。1 分・1 回限り) |
 | `GET /login-options` | — | この導入で使えるログイン方法 `{ google, passwordLogin }`(ログイン画面は認証前なので `/capabilities` を読めない) |
 | `POST /break-glass/reset-link` | — | 非常時に OWNER のパスワード再設定リンクを発行(非常用トークン + OWNER のメール。条件を満たさない要求はすべて 404) |
 | `POST /auth/sign-in/email` ほか | — | Better Auth のパススルー(`sign-in/email` `sign-out` `sign-up/email` `get-session` `request-password-reset` `reset-password` のみ公開)。**このうちパスワードを使う 4 経路は非常用トークンがあるときだけ開き、普段は 404** |
-| `GET /capabilities` | 認証のみ | この導入で使える機能 `{ imageUpload, edgeOrigin, tagOrigin, edgeOnWorkersDev, passwordLogin, resultsStore, writeFreeze }`(R2 と公開ベースの有無、edge の公開 origin、設置タグを配る origin、パスワードログインが開いているか、計測用 D1(`RESULTS_DB`)の binding があるか、書き込みの凍結の状態) |
+| `GET /capabilities` | 認証のみ | 製品の版名とこの導入で使える機能 `{ productVersion, imageUpload, edgeOrigin, tagOrigin, edgeOnWorkersDev, passwordLogin, resultsStore, imageThumbnails, writeFreeze, apiVersion, minClientVersion }`(製品の版名(Release と同じ版名。公開版でない build では `dev`)、R2 と公開ベースの有無、edge の公開 origin、設置タグを配る origin、パスワードログインが開いているか、計測用 D1(`RESULTS_DB`)の binding があるか、画像の縮小版を作れるか(Images の binding の有無)、書き込みの凍結の状態、API 契約の版、受け付ける最低のクライアントの版) |
 | `GET /me` | 認証のみ | 現在のセッション(または API キー)の持ち主 |
 | `GET /me/api-keys` | 認証のみ | 自分の API キー一覧(平文は含まない) |
 | `POST /me/api-keys` | 認証のみ | API キーを発行(平文はこの応答限り)。範囲 `workspaceId` は必須(`null` = フルはシステム管理者のみ)。非常用のパスワードログインのセッションからは 403 `password_session` |
