@@ -104,7 +104,9 @@ describe("capabilities", () => {
   it("library_disabled_hint_with_uploader", () => {
     expect(LIBRARY_DISABLED_HINT.withUploader).toBe("この導入では、画像は左メニューの「画像」からアップロードします(API は /sites/<siteId>/uploads)");
     expect(libraryDisabledHint(true)).toBe(LIBRARY_DISABLED_HINT.withUploader);
-    expect(IMAGE_DISABLED_HINT).not.toBe(LIBRARY_NO_UPLOADER); // IMAGE の 422 は別の文
+    // B285: IMAGE の 422 もアップローダーを案内せず、ライブラリの口のアップローダーなしの文と同じ
+    expect(IMAGE_DISABLED_HINT).toBe(LIBRARY_NO_UPLOADER);
+    expect(IMAGE_DISABLED_HINT).not.toContain("AB_UPLOADER_PUBLIC_BASE");
   });
 });
 

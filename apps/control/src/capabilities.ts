@@ -52,10 +52,11 @@ export function uploaderPublicBase(env: Env): string | null {
 
 /**
  * IMAGE の 422 image_upload_disabled(R2 もアップローダーも無い導入)の hint。代替は ATTRIBUTE の src。
- * 文の正はアップローダーの spec §10(B68 spec §4.5 の 2)。文言は公開物なので設計記録への参照を書かない
+ * B285(v1.0): アップローダーは公開文書に説明が無いので、案内は R2 だけにする(ライブラリの口のアップローダーなしの文と同じ)。
+ * アップローダーの作業が公開されるときに、案内の文を決め直す。文言は公開物なので設計記録への参照を書かない
  */
 export const IMAGE_DISABLED_HINT =
-  "画像の差し替えは ATTRIBUTE の src で行えます。有効にするには R2 バケットの binding と公開ベース URL(AB_ASSET_PUBLIC_BASE)を設定するか、画像のアップローダーの公開ベース URL(AB_UPLOADER_PUBLIC_BASE)を設定して再デプロイします";
+  "画像の差し替えは ATTRIBUTE の src で行えます。有効にするには R2 バケットの binding と公開ベース URL(AB_ASSET_PUBLIC_BASE)を設定して再デプロイします";
 
 /**
  * B68 spec §8: ライブラリの口(POST /sites/:sid/assets・PATCH・DELETE …/assets/:aid)の 409 image_upload_disabled の hint。

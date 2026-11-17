@@ -562,12 +562,12 @@ describe("image changes point at existing site assets (B68)", () => {
     expect((await putWith(s, [html(`<img src="${url.replaceAll("/", "&#47;")}">`)], NO_R2)).status).toBe(200);
   });
 
-  it("image_disabled_hint_is_uploader_spec_text", async () => {
+  it("image_disabled_hint_guides_r2_only", async () => {
     const s = await editorSetup();
     const res = await putWith(s, [img("https://cdn.example.com/x.png")], NO_R2);
     expect(await expectEnvelope(res)).toMatchObject({
       error: "image_upload_disabled",
-      hint: "画像の差し替えは ATTRIBUTE の src で行えます。有効にするには R2 バケットの binding と公開ベース URL(AB_ASSET_PUBLIC_BASE)を設定するか、画像のアップローダーの公開ベース URL(AB_UPLOADER_PUBLIC_BASE)を設定して再デプロイします",
+      hint: "画像の差し替えは ATTRIBUTE の src で行えます。有効にするには R2 バケットの binding と公開ベース URL(AB_ASSET_PUBLIC_BASE)を設定して再デプロイします",
     });
   });
 
