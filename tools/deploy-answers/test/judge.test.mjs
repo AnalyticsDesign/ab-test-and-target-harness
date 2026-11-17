@@ -349,6 +349,9 @@ test("Free の構成の「注意」に CPU 時間の注意が出て、Paid で�
   assert.equal(free.plan, "free");
   const n = notesOf(base, free);
   assert.ok(n.some((x) => x.startsWith(FREE_CPU_NOTE) && /デプロイガイド 2\.8/.test(x)));
+  // Q706: ドメインなしの構成は Free が前提なので、評価のための導入に向くことと、Route の構成への移り方を添える
+  assert.ok(n.some((x) => x.startsWith(FREE_CPU_NOTE) && /ドメインなしの構成は Free が前提なので、評価のための導入に向く/.test(x) && /Route の構成にしてから Workers Paid にする/.test(x)));
+  assert.ok(!notesOf({ ...base, ...zone }, recommend({ ...base, ...zone })).some((x) => /ドメインなしの構成は/.test(x)));
   const zoned = { ...base, ...zone };
   const zf = recommend(zoned);
   assert.equal(zf.plan, "free");

@@ -281,7 +281,7 @@ export function notesOf(values, c) {
   if (c.edge_address === "workers-dev" && c.plan === "paid")
     n.push(`このアカウントは Workers Paid。${FLOOD_PAID}。この製品用に Free のアカウントを別に作り、そこに入れることを勧める`);
   if (c.plan === "free")
-    n.push(c.edge_address === "workers-dev" ? `${FREE_CPU_NOTE}(ドメインなしの構成では、先にドメインを Cloudflare に追加する。デプロイガイド 2.8)` : FREE_CPU_NOTE);
+    n.push(c.edge_address === "workers-dev" ? `${FREE_CPU_NOTE}。ドメインなしの構成は Free が前提なので、評価のための導入に向く。安定して使うときは、ドメインを Cloudflare に追加して Route の構成にしてから Workers Paid にする(デプロイガイド 2.8)` : FREE_CPU_NOTE);
   // 履歴を選んでいれば、上限の話は構成の理由に既に出ているので、重ねて言わない
   if (!f.has("history")) n.push(`導入の後に管理画面で履歴の条件や割り当ての固定を使い始めると、Free の上限が${FREE_LIMITS.history.label}(予算確認などの分だけ下がる)になる`);
   return n;
