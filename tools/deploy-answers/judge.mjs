@@ -7,7 +7,7 @@ import { featuresOf, hostProblem, hostInZone, approxZoneOf, extraHostsOf, tokenM
  * A/B テストだけなら、割り当てとゴールの計測はブラウザの中で完結し、上限に効かない
  */
 export const FREE_LIMITS = {
-  history: { label: "約 5 万 PV/日", paidAt: ["30k_70k", "over_70k"], what: "訪問者ごとの履歴の保存" },
+  history: { label: "約 4.7 万 PV/日", paidAt: ["30k_70k", "over_70k"], what: "訪問者ごとの履歴の保存" },
   itp: { label: "約 10 万 PV/日", paidAt: ["over_70k"], what: "表示のたびの Cloudflare への問い合わせ(Mode B)" },
 };
 
@@ -162,7 +162,7 @@ export function reasonsOf(values, c) {
   else r.push(`多い日の PV が Free の上限(${limit.label})に収まる見込みなので Free で足りる`);
   r.push(
     c.asset_public_base === "none"
-      ? "画像は URL で指定するので、画像の置き場(R2)を使わない(支払い方法の登録が要らない)"
+      ? "画像は、サイトなどに置いた画像の URL を ATTRIBUTE の src に書いて差し替えるので、画像の置き場(R2)を使わない(支払い方法の登録が要らない)"
       : c.asset_public_base === "dev-assets"
         ? "画像をアップロードするので R2 を使う。ドメインが無いので、管理用の Worker 経由で配る(R2 から直接配るより遅く、Workers の無料枠を使う)"
         : "画像をアップロードするので R2 を使い、wtt-assets.<ゾーン名> のアドレスで配る",
@@ -278,6 +278,6 @@ export function notesOf(values, c) {
   if (c.edge_address === "workers-dev" && c.plan === "paid")
     n.push(`このアカウントは Workers Paid。${FLOOD_PAID}。この製品用に Free のアカウントを別に作り、そこに入れることを勧める`);
   // 履歴を選んでいれば、上限の話は構成の理由に既に出ているので、重ねて言わない
-  if (!f.has("history")) n.push("導入の後に管理画面で履歴の条件や割り当ての固定を使い始めると、Free の上限が約 5 万 PV/日になる");
+  if (!f.has("history")) n.push(`導入の後に管理画面で履歴の条件や割り当ての固定を使い始めると、Free の上限が${FREE_LIMITS.history.label}(予算確認などの分だけ下がる)になる`);
   return n;
 }

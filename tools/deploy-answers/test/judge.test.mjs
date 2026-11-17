@@ -24,7 +24,7 @@ test("history × 3〜7 万 × ドメインあり → route × Paid、zone_name �
   const v = { ...base, ...zone, features: ["ab", "history"], daily_pv: "30k_70k" };
   const r = recommend(v);
   assert.deepEqual(r, { edge_address: "route", zone_name: "auto", asset_public_base: "none", dlite_hosts: [], plan: "paid" });
-  assert.ok(has(reasonsOf(v, r), /約 5 万 PV\/日/));
+  assert.ok(has(reasonsOf(v, r), /約 4\.7 万 PV\/日/));
   assert.ok(has(tasksOf(v, r), /Workers Paid に切り替える/));
   assert.ok(has(tasksOf(v, r), /ゾーンの設定用\(期限 = 翌日\)/));
   assert.ok(has(tasksOf(v, r), /デプロイ用・使用状況用\(どちらも期限なし\)/));
