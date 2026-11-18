@@ -6,6 +6,7 @@
 
 操作の記録と変更履歴、サイトの画像の一覧、公開する内容の確認、タグを置くドメインの一覧を足し、ページの条件を対象 URL にまとめ、守りの直しを入れた。**更新には、後方互換でないマイグレーション・runtime の変更・control の設定ファイルの追加があり、デプロイの順を守る必要がある**(末尾の「更新時の作業(この版全体)」)。
 
+- **公開ガイドの読み方**: 文書の索引を導入・運用・分析の目的別に整理し、各ガイドの前提と参照先を見つけやすくした。
 - **セキュリティの修正**: 次の穴を直した。突き方は書かない。
   - **High**: ログインに使う部品 Better Auth を 1.7.15 に上げた(部品の側の GHSA-g38m-r43w-p2q7)。非常用のパスワードログインを開けている間に、まだ使われていない招待リンクを手に入れた人が、そのメールアドレスの本人が後で Google でログインしたときに、同じアカウントに入れてしまう問題を直した。影響する版 = v0.9〜v0.11(公開したすべての版)。更新しない場合の緩和策 = 非常用のパスワードログイン(`AB_BREAK_GLASS_TOKEN`)を開けない。開ける場合は、開ける前に使われていない招待を取り消し、閉じた後に出し直す。閉じた後は、パスワードで作られ、まだ Google でログインしていない人を、読むだけの SQL `pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select u.email from \"user\" u where u.\"emailVerified\" = 0 and not exists (select 1 from account a where a.\"userId\" = u.id and a.\"providerId\" != 'credential')"` で確かめる(更新の前の版でも使える。メールアドレスをエージェントの会話や端末の出力に残してよいかは人が決める)。本人のものと確かめられない人は、本人が Google でログインする前に、その人の API キーを失効させてからメンバーから外す。同じ部品の、ほかの公表済みの穴 11 件も、この版で直った(この版の時点で、`pnpm --prod audit` に Better Auth の件は出ない)。動きの変化は下の「非常口で作った人は Google に自動で結びつかない」。
   - **Moderate**: control・edge が使う Hono を 4.13.16 に更新した。control では、正当な追加パラメータ付きの画像アップロードが拒否される問題を修正した。影響する版 = v0.9〜v0.11。更新しない場合は、アップロードの `Content-Type` に `boundary` 以外のパラメータを付けない。edge では、Mode B の未登録のパスへの要求でも送信元と本文形式の検査が適用されるようにした。影響する版 = v0.11。この挙動に対する更新なしの緩和策は無し。[画像アップロードの Advisory](https://github.com/honojs/hono/security/advisories/GHSA-4h7h-rv7c-7m2v)・[ルーティングの Advisory](https://github.com/honojs/hono/security/advisories/GHSA-h7mg-cq63-vhpq)。

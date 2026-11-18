@@ -2,13 +2,15 @@
 
 [![CI](https://github.com/AnalyticsDesign/ab-test-and-target-harness/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AnalyticsDesign/ab-test-and-target-harness/actions/workflows/ci.yml)
 
-自分の Cloudflare アカウントにデプロイして使う、OSS の Web A/B テスト / パーソナライズツール。役割は 3 つに分かれている。
+自分の Cloudflare アカウントにデプロイして使う、OSS の Web A/B テスト / パーソナライズツール。
 
-- 管理: エクスペリエンスの作成と運用は、管理画面(Cloudflare Workers)で行う
-- 配信: 設置タグを配る配信専用の Worker と、判定を返す edge Worker が担う
-- 計測: テストの結果(露出・目標の達成)は `dataLayer` から GA4 に送り、GA4 / BigQuery で読む。サイト設定で「結果を記録する」を有効にすると、本製品も参加と目標の達成を記録し、管理画面で判定を読める
+| 役割 | どこで何をするか |
+|---|---|
+| 管理 | 管理画面(Cloudflare Workers)でエクスペリエンスを作成し、運用する。 |
+| 配信 | 配信専用の Worker が設置タグを配り、edge Worker が判定を返す。 |
+| 計測 | 露出と目標の達成を `dataLayer` から GA4 に送り、GA4 / BigQuery で結果を読む。サイト設定で「結果を記録する」を有効にすると、本製品も参加と目標の達成を記録し、管理画面で判定を確認できる。 |
 
-状態: v0.11(先行公開版)。v1.0 で追加する予定の機能は[まだできないこと](#まだできないこと)にある。v0.9 / v0.9.1 / v0.10 / v0.10.1 / v0.11 から v1.0 へは更新で上げられる。使ってみた感想や不具合は Issue / Discussions へ。変更履歴は [CHANGELOG.md](CHANGELOG.md)
+**現在の公開版は v0.11(先行公開版)。** v0.9 / v0.9.1 / v0.10 / v0.10.1 / v0.11 から v1.0 へは更新できる。v1.0 で追加予定の機能は[まだできないこと](#まだできないこと)、各版の変更は[変更履歴](CHANGELOG.md)を参照。使ってみた感想や不具合は Issue / Discussions へ。
 
 > **Adobe 社および同社の旧製品 Test&Target とは無関係**である。名称の "Test and Target" は一般名詞としての用法で、Adobe との提携・後継・互換関係は一切ない。
 
