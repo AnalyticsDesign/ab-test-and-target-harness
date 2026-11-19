@@ -6,7 +6,7 @@ AB Test and Target Harness の手順書。製品の機能と制約、構成図�
 
 ### 導入する
 
-1. **構成を選ぶ。** AI エージェントに任せる場合は、[導入の質問](install-questions.md)に沿って、やりたいことと今の環境を伝える。手で進める場合や判断の根拠を知りたい場合は、[導入構成の選び方](install-patterns.md)を読む。ドメインに応じた edge の置き方 3 種類、Free と Workers Paid の上限と目安、control の守り、付加機能の要件、入力ファイルの対応を確認できる。入力にはリポジトリ直下の[雛形](../deploy-answers.example.yaml)を使う。
+1. **構成を選ぶ。** AI エージェントに任せる場合は、[製品 README の依頼文](../README.md#ai-エージェントに任せる推奨)をエージェントに渡す。エージェントが[導入の質問](install-questions.md)に沿って、やりたいことと今の環境を聞く。手で進める場合や判断の根拠を知りたい場合は、[導入構成の選び方](install-patterns.md)を読む。ドメインに応じた edge の置き方 3 種類、Free と Workers Paid の上限と目安、control の守り、付加機能の要件、入力ファイルの対応を確認できる。入力は、リポジトリ直下の[雛形](../deploy-answers.example.yaml)を `deploy-answers.yaml` に写して書く。
 2. **Cloudflare にデプロイする。** [デプロイガイド](deploy.md)に沿って、自分のアカウントに edge / control / admin を配置する。KV / D1 / R2 / DO / secrets と Cache Rule の設定から初回セットアップまでを扱う。導入後の更新順序、無認証入口の防御、非常時の入り方、稼働の確認、バックアップ・復旧・撤去もこのガイドにある。
 3. **サイトにタグを設置する。** [サイト導入ガイド](site-install.md)の最短手順チェックリストから始める。第 1 部はサイト作成、タグ設置、GA4 と GTM の接続(GTM インポート用 JSON あり)、設置後の確認とトラブル対処。第 2 部は consent、Mode C と Mode B、履歴条件、コードの変更と CSP。第 3 部でサイト設定項目、dataLayer の契約、ブラウザの制約、外部送信規律を参照できる。
 
