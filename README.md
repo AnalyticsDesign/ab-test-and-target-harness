@@ -10,7 +10,7 @@
 | 配信 | あなたのサイトに設置タグ(`<script>` 1 行)を置く。配信専用の Worker がこのタグを配り、edge Worker が、訪問者にどのパターンを見せるかを判定して返す。 |
 | 計測 | パターンを見せたこと(露出)と目標の達成を `dataLayer` に push し、GTM 経由で GA4 に送る。結果は GA4 / BigQuery で読む。サイト設定で「結果を記録する」を有効にすると、本製品も参加と目標の達成を記録し、管理画面で判定を確認できる。 |
 
-**現在の公開版は v0.11(先行公開版)。** すでに導入している場合は、[エージェントに任せる更新](#更新する)、または[デプロイガイドの更新の手順](docs/deploy.md#6-更新リリースタグ単位)で上げられる。今後の予定は[今後の予定と範囲外](#今後の予定と範囲外)の節、各版の変更は[変更履歴](CHANGELOG.md)を参照。使ってみた感想や不具合は Issue / Discussions へ。
+**現在の公開版は v1.0(2026-11-20 公開)。** すでに導入している場合は、[エージェントに任せる更新](#更新する)、または[デプロイガイドの更新の手順](docs/deploy.md#6-更新リリースタグ単位)で上げられる。今後の予定は[今後の予定と範囲外](#今後の予定と範囲外)の節、各版の変更は[変更履歴](CHANGELOG.md)を参照。使ってみた感想や不具合は Issue / Discussions へ。
 
 > **Adobe 社および同社の旧製品 Test&Target とは無関係**である。名称の "Test and Target" は一般名詞としての用法で、Adobe との提携・後継・互換関係は一切ない。
 
@@ -90,7 +90,7 @@ flowchart LR
   - R2(画像の置き場): 任意。使わなければ支払い方法の登録も不要
   - 構成の選び方は[導入構成の選び方](docs/install-patterns.md)を参照
 - **GA4 プロパティと GTM コンテナ**: テストの結果を GA4 / BigQuery で読むときに要る(`dataLayer` から GTM 経由で GA4 に送る)。管理画面の結果のタブ(「結果を記録する」を有効にしたサイト)だけで読むなら、無くても判定は出る。本製品が保存するものは[法務](#法務)に書いてある
-- **Node 24.18.0 以上の 24 系、または 26.9.0 以上の 26 系と pnpm 10 系**: Node の対応範囲は `engines.node`、pnpm の版は `packageManager` で指定。wrangler は `pnpm install` で入る
+- **Node 24.22.3 以上の 24 系、または 26.13.1 以上の 26 系と pnpm 10 系**: Node の対応範囲は `engines.node`、pnpm の版は `packageManager` で指定。wrangler は `pnpm install` で入る
 
 費用の目安は次のとおり(2026-11-16 確認、USD、ドメイン代・税別)。結果の記録と画像配信を使わず、目標の送信は 0.05 回/PV、新規 Profile は 0.1 件/PV、ピーク日は平均の 2 倍とした試算。無料枠内は Free、超える構成は Paid とし、管理操作・定期実行も見込む。料金と計算の前提は[導入構成の選び方 3 節](docs/install-patterns.md#3-料金プラン問い-2)にある。
 
@@ -152,7 +152,7 @@ Claude Code / Codex などのコーディングエージェントに、下のプ
 
 ```text
 AB Test and Target Harness を私の Cloudflare アカウントに導入してください。
-1. この PC に足りないツール(Git / Node 24.18.0 以上の 24 系、または 26.9.0 以上の 26 系 / pnpm / jq。Windows では Git for Windows(Git Bash・OpenSSL を含む)も)を確かめ、入れるもの(名前と入手元)の一覧を 1 回だけ示して了承を取ってから入れる。pnpm は単体で入れず、Node に付く Corepack で使う(clone の後、リポジトリが固定した版が使われる。docs/deploy.md 0.4)
+1. この PC に足りないツール(Git / Node 24.22.3 以上の 24 系、または 26.13.1 以上の 26 系 / Corepack / jq。Windows では Git for Windows(Git Bash・OpenSSL を含む)も)を確かめ、入れるもの(名前と入手元)の一覧を 1 回だけ示して了承を取ってから入れる。pnpm は Corepack で使う(Node 26 系などで Corepack が無ければ `npm install -g corepack` で入れる)。clone 後にリポジトリ直下で `corepack enable` を実行すると、リポジトリが固定した pnpm が使われる(docs/deploy.md 0.4)
 2. https://github.com/AnalyticsDesign/ab-test-and-target-harness を短いパスに clone し(Windows では例 C:\wtth。長いパスでは Filename too long で失敗する。docs/deploy.md 0.4)、最新のリリースタグ(git tag の v* を版の順に並べた先頭。GitHub Releases の API は使わない)を checkout する
 3. docs/install-questions.md を読み、その質問の表と進め方の規則どおりに私に聞く。答えは deploy-answers.example.yaml を写した deploy-answers.yaml に書く(既に deploy-answers.yaml があれば、答えの書かれた質問は飛ばす)
 4. node tools/deploy-answers/cli.mjs を実行し、出力を要約せずにそのまま私に見せて、推奨構成と最軽量構成のどちらにするかを聞く。選んだら --accept recommended か --accept lightest を付けて実行する。出力の先頭に『確認: アカウントが変わる』が出て、選んだ構成がそれに当たるときは、その節をそのまま見せ、構成の選択とは別にアカウントの変更への同意を聞く。同意したときだけ --confirm-account-change を付ける(終了コードごとの扱いは docs/deploy.md 0.2)
@@ -212,7 +212,7 @@ AB Test and Target Harness を更新してください。導入時の clone は 
 ## 開発
 
 ```bash
-pnpm install       # 依存の導入(Node 24.18.0 以上の 24 系、または 26.9.0 以上の 26 系)
+pnpm install       # 依存の導入(Node 24.22.3 以上の 24 系、または 26.13.1 以上の 26 系)
 pnpm test          # 単体テスト(全パッケージ)
 pnpm e2e           # E2E(sample-site + wrangler dev + Playwright)
 pnpm e2e:admin     # 管理画面の E2E
