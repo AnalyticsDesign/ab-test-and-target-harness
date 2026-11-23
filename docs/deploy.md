@@ -2394,7 +2394,7 @@ CHANGELOG に目印があるリリースは、6.3 の太字の項の見出しに
 
    最新の upload と稼働版が異なる場合や、複数版にトラフィックを分けている場合は、`wrangler deployments list --name <Worker 名>` と `wrangler versions view <version ID> --name <Worker 名>` で稼働版の設定を照合する。引き継ぐ値を確定できない場合は止まる。[Workers API](https://developers.cloudflare.com/api/resources/workers/) · [Wrangler の Workers コマンド](https://developers.cloudflare.com/workers/wrangler/commands/workers/)
 
-4. **目標 tag の雛形に稼働環境の値を入れる**。6.2 の stash ブロックは使わず、目標 tag を checkout して `pnpm install` を実行する。現在 tag の雛形は `git show <稼働 tag>:apps/<app>/wrangler.jsonc` で参照できる。確認した Worker 名、Route、vars、既存 bindings の ID と宛先、独自の設定を目標 tag の 4 ファイルに反映する。互換フラグ・移行の定義・新しい binding は目標 tag の文書と雛形に従う。たとえば v0.11 より前の admin で service binding が無ければ、目標 tag の `CONTROL` の宛先だけを既存の control に合わせ、`ControlBff` の entrypoint を使う。計測 D1 を初めて足す更新では 6.3 の該当手順を使う。配信専用 Worker は既存のまま使う。
+4. **目標 tag の雛形に稼働環境の値を入れる**。6.2 の stash ブロックは使わず、目標 tag を checkout し、6.2 の `node -p` の行と 2 つ目のブロック(`corepack enable`・`pnpm -v`・`pnpm install`)を流す。現在 tag の雛形は `git show <稼働 tag>:apps/<app>/wrangler.jsonc` で参照できる。確認した Worker 名、Route、vars、既存 bindings の ID と宛先、独自の設定を目標 tag の 4 ファイルに反映する。互換フラグ・移行の定義・新しい binding は目標 tag の文書と雛形に従う。たとえば v0.11 より前の admin で service binding が無ければ、目標 tag の `CONTROL` の宛先だけを既存の control に合わせ、`ControlBff` の entrypoint を使う。計測 D1 を初めて足す更新では 6.3 の該当手順を使う。配信専用 Worker は既存のまま使う。
 5. **復元した値を確かめる**。4 つの Worker(と `wtt-static`)の名前、公開 URL と全 Route、共有 KV、D1・R2、サービス間の接続、Cron、secret 名を稼働環境と照合する。管理画面は 4.3 のビルド後の設定も確認する。元に戻す際に必要な設定と現在 tag は、更新前に `deploy-backups/` に控える。6.2 の「更新前の設定確認」と Worker 名の確認から共通の手順に戻る。
 
 主 D1 を 10.3 の手順で読み戻したことがあるときは、稼働中の `DB` binding の ID と `d1 list --json` で、実際のデータベース名を確認する。6 節で `wtt-control` を指定する export・凍結・解除・SQL はその名前を使う。`pnpm -C apps/control d1:migrate:remote` の代わりに `pnpm -C apps/control exec wrangler d1 migrations apply <実際の DB 名> --remote` を使う。この読み替えは既存の clone での更新にも適用する。
@@ -2421,7 +2421,7 @@ git describe --tags --exact-match          # 期待: 目標 tag
 node -p "process.version + '  必要: ' + require('./package.json').engines.node"   # 期待: 左の版が右の範囲に入る
 ```
 
-左の版が右の範囲の外なら、Node を上げ、0.4 の Corepack の手順(`corepack --version`・`corepack enable`)をやり直してから次のブロックに進む。範囲の外のまま進めない(pnpm は Node の版が範囲の外でも警告を出すだけで、止まらない)。版によって下限が上がる。
+左の版が右の範囲(`^24.22.3` は 24.22.3 以上の 24 系)の外なら、Node を上げて `corepack --version` を確かめ(`command not found` なら `npm install -g corepack`。Node 26 系には同梱されない)、次のブロックに進む。範囲の外のまま進めない(pnpm は Node の版が範囲の外でも警告を出すだけで、止まらない)。下限は目標 tag ごとに違うので、目標 tag の `package.json` で見る。
 
 ```bash
 corepack enable                                      # pnpm を Corepack で使う
