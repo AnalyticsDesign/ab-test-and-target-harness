@@ -55,7 +55,24 @@ describe("workspaces / invitations / members", () => {
     const mine = await json<Array<{ id: string; role: string }>>(await call("GET", "/workspaces", { token }));
     expect(mine).toEqual([{ id: owner.workspaceId, name: "Workspace A", role: "editor" }]);
     // 使用済みの招待は再利用できない
-    expect((await call("POST", `/invitations/${id}/accept`, { body: { name: "Ed", password: "password123" }, envOverride: BREAK_GLASS })).status).toBe(410);
+    const reused = await call("POST", `/invitations/${id}/accept`, { body: { name: "Ed", password: "password123" }, envOverride: BREAK_GLASS });
+    expect(reused.status).toBe(410);
+    expect(await expectEnvelope(reused)).toMatchObject({
+      error: "invitation_used",
+      status: "accepted",
+      message: "この招待はもう使えません。管理者に招待を出し直してもらってください",
+    });
+  });
+  it("tells the invitee to request a new invitation after expiry", async () => {
+    const owner = await setupOwner();
+    const { id } = await json<InvitationResult>(await invite(owner.token, owner.workspaceId, uniqueEmail("expired"), "viewer"));
+    await setExpiry(id, Date.now() - 60_000);
+    const response = await call("POST", `/invitations/${id}/accept`);
+    expect(response.status).toBe(410);
+    expect(await expectEnvelope(response)).toMatchObject({
+      error: "invitation_expired",
+      message: "この招待は期限切れです。管理者に招待を出し直してもらってください",
+    });
   });
   it("an existing user accepts with a bearer session and the email must match", async () => {
     const owner = await setupOwner();
@@ -481,7 +498,11 @@ describe("workspaces / invitations / members", () => {
     // 取り消した招待は受諾できず、受諾画面は pending でない状態として読む
     const acc = await call("POST", `/invitations/${inv.id}/accept`, { body: { name: "X", password: "password123" }, envOverride: BREAK_GLASS });
     expect(acc.status).toBe(410);
-    expect((await expectEnvelope(acc)).error).toBe("invitation_used");
+    expect(await expectEnvelope(acc)).toMatchObject({
+      error: "invitation_used",
+      status: "canceled",
+      message: "この招待はもう使えません。管理者に招待を出し直してもらってください",
+    });
     expect((await json<{ status: string }>(await call("GET", `/invitations/${inv.id}`))).status).toBe("canceled");
     // 取り消した後で初めて Google ログインしても user 行はできない
     const late = await googleSignIn(email);
