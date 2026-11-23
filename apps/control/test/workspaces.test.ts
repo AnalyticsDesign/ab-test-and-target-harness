@@ -60,7 +60,7 @@ describe("workspaces / invitations / members", () => {
     expect(await expectEnvelope(reused)).toMatchObject({
       error: "invitation_used",
       status: "accepted",
-      message: "この招待はもう使えません。管理者に招待を出し直してもらってください",
+      message: "この招待はもう使えません。参加済みならそのままログインしてください。参加できていないときは、管理者に招待を出し直してもらってください",
     });
   });
   it("tells the invitee to request a new invitation after expiry", async () => {
@@ -501,7 +501,7 @@ describe("workspaces / invitations / members", () => {
     expect(await expectEnvelope(acc)).toMatchObject({
       error: "invitation_used",
       status: "canceled",
-      message: "この招待はもう使えません。管理者に招待を出し直してもらってください",
+      message: "この招待はもう使えません。参加済みならそのままログインしてください。参加できていないときは、管理者に招待を出し直してもらってください",
     });
     expect((await json<{ status: string }>(await call("GET", `/invitations/${inv.id}`))).status).toBe("canceled");
     // 取り消した後で初めて Google ログインしても user 行はできない
