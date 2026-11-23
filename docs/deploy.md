@@ -9,7 +9,7 @@ AB Test and Target Harness を運用者自身の Cloudflare アカウントへ�
 **料金プランは利用目的に合わせて選ぶ。**
 
 - **Workers Free は評価目的の導入に推奨する。** CPU 時間の上限は 1 回 10 ms。本製品は開発段階で Worker の負荷が大きい。2026-11 の実測では、以前の版(v0.9)の管理画面を Free で動かすと、エクスペリエンスの一覧を 20 回表示する間に、Cloudflare が 11 件の要求を止めた(Error 1102)。少し時間を置くと止められなくなった。つまり Free では、管理画面の要求が時々止められる。v1.0 では CPU 時間を減らした(管理画面の Worker の CPU 時間の中央値は、一覧で 12.9 ms から 2.9 ms、詳細で 15.8 ms から 2.8 ms)。保存・公開・一時停止と再開・一覧・詳細・2 つのタブの同時表示を 24 分続けた測定では、止められた要求は 0 件だった。ただし、重いほうの 1%(p99)には 100 ms を超える要求が残る。0 件は、この測定の間に止められた要求が無かったという意味で、止められないことの保証ではない。止められたときの見え方と確かめ方は[運用ガイド 11 節](operations.md#cpu-の上限で要求が止められたときfree)にある。
-- **安定した運用**には Workers Paid を選ぶ。一時停止・終了の時刻を厳密に決めて運用するときも Paid を勧める(止められた要求では、一時停止・終了が配信に反映されないことがある)。ドメインなしの構成から移る場合は、先にドメインを Cloudflare に追加する([2.8](#28-ドメインありへの移行workers-dev--route))。
+- **安定した運用**には Workers Paid を選ぶ。一時停止・終了の時刻を厳密に決めて運用するときも Paid を勧める(要求が止められると、一時停止・終了が配信に反映されないことがある)。ドメインなしの構成から移る場合は、先にドメインを Cloudflare に追加する([2.8](#28-ドメインありへの移行workers-dev--route))。
 
 **使用量を確認するには**、管理画面の「[使用状況](operations.md#11-使用状況cloudflare-の上限)」を見る。本製品には Workers Paid の支出が上限に達したときに自動停止する機能はない。Cloudflare の Workers の支出制限([1 節](#1-前提と全体像))の対象は Workers の要求・CPU の超過料金だけで、請求総額の上限にはならない。
 
@@ -633,7 +633,7 @@ Windows で `pnpm install` が `Failed to validate workerd binary` や `Local de
 |---|---|---|---|---|
 | Git | 取得と更新 | 同梱(Xcode CLT)または `brew install git` | ディストリのパッケージ | Git for Windows(Git Bash を含む)。この文書の bash ブロックはすべて Git Bash で実行する。PowerShell / cmd では動かない。人に示すコマンドだけは 0 節のとおり PowerShell 用も併記する |
 | Node 24.22.3 以上の 24 系、または 26.13.1 以上の 26 系(`package.json` の `engines.node` に従う) | pnpm / wrangler の実行 | `brew install node` | nodesource など | `winget install OpenJS.NodeJS.LTS` |
-| pnpm。`package.json` の `packageManager` で固定した版を使う。Corepack で使う | 依存の導入 | `corepack --version` が `command not found` なら `npm install -g corepack` で入れる。clone の後、リポジトリ直下で `corepack enable` を実行する | 同左 | Git Bash で、Corepack が無ければ `npm install -g corepack`、続けて clone の後のリポジトリ直下で `corepack enable`(`EPERM` で失敗するときは下の「期待と違うとき」) |
+| pnpm。`package.json` の `packageManager` で固定した版を使う。Corepack で使う | 依存の導入 | `corepack --version` が `command not found` なら `npm install -g corepack` で入れる。clone の後、リポジトリ直下で `corepack enable` を実行し、`pnpm -v` が `packageManager` の版か確かめる(0.3 のブロック) | 同左 | Git Bash で同じ手順を実行する(`corepack --version` が `command not found` なら `npm install -g corepack`。clone の後、リポジトリ直下で `corepack enable`)。`corepack enable` が `EPERM` で失敗するときは下の「期待と違うとき」 |
 | wrangler 4 | Cloudflare の操作 | `pnpm install` で入る(ルートの PATH には乗らない) | 同左 | 同左 |
 | curl / openssl | API 呼び出し / 乱数 | 同梱 | 同梱 | Git Bash に同梱 |
 | jq | API 応答の読み取り(2.6 / 2.7 / 9 節) | `brew install jq` | パッケージ | `winget install jqlang.jq`。入れた後に Git Bash を開き直す |
@@ -2363,7 +2363,7 @@ CHANGELOG に目印があるリリースは、6.3 の太字の項の見出しに
 
 導入当時の PC や `deploy-answers.yaml` が無くても、稼働中の Cloudflare のリソースを使って更新できる。作業の前に、稼働中の管理画面か control の URL、対象 Account ID、そこへの作業者のアクセス権限を確認する。
 
-1. [公開リポジトリ](https://github.com/AnalyticsDesign/ab-test-and-target-harness)を新しいフォルダに clone し、`git fetch --tags origin` でタグを取る。0.4 と目標 tag の要件に従って作業環境をそろえ、`pnpm install` で Wrangler を使えるようにする。新しい作業者自身の資格でログインし、6.1 のとおり `CLOUDFLARE_ACCOUNT_ID` を固定する。Cloudflare API の読み取りで不足する権限は、対象アカウントまたはゾーンについて用意する。
+1. [公開リポジトリ](https://github.com/AnalyticsDesign/ab-test-and-target-harness)を新しいフォルダに clone し、`git fetch --tags origin` でタグを取る。0.4 と目標 tag の要件に従って作業環境をそろえ、0.3 のブロックのとおり `corepack enable` と `pnpm -v` を確かめてから、`pnpm install` で Wrangler を使えるようにする。新しい作業者自身の資格でログインし、6.1 のとおり `CLOUDFLARE_ACCOUNT_ID` を固定する。Cloudflare API の読み取りで不足する権限は、対象アカウントまたはゾーンについて用意する。
 2. **稼働中のタグを確かめる**。表示できる導入では、管理画面の「設定」→「この導入について」の製品版を確認する。API キーが使える場合は 6.4 の `GET /capabilities` の `productVersion` でも確かめられる。v1.0 より前の版(v0.11 まで)には `productVersion` が無く、管理画面にも「この導入について」は無い。当時の deploy ログ、CI の記録、稼働中の Worker の version 注記に残したタグや公開 commit、または導入・更新を行った人が当時の作業から確認できるタグを手掛かりに、稼働環境と照合する。アカウントや Worker が一致するか、`wrangler deployments list --name <Worker 名>` の配備履歴、D1 の適用履歴なども見る。API の `x-wtt-api-version` と新しい clone の `git describe` は製品版の根拠に使わない。稼働タグを特定できない場合や、管理画面と control の版が食い違う場合はここで止まる。特定できたら 6.1 のとおり目標 tag の文書と CHANGELOG を読み、途中で適用が必要な版を確認する。
 3. **稼働中の設定を読む**。以下の GET と Wrangler の一覧を使う。既知の URL を実際に受ける Worker からたどり、control の URL と service binding の関係で、同じ導入の edge・deployer・control・管理画面の 4 つの Worker(と配信専用の `wtt-static`)と設置タグの配信先を確認する。v0.11 より前(v0.10.1 まで)の admin は service binding を持たないので、`AB_CONTROL_URL` で control と照合する。権限エラーや候補が複数ある場合は、対象を確定できるまで先に進まない。
 
@@ -2418,7 +2418,14 @@ if [ "$CHANGED" -gt 0 ]; then
 fi
 git status --short                         # 期待: 4 ファイル
 git describe --tags --exact-match          # 期待: 目標 tag
-node -v                                    # 目標 tag の package.json の engines.node の範囲か確かめる。下限より古ければ Node を上げてから pnpm install する(版によって下限が上がる)
+node -p "process.version + '  必要: ' + require('./package.json').engines.node"   # 期待: 左の版が右の範囲に入る
+```
+
+左の版が右の範囲の外なら、Node を上げ、0.4 の Corepack の手順(`corepack --version`・`corepack enable`)をやり直してから次のブロックに進む。範囲の外のまま進めない(pnpm は Node の版が範囲の外でも警告を出すだけで、止まらない)。版によって下限が上がる。
+
+```bash
+corepack enable                                      # pnpm を Corepack で使う
+pnpm -v                                              # 期待: package.json の packageManager の版(例 pnpm@10.34.5 なら 10.34.5)
 pnpm install
 ```
 
