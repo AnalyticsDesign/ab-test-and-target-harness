@@ -105,7 +105,7 @@ flowchart LR
 - 結果の記録は別に見積もる。1 テストで参加の送信が 1/3 回/PV、CV の送信が 0.05 回/PV なら、Mode A(JS Cookie) / Mode C(BYOID)・履歴なしで約 0.38 回/PV が足される。履歴ありの CV や Mode B(サーバー発行 Cookie)のページ表示目標は既存の送信に便乗するため、同じ回数を足さない。記録の予算は Paid でも既定 7 万行/日。上記の 1 テスト・初回書込 2 行/件なら理論上約 9 万 PV/日だが、使い残しの枠や複数テストなどで早く止まる。予算に達した日は記録だけが止まり、配信は続く
 - 別オリジンへの送信には CORS preflight、control 経由の画像には画像取得ごとの Worker と R2 の読み取りが加わる。履歴・画像・結果の保存量と CPU も別に確認する。表はこれらを含む請求額の保証ではない
 
-Workers Free の CPU 時間の上限は 1 回 10 ms である。本製品は開発の段階で Worker の負荷が大きく、2026-11 の実測では、前の版(v0.9)の管理画面が Free で Cloudflare に時々止められた(Error 1102)。v1.0 で CPU 時間は減ったが、重い要求が止められる可能性は残る。実測の数字は[デプロイガイド 1 節](docs/deploy.md#1-前提と全体像)、止められたときの見え方と確かめ方は[運用ガイド](docs/operations.md#cpu-の上限で要求が止められたときfree)にある。そのため、Free での導入は評価のために使うことを勧める。安定して使うなら、または一時停止・終了の時刻を厳密に決めて運用するなら Workers Paid にする(ドメインなしの構成では、先にドメインを Cloudflare に追加する。[デプロイガイド 2.8](docs/deploy.md#28-ドメインありへの移行workers-dev--route))。
+Workers Free の CPU 時間の上限は 1 回 10 ms である。本製品は開発の段階で Worker の負荷が大きく、2026-11 の実測では、以前の版(v0.9)の管理画面が Free で Cloudflare に時々止められた(Error 1102)。v1.0 で CPU 時間は減ったが、重い要求が止められる可能性は残る。実測の数字は[デプロイガイドの冒頭](docs/deploy.md#デプロイガイド)、止められたときの見え方と確かめ方は[運用ガイド](docs/operations.md#cpu-の上限で要求が止められたときfree)にある。そのため、Free での導入は評価のために使うことを勧める。安定して使うなら、または一時停止・終了の時刻を厳密に決めて運用するなら Workers Paid にする(ドメインなしの構成では、先にドメインを Cloudflare に追加する。[デプロイガイド 2.8](docs/deploy.md#28-ドメインありへの移行workers-dev--route))。
 
 本製品には、費用の合計を見て自動で止める機能は無い。Cloudflare の [Workers の支出制限](https://developers.cloudflare.com/workers/platform/spend-management/)は要求・CPU の超過料金を対象にし、DO・D1・KV・R2 や月額最低額は対象外で、反映にも遅延がある。管理画面の「[使用状況](docs/operations.md#11-使用状況cloudflare-の上限)」も合わせて確認する。
 
@@ -152,8 +152,8 @@ Claude Code / Codex などのコーディングエージェントに、下のプ
 
 ```text
 AB Test and Target Harness を私の Cloudflare アカウントに導入してください。
-1. この PC に足りないツール(Git / Node 24.22.3 以上の 24 系、または 26.13.1 以上の 26 系 / Corepack / jq。Windows では Git for Windows(Git Bash・OpenSSL を含む)も)を確かめ、入れるもの(名前と入手元)の一覧を 1 回だけ示して了承を取ってから入れる。pnpm は Corepack で使う(Node 26 系などで Corepack が無ければ `npm install -g corepack` で入れる)。clone 後にリポジトリ直下で `corepack enable` を実行すると、リポジトリが固定した pnpm が使われる(docs/deploy.md 0.4)
-2. https://github.com/AnalyticsDesign/ab-test-and-target-harness を短いパスに clone し(Windows では例 C:\wtth。長いパスでは Filename too long で失敗する。docs/deploy.md 0.4)、最新のリリースタグ(git tag の v* を版の順に並べた先頭。GitHub Releases の API は使わない)を checkout する
+1. この PC に足りないツール(Git / Node 24.22.3 以上の 24 系、または 26.13.1 以上の 26 系 / Corepack / jq。Windows では Git for Windows(Git Bash・OpenSSL を含む)も)を確かめ、入れるもの(名前と入手元)の一覧を 1 回だけ示して了承を取ってから入れる。pnpm は Corepack で使う(Node 26 系などで Corepack が無ければ `npm install -g corepack` で入れる。有効にするのは 2 の clone の後)
+2. https://github.com/AnalyticsDesign/ab-test-and-target-harness を短いパスに clone し(Windows では例 C:\wtth。長いパスでは Filename too long で失敗する。docs/deploy.md 0.4)、最新のリリースタグ(git tag の v* を版の順に並べた先頭。GitHub Releases の API は使わない)を checkout する。リポジトリ直下で `corepack enable` を実行し、`pnpm -v` が package.json の packageManager の版になることを確かめる(docs/deploy.md 0.4)
 3. docs/install-questions.md を読み、その質問の表と進め方の規則どおりに私に聞く。答えは deploy-answers.example.yaml を写した deploy-answers.yaml に書く(既に deploy-answers.yaml があれば、答えの書かれた質問は飛ばす)
 4. node tools/deploy-answers/cli.mjs を実行し、出力を要約せずにそのまま私に見せて、推奨構成と最軽量構成のどちらにするかを聞く。選んだら --accept recommended か --accept lightest を付けて実行する。出力の先頭に『確認: アカウントが変わる』が出て、選んだ構成がそれに当たるときは、その節をそのまま見せ、構成の選択とは別にアカウントの変更への同意を聞く。同意したときだけ --confirm-account-change を付ける(終了コードごとの扱いは docs/deploy.md 0.2)
 5. docs/deploy.md を最初から最後まで読み、0 節の分担どおりに進める。コマンドは自分で実行し、【人が行う】と【人に依頼】の箇所でだけ止まって私に指示する

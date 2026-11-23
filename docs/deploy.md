@@ -8,8 +8,8 @@ AB Test and Target Harness を運用者自身の Cloudflare アカウントへ�
 
 **料金プランは利用目的に合わせて選ぶ。**
 
-- **Workers Free は評価目的の導入に推奨する。** CPU 時間の上限は 1 回 10 ms。本製品は開発段階で Worker の負荷が大きい。2026-11 の実測では、前の版(v0.9)の管理画面を Free で動かすと、エクスペリエンスの一覧を 20 回表示する間に、Cloudflare が 11 件の要求を止めた(Error 1102)。少し時間を置くと止められなくなった。つまり Free では、管理画面の要求が時々止められる。v1.0 では CPU 時間を減らした(管理画面の Worker の CPU 時間の中央値は、一覧で 12.9 ms から 2.9 ms、詳細で 15.8 ms から 2.8 ms)。保存・公開・一時停止と再開・一覧・詳細・2 つのタブの同時表示を 24 分続けた測定では、止められた要求は 0 件だった。ただし、重いほうの 1%(p99)には 100 ms を超える要求が残る。0 件は観測しなかったという意味で、止められないことの保証ではない。止められたときの見え方と確かめ方は[運用ガイド 11 節](operations.md#cpu-の上限で要求が止められたときfree)にある。
-- **安定した運用**には Workers Paid を選ぶ。一時停止・終了の時刻を厳密に決めて運用するときも Paid を勧める。ドメインなしの構成から移る場合は、先にドメインを Cloudflare に追加する([2.8](#28-ドメインありへの移行workers-dev--route))。
+- **Workers Free は評価目的の導入に推奨する。** CPU 時間の上限は 1 回 10 ms。本製品は開発段階で Worker の負荷が大きい。2026-11 の実測では、以前の版(v0.9)の管理画面を Free で動かすと、エクスペリエンスの一覧を 20 回表示する間に、Cloudflare が 11 件の要求を止めた(Error 1102)。少し時間を置くと止められなくなった。つまり Free では、管理画面の要求が時々止められる。v1.0 では CPU 時間を減らした(管理画面の Worker の CPU 時間の中央値は、一覧で 12.9 ms から 2.9 ms、詳細で 15.8 ms から 2.8 ms)。保存・公開・一時停止と再開・一覧・詳細・2 つのタブの同時表示を 24 分続けた測定では、止められた要求は 0 件だった。ただし、重いほうの 1%(p99)には 100 ms を超える要求が残る。0 件は、この測定の間に止められた要求が無かったという意味で、止められないことの保証ではない。止められたときの見え方と確かめ方は[運用ガイド 11 節](operations.md#cpu-の上限で要求が止められたときfree)にある。
+- **安定した運用**には Workers Paid を選ぶ。一時停止・終了の時刻を厳密に決めて運用するときも Paid を勧める(止められた要求では、一時停止・終了が配信に反映されないことがある)。ドメインなしの構成から移る場合は、先にドメインを Cloudflare に追加する([2.8](#28-ドメインありへの移行workers-dev--route))。
 
 **使用量を確認するには**、管理画面の「[使用状況](operations.md#11-使用状況cloudflare-の上限)」を見る。本製品には Workers Paid の支出が上限に達したときに自動停止する機能はない。Cloudflare の Workers の支出制限([1 節](#1-前提と全体像))の対象は Workers の要求・CPU の超過料金だけで、請求総額の上限にはならない。
 
@@ -63,11 +63,11 @@ Windows の Git Bash で確認コマンドの出力が期待と違う場合は�
 
 **1. ツールを入れる**(0.4)
 
-Git・Node(24.22.3 以上の 24 系、または 26.13.1 以上の 26 系)・jq を入れる。Corepack が無ければ `npm install -g corepack` で入れ、リポジトリ直下で `corepack enable` を実行する。Node 26 系には Corepack が同梱されない。Windows は Git for Windows の Git Bash で、ここにあるすべてのコマンドを実行する。
+Git・Node(24.22.3 以上の 24 系、または 26.13.1 以上の 26 系)・jq を入れる。`corepack --version` が `command not found` なら、`npm install -g corepack` で Corepack を入れる(Node 26 系には Corepack が同梱されない)。`corepack enable` と `pnpm -v` の確認は、2 の clone の後にリポジトリ直下で行う。Windows は Git for Windows の Git Bash で、ここにあるすべてのコマンドを実行する。
 
 ```bash
 node -v      # v24.22.3 以上の 24 系、または v26.13.1 以上の 26 系
-pnpm -v      # リポジトリ直下で。package.json の packageManager の版(例 pnpm@10.34.5 なら 10.34.5)
+corepack --version   # 版が出る。command not found なら上のとおり入れる
 jq --version # jq-1.7 以上
 git --version
 bash --version | head -1   # GNU bash
@@ -84,6 +84,8 @@ cd ab-test-and-target-harness
 git tag --list 'v*' --sort=-v:refname | head -5     # 使える tag。release_tag が latest なら先頭
 git checkout v1.0                                    # 入れる tag に読み替える
 git describe --tags --exact-match                    # 期待: 今 checkout した tag 名。それ以外なら checkout に失敗している
+corepack enable                                      # pnpm を Corepack で使う
+pnpm -v                                              # 期待: package.json の packageManager の版(例 pnpm@10.34.5 なら 10.34.5)
 pnpm install
 ```
 
@@ -614,12 +616,14 @@ cd ab-test-and-target-harness
 git tag --list 'v*' --sort=-v:refname | head -5     # 使える tag。release_tag が latest なら先頭
 git checkout v1.0                                    # 入れる tag に読み替える
 git describe --tags --exact-match                    # 期待: 今 checkout した tag 名。それ以外なら checkout に失敗している
+corepack enable                                      # pnpm を Corepack で使う
+pnpm -v                                              # 期待: package.json の packageManager の版(例 pnpm@10.34.5 なら 10.34.5)
 pnpm install
 ```
 
 `release_tag` が `latest` のときは、上の `git tag --list 'v*' --sort=-v:refname` の出力の 1 行目(版の番号がいちばん大きい tag)を入れる。GitHub Releases の API(`/releases/latest`)は使わない。リリースは tag で定義しており、API が 404 を返しても「tag が無い」という意味ではない。認証・ネットワークの制限でも 404 になる。
 
-`Corepack` の案内が出たら `corepack enable` を先に実行する。`corepack: command not found` なら 0.4 の「期待と違うとき」を読む。
+`corepack: command not found` なら 0.4 の「期待と違うとき」を読む。`pnpm -v` が `packageManager` と違う版のときも同じ。
 
 Windows で `pnpm install` が `Failed to validate workerd binary` や `Local development will not work` を出しても、終了コードが 0 なら導入を続けてよい。workerd はローカル実行用のランタイムで、導入の手順は使わない。導入の手順(ビルド・deploy・データベースの更新)はどれも Cloudflare 側で動く。ローカル開発もするなら、workerd の起動に要る Microsoft の Visual C++ 再頒布可能パッケージ(x64)を入れる。
 
@@ -629,7 +633,7 @@ Windows で `pnpm install` が `Failed to validate workerd binary` や `Local de
 |---|---|---|---|---|
 | Git | 取得と更新 | 同梱(Xcode CLT)または `brew install git` | ディストリのパッケージ | Git for Windows(Git Bash を含む)。この文書の bash ブロックはすべて Git Bash で実行する。PowerShell / cmd では動かない。人に示すコマンドだけは 0 節のとおり PowerShell 用も併記する |
 | Node 24.22.3 以上の 24 系、または 26.13.1 以上の 26 系(`package.json` の `engines.node` に従う) | pnpm / wrangler の実行 | `brew install node` | nodesource など | `winget install OpenJS.NodeJS.LTS` |
-| pnpm。`package.json` の `packageManager` で固定した版を使う。Corepack で使う | 依存の導入 | Corepack が無ければ `npm install -g corepack` を実行し、`corepack enable` で有効にする | 同左 | Git Bash で同じ手順を実行 |
+| pnpm。`package.json` の `packageManager` で固定した版を使う。Corepack で使う | 依存の導入 | `corepack --version` が `command not found` なら `npm install -g corepack` で入れる。clone の後、リポジトリ直下で `corepack enable` を実行する | 同左 | Git Bash で、Corepack が無ければ `npm install -g corepack`、続けて clone の後のリポジトリ直下で `corepack enable`(`EPERM` で失敗するときは下の「期待と違うとき」) |
 | wrangler 4 | Cloudflare の操作 | `pnpm install` で入る(ルートの PATH には乗らない) | 同左 | 同左 |
 | curl / openssl | API 呼び出し / 乱数 | 同梱 | 同梱 | Git Bash に同梱 |
 | jq | API 応答の読み取り(2.6 / 2.7 / 9 節) | `brew install jq` | パッケージ | `winget install jqlang.jq`。入れた後に Git Bash を開き直す |
@@ -640,7 +644,7 @@ Windows で `pnpm install` が `Failed to validate workerd binary` や `Local de
 
 ```bash
 node -v      # v24.22.3 以上の 24 系、または v26.13.1 以上の 26 系
-pnpm -v      # リポジトリ直下で。package.json の packageManager の版(例 pnpm@10.34.5 なら 10.34.5)
+corepack --version   # 版が出る。command not found なら上のとおり入れる
 jq --version # jq-1.7 以上
 git --version
 bash --version | head -1   # GNU bash
@@ -660,7 +664,7 @@ openssl version            # 乱数の生成に使う
   pnpm -v   # リポジトリ直下で。packageManager の版
   ```
 
-- `corepack: command not found`(Node 25 以降は corepack が同梱されない)→ `npm install -g corepack` の後に `corepack enable`。LTS の Node を入れ直してもよい
+- `corepack: command not found`(Node 26 系には Corepack が同梱されない)→ `npm install -g corepack` の後に `corepack enable`。24 系の Node を入れ直してもよい
 - `pnpm -v` が `packageManager` と違う版(単体で入れた pnpm 11 など)→ `corepack pnpm -v` が固定の版を返すなら、PATH の先に単体の pnpm がある。単体の pnpm を外して `corepack enable` を実行し、`pnpm -v` を確かめ直す。npm で入れたなら `npm uninstall -g pnpm` で外す。違う版のまま `pnpm install` を進めない。ロックファイルの解釈が変わる
 - `jq` / `pnpm` が入れた直後に見つからない(Windows)→ Git Bash を開き直す
 - `openssl: command not found`、または `bash` が無い(Windows)→ Git for Windows を入れ、その Git Bash で実行する。原因は Git for Windows ではない Git を使っていること。エージェントの実行環境に同梱された最小構成の Git などが当たる。この文書の bash ブロックは `openssl`・`sleep`・`date` を使う
@@ -2414,6 +2418,7 @@ if [ "$CHANGED" -gt 0 ]; then
 fi
 git status --short                         # 期待: 4 ファイル
 git describe --tags --exact-match          # 期待: 目標 tag
+node -v                                    # 目標 tag の package.json の engines.node の範囲か確かめる。下限より古ければ Node を上げてから pnpm install する(版によって下限が上がる)
 pnpm install
 ```
 
