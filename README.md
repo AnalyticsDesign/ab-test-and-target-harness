@@ -105,7 +105,7 @@ flowchart LR
 - 結果の記録は別に見積もる。1 テストで参加の送信が 1/3 回/PV、CV の送信が 0.05 回/PV なら、Mode A(JS Cookie) / Mode C(BYOID)・履歴なしで約 0.38 回/PV が足される。履歴ありの CV や Mode B(サーバー発行 Cookie)のページ表示目標は既存の送信に便乗するため、同じ回数を足さない。記録の予算は Paid でも既定 7 万行/日。上記の 1 テスト・初回書込 2 行/件なら理論上約 9 万 PV/日だが、使い残しの枠や複数テストなどで早く止まる。予算に達した日は記録だけが止まり、配信は続く
 - 別オリジンへの送信には CORS preflight、control 経由の画像には画像取得ごとの Worker と R2 の読み取りが加わる。履歴・画像・結果の保存量と CPU も別に確認する。表はこれらを含む請求額の保証ではない
 
-Workers Free の CPU 時間の上限は 1 回 10 ms である。本製品は開発の段階で Worker の負荷が大きく、2026-11 の実測では、以前の版(v0.9)の管理画面が Free で Cloudflare に時々止められた(Error 1102)。v1.0 で CPU 時間は減ったが、重い要求が止められる可能性は残る。実測の数字は[デプロイガイドの冒頭](docs/deploy.md#デプロイガイド)、止められたときの見え方と確かめ方は[運用ガイド](docs/operations.md#cpu-の上限で要求が止められたときfree)にある。そのため、Free での導入は評価のために使うことを勧める。安定して使うなら、または一時停止・終了の時刻を厳密に決めて運用するなら Workers Paid にする(ドメインなしの構成では、先にドメインを Cloudflare に追加する。[デプロイガイド 2.8](docs/deploy.md#28-ドメインありへの移行workers-dev--route))。
+Workers Free の CPU 時間の上限は 1 回 10 ms である。本製品は開発の段階で Worker の負荷が大きく、2026-11 の実測では、v0.9 の管理画面が Free で Cloudflare に時々止められた(Error 1102。v0.10・v0.11 は測っていないが、CPU 時間を減らす前の作り)。v1.0 で CPU 時間は減ったが、重い要求が止められる可能性は残る。Free で v1.0 より前の版を使っているなら、v1.0 への更新を勧める。実測の数字は[デプロイガイドの冒頭](docs/deploy.md#デプロイガイド)、止められたときの見え方と確かめ方は[運用ガイド](docs/operations.md#cpu-の上限で要求が止められたときfree)にある。そのため、Free での導入は評価のために使うことを勧める。安定して使うなら、または一時停止・終了の時刻を厳密に決めて運用するなら Workers Paid にする(ドメインなしの構成では、先にドメインを Cloudflare に追加する。[デプロイガイド 2.8](docs/deploy.md#28-ドメインありへの移行workers-dev--route))。
 
 本製品には、費用の合計を見て自動で止める機能は無い。Cloudflare の [Workers の支出制限](https://developers.cloudflare.com/workers/platform/spend-management/)は要求・CPU の超過料金を対象にし、DO・D1・KV・R2 や月額最低額は対象外で、反映にも遅延がある。管理画面の「[使用状況](docs/operations.md#11-使用状況cloudflare-の上限)」も合わせて確認する。
 

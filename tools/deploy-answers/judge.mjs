@@ -35,7 +35,7 @@ export const FLOOD = `万が一、悪意のある人がプログラムで大量�
 export const FLOOD_PAID = `${FLOOD}、そのアクセスの分もすべて請求に含まれる(支出の上限も掛けられない)`;
 /** Workers Free の CPU 時間の上限(1 回 10 ms)の注意。README・デプロイガイド冒頭と同じ意味(Q703・Q704。2026-11 の実測は B278) */
 export const FREE_CPU_NOTE =
-  "Workers Free の CPU 時間の上限は 1 回 10 ms。本製品は開発の段階で Worker の負荷が大きく、2026-11 の実測では、以前の版(v0.9)の管理画面が Free で Cloudflare に時々止められた(v1.0 で CPU 時間は減ったが、重い要求が止められる可能性は残る)。そのため Free での導入は評価のために使うことを勧め、安定して使うなら Workers Paid にする";
+  "Workers Free の CPU 時間の上限は 1 回 10 ms。本製品は開発の段階で Worker の負荷が大きく、2026-11 の実測では、v0.9 の管理画面が Free で Cloudflare に時々止められた(v0.10・v0.11 は測っていない。v1.0 で CPU 時間は減ったが、重い要求が止められる可能性は残る)。そのため Free での導入は評価のために使うことを勧め、安定して使うなら Workers Paid にする";
 
 const accountIsPaid = (values) => values.cloudflare_account === "existing" && values.existing_plan === "paid";
 
