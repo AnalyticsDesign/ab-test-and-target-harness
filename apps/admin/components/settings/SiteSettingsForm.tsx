@@ -9,7 +9,7 @@ import { ApiClientError, api, describeError, fieldErrors } from "@/lib/client";
 import { budgetFromInput, NEW_PROFILE_BUDGET_HINT, NEW_PROFILE_BUDGET_LABEL } from "@/lib/new-profile-budget";
 import { capacityWarning, cspNotice, resultsToggleNotice, splitCode } from "@/lib/results-settings";
 import { clearSettingsSection, sectionOfHref, setSectionErrors, setSettingsSection, syncSettingsSection, useSettingsSection } from "@/lib/settings-section";
-import type { AnalyticsSettings, DomainChecks, Site, SiteSaved } from "@/lib/types";
+import type { DomainChecks, Site, SiteSaved } from "@/lib/types";
 import { useLeaveGuard, type LeaveAttempt } from "../ui/useLeaveGuard";
 import { Field } from "../Field";
 import { ErrorBox } from "../ErrorBox";
@@ -24,30 +24,15 @@ import { SharingCard } from "./SharingCard";
 import { DomainsSection } from "./DomainsSection";
 import { compactRows, domainsChanged, shouldSendDomains } from "./domains-view";
 import { SectionLink } from "./SectionLink";
+import { SiteNamingPreview } from "./SiteNamingPreview";
+import { ANALYTICS_FIELDS, readAnalytics } from "./analytics-fields";
+import namingStyles from "./AnalyticsNaming.module.css";
 import { sharingPatch, withSharingHint, type SharingAdjusted } from "./sharing-notice";
 import { SECTIONS, fieldKeysFor, firstInvalidSection, sectionOfField, type SectionId } from "./sections";
 import { navigateApp } from "@/lib/navigate";
 
 /** 節の見出し(B31 ⑥)。文字の正は sections.ts の SECTIONS */
 const heading = (id: SectionId) => SECTIONS.find((s) => s.id === id)!.heading;
-
-const ANALYTICS_FIELDS: Array<{ path: string; label: string; get: (a: AnalyticsSettings) => string }> = [
-  { path: "extraKey", label: "extra の名前空間キー", get: (a) => a.extraKey },
-  { path: "exposure.event", label: "露出のイベント名", get: (a) => a.exposure.event },
-  { path: "exposure.keys.experimentId", label: "露出: experimentId キー", get: (a) => a.exposure.keys.experimentId! },
-  { path: "exposure.keys.experimentName", label: "露出: experimentName キー", get: (a) => a.exposure.keys.experimentName! },
-  { path: "exposure.keys.variantId", label: "露出: variantId キー", get: (a) => a.exposure.keys.variantId! },
-  { path: "exposure.keys.variantName", label: "露出: variantName キー", get: (a) => a.exposure.keys.variantName! },
-  { path: "conversion.event", label: "コンバージョンのイベント名", get: (a) => a.conversion.event },
-  { path: "conversion.keys.goalId", label: "コンバージョン: goalId キー", get: (a) => a.conversion.keys.goalId! },
-  { path: "conversion.keys.goalName", label: "コンバージョン: goalName キー", get: (a) => a.conversion.keys.goalName! },
-];
-function setPath(obj: Record<string, unknown>, path: string, value: string) {
-  const parts = path.split(".");
-  let cur = obj;
-  for (const p of parts.slice(0, -1)) cur = (cur[p] ??= {}) as Record<string, unknown>;
-  cur[parts[parts.length - 1]!] = value;
-}
 
 /** spec §5.4 / §10.9: Identity と Analytics 命名設定を 1 画面に集約(ADMIN 以上) */
 export function SiteSettingsForm({
@@ -204,9 +189,6 @@ export function SiteSettingsForm({
     const resultsChanged = resultsOn !== site.resultsEnabled;
     const toggleNotice = resultsChanged ? resultsToggleNotice({ enabling: resultsOn, runningTests, runningRecordedTests }) : null;
     if (toggleNotice !== null && !(await ask(resultsOn ? { title: "結果の記録を有効にしますか?", body: toggleNotice, confirmLabel: "有効にして保存" } : { title: "結果の記録を止めますか?", body: toggleNotice, confirmLabel: "止めて保存", tone: "danger" }))) return;
-    const analytics: Record<string, unknown> = {};
-    analytics.dataLayerName = String(fd.get("analytics.dataLayerName"));
-    for (const f of ANALYTICS_FIELDS) setPath(analytics, f.path, String(fd.get(`analytics.${f.path}`)));
     // B148: domains はドメインの節の保存か、一覧・導入の形を変えたときだけ送る(ほかの節の保存で確かめに行かない)。
     // 空の行は送らず、画面の行も同じ形にそろえる(control の 422 の行の番号 domains.<n> と画面の行を合わせるため)
     const sentRows = compactRows(rows);
@@ -230,7 +212,7 @@ export function SiteSettingsForm({
       ...sharingPatch(share, site.shareSubdomains),
       uuidCookieEnabled: fd.get("uuidCookieEnabled") === "on",
       uuidCookieName: fd.get("uuidCookieName"),
-      analytics,
+      analytics: readAnalytics(fd),
       // Plan 10 B1: 外部 ID 2 項目(決定 34。資格情報ではない)。空欄 = null で解除
       ga4PropertyId: String(fd.get("ga4PropertyId") ?? "").trim() || null,
       bigqueryDataset: String(fd.get("bigqueryDataset") ?? "").trim() || null,
@@ -478,22 +460,29 @@ export function SiteSettingsForm({
         />
         <section className={switched ? "card enter" : "card"} hidden={section !== "naming"}>
           <h2>{heading("naming")}</h2>
-          <Field
-            label="dataLayer の変数名"
-            hint="タグが計測イベントを入れる配列の名前。GTM のスニペットで dataLayer の名前を変えている場合だけ、同じ名前にします(スニペットの 4 番目の引数で、既定は 'dataLayer'。gtm.js の URL の l= の値)。英字・_・$ で始まり、英数字と _ と $ だけの 64 字以内"
-            error={analyticsError("dataLayerName")}
-          >
-            <input name="analytics.dataLayerName" defaultValue={site.analytics.dataLayerName ?? "dataLayer"} disabled={ro} required pattern="[A-Za-z_$][A-Za-z0-9_$]{0,63}" />
-          </Field>
-          <p className="muted">
-            GA4 の規則: 英字始まり・英数字と _ のみ・40 字以内。_ / firebase_ / ga_ / google_ / gtag. 始まりと GA4 の予約イベント名は不可。7 つのキー名は互いに重複せず、露出と
-            コンバージョンのイベント名は異なる必要があります。既定のまま使えます
-          </p>
-          {ANALYTICS_FIELDS.map((f) => (
-            <Field key={f.path} label={f.label} error={analyticsError(f.path)}>
-              <input name={`analytics.${f.path}`} defaultValue={f.get(site.analytics)} disabled={ro} required pattern="[A-Za-z][A-Za-z0-9_]{0,39}" />
-            </Field>
-          ))}
+          <div className={namingStyles.container}>
+            <div className={namingStyles.layout}>
+              <div>
+                <Field
+                  label="dataLayer の変数名"
+                  hint="タグが計測イベントを入れる配列の名前。GTM のスニペットで dataLayer の名前を変えている場合だけ、同じ名前にします(スニペットの 4 番目の引数で、既定は 'dataLayer'。gtm.js の URL の l= の値)。英字・_・$ で始まり、英数字と _ と $ だけの 64 字以内"
+                  error={analyticsError("dataLayerName")}
+                >
+                  <input name="analytics.dataLayerName" defaultValue={site.analytics.dataLayerName ?? "dataLayer"} disabled={ro} required pattern="[A-Za-z_$][A-Za-z0-9_$]{0,63}" />
+                </Field>
+                <p className="muted">
+                  GA4 の規則: 英字始まり・英数字と _ のみ・40 字以内。_ / firebase_ / ga_ / google_ / gtag. 始まりと GA4 の予約イベント名は不可。7 つのキー名は互いに重複せず、露出と
+                  コンバージョンのイベント名は異なる必要があります。既定のまま使えます
+                </p>
+                {ANALYTICS_FIELDS.map((f) => (
+                  <Field key={f.path} label={f.label} error={analyticsError(f.path)}>
+                    <input name={`analytics.${f.path}`} defaultValue={f.get(site.analytics)} disabled={ro} required pattern="[A-Za-z][A-Za-z0-9_]{0,39}" />
+                  </Field>
+                ))}
+              </div>
+              <SiteNamingPreview saved={site.analytics} readOnly={!canAdmin} active={section === "naming"} busy={busy} />
+            </div>
+          </div>
         </section>
         <section className={switched ? "card enter" : "card"} hidden={section !== "external"}>
           <h2>{heading("external")}</h2>

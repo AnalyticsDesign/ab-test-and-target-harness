@@ -123,6 +123,7 @@ export function ExperimentAnalyticsCard({
               />
             </div>
             <DataLayerPreview
+              dataLayerName={names.dataLayerName}
               extraKey={names.extraKey}
               lines={exposurePreview(names, {
                 experimentId,

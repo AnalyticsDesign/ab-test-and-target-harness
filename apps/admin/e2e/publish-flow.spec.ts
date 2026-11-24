@@ -1,6 +1,7 @@
 import { test, expect, type ConsoleMessage, type Page, type Request, type Response } from "@playwright/test";
 import {
   ADMIN_URL,
+  CONTROL_URL,
   controlHeaders,
   STATIC_URL,
   EXPERIMENT,
@@ -369,6 +370,8 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await openSettings(page);
     await page.getByTestId("section-naming").click();
     await expect(page.getByTestId("section-naming")).toHaveAttribute("aria-current", "page");
+    // ログインを増やさず、設定を開いたページでプレビューを確かめる。
+    await test.step("site analytics preview follows unsaved input and stacks on narrow screens", () => verifySiteNamingPreview(page, SITE_UNPUBLISHED.id));
     await nav.getByRole("link", { name: /^戻る/ }).click();
     await expect(page).toHaveURL(new RegExp(`/sites/${SITE_UNPUBLISHED.id}$`));
     await expect(page.getByText("エクスペリエンスはまだありません")).toBeVisible();
@@ -1256,4 +1259,195 @@ async function openVariant(page: Page, id: string): Promise<void> {
   await page.getByRole("tab", { name: "パターン" }).click();
   await page.getByTestId(`variant-pick-${id}`).click();
   await expect(page.getByTestId(`variant-${id}`)).toBeVisible();
+}
+
+async function verifySiteNamingPreview(page: Page, siteId: string) {
+  await waitForHydration(page);
+  const input = (name: string) => page.locator(`input[name="analytics.${name}"]`);
+  const dataLayerName = input("dataLayerName");
+  const extraKey = input("extraKey");
+  const variantId = input("exposure.keys.variantId");
+  const goalId = input("conversion.keys.goalId");
+  const goalName = input("conversion.keys.goalName");
+  const pushes = page.getByTestId("datalayer-preview");
+  await expect(pushes).toHaveCount(4);
+
+  const requests: string[] = [];
+  const onRequest = (request: Request) => {
+    if ([ADMIN_URL, CONTROL_URL].includes(new URL(request.url()).origin)) requests.push(request.url());
+  };
+  const rows = (index: number) => pushes.nth(index).locator(":scope > div");
+  const expectBlankExtra = async (index: number, line: RegExp) => {
+    const contents = await rows(index).allTextContents();
+    expect(contents).toContainEqual(expect.stringMatching(line));
+  };
+  page.on("request", onRequest);
+  try {
+    await dataLayerName.fill("customLayer");
+    await extraKey.fill("ab_info");
+    await variantId.fill("ab_vid");
+    for (let index = 0; index < 4; index += 1) {
+      await expect(rows(index).first()).toHaveText("window.customLayer.push({");
+    }
+    await expect(pushes.nth(0)).toContainText("ab_info: null");
+    await expect(pushes.nth(1)).toContainText("ab_vid:");
+    await expect(pushes.nth(1)).toContainText("ab_info: {");
+    await expect(pushes.nth(2)).toContainText("ab_info: null");
+    await expect(pushes.nth(3)).toContainText('ab_error_type: "rate_limited"');
+
+    await extraKey.fill("");
+    await expect(pushes).toHaveCount(4);
+    await expectBlankExtra(0, /^: null(?:\s|$)/);
+    await expectBlankExtra(1, /^: \{$/);
+    await expectBlankExtra(2, /^: null(?:\s|$)/);
+    for (const push of await pushes.all()) {
+      await expect(push).not.toContainText(/ab_info|ab_extra/);
+    }
+    await extraKey.fill("ab_info");
+
+    await goalId.fill("x");
+    await goalName.fill("x");
+    await expect(rows(2).filter({ hasText: /^x:/ })).toHaveCount(2);
+    await goalId.fill("ab_goal_id");
+    await goalName.fill("ab_goal_name");
+  } finally {
+    page.off("request", onRequest);
+  }
+  expect(requests, "外部計測の名前を入力している間の admin・control への要求").toEqual([]);
+
+  await test.step("wide preview stays on screen, narrow preview scrolls with the form", async () => {
+    const viewport = page.viewportSize()!;
+    const main = page.locator("main");
+    const heading = page.getByRole("heading", { level: 3, name: /^出力される内容/ });
+    const preview = heading.locator("../..");
+    const layout = preview.locator("..");
+    const scrollTo = (top: number) => main.evaluate((element, y) => (element.scrollTop = y, element.scrollTop), top);
+    try {
+      await page.setViewportSize({ width: 1400, height: 630 });
+      await scrollTo(0);
+      await expect(preview).toHaveCSS("position", "sticky");
+      const original = (await heading.boundingBox())!;
+      const previewStart = (await preview.boundingBox())!;
+      const mainTop = (await main.boundingBox())!.y;
+      expect(original.x).toBeGreaterThan((await dataLayerName.boundingBox())!.x);
+
+      // 通常の配置なら見出しが隠れ、右の列が配置の下端に達する前の位置で確かめる。
+      const wideScroll = await scrollTo(original.y - mainTop + 8);
+      const afterScroll = (await layout.boundingBox())!;
+      expect(original.y - wideScroll).toBeLessThan(mainTop);
+      const stickyTop = mainTop + 16;
+      expect(afterScroll.y + afterScroll.height).toBeGreaterThan(stickyTop + previewStart.height);
+      await expect.poll(async () => Math.abs((await preview.boundingBox())!.y - stickyTop)).toBeLessThan(2);
+      await expect(heading).toBeInViewport();
+
+      const tip = heading.getByRole("button", { name: "出力される内容の補足" });
+      // locator.hover() による自動スクロールを避け、固定された位置のまま吹き出しを開く。
+      const trigger = (await tip.boundingBox())!;
+      await page.mouse.move(trigger.x + trigger.width / 2, trigger.y + trigger.height / 2);
+      const tooltip = tip.getByRole("tooltip");
+      await expect(tooltip).toHaveCSS("opacity", "1");
+      expect(await main.evaluate((element) => element.scrollTop)).toBe(wideScroll);
+      const bounds = (await main.boundingBox())!;
+      const bubble = (await tooltip.boundingBox())!;
+      expect(bubble.y, "固定された右列の補足の上端").toBeGreaterThanOrEqual(bounds.y);
+      expect(bubble.y + bubble.height, "固定された右列の補足の下端").toBeLessThanOrEqual(bounds.y + bounds.height);
+
+      await page.setViewportSize({ width: 550, height: 630 });
+      await scrollTo(0);
+      await expect(preview).toHaveCSS("position", "static");
+      const stacked = (await heading.boundingBox())!;
+      expect(stacked.y).toBeGreaterThan((await goalName.boundingBox())!.y);
+      const start = await scrollTo(stacked.y - (await main.boundingBox())!.y - 30);
+      await expect(heading).toBeInViewport();
+      const before = (await heading.boundingBox())!.y;
+      const end = await scrollTo(start + 200);
+      expect(end - start).toBeGreaterThan(120);
+      await expect.poll(async () => Math.abs((await heading.boundingBox())!.y - before + end - start)).toBeLessThan(2);
+      await expect(heading).not.toBeInViewport();
+    } finally {
+      await page.setViewportSize(viewport);
+    }
+  });
+
+  const patchPath = `/api/control/sites/${siteId}`;
+  const settingsPath = new URL(page.url()).pathname;
+  const save = page.getByRole("button", { name: "保存", exact: true });
+  const isPatch = (request: Request) => request.method() === "PATCH" && new URL(request.url()).pathname === patchPath;
+  const isRefresh = (request: Request) => {
+    const url = new URL(request.url());
+    return request.method() === "GET" && url.pathname === settingsPath && url.searchParams.has("_rsc") && !request.headers()["next-router-prefetch"];
+  };
+
+  await test.step("keep the draft during PATCH and after a delayed refresh", async () => {
+    const patch = Promise.withResolvers<void>();
+    const refresh = Promise.withResolvers<void>();
+    const patchUrl = (url: URL) => url.pathname === patchPath;
+    const refreshUrl = (url: URL) => url.pathname === settingsPath && url.searchParams.has("_rsc");
+    await page.route(patchUrl, async (route) => {
+      if (!isPatch(route.request())) return route.fallback();
+      const response = await route.fetch();
+      await patch.promise;
+      await route.fulfill({ response });
+    });
+    await page.route(refreshUrl, async (route) => {
+      if (!isRefresh(route.request())) return route.fallback();
+      await refresh.promise;
+      await route.continue();
+    });
+
+    try {
+      await extraKey.fill("ab_b");
+      const patchSent = page.waitForRequest(isPatch);
+      const patchResponse = page.waitForResponse((response) => isPatch(response.request()));
+      await save.click();
+      await patchSent;
+      await expect(extraKey).toBeDisabled();
+      await expect(pushes.nth(0)).toContainText("ab_b: null");
+
+      // PATCH 応答前に節を往復しても、無効な欄とプレビューに同じ名前が残る。
+      const general = page.getByTestId("section-general");
+      const naming = page.getByTestId("section-naming");
+      await general.click();
+      await expect(general).toHaveAttribute("aria-current", "page");
+      await expect(pushes).toHaveCount(0);
+      await naming.click();
+      await expect(naming).toHaveAttribute("aria-current", "page");
+      await expect(extraKey).toBeDisabled();
+      await expect(extraKey).toHaveValue("ab_b");
+      await expect(pushes.nth(0)).toContainText("ab_b: null");
+
+      const refreshSent = page.waitForRequest(isRefresh);
+      patch.resolve();
+      expect((await patchResponse).status()).toBe(200);
+      await refreshSent;
+      await expect(extraKey).toBeEnabled();
+      await extraKey.fill("ab_c");
+      await expect(pushes.nth(0)).toContainText("ab_c: null");
+      refresh.resolve();
+      // value 属性(defaultValue)に B が届くまで待って、RSC が反映された後の欄とプレビューを確認する。
+      await expect(extraKey).toHaveAttribute("value", "ab_b");
+      await expect(extraKey).toHaveValue("ab_c");
+      await expect(pushes.nth(0)).toContainText("ab_c: null");
+
+      const second = page.waitForRequest(isPatch);
+      const secondResponse = page.waitForResponse((response) => isPatch(response.request()));
+      await save.click();
+      expect((await second).postDataJSON()).toMatchObject({ analytics: { extraKey: "ab_c" } });
+      expect((await secondResponse).status()).toBe(200);
+      await expect(extraKey).toHaveAttribute("value", "ab_c");
+    } finally {
+      patch.resolve();
+      refresh.resolve();
+      await page.unroute(patchUrl);
+      await page.unroute(refreshUrl);
+    }
+  });
+
+  await dataLayerName.fill("dataLayer");
+  await extraKey.fill("ab_extra");
+  await variantId.fill("ab_variant_id");
+  const restored = page.waitForResponse((response) => isPatch(response.request()));
+  await save.click();
+  expect((await restored).status()).toBe(200);
+  await expect(extraKey).toHaveAttribute("value", "ab_extra");
 }

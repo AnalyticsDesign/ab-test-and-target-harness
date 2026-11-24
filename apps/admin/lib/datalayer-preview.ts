@@ -1,4 +1,4 @@
-import type { AnalyticsSettings } from "./types";
+import type { AnalyticsSettings } from "@wtt/core";
 
 /**
  * B77(K13、設計書 §5 の「出力」): dataLayer の出力プレビューの 1 行。エクスペリエンス・パターン・目標の 3 か所で共有する。
@@ -57,5 +57,57 @@ export function conversionPreview(names: AnalyticsSettings, input: { goalId: str
     line(k.goalId, input.goalId),
     input.goalName ? line(k.goalName, input.goalName, "指定した目標名", true) : line(k.goalName, input.goalId, "指定なし = 目標 ID"),
     line(names.extraKey, null, "追加する情報なし"),
+  ];
+}
+
+export type SitePreviewSample = {
+  experimentId: string;
+  experimentName: string;
+  variantId: string;
+  variantName: string;
+  extra: Record<string, string>;
+  goalId: string;
+  goalName: string;
+};
+
+export const SITE_PREVIEW_SAMPLE: SitePreviewSample = {
+  experimentId: "<エクスペリエンス ID>",
+  experimentName: "",
+  variantId: "<パターン ID>",
+  variantName: "",
+  extra: { example_key: "<値>" },
+  goalId: "<目標 ID>",
+  goalName: "",
+};
+
+export type SitePreviewBlock = {
+  id: "exposure" | "conversion" | "rateLimited";
+  title: string;
+  pushes: PreviewLine[][];
+};
+
+export function siteDataLayerPreview(
+  names: AnalyticsSettings,
+  sample: SitePreviewSample = SITE_PREVIEW_SAMPLE,
+): SitePreviewBlock[] {
+  return [
+    {
+      id: "exposure",
+      title: "露出",
+      pushes: [
+        [line(names.extraKey, null, "前の露出の追加情報を消す(イベントなし)")],
+        exposurePreview(names, { ...sample, experimentExtra: sample.extra, variantExtra: {} }),
+      ],
+    },
+    {
+      id: "conversion",
+      title: "コンバージョン",
+      pushes: [conversionPreview(names, sample)],
+    },
+    {
+      id: "rateLimited",
+      title: "制限に当たったとき",
+      pushes: [[line("event", "ab_error"), line("ab_error_type", "rate_limited")]],
+    },
   ];
 }

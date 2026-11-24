@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { uuidToVisitorId, visitorIdToUuid, bucketOf, hashByoidValue, compile, shortVisitorHash } from "@wtt/core";
+import { DEFAULT_ANALYTICS, uuidToVisitorId, visitorIdToUuid, bucketOf, hashByoidValue, compile, shortVisitorHash } from "@wtt/core";
 import type { CompiledConfig } from "@wtt/core";
 import { createRuntime, type AbApi, type RuntimeDeps } from "../src/runtime";
 import { baseConfig, baseSettings, dliteSettings, goalsConfig, namedConfig, namedSettings, remoteConfig, renamedAnalytics } from "./fixtures";
+import { SITE_PREVIEW_SAMPLE, siteDataLayerPreview, type PreviewLine, type SitePreviewBlock, type SitePreviewSample } from "../../../apps/admin/lib/datalayer-preview";
 
 /** exp_hero(50/50)で指定の半分に入る canonical ID を探す */
 function findVisitor(half: "A" | "B"): string {
@@ -52,6 +53,27 @@ function perCallDeferredFetch() {
 
 function makeDeps(fetchFn: typeof fetch, nonce: string | null = null): RuntimeDeps {
   return { win: window as RuntimeDeps["win"], doc: document, fetchFn, scriptSrc: "https://edge.test/s/site_unit.js", nonce };
+}
+
+function toPush(lines: PreviewLine[], extraKey: string): Record<string, unknown> {
+  const push: Record<string, unknown> = {};
+  for (const { key, value, nested } of lines) {
+    if (nested) {
+      const extra = (push[extraKey] ??= {}) as Record<string, unknown>;
+      extra[key] = JSON.parse(value);
+    } else {
+      push[key] = JSON.parse(value);
+    }
+  }
+  return push;
+}
+
+function pushesOf(blocks: SitePreviewBlock[], ids: SitePreviewBlock["id"][]): PreviewLine[][] {
+  return ids.flatMap((id) => {
+    const block = blocks.find((block) => block.id === id);
+    if (!block) throw new Error(`プレビューに ${id} がありません`);
+    return block.pushes;
+  });
 }
 
 function dataLayer(): Array<Record<string, unknown>> {
@@ -225,6 +247,66 @@ it("custom_datalayer_name_receives_exposure_and_conversion", async () => {
   const myDL = (window as unknown as { myDL?: Array<Record<string, unknown>> }).myDL;
   expect(myDL?.map((e) => e.event)).toEqual([undefined, "wtt_exposure", "wtt_conversion"]);
   expect("dataLayer" in window).toBe(false); // 既定名の配列は作らない
+});
+
+const previewSample: SitePreviewSample = {
+  experimentId: "exp_hero",
+  experimentName: "Hero Q3",
+  variantId: "vB",
+  variantName: "New hero",
+  extra: { test_group: "pricing_q3", external_exp_id: "E-101" },
+  goalId: "g_cta",
+  goalName: "CTA click",
+};
+
+it.each([
+  ["dataLayer", { ...baseSettings, analytics: DEFAULT_ANALYTICS }],
+  ["myDL", { ...namedSettings, analytics: { ...renamedAnalytics, dataLayerName: "myDL" } }],
+] as const)("site_settings_preview_matches_runtime_pushes (%s)", async (destination, settings) => {
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const f = deferredFetch();
+  const api = createRuntime(makeDeps(f.fn), { config: namedConfig, settings });
+  await flush();
+  api.track("g_cta");
+
+  const names = settings.analytics;
+  const blocks = siteDataLayerPreview(names, previewSample);
+  const expected = pushesOf(blocks, ["exposure", "conversion"]).map((lines) => toPush(lines, names.extraKey));
+  const actual = (window as unknown as Record<string, unknown>)[destination];
+  expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
+  if (destination === "myDL") expect("dataLayer" in window).toBe(false);
+});
+
+it("site settings preview matches compiled runtime pushes when analytics names are unset", async () => {
+  const experiment = baseConfig.experiments[0]!;
+  const sample = {
+    ...SITE_PREVIEW_SAMPLE,
+    experimentId: experiment.id,
+    variantId: "vB",
+    goalId: "g_cta",
+  };
+  // 管理用の名前はあっても、外部計測の名前を指定しなければ compile が ID を焼く。
+  const config = compile({
+    siteId: baseConfig.siteId, siteSalt: baseConfig.siteSalt, version: baseConfig.version,
+    experiments: [{
+      ...experiment,
+      name: "Hero Q3",
+      analytics: { extra: sample.extra },
+      variants: experiment.variants.map((variant) => ({ ...variant, name: variant.id === "vB" ? "New hero" : "Control" })),
+    }],
+    goals: [{ id: sample.goalId, name: "CTA click", type: "CUSTOM", config: {} }],
+  });
+
+  document.cookie = `_ab_vid=${VB}; Path=/`;
+  const names = DEFAULT_ANALYTICS;
+  const f = deferredFetch();
+  const api = createRuntime(makeDeps(f.fn), { config, settings: { ...baseSettings, analytics: names } });
+  await flush();
+  api.track(sample.goalId);
+
+  const blocks = siteDataLayerPreview(names, sample);
+  const expected = pushesOf(blocks, ["exposure", "conversion"]).map((lines) => toPush(lines, names.extraKey));
+  expect(JSON.stringify(dataLayer())).toBe(JSON.stringify(expected));
 });
 
 it("analytics_without_datalayer_name_pushes_to_datalayer", async () => {

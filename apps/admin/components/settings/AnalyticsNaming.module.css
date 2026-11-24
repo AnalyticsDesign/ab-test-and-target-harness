@@ -1,0 +1,23 @@
+.container { container-type: inline-size; }
+.layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  align-items: start;
+}
+.layout > * { min-width: 0; }
+
+@container (min-width: calc(38rem + 20px)) {
+  .layout { grid-template-columns: 1fr 1fr; }
+  .preview {
+    position: sticky;
+    top: 16px;
+    /* 固定中も補足が本文の上端で切れないよう、ボタンの下に開く。 */
+    --analytics-tip-inset: calc(100% + 8px) auto;
+  }
+}
+
+.example { display: grid; gap: 4px; }
+.example + .example { margin-top: 4px; }
+.example h4 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0; }
+.example h4 span { font-size: 12px; font-weight: 400; }

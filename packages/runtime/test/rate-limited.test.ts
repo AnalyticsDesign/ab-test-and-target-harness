@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { uuidToVisitorId } from "@wtt/core";
+import { DEFAULT_ANALYTICS, uuidToVisitorId } from "@wtt/core";
 import { createRuntime, type AbApi, type RuntimeDeps } from "../src/runtime";
 import { baseConfig, baseSettings, dliteSettings, goalsConfig, namedSettings, remoteConfig, renamedAnalytics } from "./fixtures";
+import { siteDataLayerPreview, type PreviewLine, type SitePreviewBlock } from "../../../apps/admin/lib/datalayer-preview";
 
 // Plan 12 K11: edge が 429 を返したら、そのページで 1 回だけ dataLayer に ab_error を積む(適用と送信は止めない)
 
@@ -25,6 +26,27 @@ function routedFetch(handler: Handler) {
 
 function makeDeps(fetchFn: typeof fetch): RuntimeDeps {
   return { win: window as RuntimeDeps["win"], doc: document, fetchFn, scriptSrc: "https://edge.test/s/site_unit.js", nonce: null };
+}
+
+function toPush(lines: PreviewLine[], extraKey: string): Record<string, unknown> {
+  const push: Record<string, unknown> = {};
+  for (const { key, value, nested } of lines) {
+    if (nested) {
+      const extra = (push[extraKey] ??= {}) as Record<string, unknown>;
+      extra[key] = JSON.parse(value);
+    } else {
+      push[key] = JSON.parse(value);
+    }
+  }
+  return push;
+}
+
+function pushesOf(blocks: SitePreviewBlock[], ids: SitePreviewBlock["id"][]): PreviewLine[][] {
+  return ids.flatMap((id) => {
+    const block = blocks.find((block) => block.id === id);
+    if (!block) throw new Error(`プレビューに ${id} がありません`);
+    return block.pushes;
+  });
 }
 
 function dataLayer(): Array<Record<string, unknown>> {
@@ -67,6 +89,25 @@ it("rate_limited_response_pushes_ab_error_once_per_page", async () => {
   await flush();
   expect(f.calls.some((c) => c.url.endsWith("/event") && c.body.type === "goal")).toBe(true);
   expect(abErrors(dataLayer())).toEqual([RATE_LIMITED]); // 増えない
+});
+
+it.each([
+  ["dataLayer", { ...baseSettings, analytics: DEFAULT_ANALYTICS }],
+  ["myDL", { ...namedSettings, analytics: { ...renamedAnalytics, dataLayerName: "myDL" } }],
+] as const)("rate_limited_push_matches_site_settings_preview (%s)", async (destination, settings) => {
+  const f = routedFetch(() => res(429));
+  createRuntime(makeDeps(f.fn), { config: goalsConfig, settings });
+  await flush();
+  expect(f.calls.some(({ url }) => url.endsWith("/decision"))).toBe(true);
+
+  const names = settings.analytics;
+  const blocks = siteDataLayerPreview(names);
+  const expected = pushesOf(blocks, ["rateLimited"]).map((lines) => toPush(lines, names.extraKey));
+  const destinations = window as unknown as Record<string, Array<Record<string, unknown>> | undefined>;
+  // goalsConfig のページ表示目標も成立するため、エラーの push を取り出す。
+  const actual = abErrors(destinations[destination] ?? []);
+  expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
+  if (destination === "myDL") expect("dataLayer" in window).toBe(false);
 });
 
 it("event だけが 429 のときも積む(decision は成功)", async () => {

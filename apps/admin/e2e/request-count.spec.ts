@@ -15,6 +15,7 @@ import { RELEASE_VERSION } from "../generated/release";
  * 対象の画面(SCREENS): ホーム・ワークスペースのホーム・サイトのトップ(= エクスペリエンスの一覧)・目標・オーディエンスの一覧・画像の一覧(B68)・
  * エクスペリエンスの詳細・オーディエンスの詳細(設定)・サイト設定・メンバー(ワークスペースの設定)・公開・公開履歴・操作の記録(ワークスペース・導入全体。B129)・この導入について(B142)。
  * B148: サイト設定のドメインの節(siteSettingsDomains)は、直接(?section=domains)・節のリンク・節の保存 1 回を SCREENS の外で数える(節の切り替えはルーターを通らない)。
+ * B288: 外部計測の名前の節(siteSettingsNaming)も、直接(?section=naming)の HTML を数える。
  * 目標には詳細の画面が無い(一覧の中で編集する)ので、目標の一覧で代える。画面ごとに次の 2 通りを数える:
  * - 直接: page.goto で URL を開く(HTML の要求)
  * - 遷移: 遷移元の画面を開き、落ち着いてからリンクにマウスを乗せ、その先読みも落ち着いてから押す(RSC の要求 `?_rsc=`)。
@@ -60,6 +61,7 @@ type ScreenName =
   | "audience"
   | "siteSettings"
   | "siteSettingsDomains"
+  | "siteSettingsNaming"
   | "members"
   | "publish"
   | "history"
@@ -91,6 +93,9 @@ export const REQUEST_LIMITS: Record<ScreenName, { direct: number; navigation: nu
   // B148: サイト設定のドメインの節。上限は siteSettings と同じ(節を増やしても admin → control の要求を増やさない)。
   // direct = ?section=domains を直接開く / navigation = 一般の節から設定のメニューの「ドメイン」で移る(ルーターを通さない節の切り替え)
   siteSettingsDomains: { direct: 6, navigation: 6 }, // 実測 5 / 0(2026-11-02。節のリンクはルーターを通らないので control を呼ばない)
+  // B288 実測 5 / —(2026-11-19。外枠の 4 回 + experiments。プレビューはサイト設定と入力値を使い、取得を増やさない)。
+  // 直接表示だけを計測する。節の遷移は計測しないため navigation の値は使わない。上限は siteSettings と同じ。
+  siteSettingsNaming: { direct: 6, navigation: 6 },
   members: { direct: 6, navigation: 6 }, // 実測 5 / 5(サイトの外。+ members・invitations)
   publish: { direct: 6, navigation: 6 }, // 実測 5 / 5(+ publish-preview)
   history: { direct: 6, navigation: 6 }, // 実測 5 / 5(+ publishes)
@@ -543,40 +548,47 @@ test("main screens: control requests per view stay within the budget (direct HTM
 
   // B148: サイト設定のドメインの節。節はルーターを通さずに切り替わる(lib/settings-section.ts)ので、SCREENS の遷移の形(押した後の RSC の要求)にならない。
   // 直接(?section=domains の HTML)・節のリンク(押した後の要求の全部)・節の保存 1 回(BFF の PATCH と保存の後の読み直しの RSC)を数える
-  {
+  // B288: 外部計測の名前の節は、プレビューを含む直接の表示だけを数える。
+  for (const [name, section] of [["siteSettingsNaming", "naming"], ["siteSettingsDomains", "domains"]] as const) {
     const settingsPath = `${siteBase(ids)}/settings`;
-    const limit = REQUEST_LIMITS.siteSettingsDomains;
+    const limit = REQUEST_LIMITS[name];
     const row: Row = { direct: null, navigation: null, prefetchOnHover: null, afterLoad: null, save: null };
-    summary.siteSettingsDomains = row;
+    summary[name] = row;
     const domainsSection = page.getByTestId("domains-section");
     const isOwnHtml = (r: AdminRequest) => new URL(r.url).pathname === settingsPath && !new URL(r.url).searchParams.has("_rsc");
     const guard = async (what: string, body: () => Promise<void>) => {
       try {
         await body();
       } catch (e) {
-        expect.soft(String(e), `siteSettingsDomains: ${what} の操作が最後まで進む`).toBe("");
+        expect.soft(String(e), `${name}: ${what} の操作が最後まで進む`).toBe("");
         await waitQuiet(Date.now() - 5_000).catch(() => undefined);
       }
     };
 
-    await test.step("siteSettingsDomains: direct load (HTML, ?section=domains)", () =>
+    await test.step(`${name}: direct load (HTML, ?section=${section})`, () =>
       guard("direct", async () => {
         const from = Date.now();
-        await page.goto(`${settingsPath}?section=domains`);
+        await page.goto(`${settingsPath}?section=${section}`);
         await waitForHydration(page);
-        await expect(domainsSection).toBeVisible();
+        if (section === "naming") {
+          await expect(page.getByTestId("datalayer-preview")).toHaveCount(4);
+        } else {
+          await expect(domainsSection).toBeVisible();
+        }
         const to = await waitQuiet(from);
         const reqs = await adminRequests(from, to);
         const own = reqs.filter(isOwnHtml);
         const direct = count(own, ids.wid);
         row.direct = direct.total;
-        await record(testInfo, "siteSettingsDomains-direct", { direct, others: count(reqs.filter((r) => !isOwnHtml(r)), ids.wid), requests: perRequest(reqs, ids.wid) });
-        expect.soft(own, "siteSettingsDomains: 直接: 画面の HTML の要求が 1 件ある").toHaveLength(1);
-        expect.soft(duplicates(direct), "siteSettingsDomains: 直接: 同じパスへの重複が無い").toEqual({});
-        expect.soft(direct.total, "siteSettingsDomains: 直接: control への要求が数えられている(≥ 1)").toBeGreaterThan(0);
-        expect.soft(direct.total, `siteSettingsDomains: 直接の表示で control への要求 ≤ ${limit.direct}`).toBeLessThanOrEqual(limit.direct);
+        await record(testInfo, `${name}-direct`, { direct, others: count(reqs.filter((r) => !isOwnHtml(r)), ids.wid), requests: perRequest(reqs, ids.wid) });
+        expect.soft(own, `${name}: 直接: 画面の HTML の要求が 1 件ある`).toHaveLength(1);
+        expect.soft(duplicates(direct), `${name}: 直接: 同じパスへの重複が無い`).toEqual({});
+        expect.soft(direct.total, `${name}: 直接: control への要求が数えられている(≥ 1)`).toBeGreaterThan(0);
+        expect.soft(direct.total, `${name}: 直接の表示で control への要求 ≤ ${limit.direct}`).toBeLessThanOrEqual(limit.direct);
       }),
     );
+
+    if (section === "naming") continue;
 
     await test.step("siteSettingsDomains: section link from the general section", () =>
       guard("navigation", async () => {

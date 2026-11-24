@@ -257,6 +257,7 @@ export function VariantEditor({
         </AnalyticsSection>
         <AnalyticsSection output title="出力される内容" tipLabel="出力される内容の補足" tip="このパターンが表示されたときに dataLayer に送る内容です。サイト設定・エクスペリエンス・このパターンの値を合わせた結果です">
           <DataLayerPreview
+            dataLayerName={names.dataLayerName}
             extraKey={names.extraKey}
             lines={exposurePreview(names, { experimentId, experimentName, variantId: variant.id, variantName: nameOverride, experimentExtra, variantExtra: extra })}
           />
