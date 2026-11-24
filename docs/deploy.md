@@ -3117,7 +3117,7 @@ Workers の実行回数・失敗と、訪問者に返った 5xx を GraphQL Anal
 
 - **【人に依頼】** 稼働確認用のトークン `CF_ANALYTICS_TOKEN`。導入の日のトークンには、ここで使う 2 つの Analytics の権限をそろえたものが無い(作業用はゾーンの設定だけ、使用状況用はアカウントの Analytics だけで、ゾーンの Analytics は無い)。control に入れる `CF_USAGE_TOKEN` とは別物。Account API Token で作る。1 本にアカウントとゾーンの 2 つのポリシーを入れる:
   - 画面: ダッシュボードの Manage account(アカウントの管理)→ Account API tokens(アカウント API トークン)→ Create a token(トークンを作成)→ Start from scratch(最初から作成)の Custom(この Custom は日本語の表示でも英語のまま)
-  - Permission policies(権限ポリシー)の Edit policy(ポリシーを編集)で Entire Account(アカウント全体)を選び、Analytics & Logs の Account Analytics の Read にチェックを入れる(分類・権限の名前と Read は日本語の表示でも英語のまま)
+  - Permission policies(権限ポリシー)の Edit policy(ポリシーを編集)で Entire Account(アカウント全体)を選び、Analytics & Logs の Account Analytics の Read にチェックを入れる(分類・権限の名前と Read は日本語の表示でも英語のまま)。control のログ(Workers Logs)も API で読むなら、同じポリシーで Developer Platform の Workers Observability(Legacy(レガシー))の Read にもチェックを入れる(この節の確認には要らない。使い方は[運用ガイド 10 節「Cron の回の結果を後から読む」](operations.md#cron-の回の結果を後から読む))
   - Add policy(ポリシーを追加)を押す。先のポリシーは残り、次の Edit policy(ポリシーを編集)が出る。そこで Specified Domains(指定ドメイン)にし、Select domains...(ドメインを選択...)で対象のゾーンを選び、Analytics & Logs の Zone Analytics の Read にチェックを入れる(Specified Domains(指定ドメイン)にした後の Zone Analytics の行の日本語の表示は未確認)
   - Token expiration(トークンの有効期限)= Custom(カスタム)で短く(数日)する。カレンダーで今日の日付を押してから終わりの日付を押し、Start(開始)が今日・End(終了)が終わりの日になったことを確かめてから Apply(適用)を押す(0.5 の基本の 2(親トークン)と同じ押し方。押した結果を確かめたのは、英語の画面で今日 → 翌日を押したときだけ)
   - Client IP address filtering(クライアント IP アドレス フィルタリング)は空のままにし、Review token(トークンを確認)の Summary(概要)で権限と期限を確かめてから Create token(トークンを作成)を押す。値を控えたら、作成の直後の画面のタブを閉じる
@@ -3132,7 +3132,7 @@ echo "${#CF_ZONE_ID}"   # 期待: 32
 ```
 
 ```bash
-# CF_ANALYTICS_TOKEN: アカウントの Account Analytics の Read と、ゾーンの Zone Analytics(User API Token では Analytics)の Read だけのトークン / CF_ACCOUNT_ID: pnpm -C apps/control exec wrangler whoami の Account ID / CF_ZONE_ID: zone_name のゾーンの ID
+# CF_ANALYTICS_TOKEN: アカウントの Account Analytics の Read と、ゾーンの Zone Analytics(User API Token では Analytics)の Read だけのトークン(ログも読むなら Workers Observability の Read も足してよい) / CF_ACCOUNT_ID: pnpm -C apps/control exec wrangler whoami の Account ID / CF_ZONE_ID: zone_name のゾーンの ID
 # 半開区間 [SINCE, UNTIL)。UNTIL を過ぎた実時刻になってから実行する
 G=https://api.cloudflare.com/client/v4/graphql; H=(-H "Authorization: Bearer $CF_ANALYTICS_TOKEN" -H 'content-type: application/json')
 SINCE=<開始 UTC> UNTIL=<終了 UTC>
