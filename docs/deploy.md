@@ -3455,12 +3455,16 @@ pnpm -C apps/control exec wrangler r2 bucket delete wtt-assets                  
 4. ゾーンに置いたルールを消す(ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のみ)。2.6 / 2.7 の `$H` / `$ZID` と同じ準備で:
 
 ```bash
-# Cache Rule: 2.6 の確認コマンドで id を引き、本ツールの式(/s/ と /v1/ を含む)のルールだけ消す
+# Cache Rule: 2.6 の手順 2 の一覧(`.result.rules[]?` のほう)で RID と id を引き、本ツールの式(/s/ と /v1/ を含む)のルールだけ消す
 curl -sS -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RID/rules/<rule id>" -H "$H" | jq '{success, errors}'
-# WAF Rate Limiting Rule: 2.7 の確認コマンドで id を引き、同じように消す(phase は http_ratelimit)
+# WAF Rate Limiting Rule: 2.7 の「既存のレート制限ルールの有無」のコマンドで RID と id を引き、同じように消す(phase は http_ratelimit)
 ```
 
-期待: `"success": true`。ゾーンに他のルールがある場合、ruleset 自体は消さない(entrypoint を DELETE すると他のルールも消える)。ダッシュボードで消すなら、対象ゾーンの Caching → Cache Rules / Security(セキュリティ)→ Security rules(セキュリティ ルール)の該当行。
+期待: `"success": true`。ゾーンに他のルールがある場合、ruleset 自体は消さない(entrypoint を DELETE すると他のルールも消える)。
+
+消した後は、既存のルールの一覧を出すコマンド(2.6 の手順 2 と 2.7 の「既存のレート制限ルールの有無」。`.result.rules[]?` と `?` が付いているほう)で確かめる。その ruleset の最後の 1 行を消すと、応答から `rules` そのものが省かれることがある(Cache Rule で確かめた。WAF Rate Limiting Rule で同じになるかは確かめていない)。一覧を出すコマンドは、このとき `rules: []` を出し、ルールが 0 行になったと読める。2.6 の作成後の確認コマンド(`.result.rules[]` のほう。`?` が無い)は `rules` が無いと jq のエラーで止まるので、撤去の確認には使わない。DELETE の結果が分からないとき(jq のエラー・接続の切断など)は、DELETE を送り直したり、ルールの ID を引き直したりする前に、まず 2.6 の手順 2 か 2.7 の「既存のレート制限ルールの有無」のコマンドをもう一度流して、今の状態を見る。
+
+ダッシュボードで消すなら、対象ゾーンの Caching → Cache Rules / Security(セキュリティ)→ Security rules(セキュリティ ルール)の該当行。
 
 `custom-domain` の構成で、別のドメインのゾーンとアカウントを残すときは、Custom Domain のために発行された証明書が残っていれば片づける。この証明書は Custom Domain を消しても残る。ただし、ゾーンの既定の証明書(Universal SSL)が `<edge のホスト>` を含むとき(例 `*.example.net` が `ab.example.net` を含む)は、別の証明書が発行されず、片づけるものが無いことがある。**【人に依頼】** ダッシュボードの対象ゾーンの SSL/TLS → Edge Certificates(日本語の表示は未確認)で `<edge のホスト>` だけを対象にした証明書を探し、あれば、そのゾーンのほかのホストで使っていないことを確かめてから消してもらう。
 
