@@ -635,13 +635,38 @@ describe("publish (spec §13.6)", () => {
     const resBody = (await expectEnvelope(res)) as { error: string; message: string };
     expect(resBody.error).toBe("site_has_running_experiments");
     // 管理画面の Site 削除ボタンがそのまま表示する文言(Task 11)
-    expect(resBody.message).toBe("配信中のエクスペリエンスがあります。先に終了してから削除してください");
+    expect(resBody.message).toBe("配信中または一時停止中のエクスペリエンスがあります。終了を公開してから削除してください");
     await env.ASSETS!.put(`sites/${sid}/experiments/${eid}/x.png`, new Uint8Array([1, 2, 3]));
     expect((await json<PublishResult>(await publishRes(owner.token, sid))).ok).toBe(true); // Stop を Publish
     expect((await call("DELETE", `/sites/${sid}`, { token: owner.token })).status).toBe(204);
     expect((await env.ASSETS!.list({ prefix: `sites/${sid}/` })).objects).toEqual([]);
     expect(await env.CONFIG_KV.get(kvKeys.settings(sid))).toBeNull();
     expect(await env.CONFIG_KV.get(kvKeys.active(sid))).toBeNull();
+  });
+
+  it("blocks site deletion for a paused experiment until its end is published", async () => {
+    const { owner, sid, eid } = await siteWithRunning();
+    const { token } = owner;
+    const expectBlocked = async () => {
+      const response = await call("DELETE", `/sites/${sid}`, { token });
+      expect(response.status).toBe(409);
+      expect(await expectEnvelope(response)).toMatchObject({
+        error: "site_has_running_experiments",
+        message: "配信中または一時停止中のエクスペリエンスがあります。終了を公開してから削除してください",
+      });
+      expect(await env.CONFIG_KV.get(kvKeys.settings(sid))).not.toBeNull();
+    };
+
+    await runDirect(sid, eid, "paused"); // 状態だけが一時停止中(未公開)
+    await expectBlocked();
+
+    expect((await json<PublishResult>(await publishRes(token, sid))).ok).toBe(true);
+    await runDirect(sid, eid, "archived"); // 公開済みの状態だけが一時停止中
+    await expectBlocked();
+    expect(await active(sid)).toBe("1");
+
+    expect((await json<PublishResult>(await publishRes(token, sid))).ok).toBe(true);
+    expect((await call("DELETE", `/sites/${sid}`, { token })).status).toBe(204);
   });
 });
 

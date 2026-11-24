@@ -650,7 +650,7 @@ siteRoutes.delete(
   "/sites/:sid",
   describeRoute({
     tags: ["sites"],
-    summary: "サイトを削除(オーナーのみ)。KV の settings / host / active / config と、設置タグの配信ファイルも消す。配信ファイルを消せなかったときは 503 でサイトを残す",
+    summary: "サイトを削除(オーナーのみ)。配信中または一時停止中のエクスペリエンスがある場合は 409。KV の settings / host / active / config と、設置タグの配信ファイルも消す。配信ファイルを消せなかったときは 503 でサイトを残す",
     security: [{ bearer: [] }],
     responses: { 204: { description: "削除した" }, ...errorResponses(401, 403, 404, 409, 503) },
   }),
@@ -658,14 +658,15 @@ siteRoutes.delete(
   async (c) => {
     const { site } = await loadSite(c, c.req.param("sid"), "owner");
     const db = c.get("db");
-    // Desired と Published のどちらかが running なら消せない(Stop の Publish が失敗して配信中のままの Site を守る。spec §13.8)
-    const running = await db
+    // 編集中か公開済みのいずれかが配信中・一時停止中なら、終了の公開まで削除を止める。
+    // IN は公開済みの状態が NULL の行に一致しない。
+    const active = await db
       .selectFrom("experiments")
       .select("id")
       .where("site_id", "=", site.id)
-      .where((eb) => eb.or([eb("status", "=", "running"), eb("published_status", "=", "running")]))
+      .where((eb) => eb.or([eb("status", "in", ["running", "paused"]), eb("published_status", "in", ["running", "paused"])]))
       .executeTakeFirst();
-    if (running) throw new ApiError(409, "site_has_running_experiments", { experimentId: running.id, message: "配信中のエクスペリエンスがあります。先に終了してから削除してください" });
+    if (active) throw new ApiError(409, "site_has_running_experiments", { experimentId: active.id, message: "配信中または一時停止中のエクスペリエンスがあります。終了を公開してから削除してください" });
     // 決定 52 (5) / 7i plan K23: 削除ごとの印(token)を立ててから配信ファイルを先に消す。届かない・待ち切れない・墓標が受け付けられたと
     // 確かめられなければ Site を残して 503(消えた Site のファイルが残り続けないように)
     const token = crypto.randomUUID();
