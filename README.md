@@ -94,11 +94,11 @@ flowchart LR
 
 費用の目安は次のとおり(2026-11-16 確認、USD、ドメイン代・税別)。結果の記録と画像配信を使わず、目標の送信は 0.05 回/PV、新規 Profile は 0.1 件/PV、ピーク日は平均の 2 倍とした試算。無料枠内は Free、超える構成は Paid とし、管理操作・定期実行も見込む。料金と計算の前提は[導入構成の選び方 3 節](docs/install-patterns.md#3-料金プラン問い-2)にある。
 
-| 月間 PV | 履歴条件・`persistAssignment` を使わない: Mode A(JS Cookie) / Mode C(BYOID) | Mode B(サーバー発行 Cookie)・履歴なし | 履歴条件・`persistAssignment` を使う(Mode を問わない) |
+| 構成 | 月間 10 万 PV | 月間 100 万 PV | 月間 1,000 万 PV |
 |---|---|---|---|
-| 10 万 | $0 | $0 | $0 |
-| 100 万 | $0 | $0 | 約 $5 |
-| 1,000 万 | $0 | 約 $5 | 約 $7 |
+| 履歴条件・`persistAssignment` を使わない: Mode A(JS Cookie) / Mode C(BYOID) | $0 | $0 | $0 |
+| Mode B(サーバー発行 Cookie)・履歴なし | $0 | $0 | 約 $5 |
+| 履歴条件・`persistAssignment` を使う(Mode を問わない) | $0 | 約 $5 | 約 $7 |
 
 - Mode A(JS Cookie) / Mode C(BYOID) で履歴条件などを使わず、結果の記録・画像配信も無ければ、PV に比例する Workers・DO・D1・KV・R2 の利用は無い(設置タグは無料の静的アセット)。導入全体の費用は、管理操作や定期実行、同じアカウントのほかの利用分にもよる
 - Mode B(サーバー発行 Cookie)の判定は約 1 回/PV。Free の 10 万要求/日、Paid の 1,000 万要求/月から管理操作などの分を引いて考える。履歴条件などを使う場合の Free の約 4.7 万 PV/日は、Profile 更新だけで計算した上限で、予算確認・期限切れ削除などの分だけ下がる。上記の新規 Profile・削除の前提では、Paid の DO 要求の込み量は月約 80 万 PV で使い切る
