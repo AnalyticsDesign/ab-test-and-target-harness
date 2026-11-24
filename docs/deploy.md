@@ -420,14 +420,27 @@ curl -sS -w '\n%{http_code}\n' "<AB_ADMIN_URL>/api/control/me"                  
 `<owner_email>` と `<workspace_name>` に値を入れ、`<usage_visibility>` には `members` を入れて、1 つのシェルで続けて実行する。`<workspace_name>` はワークスペースの名前で、管理画面のサイドバーに出る。後から変えられる:
 
 ```bash
-SETUP_TOKEN=$(openssl rand -hex 16) \
-&& printf '%s' "$SETUP_TOKEN" | pnpm -C apps/control exec wrangler secret put AB_SETUP_TOKEN \
-&& sleep 10 \
-&& curl -sS -X POST "<control URL>/setup" -H "X-Setup-Token: $SETUP_TOKEN" -H 'content-type: application/json' \
-     -d '{"email":"<owner_email>","workspaceName":"<workspace_name>","usageVisibility":"<usage_visibility>"}' -w '\n%{http_code}\n'   # 期待: {"workspaceId":"…","userId":"…"} と 201
+(
+  post_setup() {
+    curl -sS -X POST "<control URL>/setup" -H "X-Setup-Token: $SETUP_TOKEN" -H 'content-type: application/json' \
+      -d '{"email":"<owner_email>","workspaceName":"<workspace_name>","usageVisibility":"<usage_visibility>"}' -w '\n%{http_code}\n'
+  }
+
+  SETUP_TOKEN=$(openssl rand -hex 16) || exit 1
+  printf '%s' "$SETUP_TOKEN" | pnpm -C apps/control exec wrangler secret put AB_SETUP_TOKEN || exit 1
+  sleep 30
+  setup_response=$(post_setup) || exit 1
+  printf '%s\n' "$setup_response"
+
+  if [ "${setup_response##*$'\n'}" = 403 ] &&
+    printf '%s\n' "${setup_response%$'\n'*}" | jq -e '.error == "setup_closed"' >/dev/null 2>&1; then
+    sleep 30
+    post_setup
+  fi
+)
 ```
 
-403 `setup_closed` → 30 秒待って同じブロックをもう一度(5 節の「期待と違うとき」)。201 が返ったら `<AB_ADMIN_URL>/login` を開き、「Google でログイン」から `<owner_email>` でログインする。管理画面が開いたら使い捨てトークンを消す:
+このコマンドは、最初の応答が 403 `setup_closed` なら 30 秒待ち、同じトークンで同じ POST を 1 回だけ送り直す。成功時の最後の応答は 201 と `{"workspaceId":"…","userId":"…"}`。それでも 403 なら、5 節の「期待と違うとき」で応答本文・対象の Worker と URL・登録の有無を順に確かめる。201 が返るか登録済みと確認できたら `<AB_ADMIN_URL>/login` を開き、「Google でログイン」から `<owner_email>` でログインする。管理画面が開いたら使い捨てトークンを消す:
 
 ```bash
 pnpm -C apps/control exec wrangler secret delete AB_SETUP_TOKEN
@@ -2176,29 +2189,45 @@ curl -sS -w '\n%{http_code}\n' "<AB_ADMIN_URL>/api/control/me"                  
    - 送る値は入力ファイルの `owner_email` / `workspace_name` / `usage_visibility`。`usage_visibility` が入力ファイルに無ければ `members` を入れる。空文字のまま送ると 422 になる
    - `owner_email` は、ログインに使う Google アカウントと同じもの。パスワードは無い
    - トークンはこのブロックの中だけで使い、画面にも `deploy-log.md` にも出さない
-   - 1 つのシェルで続けて実行し、生成と使用を分けない。エージェントの実行環境は、コマンドごとにシェルが変わることがあるため
+   - 1 つのシェルで続けて実行する。コマンドをまとめると、エージェントが実行する場合も再送まで同じトークンを使える
+   - トークンを登録すると新しい Worker の版が作られ、全拠点に届くまで数秒かかるため、最初の POST までの 30 秒は余裕を見た待ち時間で、Cloudflare の保証値ではない。[シークレットの登録](https://developers.cloudflare.com/workers/configuration/secrets/#adding-secrets-to-your-project) [デプロイの反映](https://developers.cloudflare.com/workers/versions-and-deployments/version-skew/#versions-deployments-and-asset-sets)
 
 ```bash
-SETUP_TOKEN=$(openssl rand -hex 16) \
-&& printf '%s' "$SETUP_TOKEN" | pnpm -C apps/control exec wrangler secret put AB_SETUP_TOKEN \
-&& sleep 10 \
-&& curl -sS -X POST "<control URL>/setup" -H "X-Setup-Token: $SETUP_TOKEN" -H 'content-type: application/json' \
-     -d '{"email":"<owner_email>","workspaceName":"<workspace_name>","usageVisibility":"<usage_visibility>"}' -w '\n%{http_code}\n'   # 期待: {"workspaceId":"…","userId":"…"} と 201
+(
+  post_setup() {
+    curl -sS -X POST "<control URL>/setup" -H "X-Setup-Token: $SETUP_TOKEN" -H 'content-type: application/json' \
+      -d '{"email":"<owner_email>","workspaceName":"<workspace_name>","usageVisibility":"<usage_visibility>"}' -w '\n%{http_code}\n'
+  }
+
+  SETUP_TOKEN=$(openssl rand -hex 16) || exit 1
+  printf '%s' "$SETUP_TOKEN" | pnpm -C apps/control exec wrangler secret put AB_SETUP_TOKEN || exit 1
+  sleep 30
+  setup_response=$(post_setup) || exit 1
+  printf '%s\n' "$setup_response"
+
+  if [ "${setup_response##*$'\n'}" = 403 ] &&
+    printf '%s\n' "${setup_response%$'\n'*}" | jq -e '.error == "setup_closed"' >/dev/null 2>&1; then
+    sleep 30
+    post_setup
+  fi
+)
 ```
+
+成功時の最後の応答は 201 と `{"workspaceId":"…","userId":"…"}`。
 
 期待と違うとき:
 
-- 403 `setup_closed` → 原因は 2 つ: (a) 既にオーナーがいる(再実行のとき)/ (b) `AB_SETUP_TOKEN` が一致しない(`secret put` の反映前に送った、または別の値が残っている)
-  - 初回導入で 403 が返ったら、まず (b) として扱う。secret の反映を 30 秒待ってから、上のブロックをもう一度、変更せずに実行する。新しい値で登録し直して送ることになる
-  - それでも 403 なら (a) = 登録済みなので手順 2 へ進む。人が Google でログインできれば確定する
-  - 直前に 503 が返っていた場合は下の 503 の項に従う
+- 403 → 最初の応答が `setup_closed` の場合、上のコマンドは 30 秒待ってから同じトークンで同じ POST を 1 回だけ送り直す。最後の応答が 403 なら、次の順に確かめる。
+  1. **応答の本文**を見て、JSON の `error` が `setup_closed` か確かめる。別の本文なら、その本文に従って拒否した箇所を調べる
+  2. **Worker と URL** を照合する。`apps/control/wrangler.jsonc` の `name` がデプロイした control の Worker 名と一致し、POST 先が 3.5 で確認した control の URL の `/setup` であることを確かめる
+  3. **初回登録の有無**を確かめる。control の `DB` に設定した D1 を確かめ、`pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select completed from setup_lock where id = 1"` を実行する(D1 の名前を変えた場合は `wtt-control` を置き換える)。`completed = 1` なら登録済みなので、手順 2 で本人がログインして確かめる。行がない、`completed = 0`、または確認できない場合は、応答本文と分かった状況を控えて止まる
 - 422 → `owner_email` の形式か `workspace_name` の長さ(1〜100 文字)、または `usage_visibility` が `members` / `instance_admins` 以外。入力ファイルを直して再実行
 - 429 → 10 秒待って再実行(無認証入口は IP 単位で 30 回 / 10 秒)
-- 503 `setup_failed` → ワークスペースの作成に失敗。60 秒待ってから上のブロックをもう一度、変更せずに実行する。途中の状態は、60 秒たつと次の実行が片付ける。60 秒以内に再実行すると 403 `setup_closed` が返ることがある。その 403 は上の (a) ではないので、60 秒待ってからやり直す
+- 503 `setup_failed` → ワークスペースの作成に失敗。60 秒待ってから上のブロックをもう一度、変更せずに実行する。途中の状態は、60 秒たつと次の実行が片付ける。60 秒以内に再実行すると 403 `setup_closed` が返ることがある。その場合は、503 が返ってから 60 秒待ってやり直す
 - 400 → JSON の形。上のコマンドの引用符を確認
 
 2. **【人が行う】** `<AB_ADMIN_URL>/login`(4.3 で確認した admin の URL)を開き、「Google でログイン」から `owner_email` の Google アカウントでログインする。管理画面(`/w`)が開いたらエージェントに「ログインできた」と伝える
-3. エージェントが `AB_SETUP_TOKEN` を削除する。以後はユーザーを招待リンク経由でしか増やせなくなる。手順 1 で 403 (a) だった場合も、secret が残っていれば消す:
+3. エージェントが `AB_SETUP_TOKEN` を削除する。以後はユーザーを招待リンク経由でしか増やせなくなる。403 の後に登録済みと確認できた場合も、secret が残っていれば消す:
 
 ```bash
 pnpm -C apps/control exec wrangler secret delete AB_SETUP_TOKEN
