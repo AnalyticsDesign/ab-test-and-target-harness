@@ -1,5 +1,5 @@
 import { test, expect, type BrowserContext, type Page, type Request, type Route } from "@playwright/test";
-import { ADMIN_URL, acceptInvite, changeStatus, controlHeaders, createExperiment, createSite, issueInvite, login, markSessionsAsGoogle, openMembers, openWorkspace, pick, waitForHydration } from "./fixtures";
+import { ADMIN_URL, acceptInvite, changeStatus, controlHeaders, createExperiment, createSite, issueInvite, login, markSessionsAsGoogle, openMembers, openWithLatePopstateGuard, openWorkspace, pick, waitForHydration } from "./fixtures";
 
 /**
  * 書き込みの範囲と確認(B173 第 2 段)。
@@ -104,9 +104,22 @@ test.describe.serial("busy scopes and confirms (B173 stage 2)", () => {
     await page.getByRole("region", { name: "配信条件" }).getByRole("textbox", { name: "値", exact: true }).first().fill("/busy-changed");
     const patches = countRequests(page, (r) => r.method() === "PATCH" && new URL(r.url()).pathname === `/api/control/sites/${SITE.id}/experiments/${EXP_RUN.id}`);
     try {
-      await page.getByRole("button", { name: "保存(下書き)" }).dblclick();
+      await page.evaluate(() => {
+        function recordBackdropClick(event: MouseEvent) {
+          const dialog = event.target;
+          if (!(dialog instanceof HTMLDialogElement) || !dialog.open) return;
+          const bounds = dialog.getBoundingClientRect();
+          if (event.clientX >= bounds.left && event.clientX <= bounds.right &&
+              event.clientY >= bounds.top && event.clientY <= bounds.bottom) return;
+          dialog.dataset.e2eBackdropClick = "true";
+          document.removeEventListener("click", recordBackdropClick, true);
+        }
+        document.addEventListener("click", recordBackdropClick, true);
+      });
+      // 1 回目の後に確認を描画する時間を入れ、2 回目が実際に背面へ届いたことを確かめる。
+      await page.getByRole("button", { name: "保存(下書き)" }).dblclick({ delay: 75 });
       const confirm = page.getByRole("alertdialog", { name: "実行中のテストを変更しますか?" });
-      // 2 回目のクリックは確認の背面に落ちるが、開いた直後なので閉じない
+      await expect(confirm).toHaveAttribute("data-e2e-backdrop-click", "true");
       await expect(confirm).toBeVisible();
       expect(patches.count()).toBe(0);
       await confirm.getByRole("button", { name: "保存する", exact: true }).press("Enter");
@@ -521,18 +534,7 @@ test.describe.serial("busy scopes and confirms (B173 stage 2)", () => {
   test("going back during the create POST stays on the page it went to (lateInstall)", async () => {
     const q = await ctx.newPage();
     try {
-      // 管理画面の CSS だけを遅らせる: vinext のモジュールが先に走り、戻る・進むの守りが素通りになる(e2e/leave-guard.spec.ts と同じ形)
-      await q.route(
-        (u) => u.href.startsWith(ADMIN_URL) && u.pathname.endsWith(".css"),
-        async (route) => {
-          await new Promise((r) => setTimeout(r, 1_500));
-          return route.continue().catch(() => {});
-        },
-      );
-      await q.goto(siteUrl);
-      await waitForHydration(q);
-      const late = await q.evaluate(() => (window as unknown as { __wttPopstateGuard?: { lateInstall: boolean } }).__wttPopstateGuard?.lateInstall ?? null);
-      expect(late, "this load must run vinext before the guard script (otherwise the test checks nothing)").toBe(true);
+      await openWithLatePopstateGuard(q, siteUrl);
       // 同じ文書の中で作成の画面へ移る(戻る先の履歴を積む)
       await q.getByRole("link", { name: "新しいエクスペリエンス" }).dispatchEvent("click");
       await expect(q.getByRole("heading", { level: 1, name: "新しいエクスペリエンス" })).toBeVisible();
@@ -857,17 +859,7 @@ test.describe.serial("busy scopes and confirms (B173 stage 2)", () => {
     const ID = "exp_busy7_late";
     const q = await ctx.newPage();
     try {
-      await q.route(
-        (u) => u.href.startsWith(ADMIN_URL) && u.pathname.endsWith(".css"),
-        async (route) => {
-          await new Promise((r) => setTimeout(r, 1_500));
-          return route.continue().catch(() => {});
-        },
-      );
-      await q.goto(site7Url);
-      await waitForHydration(q);
-      const late = await q.evaluate(() => (window as unknown as { __wttPopstateGuard?: { lateInstall: boolean } }).__wttPopstateGuard?.lateInstall ?? null);
-      expect(late, "this load must run vinext before the guard script (otherwise the test checks nothing)").toBe(true);
+      await openWithLatePopstateGuard(q, site7Url);
       // 同じ文書の中でエクスペリエンスの画面へ移る(戻る先の履歴を積む)
       await q.locator(`[data-testid="experiment-row-${ID}"]`).getByRole("link").first().dispatchEvent("click");
       await q.waitForURL((u) => u.pathname === exp7Path(ID));

@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { POPSTATE_GUARD_SCRIPT, installPopstateGuard, type PopstateGuardApi } from "@/lib/popstate-guard";
 
@@ -415,11 +413,5 @@ describe("POPSTATE_GUARD_SCRIPT", () => {
     install(w);
     go(w, "/w/b");
     expect(posAt(w, 1)).toBe(1);
-  });
-
-  it("the script is registered in the root layout head after the theme script", () => {
-    const src = readFileSync(path.join(import.meta.dirname, "../app/layout.tsx"), "utf8");
-    const head = src.slice(src.indexOf("<head>"), src.indexOf("</head>"));
-    expect(head).toMatch(/__html: THEME_INIT_SCRIPT[\s\S]*__html: POPSTATE_GUARD_SCRIPT/);
   });
 });

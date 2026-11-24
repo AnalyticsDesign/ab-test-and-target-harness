@@ -1,5 +1,5 @@
 /**
- * ブラウザの戻る・進むの前の確認の土台(B173 第 1 段 Task 8。Q17・Q21)。root layout の <head> にインラインのスクリプトとして置く(POPSTATE_GUARD_SCRIPT)。
+ * ブラウザの戻る・進むの前の確認の土台(B173 第 1 段 Task 8。Q17・Q21)。root layout の beforeInteractive で <head> の先頭にインラインのスクリプトとして置く(POPSTATE_GUARD_SCRIPT)。
  *
  * popstate は止められない(URL は既に移っている)ので、移った先が守る画面でなければ、vinext の popstate の処理より先に受けて
  * stopImmediatePropagation で vinext に知らせず、history.go(delta) で元の項目に戻してから、確認を出す(PageLeaveGuard)。
@@ -44,7 +44,7 @@ export function installPopstateGuard(win: Window): void {
 
   // vinext 1.0.0-beta.10 の内部の値。名前が変わると差し替えが効かず、位置の番号が付かない項目は守りが素通りする(壊さない)。
   // vinext はモジュールの読み込みの時点で元の pushState・replaceState をここに 1 回だけ握り、遷移の書き込みではそれを呼ぶたびに引いて直接呼ぶ。
-  // CSS の読み込みが遅いと、vinext のモジュールがこのスクリプトより先に走る(インラインの script は先の stylesheet を待つため)
+  // 部品の読み込み順が変わり、vinext が先に動いた文書では、履歴の項目の番号を後から付け直さず確認を素通りさせる。
   const vinextState = w[Symbol.for("vinext.clientNavigationState")];
   const lateInstall = !!vinextState && typeof vinextState.originalPushState === "function" && typeof vinextState.originalReplaceState === "function";
   const rawPush = lateInstall ? vinextState.originalPushState : h.pushState;
@@ -175,7 +175,7 @@ export function installPopstateGuard(win: Window): void {
   w.__wttPopstateGuard = api;
 }
 
-/** root layout の <head> に置くインラインのスクリプト(THEME_INIT_SCRIPT の次。vinext の JS より先に走らせたいので、できるだけ前に置く) */
+/** vinext の JS より先に実行するインラインのスクリプト(vinext が <head> の先頭に置く)。 */
 export const POPSTATE_GUARD_SCRIPT = `(${installPopstateGuard.toString()})(window)`;
 
 /** window に置いた守りの API。サーバー・スクリプトの無い環境では null */

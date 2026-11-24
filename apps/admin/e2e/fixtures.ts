@@ -16,6 +16,34 @@ import { API_CONTRACT_VERSION, CLIENT_VERSION_HEADER } from "@wtt/core";
  */
 export const ADMIN_URL = "http://localhost:3000";
 
+/** SSR の HTML にある実タグを ID で探す。data-nscript など他の属性の順や有無は問わない。 */
+export function popstateGuardTags(html: string): RegExpMatchArray[] {
+  return [...html.matchAll(/<script\b(?=[^>]*\sid=["']wtt-popstate-guard["'](?=[\s>]))[^>]*>([\s\S]*?)<\/script>/gi)];
+}
+
+/** 本文のガードを外し、vinext の初期化が済んでから同じスクリプトを実行する。 */
+export async function openWithLatePopstateGuard(page: Page, path: string): Promise<void> {
+  const url = new URL(path, ADMIN_URL).href;
+  let script: string | undefined;
+  await page.route(url, async (route) => {
+    if (!route.request().isNavigationRequest()) return route.fallback();
+    const response = await route.fetch();
+    const html = await response.text();
+    const tags = popstateGuardTags(html);
+    expect(tags).toHaveLength(1);
+    const [tag, content] = tags[0]!;
+    script = content;
+    await route.fulfill({ response, body: html.replace(tag!, "") });
+  }, { times: 1 });
+  await page.goto(url);
+  await waitForHydration(page);
+  if (!script) throw new Error("The document did not contain the popstate guard script");
+  await page.addScriptTag({ content: script });
+  const late = await page.evaluate(() => (window as unknown as { __wttPopstateGuard?: { lateInstall: boolean } }).__wttPopstateGuard?.lateInstall ?? null);
+  expect(late).toBe(true);
+}
+
+
 /**
  * BFF(`/api/control/*`)を画面を通さずに直接叩く E2E の補助が付けるヘッダー(plan12 K3)。
  * 管理画面の JS(lib/client.ts の api())と同じく版を名乗る。名乗らない書き込みは、BFF が版 0 を名乗るので control が 426 にする。

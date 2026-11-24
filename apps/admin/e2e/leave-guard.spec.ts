@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { test, expect, type BrowserContext, type Page, type Request, type Route } from "@playwright/test";
-import { ADMIN_URL, WORKSPACE_NAME, changeStatus, createExperiment, createSite, login, markSessionsAsGoogle, pick, waitForHydration } from "./fixtures";
+import { ADMIN_URL, WORKSPACE_NAME, changeStatus, createExperiment, createSite, login, markSessionsAsGoogle, openWithLatePopstateGuard, pick, popstateGuardTags, waitForHydration } from "./fixtures";
 
 /**
  * 離れる前の確認(B173 第 1 段 Task 8)。
  * - 未保存の変更・保存の途中で、サイドバーのリンク・ログアウト・再読み込み・ブラウザの戻る・進むを止めて確認を出す(components/ui/PageLeaveGuard.tsx)
- * - 戻る・進むは root layout の <head> のスクリプト(lib/popstate-guard.ts)が vinext より先に受けて止める。addInitScript は使わない(本番と同じ読み込みで確かめる)
- * - CSS が遅い読み込みでは vinext のモジュールが先に走り、その文書では戻る・進むを止めない(素通りして画面が壊れないこと)。リンクの確認は効く
+ * - 戻る・進むは <head> の先頭のスクリプト(lib/popstate-guard.ts)が vinext より先に受けて止める。addInitScript は使わない(本番と同じ読み込みで確かめる)
+ * - CSS が遅い読み込みでも、戻るときに未保存の入力を確かめる
  * - 状態の変更(開始・終了など)の前に、未保存の変更があれば「先に保存してください」だけの確認で止める(lib/status-guard.ts)
  *
  * 戻る・進むは page.goBack() ではなく history.back() などをページの中で呼ぶ(守りが戻すので、goBack が待つ遷移の確定が来ないことがある)
@@ -57,17 +57,21 @@ async function open(page: Page, path: string): Promise<void> {
 }
 
 async function openWithPopstateGuard(page: Page, path: string): Promise<void> {
-  // lateInstall は文書ごとに決まる。vinext が先に走った文書は開き直してから履歴を積む。
-  let lateInstall: boolean | null = true;
-  for (let attempt = 0; attempt < 5 && lateInstall === true; attempt++) {
-    if (attempt === 0) await page.goto(path);
-    else await page.reload();
-    lateInstall = await page.evaluate(() =>
-      (window as unknown as { __wttPopstateGuard?: { lateInstall: boolean } }).__wttPopstateGuard?.lateInstall ?? null,
-    );
-  }
-  expect(lateInstall, "the popstate guard must run before vinext within 5 document loads").toBe(false);
+  const response = await page.goto(path);
+  expect(response?.ok()).toBe(true);
+  const html = await response!.text();
+  const head = html.match(/<head\b[^>]*>([\s\S]*?)<\/head>/i)?.[1] ?? "";
+  const tags = popstateGuardTags(html);
+  expect(tags, "the built HTML must include one guard script").toHaveLength(1);
+  const guard = tags[0]![0]!;
+  expect(head.trimStart().startsWith(guard), "the guard must precede stylesheets and modules in head").toBe(true);
+  expect(guard).toContain('data-nscript="beforeInteractive"');
+  const lateInstall = await page.evaluate(() =>
+    (window as unknown as { __wttPopstateGuard?: { lateInstall: boolean } }).__wttPopstateGuard?.lateInstall ?? null,
+  );
+  expect(lateInstall, "the popstate guard must run before vinext on the first document load").toBe(false);
   await waitForHydration(page);
+  await expect(page.locator("script#wtt-popstate-guard")).toHaveCount(1);
 }
 
 const navLink = (page: Page, label: string) => page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: label, exact: true });
@@ -219,43 +223,55 @@ test("unsaved changes stop back, two-step back and forward without any request",
   await expectStopped(page, () => forward(page), "E2E leave 3", expPath(EXP.id));
 });
 
-test("a load with slow CSS does not break the page, and back passes through without the confirm", async () => {
+test("a load with slow CSS still confirms back with unsaved changes", async () => {
   const page = await ctx.newPage();
-  // 管理画面の CSS だけを 1.5 秒遅らせる: インラインのスクリプトは先の stylesheet を待つので、vinext のモジュールが先に走る(2026-11-02 のスパイク)
+  let delayedStylesheets = 0;
+  // 先行する CSS がインラインのスクリプトを止める条件を、実際のビルドの応答で作る。
   await page.route(
     (u) => u.href.startsWith(ADMIN_URL) && u.pathname.endsWith(".css"),
     async (route) => {
+      delayedStylesheets += 1;
       await new Promise((r) => setTimeout(r, 1_500));
-      return route.continue().catch(() => {});
+      await route.continue();
     },
   );
-  await open(page, sitePath());
-  const late = await page.evaluate(() => (window as unknown as { __wttPopstateGuard?: { lateInstall: boolean } }).__wttPopstateGuard?.lateInstall ?? null);
-  expect(late, "this load must run vinext before the guard script (otherwise the test checks nothing)").toBe(true);
+  await openWithPopstateGuard(page, expPath(EXP.id));
+  expect(delayedStylesheets).toBeGreaterThan(0);
+  await expect(nameInput(page)).toBeVisible();
+  // フォームの HTML 自体を低速 CSS で開き、同じ文書内で戻る先の履歴を積む。
+  await clickNav(page, "エクスペリエンス");
   await listToDetail(page, EXP);
   await nameInput(page).fill("E2E leave slow");
+  await expectStopped(page, () => back(page), "E2E leave slow", expPath(EXP.id));
+});
+
+test("a late guard leaves history navigation usable and still confirms links", async () => {
+  const page = await ctx.newPage();
+  await openWithLatePopstateGuard(page, sitePath());
+  await listToDetail(page, EXP);
+  await nameInput(page).fill("E2E late history");
   await back(page);
-  await expect(h1(page, "エクスペリエンス")).toBeVisible();
-  await expect(rowLink(page, EXP)).toBeVisible();
-  await expect(page.getByRole("alertdialog")).toHaveCount(0);
-  expect(pathname(page)).toBe(sitePath());
-  // その後の遷移・戻る・進むでも URL と本文が合う
+  const expectList = async () => {
+    await expect(page).toHaveURL((url) => url.pathname === sitePath());
+    await expect(h1(page, "エクスペリエンス")).toBeVisible();
+    await expect(rowLink(page, EXP)).toBeVisible();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  };
+  await expectList();
   await forward(page);
+  await expect(page).toHaveURL((url) => url.pathname === expPath(EXP.id));
   await expect(nameInput(page)).toBeVisible();
-  expect(pathname(page)).toBe(expPath(EXP.id));
   await back(page);
-  await expect(h1(page, "エクスペリエンス")).toBeVisible();
+  await expectList();
   await clickNav(page, "目標");
   await expect(h1(page, "目標")).toBeVisible();
+  await expect(page).toHaveURL((url) => url.pathname === `${sitePath()}/goals`);
   await back(page);
-  await expect(h1(page, "エクスペリエンス")).toBeVisible();
-  // リンクの確認(click の守り)は効く
+  await expectList();
+
   await listToDetail(page, EXP);
-  await nameInput(page).fill("E2E leave slow 2");
-  await clickNav(page, "目標");
-  await expect(leaveConfirm(page)).toBeVisible();
-  await leaveConfirm(page).getByRole("button", { name: "とどまる", exact: true }).press("Enter");
-  expect(pathname(page)).toBe(expPath(EXP.id));
+  await nameInput(page).fill("E2E late link");
+  await expectStopped(page, () => clickNav(page, "目標"), "E2E late link", expPath(EXP.id));
 });
 
 test("back is stopped after branching history", async () => {

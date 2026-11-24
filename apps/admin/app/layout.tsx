@@ -1,3 +1,4 @@
+import Script from "next/script";
 import type { ReactNode } from "react";
 import "@fontsource/ibm-plex-sans-jp/400.css";
 import "@fontsource/ibm-plex-sans-jp/500.css";
@@ -24,9 +25,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="ja" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
-        {/* 戻る・進むの前の確認の土台(履歴の項目に位置の番号を付ける。lib/popstate-guard.ts)。vinext の JS より先に走らせたいので、head のできるだけ前に置く。
-            admin の CSP は frame-ancestors だけで、インラインのスクリプトを妨げない */}
-        <script dangerouslySetInnerHTML={{ __html: POPSTATE_GUARD_SCRIPT }} />
+        {/* vinext が head の開始タグの直後に置き、stylesheet と module より先に実行させる。 */}
+        <Script id="wtt-popstate-guard" strategy="beforeInteractive">{POPSTATE_GUARD_SCRIPT}</Script>
       </head>
       <body>
         <ConfirmProvider>
