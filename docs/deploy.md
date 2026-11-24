@@ -2512,7 +2512,7 @@ printf '%s\naccount=%s\n' "$R" "$AID"   # 期待: <管理画面の Worker 名> f
 BACKUP="$PWD/deploy-backups/wtt-control-$(date -u +%Y%m%dT%H%M%SZ).sql" && mkdir -p "$PWD/deploy-backups" && chmod 700 "$PWD/deploy-backups" && WRANGLER_WRITE_LOGS=false pnpm -C apps/control exec wrangler d1 export wtt-control --remote --output "$BACKUP" >/dev/null && test -s "$BACKUP" && echo "控え: $BACKUP" || unset BACKUP
 ```
 
-手順 0 で「控え: <ファイル名>」と表示され、今回作ったファイルが存在して空でないことを確認してから、手順 1 以降へ進む。export が失敗した場合、ファイルが無い場合、または空の場合は、手順 4 の管理画面のデプロイも含めて更新を中止し、凍結を外さずに原因を調べ、手順 0 からやり直す。
+手順 0 で「控え: <ファイル名>」と表示され、今回作ったファイルが存在して空でないことを確認してから、手順 1 以降へ進む。export が失敗した場合、ファイルが無い場合、または空の場合は、手順 4 の管理画面のデプロイも含めて更新を中止し、凍結を外さずに原因を調べ(エラーの読み方は 10.1。API トークンで wrangler を動かしているときは、トークンの権限も見る)、手順 0 からやり直す。
 
 ```bash
 if test -s "${BACKUP:-}"; then
@@ -3204,7 +3204,9 @@ grep -c 'CREATE TABLE' "$PWD"/deploy-backups/wtt-control-*.sql | tail -1   # 期
 
 - `deploy-backups/` は git に入らない(`.gitignore` 済み)。**ファイルにはメンバーのメールアドレス・パスワードと API キーのハッシュ・エクスペリエンスの内容と、ログイン中のセッションのトークンが入る**。トークンをそのまま使えば、その人としてログインできる(使われている間は同じトークンのまま期限が延びる)。そのため、ディレクトリは所有者だけが開ける権限にし(上の `chmod 700`)、リポジトリや共有フォルダに置かず、暗号化されたディスクやアクセス制御のある置き場に移す
 - `wrangler d1 export` は、控えを 1 時間ダウンロードできる URL を標準出力に出す。URL を知っていれば誰でも D1 全体の控えを落とせるので、上のコマンドは標準出力を捨て、エージェントの会話の記録に残さない。wrangler は同じ内容を自分のログのファイル(`~/.wrangler/logs` など。macOS は `~/Library/Preferences/.wrangler/logs`)にも書くので、`WRANGLER_WRITE_LOGS=false` を付けて書かせない。失敗の文言は標準エラー出力に出るので、捨てずに読める
-- エラー `Authentication error` / `code: 10000` → `wrangler login` のアカウントが違う。`pnpm -C apps/control exec wrangler whoami` で確認する
+- エラー `Authentication error` / `code: 10000` → 原因は次の 2 つのどちらか
+  - `wrangler login` のアカウントが違う。`pnpm -C apps/control exec wrangler whoami` で確認する
+  - 環境変数 `CLOUDFLARE_API_TOKEN` に API トークンを入れて wrangler を動かしている(wrangler は `wrangler login` よりこのトークンを優先する)とき、そのトークンに D1 の書き込みの権限が無い。export は書き出しが終わるまでデータベースを止めるので、読み取りの権限(D1 の Read)だけでは失敗する。トークンに Developer Platform の D1 の Edit を入れる(分類・権限の名前と Read / Edit は日本語の表示でも英語のまま。Account API Token の画面での分類・名前は未確認)。今のトークンの権限に D1 の Edit を足す(ほかの権限は外さない。外すと、同じトークンで続けて流す `wrangler deploy` などが権限のエラーになる)。トークンを作り直すときの画面の順は 10.2 の「別のトークンを使うとき」と同じ。`wrangler login` だけで動かしているときは、この権限を気にしなくてよい
 - Time Travel(10.2)は Cloudflare 側の保持期間を過ぎると遡れない(Workers Free は 7 日、Workers Paid は 30 日)ので、それより古い時点に戻す控えがこのファイル。読み戻し方は 10.3
 
 ### 10.2 D1 を過去の時点に戻す(Time Travel)
