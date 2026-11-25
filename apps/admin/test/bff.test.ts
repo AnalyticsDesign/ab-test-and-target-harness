@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { API_CONTRACT_VERSION } from "@wtt/core";
+import { resetErrorMessage } from "@/lib/reset-errors";
 
 /** この画面(BFF)の版の名乗り */
 const OWN_VERSION = String(API_CONTRACT_VERSION);
@@ -198,6 +199,29 @@ describe("BFF /api/control/[...path]", () => {
     const res = await POST(post("http://admin.test/api/control/auth/reset-password", { headers: { "content-type": "application/json" }, body: "{}" }), params(["auth", "reset-password"]));
     expect(res.status).toBe(200);
     expect(lastCall().url).toBe(`${CONTROL}/auth/reset-password`);
+  });
+
+  it.each([
+    ["INVALID_TOKEN", "Invalid token", "途中で切れていないか"],
+    ["PASSWORD_TOO_SHORT", "Password too short", "8 文字以上"],
+    ["PASSWORD_TOO_LONG", "Password too long", "長すぎます"],
+  ])("パスワード再設定の失敗 %s を画面と同じ案内の封筒にそろえる", async (code, rawMessage, guidance) => {
+    fetchMock.mockResolvedValueOnce(controlRes(400, { code, message: rawMessage }, { "cache-control": "no-store" }));
+    const res = await POST(post(`${ORIGIN}/api/control/auth/reset-password`, { body: "{}" }), params(["auth", "reset-password"]));
+    expect(res.status).toBe(400);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("set-cookie")).toBeNull();
+    const body = await res.json();
+    expect(body).toEqual({ error: code.toLowerCase(), message: expect.stringContaining(guidance) });
+    expect(resetErrorMessage(res.status, body)).toBe(body.message);
+  });
+
+  it("パスワード再設定の既存のエラー封筒は引き継ぐ", async () => {
+    const body = { error: "rate_limited", message: "しばらく待ってからやり直してください", hint: "時間をおいてください" };
+    fetchMock.mockResolvedValueOnce(controlRes(429, body));
+    const res = await POST(post(`${ORIGIN}/api/control/auth/reset-password`, { body: "{}" }), params(["auth", "reset-password"]));
+    expect(res.status).toBe(429);
+    await expect(res.json()).resolves.toEqual(body);
   });
 
   it("control の set-auth-token / set-cookie はブラウザに返さない", async () => {

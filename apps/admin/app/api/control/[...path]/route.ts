@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { resetErrorMessage } from "@/lib/reset-errors";
 import { BFF_CHUNKED_BODY_MAX_BYTES, BFF_DECLARED_BODY_CEILING_BYTES, bodyReadFailed, declaredLength, payloadTooLarge, readBodyLimited } from "@/lib/body-limit";
 import { badOrigin, controlRequest, controlUnreachable, forwardedFrom, isHttps, originHeader, originVerdict, sessionCookieName } from "@/lib/control";
 
@@ -101,6 +102,15 @@ async function proxy(req: Request, ctx: { params: Promise<{ path: string[] }> })
   for (const name of ["x-content-type-options", "cache-control"]) {
     const v = res.headers.get(name);
     if (v) out.set(name, v);
+  }
+  if (req.method === "POST" && joined === "auth/reset-password" && res.status >= 400) {
+    const body = await res.clone().json().catch(() => null) as { error?: unknown; code?: unknown } | null;
+    if (typeof body?.code === "string" && typeof body.error !== "string") {
+      return Response.json(
+        { error: body.code.toLowerCase(), message: resetErrorMessage(res.status, body) },
+        { status: res.status, headers: out },
+      );
+    }
   }
   return new Response(res.body, { status: res.status, headers: out });
 }
