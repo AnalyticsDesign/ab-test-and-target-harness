@@ -107,7 +107,7 @@ flowchart LR
 
 Workers Free の CPU 時間の上限は 1 回 10 ms である。Free での導入は、評価のために使うことを勧める。2026-11 の実測では、v0.9 の管理画面が Free で Cloudflare に時々止められた(Error 1102)。v1.0 で CPU 時間は減ったが、重い要求が止められる可能性は残る。v1.0 より前の版は CPU 時間を減らす前の作りなので、Free で使っているなら v1.0 以降への更新を勧める。安定して使うなら、または一時停止・終了の時刻を厳密に決めて運用するなら Workers Paid にする(ドメインなしの構成では、先にドメインを Cloudflare に追加する。[デプロイガイド 2.8](docs/deploy.md#28-ドメインありへの移行workers-dev--route))。実測の数字は[デプロイガイドの冒頭](docs/deploy.md#デプロイガイド)、止められたときの見え方と確かめ方は[運用ガイド](docs/operations.md#cpu-の上限で要求が止められたときfree)にある。
 
-本製品には、費用の合計を見て自動で止める機能は無い。Cloudflare の [Workers の支出制限](https://developers.cloudflare.com/workers/platform/spend-management/)は要求・CPU の超過料金を対象にし、DO・D1・KV・R2 や月額最低額は対象外で、反映にも遅延がある。管理画面の「[使用状況](docs/operations.md#11-使用状況cloudflare-の上限)」も合わせて確認する。
+Workers Paid では、Cloudflare で Workers と Durable Objects の支出上限やメール通知を設定できる。対象となる料金、設定手順、停止時の影響は[運用ガイドの「支出上限と通知」](docs/operations.md#支出上限と通知workers-paid)を参照。
 
 ## 導入
 

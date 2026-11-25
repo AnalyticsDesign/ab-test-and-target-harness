@@ -679,6 +679,92 @@ curl -s https://api.cloudflare.com/client/v4/graphql -H "Authorization: Bearer $
 
 `workersInvocationsAdaptive` の `requests` の合計を Workers の日次上限と、`durableObjectsPeriodicGroups` の `rowsWritten` を Durable Objects の行の書き込みの上限と比べる。
 
+### 支出上限と通知(Workers Paid)
+
+Workers Paid で従量課金を管理する場合は、Cloudflare ダッシュボードで設定する。Workers Free では Workers の超過料金が発生しないため、Workers と Durable Objects の支出上限の設定は不要。R2 は別の従量課金で、Workers Free でも R2 Standard の無料枠を超えると課金される。従量課金(Pay-as-you-go)の契約なら、R2 の支出も後述の予算通知で確認できる。[Workers の料金](https://developers.cloudflare.com/workers/platform/pricing/)・[R2 の料金](https://developers.cloudflare.com/r2/pricing/)
+
+支出上限で止まるのは、その製品の対象操作。Workers と Durable Objects にそれぞれ 1 件ずつ有効にでき、同じアカウントのすべての環境とアプリに適用される。検証環境も同じ上限を使う。稼働を続けながら金額を確認したい場合は、製品別メール通知や予算通知を使う。公式資料の確認日は 2026-11-25。
+
+#### 上限に含まれる料金
+
+| 料金項目 | Workers の上限 | Durable Objects の上限 |
+|---|---|---|
+| Workers のリクエスト・CPU 時間 | 対象 | 対象外 |
+| Durable Objects のリクエスト・実行時間・SQLite の行の読み書き・旧 KV バックエンドの読み書きと削除 | 対象外 | 対象 |
+| Durable Objects の保存済みデータ | 対象外 | 対象外。停止中も保存の料金が発生し得る |
+| D1(読み書き・保存・データベース数)、Workers KV(操作・保存・namespace 数) | 対象外 | 対象外 |
+| R2(保存・操作・データ取り出しなど)、Workers Logs / Cloudflare Observability | 対象外 | 対象外 |
+| Workers Paid の月額料金などの固定費 | 対象外 | 対象外 |
+
+上限の計算に入るのは、現在の契約の請求周期における、込み量を差し引いた対象項目の推定料金(USD)。当期にすでに記録された使用分も含む。集計や停止の反映に時間がかかり、先に始まった処理からも料金が発生し得る。請求額は上限を上回ることがある。なお、旧 KV バックエンドの操作は Durable Objects の上限の計算に入るが、上限に達した後もその操作自体は遮断されない。[Cloudflare の支出上限と通知](https://developers.cloudflare.com/billing/manage/spend-management/#what-counts-toward-a-limit)・[Durable Objects で継続する操作](https://developers.cloudflare.com/durable-objects/platform/spend-management/#operations-that-can-continue)
+
+#### Workers と Durable Objects の上限を設定する
+
+請求設定を編集できる人が操作する。試用環境では英語の入口まで確認した。有料の編集フォームと操作は公式の資料による(実際の画面では確かめていない)。項目名は英語で記す。
+
+1. 対象アカウントで **Manage account** の **Settings** → **Billing** → **Spend limits** を開く。Cloudflare のガイドでは最後のタブを **Spend Management** と表記している。
+2. Workers の上限は **Workers** の行、Durable Objects の上限は **Durable Objects** の行で、**Actions** のメニュー → **Edit the spending limit** を選ぶ。
+3. **Monthly limit (USD)** に 0 より大きい金額を小数第 2 位までで入力し、**Save limit** を選ぶ。
+4. **On** を確認する。新規保存では有効になる。既存の上限の金額だけを編集すると、保存前の有効・無効の状態が維持される。現在の推定料金以下の金額で有効にすると、適用後すぐに停止することがある。
+
+[Cloudflare のダッシュボード手順](https://developers.cloudflare.com/billing/manage/spend-management/#set-a-spending-limit-in-the-dashboard)
+
+#### 製品別メール通知を設定する
+
+Cloudflare の公式発表の画面例による手順(実際の画面では確かめていない)。画面例は Workers のもの。
+
+1. **Settings** → **Billing** → **Spend limits** で、**Workers** または **Durable Objects** の行の右端にある **…** から、その製品の支出設定を開く。
+2. 通知だけにする場合は **Block usage** をオフにする。既存の停止用の上限を維持したまま通知だけを追加する場合は、次に示す `cf` CLI で独立した通知を作る。
+3. **Email notifications** の **Recipient email** に宛先を入れる。**Alert thresholds** で **Add** を選び、通知を受ける金額を入力する。
+4. **Save** を選ぶ。
+
+[Cloudflare の公式発表と画面例](https://developers.cloudflare.com/changelog/post/2026-11-13-spend-management/#set-your-limits-and-alerts)
+
+画面例の通知項目が見当たらない場合は、Cloudflare の公式ガイドが案内する `cf` CLI を使う。対象アカウントを選択し、請求設定の編集権限で次を実行する。製品は Workers なら `workers`、Durable Objects なら `durable_objects`。しきい値は正の整数の米セントで、`<米セント>` と `<メールアドレス>` は自分の設定値に置き換える。製品を変える場合は名前も変える。
+
+```sh
+cf billing spend-policies create \
+  --name 'Workers email alert' \
+  --product-id workers \
+  --enabled true \
+  --threshold-cents '<米セント>' \
+  --action notification \
+  --notification-email '<メールアドレス>'
+```
+
+この通知は製品ごとに複数作成でき、停止用の上限と併用できる。公式ガイドでは、メールアドレス付きのポリシーはしきい値の 80% と 100% で通知する。評価の間に両方を超えると 100% の通知だけになることがある。ダッシュボードで作った上限に宛先が設定されていない場合は、公式の CLI 手順で既存の上限に宛先を追加できる。[cf CLI の公式手順](https://developers.cloudflare.com/billing/manage/spend-management/cli/#create-an-email-alert)・[上限の通知と状態](https://developers.cloudflare.com/billing/manage/spend-management/#email-alerts-and-status)
+
+#### アカウント全体の予算通知を設定する
+
+Pay-as-you-go のアカウントで使える。請求周期内の従量課金を製品横断で合計し、指定額に達したときに各しきい値につき一度メールを送る。集計は日次で、月額などの固定費は対象外。通知を受けた後も利用は続く。
+
+1. 対象アカウントで **Manage account** の **Settings** → **Billing** → **Billable usage** → **Create budget alert** を選ぶ。
+2. **Alert name**、**Budget threshold (USD)**、**Email recipients** を入力する。説明が必要なら **Description** に書く。宛先を増やすには **Add email** を選ぶ。
+3. **Save** を選ぶ。設定済みの通知は **Billable usage** の **Budget alerts** で確認・編集・削除できる。
+
+試用環境で確認したのは英語の **Create budget alert** まで。入力フォームと既存の通知の操作は公式の資料による(実際の画面では確かめていない)。[Cloudflare の予算通知](https://developers.cloudflare.com/billing/manage/budget-alerts/)・[予算通知の集計間隔](https://developers.cloudflare.com/changelog/post/2026-06-15-budget-alerts-default-on/)
+
+#### 停止時の影響と復旧
+
+以下は Cloudflare の仕様と本製品のコードから分かる挙動。支出上限を実際に発動させた確認はしていない。
+
+| 確認する場所 | Workers の上限で止まった場合 | Durable Objects の上限で止まった場合 |
+|---|---|---|
+| 訪問者のページ | Cloudflare が edge の新規起動を拒否する。公式仕様では HTTP 応答に Cloudflare のエラー `1103` が返る。Mode B のサーバー判定や履歴条件・割当の固定など、サーバー判定が必要なページでは、判定が失敗すると元の表示を出す。タグを読み込めたページのブラウザ内判定は続けられる。edge に送る参加・達成は記録できない | Visitor Profile を使う判定では DO の呼び出しが失敗すると edge が `503` を返し、元の表示になる。DO を使わない判定は続けられる。結果の記録は予算の DO にも依存し、新しい書き込み枠を取得できないと欠測が生じる |
+| 設置タグの配信 | 配信専用 Worker の設置タグと runtime は、Worker のコードを実行せずに返す静的ファイルなので配信が続く。管理・公開用の Worker は起動できず、新しい公開の反映は止まる | 静的ファイルの取得に DO は要らない |
+| 管理画面・API | admin と control が起動できず、画面表示・ログイン・管理操作や結果の参照が止まる | 管理画面と API の Worker は起動できる。計測用 D1 を読む前に予算の DO に問い合わせる結果表示などは影響を受ける |
+| 結果の記録に関わる Cron | control の Cron 自体が起動せず、評価時点の結果の記録、容量確認、保持期限を過ぎた個票の削除などが進まない | Cron は起動するが、予算の DO が必要な結果の記録・容量確認・削除などが遅れるか失敗する |
+
+[Workers で停止する操作](https://developers.cloudflare.com/workers/platform/spend-management/#what-stops-at-the-limit)・[Durable Objects で停止する操作](https://developers.cloudflare.com/durable-objects/platform/spend-management/#what-stops-at-the-limit)
+
+請求設定から解除する。次の操作は公式の資料による(実際の画面では確かめていない)。
+
+- **Billing** → **Spend limits**(公式ガイドの **Spend Management**) で、止まった製品の上限を現在の推定料金より高くするか、**Off** にするか、**Remove limit** を選んで削除を確定する。
+- 反映には数分かかることがある。有効なままにしておくと、次の契約の請求周期の開始時に停止が解除され、その周期にも上限が適用される。当期の上限をオフにして再びオンにしても、それまでの支出は累計に残る。
+- 両製品で停止している場合は、DO を呼び出す Worker の停止も解除する。復旧後はサーバー判定と管理画面を開き、Cron と結果の欠測を確認する。DO の保留中の alarm は復旧後に動く場合があるが、予約から 7 日を過ぎて削除された alarm は、必要に応じて再登録が要る。
+
+[Cloudflare の解除手順](https://developers.cloudflare.com/billing/manage/spend-management/#resume-service-or-change-a-limit)・[Durable Objects の alarm の復旧](https://developers.cloudflare.com/durable-objects/platform/spend-management/#alarm-recovery)
+
 ## 12. テストの結果の記録
 
 サイト設定の「一般」の「結果を記録する」を有効にしたサイトでは、テストの参加(訪問者がテストの対象の要素を見たこと)と目標の達成を、edge がこの導入の計測用のデータベース(D1 の `wtt-results`)に記録する。訪問者 ID はそのまま保存せず、鍵付きのハッシュにする。送る項目と保存の期間は[サイト導入ガイド 14 節](site-install.md#14-外部送信規律への対応)。
