@@ -10,6 +10,7 @@ Thumbs.db
 
 # Node (将来の実装用)
 node_modules/
+/.pnpm-store/
 dist/
 .wrangler/
 .dev.vars
