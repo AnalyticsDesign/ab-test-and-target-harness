@@ -295,16 +295,14 @@ test("library: long names end with an ellipsis and badges are not cut mid-word (
       expect.soft(m.badgeTexts, `${label}: 4 種類の札が出ている`).toEqual(["使用 1", "公開した内容で使用", "未使用", "残しました"].sort());
       // 札は格子の 1 枚の外にはみ出さない(どの幅でも)
       expect.soft(m.badBadges.filter((b) => b.outside), `${label}: 札が格子の 1 枚の外にはみ出さない`).toEqual([]);
-      // 札が文字の途中で切れないことは 1280px で表明する。390px は殻のサイドバーが畳まれず本文が約 154px しか無い(2 列で 1 枚 約 39px。2026-11-05 の実測)ため、
-      // 1 文字も収まらない札が出る。これは管理画面全体の前からの制約なので記録だけにする(殻が狭い幅で畳まれるようになったら 390px でも表明する)
-      if (width === 1280) expect.soft(m.badBadges.filter((b) => b.clipped), `${label}: 札が文字の途中で切れない`).toEqual([]);
+      expect.soft(m.badBadges.filter((b) => b.clipped), `${label}: 札が文字の途中で切れない`).toEqual([]);
       expect.soft(m.tilesOutsideGrid, `${label}: 格子の 1 枚が格子の外に出ない`).toBe(0);
       expect.soft(m.gridOverflow, `${label}: 格子が横にはみ出さない`).toBe(false);
       // どの幅でも画面全体が横にスクロールしない
       expect.soft(m.docScroll.scrollWidth, `${label}: 画面が横にスクロールしない`).toBeLessThanOrEqual(m.docScroll.clientWidth);
     }
   }
-  // 390px で見出しの右の主ボタンが本文の幅から出るのは、画像の画面に固有かを比べる記録(エクスペリエンスの一覧の「新しいエクスペリエンス」と同じ測り方)
+  // 幅 390px でメニューが畳まれ、画像とエクスペリエンスの主操作が本文に収まる
   await page.emulateMedia({ colorScheme: "light" });
   await page.setViewportSize({ width: 390, height: 900 });
   const headerButton: Record<string, unknown> = {};
@@ -317,12 +315,22 @@ test("library: long names end with an ellipsis and badges are not cut mid-word (
     await expect(button).toBeVisible();
     const box = await button.boundingBox();
     const main = await page.locator("main").boundingBox();
+    expect.soft(box!.x + box!.width, `${name}: 主操作の右端`).toBeLessThanOrEqual(main!.x + main!.width);
+    expect.soft(page.getByRole("navigation", { name: "メインメニュー" })).toBeHidden();
     headerButton[name] = { buttonRight: box ? Math.round(box.x + box.width) : null, mainRight: main ? Math.round(main.x + main.width) : null, viewport: 390 };
     await testInfo.attach(`header-button-390-${name}`, { body: await page.screenshot(), contentType: "image/png" });
   }
   await testInfo.attach("header-button-390", { body: JSON.stringify(headerButton, null, 2), contentType: "application/json" });
+  const menu = page.getByRole("navigation", { name: "メインメニュー" });
+  const toggle = page.getByRole("button", { name: "メニュー", exact: true });
+  await toggle.click();
+  await expect(menu).toBeVisible();
+  await toggle.click();
+  await expect(menu).toBeHidden();
   await page.emulateMedia({ colorScheme: null });
   await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(menu).toBeVisible();
+  await expect(toggle).toBeHidden();
 });
 
 test("library: leaving while uploading asks first", async () => {

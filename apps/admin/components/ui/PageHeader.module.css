@@ -1,0 +1,6 @@
+.header { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 20px; }
+
+@media (max-width: 760px) {
+  .header { flex-wrap: wrap; }
+  .actions { max-width: 100%; }
+}

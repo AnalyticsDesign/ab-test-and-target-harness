@@ -2,12 +2,13 @@ import type { ReactNode } from "react";
 import styles from "./AppShell.module.css";
 import { PageEnter } from "./PageEnter";
 import { NavGate } from "./NavGate";
+import { ShellSidebar } from "./ShellSidebar";
 
 /** サイドバー列 + 本文列。本文列の中身(TopBar と Content)は各 layout / page が描く */
 export function AppShell({ sidebar, children }: { sidebar: ReactNode; children: ReactNode }) {
   return (
     <div className={styles.shell}>
-      <aside className={styles.side}>{sidebar}</aside>
+      <ShellSidebar>{sidebar}</ShellSidebar>
       <div className={styles.col}>{children}</div>
     </div>
   );

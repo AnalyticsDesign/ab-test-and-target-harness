@@ -5,3 +5,13 @@
 .content { flex: 1; min-height: 0; overflow-y: auto; }
 /* max-width と padding は必ずこの 1 枚に置く(SaveBar の `margin: 24px -32px -32px` がこの padding と対になる) */
 .inner { max-width: 1240px; width: 100%; padding: 32px; }
+
+.menuBar { display: none; }
+
+@media (max-width: 760px) {
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); }
+  .menuBar { display: block; grid-row: 1; padding: 8px 16px; background: var(--side); border-bottom: 1px solid var(--border); }
+  .side { grid-row: 2; height: auto; max-height: 50dvh; border-right: 0; border-bottom: 1px solid var(--border); }
+  .side[data-open="false"] { display: none; }
+  .col { grid-row: 3; }
+}
