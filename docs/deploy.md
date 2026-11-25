@@ -2219,8 +2219,8 @@ curl -sS -w '\n%{http_code}\n' "<AB_ADMIN_URL>/api/control/me"                  
 
 - 403 → 最初の応答が `setup_closed` の場合、上のコマンドは 30 秒待ってから同じトークンで同じ POST を 1 回だけ送り直す。最後の応答が 403 なら、次の順に確かめる。
   1. **応答の本文**を見て、JSON の `error` が `setup_closed` か確かめる。別の本文なら、その本文に従って拒否した箇所を調べる
-  2. **Worker と URL** を照合する。`apps/control/wrangler.jsonc` の `name` がデプロイした control の Worker 名と一致し、POST 先が 3.5 で確認した control の URL の `/setup` であることを確かめる
-  3. **初回登録の有無**を確かめる。control の `DB` に設定した D1 を確かめ、`pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select completed from setup_lock where id = 1"` を実行する(D1 の名前を変えた場合は `wtt-control` を置き換える)。`completed = 1` なら登録済みなので、手順 2 で本人がログインして確かめる。行がない、`completed = 0`、または確認できない場合は、応答本文と分かった状況を控えて止まる
+  2. **Worker と URL** を照合する。`apps/control/wrangler.jsonc` の `name` がデプロイした control の Worker 名(0.5 の名前を決めるブロック、または最短の手順の「名前を決める」のブロックが `names: ok` の行に出した `control=` の名前)と一致し、POST 先が 3.5 で確認した control の URL の `/setup` であることを確かめる
+  3. **初回登録の有無**を確かめる。control の `DB` に設定した D1(`apps/control/wrangler.jsonc` の `d1_databases` のうち `binding` が `DB` の行の `database_name`)を確かめ、`pnpm -C apps/control exec wrangler d1 execute wtt-control --remote --command "select completed from setup_lock where id = 1"` を実行する(D1 の名前を変えた場合は `wtt-control` を置き換える)。`completed = 1` なら登録済みなので、手順 2 で本人がログインして確かめる。行がない、`completed = 0`、または確認できない場合は、応答本文と分かった状況を控えて止まる
 - 422 → `owner_email` の形式か `workspace_name` の長さ(1〜100 文字)、または `usage_visibility` が `members` / `instance_admins` 以外。入力ファイルを直して再実行
 - 429 → 10 秒待って再実行(無認証入口は IP 単位で 30 回 / 10 秒)
 - 503 `setup_failed` → ワークスペースの作成に失敗。60 秒待ってから上のブロックをもう一度、変更せずに実行する。途中の状態は、60 秒たつと次の実行が片付ける。60 秒以内に再実行すると 403 `setup_closed` が返ることがある。その場合は、503 が返ってから 60 秒待ってやり直す
@@ -3235,7 +3235,7 @@ grep -c 'CREATE TABLE' "$PWD"/deploy-backups/wtt-control-*.sql | tail -1   # 期
 - `wrangler d1 export` は、控えを 1 時間ダウンロードできる URL を標準出力に出す。URL を知っていれば誰でも D1 全体の控えを落とせるので、上のコマンドは標準出力を捨て、エージェントの会話の記録に残さない。wrangler は同じ内容を自分のログのファイル(`~/.wrangler/logs` など。macOS は `~/Library/Preferences/.wrangler/logs`)にも書くので、`WRANGLER_WRITE_LOGS=false` を付けて書かせない。失敗の文言は標準エラー出力に出るので、捨てずに読める
 - エラー `Authentication error` / `code: 10000` → 原因は次の 2 つのどちらか
   - `wrangler login` のアカウントが違う。`pnpm -C apps/control exec wrangler whoami` で確認する
-  - 環境変数 `CLOUDFLARE_API_TOKEN` に API トークンを入れて wrangler を動かしている(wrangler は `wrangler login` よりこのトークンを優先する)とき、そのトークンに D1 の書き込みの権限が無い。export は書き出しが終わるまでデータベースを止めるので、読み取りの権限(D1 の Read)だけでは失敗する。トークンに Developer Platform の D1 の Edit を入れる(分類・権限の名前と Read / Edit は日本語の表示でも英語のまま。Account API Token の画面での分類・名前は未確認)。今のトークンの権限に D1 の Edit を足す(ほかの権限は外さない。外すと、同じトークンで続けて流す `wrangler deploy` などが権限のエラーになる)。トークンを作り直すときの画面の順は 10.2 の「別のトークンを使うとき」と同じ。`wrangler login` だけで動かしているときは、この権限を気にしなくてよい
+  - 環境変数 `CLOUDFLARE_API_TOKEN` に API トークンを入れて wrangler を動かしている(wrangler は `wrangler login` よりこのトークンを優先する)とき、そのトークンに D1 の書き込みの権限が無い。export は書き出しが終わるまでデータベースを止めるので、読み取りの権限(D1 の Read)だけでは失敗する。トークンに Developer Platform の D1 の Edit を入れる(分類・権限の名前と Read / Edit は日本語の表示でも英語のまま。Account API Token の画面での分類・名前は未確認)。今のトークンに D1 の Edit を足せるなら、そのトークンに足す(ほかの権限は外さない。外すと、同じトークンで続けて流すマイグレーションや `wrangler deploy` が権限のエラーになる)。作ったトークンに後から権限を足せるかは確かめていない。足せなければトークンを作り直す。画面の押す順は 10.2 の「別のトークンを使うとき」と同じで、権限だけは、今のトークンに入っている権限をすべて入れたうえで D1 の Edit を加える(10.2 のトークンの権限(Workers R2 Storage の Read と D1 の Edit だけ)のまま作ると、6.3 の続きの deploy に使えない)。`wrangler login` だけで動かしているときは、この権限を気にしなくてよい
 - Time Travel(10.2)は Cloudflare 側の保持期間を過ぎると遡れない(Workers Free は 7 日、Workers Paid は 30 日)ので、それより古い時点に戻す控えがこのファイル。読み戻し方は 10.3
 
 ### 10.2 D1 を過去の時点に戻す(Time Travel)
@@ -3484,9 +3484,11 @@ pnpm -C apps/control exec wrangler r2 bucket delete wtt-assets                  
 4. ゾーンに置いたルールを消す(ゾーンのある構成(`edge_address` が `route` か `custom-domain`)のみ)。2.6 / 2.7 の `$H` / `$ZID` と同じ準備で:
 
 ```bash
-# Cache Rule: 2.6 の手順 2 の一覧(`.result.rules[]?` のほう)で RID と id を引き、本ツールの式(/s/ と /v1/ を含む)のルールだけ消す
+# Cache Rule: 2.6 の手順 2 の一覧(`.result.rules[]?` のほう)の rules の外にある id(ruleset の ID)を RID に、rules のうち description が "WTT bootstrap:" で始まる行の id(ルールの ID)を <rule id> に入れ、本ツールのルールだけ消す
 curl -sS -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZID/rulesets/$RID/rules/<rule id>" -H "$H" | jq '{success, errors}'
-# WAF Rate Limiting Rule: 2.7 の「既存のレート制限ルールの有無」のコマンドで RID と id を引き、同じように消す(phase は http_ratelimit)
+# WAF Rate Limiting Rule: 2.7 の「既存のレート制限ルールの有無」の出力の rules の外にある id を RID に、rules のうち式に /v1/sites/ を含む行の id を <rule id> に入れ、同じように消す(phase は http_ratelimit)
+# 2.7 で既存のルールに OR で足した導入では、そのルールには利用者の条件も入っているので DELETE せず、止まって人に聞く
+# 2.7 の「1 本のルールを書き換える」のブロックでは RID がルールの ID なので、同じシェルで流してきたときは RID を入れ直す
 ```
 
 期待: `"success": true`。ゾーンに他のルールがある場合、ruleset 自体は消さない(entrypoint を DELETE すると他のルールも消える)。
