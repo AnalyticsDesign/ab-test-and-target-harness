@@ -35,6 +35,18 @@ export type ControlRequestInit = RequestInit & {
   clientVersion?: number;
 };
 
+/** ローカル E2E の認証診断。記録する値は固定のパス、時刻、status、例外の種類だけ。 */
+function recordControlDiagnostic(path: string, status: number, error?: unknown): void {
+  if (path !== "/me" && path !== "/login-options") return;
+  const key = "WTT_E2E_CONTROL_DIAGNOSTICS";
+  if (process.env[key] !== "1") return;
+  const name = error instanceof Error ? error.name : "Other";
+  const exception = error === undefined ? null
+    : ["Error", "TypeError", "SyntaxError", "AbortError", "TimeoutError"].includes(name) ? name
+    : "Other";
+  console.info(`[wtt:e2e-control] ${JSON.stringify({ at: new Date().toISOString(), path, status, exception })}`);
+}
+
 /**
  * control を呼ぶ唯一の入口(plan12 K8。ほかの場所に fetch を書くと test/control-headers.test.ts が落ちる)。
  * - 版(backlog D13 / 決定 56 (1)・plan12 K3)と接続元 IP は、ここで付け直す。呼び出し元の headers に同じ名前があっても上書き・削除する
@@ -61,12 +73,16 @@ export async function controlRequest(path: string, init: ControlRequestInit = {}
     // ページの描画中の同じ GET は 1 回だけ送る(lib/control-dedupe.ts。binding の fetch は vinext の fetch のまとめの外を通るため)
     return await sendOncePerRender(url, requestInit, async () => {
       try {
-        return binding ? await binding.fetch(new Request(url, requestInit)) : await fetch(url, requestInit);
-      } catch {
+        const response = binding ? await binding.fetch(new Request(url, requestInit)) : await fetch(url, requestInit);
+        recordControlDiagnostic(path, response.status);
+        return response;
+      } catch (error) {
+        recordControlDiagnostic(path, 502, error);
         return null;
       }
     });
-  } catch {
+  } catch (error) {
+    recordControlDiagnostic(path, 502, error);
     return null;
   }
 }
@@ -213,7 +229,10 @@ export async function controlFetch<T>(path: string, init: RequestInit = {}): Pro
   if (init.body && typeof init.body === "string") headers.set("content-type", "application/json");
   const res = await controlRequest(path, { ...init, headers, clientIp: await requestClientIp() });
   if (!res) return { status: 502, data: null as T };
-  const data = (res.status === 204 ? null : await res.json().catch(() => null)) as T;
+  const data = (res.status === 204 ? null : await res.json().catch((error) => {
+    recordControlDiagnostic(path, res.status, error);
+    return null;
+  })) as T;
   return { status: res.status, data };
 }
 

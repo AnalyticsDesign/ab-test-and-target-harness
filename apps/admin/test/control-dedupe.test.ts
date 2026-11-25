@@ -188,3 +188,33 @@ describe("ページの描画中の同じ GET は 1 回にまとめる(admin spee
     expect(binding.fetch).toHaveBeenCalledTimes(2);
   });
 });
+
+it("E2E の認証診断に時刻・パス・status・例外の種類だけを出す", async () => {
+  vi.stubEnv("WTT_E2E_CONTROL_DIAGNOSTICS", "1");
+  const log = vi.spyOn(console, "info").mockImplementation(() => {});
+  binding.fetch.mockResolvedValueOnce(Response.json({ passwordLogin: true, privateValue: "body-value" }));
+  binding.fetch.mockRejectedValueOnce(new TypeError("exception-value"));
+  binding.fetch.mockResolvedValueOnce(new Response("broken-json"));
+  try {
+    await expect(controlFetch("/login-options")).resolves.toMatchObject({ status: 200 });
+    await expect(controlFetch("/me")).resolves.toMatchObject({ status: 502 });
+    await expect(controlFetch("/login-options")).resolves.toMatchObject({ status: 200, data: null });
+    await controlFetch("/workspaces");
+    expect(log.mock.calls).toHaveLength(4);
+    const events = log.mock.calls.map(([line]) => {
+      expect(line).toMatch(/^\[wtt:e2e-control\] /);
+      const { at, ...event } = JSON.parse(line.slice("[wtt:e2e-control] ".length));
+      expect(Number.isFinite(Date.parse(at))).toBe(true);
+      return event;
+    });
+    expect(events).toEqual([
+      { path: "/login-options", status: 200, exception: null },
+      { path: "/me", status: 502, exception: "TypeError" },
+      { path: "/login-options", status: 200, exception: null },
+      { path: "/login-options", status: 200, exception: "SyntaxError" },
+    ]);
+  } finally {
+    log.mockRestore();
+    vi.unstubAllEnvs();
+  }
+});

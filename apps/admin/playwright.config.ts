@@ -45,7 +45,7 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
-      // control と edge は各 app の wrangler(`pnpm exec`)で起動する。dev registry で互いの Durable Object を呼ぶプロセスどうしの
+      // control と edge は各 app の wrangler で起動する。dev registry で互いの Durable Object を呼ぶプロセスどうしの
       // 版(workerd の build)が違うと RPC が落ちる疑いがあり(D9 ③ では版をそろえてから落ちなくなった)、wrangler の版は apps の
       // package.json でそろえてある(B92)。D9 ③ Task 17 の修正 1 では E2E の起動だけ admin の wrangler を使っていたが、版がそろったので外した。
       // `--var` は `.dev.vars` より優先される(wrangler 4.128.0 で実測。apps でそろえた 4.133.0 でも E2E の値で走ることを確認)。開発者のローカル `.dev.vars` があっても E2E 用の値で走る
@@ -57,7 +57,7 @@ export default defineConfig({
       // AB_E2E_PROBE_OVERRIDE_ENABLED=1 は上書きを効かせる 2 つ目の門(片方だけでは効かない。control の probeOverrideFromEnv)。
       // control の compatibility_flags の global_fetch_strictly_public は、手元の wrangler dev では 127.0.0.1 への fetch を止めない(2026-11-02 に実測)ので外さない
       cwd: "../control",
-      command: `pnpm exec wrangler dev -c wrangler.jsonc -c ../admin/e2e/deployer.wrangler.jsonc --port 8799 --persist-to .e2e-state --var AB_SETUP_TOKEN:${SETUP_TOKEN} --var BETTER_AUTH_SECRET:${AUTH_SECRET} --var AB_ADMIN_URL:${ADMIN_URL} --var AB_CONTROL_URL:${CONTROL_URL} --var AB_ASSET_PUBLIC_BASE:${CONTROL_URL}/dev-assets --var AB_EDGE_ORIGIN:https://wtt-edge.example.workers.dev --var AB_GOOGLE_CLIENT_ID:e2e-google-client-id --var AB_GOOGLE_CLIENT_SECRET:e2e-google-client-secret --var AB_BREAK_GLASS_TOKEN:${BREAK_GLASS_TOKEN} --var CF_USAGE_TOKEN: --var CF_ACCOUNT_ID: --var AB_PROBE_ORIGIN_OVERRIDE:${FAKE_EDGE_URL} --var AB_E2E_PROBE_OVERRIDE_ENABLED:1`,
+      command: `node ../admin/e2e/run-wrangler.mjs -c wrangler.jsonc -c ../admin/e2e/deployer.wrangler.jsonc --port 8799 --persist-to .e2e-state --var AB_SETUP_TOKEN:${SETUP_TOKEN} --var BETTER_AUTH_SECRET:${AUTH_SECRET} --var AB_ADMIN_URL:${ADMIN_URL} --var AB_CONTROL_URL:${CONTROL_URL} --var AB_ASSET_PUBLIC_BASE:${CONTROL_URL}/dev-assets --var AB_EDGE_ORIGIN:https://wtt-edge.example.workers.dev --var AB_GOOGLE_CLIENT_ID:e2e-google-client-id --var AB_GOOGLE_CLIENT_SECRET:e2e-google-client-secret --var AB_BREAK_GLASS_TOKEN:${BREAK_GLASS_TOKEN} --var CF_USAGE_TOKEN: --var CF_ACCOUNT_ID: --var AB_PROBE_ORIGIN_OVERRIDE:${FAKE_EDGE_URL} --var AB_E2E_PROBE_OVERRIDE_ENABLED:1`,
       url: "http://127.0.0.1:8799/",
       ...wranglerServer("control"),
       reuseExistingServer: false,
@@ -67,7 +67,7 @@ export default defineConfig({
       // control と同じディレクトリを指す(= 同じローカル KV と計測用 D1(wtt-results)を読む)。
       // D9 ③(plan ③ の K26): 結果の参加・CV を書くための訪問者の鍵を `--var` で渡す(edge のコードは変えない。無いと書かずに failed を返す)
       cwd: "../edge",
-      command: `pnpm exec wrangler dev --port 8787 --persist-to ${STATE} --var RESULTS_VISITOR_KEY:${E2E_RESULTS_VISITOR_KEY}`,
+      command: `node ../admin/e2e/run-wrangler.mjs -c wrangler.jsonc --port 8787 --persist-to ${STATE} --var RESULTS_VISITOR_KEY:${E2E_RESULTS_VISITOR_KEY}`,
       url: "http://127.0.0.1:8787/",
       ...wranglerServer("edge"),
       reuseExistingServer: false,
@@ -80,8 +80,8 @@ export default defineConfig({
       // BFF は control を service binding(wrangler.jsonc の services → build の出力の dist/server/wrangler.json)で呼び、
       // 接続元 IP を x-wtt-client-ip で渡す(plan12 K8)。binding の相手は、同じ WRANGLER_REGISTRY_PATH(wranglerServer)の dev registry に
       // 登録された上の control。起動の順は問わない(相手が居ない間は binding が 503 を返す)
-      // `package.json` の `preview` と同じコマンド(生成設定のパスは scripts にだけある)
-      command: `pnpm preview --var AB_CONTROL_URL:${CONTROL_URL}`,
+      // 生成設定は `package.json` の `preview` と同じ。診断はこの Workers 実行にだけ渡す。
+      command: `node e2e/run-wrangler.mjs -c dist/server/wrangler.json --port 3000 --auth-diagnostics --var WTT_E2E_CONTROL_DIAGNOSTICS:1 --var AB_CONTROL_URL:${CONTROL_URL}`,
       url: `${ADMIN_URL}/login`,
       ...wranglerServer("admin"),
       reuseExistingServer: false,

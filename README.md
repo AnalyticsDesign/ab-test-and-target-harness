@@ -221,6 +221,8 @@ pnpm typecheck     # 型チェック(全パッケージ)
 pnpm docs:check    # 文書のリンク・パス検査
 ```
 
+管理画面の E2E は固定ポートを使うので、別の worktree と同時に実行しない。実行中は、実行元の worktree のファイルを編集しない。ログイン・セッション確認の内部要求の診断は `apps/admin` の `.wrangler` 内の `e2e-diagnostics` に実行ごとに保存する。
+
 Windows on ARM(ARM64)では、ローカル実行に使う workerd が動かない(`pnpm install` で警告が出る)。Cloudflare への導入(deploy)はできるが、workerd を使う `wrangler dev`・E2E・control / edge の単体テストは動かない。開発は macOS / Linux / x64 の Windows で行う。
 
 ### ディレクトリ
