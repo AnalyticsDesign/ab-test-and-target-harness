@@ -1,5 +1,6 @@
+import { runtimeDebug } from "./debug";
 import { createApplyEngine, createPageState } from "./apply";
-import { analyticsNames, isAnalyticsSettings, isConversionPayloads, isExposurePayloads } from "./analytics";
+import { analyticsNames, isAnalyticsSettings, isConversionPayloads, isExposurePayloads, isRecord } from "./analytics";
 import { createConsent } from "./consent";
 import { collectContext } from "./context";
 import { decideLocally, needsRemoteDecision, onEdgePath, requestDecision, type DecisionOutcome } from "./decision";
@@ -72,7 +73,6 @@ export function parseBootPayload(raw: unknown): BootPayload | null {
   if (typeof raw !== "object" || raw === null) return null;
   const config = (raw as Record<string, unknown>).config as CompiledConfig | undefined;
   const settings = (raw as Record<string, unknown>).settings as RuntimeSettings | undefined;
-  const isRecord = (v: unknown): boolean => typeof v === "object" && v !== null && !Array.isArray(v);
   if (typeof config !== "object" || config === null || (config as { schemaVersion?: unknown }).schemaVersion !== 3) return null;
   if (!Array.isArray(config.experiments) || typeof config.siteId !== "string" || typeof config.version !== "number" || typeof config.siteSalt !== "string") return null;
   // 起動経路が触るコレクションの形も見る(壊れた payload で for-of / Object.values が throw するのを防ぐ。r1 CL-High-1)
@@ -145,10 +145,10 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
             engine = factory(deps.doc, config, previewRequests, getNonce);
             engine.start();
           } else {
-            console.debug("wtt: preview unavailable");
+            runtimeDebug("preview unavailable");
           }
         } catch (e) {
-          console.debug("wtt: preview failed", e); // §10.7: プレビューの失敗でページを壊さない
+          runtimeDebug("preview failed", e); // §10.7: プレビューの失敗でページを壊さない
         } finally {
           removePrehide(deps.doc); // factory(...) の例外でも必ず外す
         }
@@ -210,7 +210,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
       const dl = win[names.dataLayerName];
       if (typeof dl?.push === "function") dl.push(evt);
     } catch (e) {
-      console.debug("wtt: dataLayer", names.dataLayerName, e);
+      runtimeDebug("dataLayer", names.dataLayerName, e);
     }
   };
   const exposure = createExposureTracker(config, names, assignments, pushDataLayer);
@@ -301,7 +301,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
       expired = true;
       myAborter.abort();
       removePrehide(deps.doc); // §10.3: 期限で解除して元表示(Exposure なし)
-      console.debug("wtt: decision timeout");
+      runtimeDebug("decision timeout");
     }, settings.decisionTimeoutMs);
 
     async function run(): Promise<void> {
@@ -370,7 +370,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
 
       if (isStale()) return; // §10.3 / §16: 期限後・revoke 後・世代交代後の応答は破棄(適用も Exposure もしない)
       if (outcome === null) {
-        console.debug("wtt: no decision"); // §10.7: 元表示
+        runtimeDebug("no decision"); // §10.7: 元表示
         return;
       }
       for (const e of outcome.experiments) assignments[e.id] = e.variant;
@@ -417,7 +417,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
     try {
       await run();
     } catch (e) {
-      console.debug("wtt: start", e);
+      runtimeDebug("start", e);
     } finally {
       clearTimeout(deadlineTimer);
       ready();
@@ -494,7 +494,7 @@ export function createRuntime(deps: RuntimeDeps, rawBoot: unknown): AbApi {
       if (consentMachine.state !== "granted") return; // §16: pending / denied 中は event を送らない
       const goal = config.goals.find((g) => g.id === goalId && g.type === "CUSTOM");
       if (!goal) {
-        console.debug("wtt: goal?", goalId);
+        runtimeDebug("goal?", goalId);
         return;
       }
       conversion(goal);

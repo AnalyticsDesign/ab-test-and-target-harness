@@ -1,10 +1,12 @@
+import { runtimeDebug } from "./debug";
 import { createRuntime, type RuntimeDeps } from "./runtime";
 
 // §10.7: runtime 自身の例外でサイトを壊さない(config 取得失敗と同じく「何もしない」)
 try {
   const g = self as unknown as { __WTT_BOOT__?: unknown; __WTT_BOOTED__?: boolean; __WTT_NONCE__?: string | null };
-  const cs = document.currentScript as HTMLScriptElement | null;
-  const scriptSrc = cs?.src ?? null;
+  const cs = document.currentScript;
+  // 読み込み元として扱うのは HTML の script 要素だけ。
+  const scriptSrc = cs instanceof HTMLScriptElement ? cs.src : null;
   // CSP の nonce hiding で content 属性は空になるため IDL 属性を先に見る(spec §11)
   const nonce = cs?.nonce || cs?.getAttribute("nonce") || null;
   // 注入した下書きの bootstrap には currentScript が無く nonce も取れない。設置タグが持つ nonce は
@@ -21,5 +23,5 @@ try {
     );
   }
 } catch (e) {
-  console.debug("wtt: boot failed", e);
+  runtimeDebug("boot failed", e);
 }

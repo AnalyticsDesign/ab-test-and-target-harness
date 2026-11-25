@@ -1,3 +1,4 @@
+import { runtimeDebug } from "./debug";
 import {
   cookieValues,
   deriveExternalUuid,
@@ -103,7 +104,7 @@ export async function establishIdentity(
       } catch (e) {
         // 非セキュアコンテキストや subtle 障害でも起動を止めない。§4.3 のフォールバックを
         // 「値が取得できない」だけでなく「BYOID を確立できない」全体へ広げる(r1 CL-High-1)
-        console.debug("wtt: byoid", e);
+        runtimeDebug("byoid", e);
       }
     }
   }

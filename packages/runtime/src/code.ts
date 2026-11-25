@@ -1,3 +1,4 @@
+import { runtimeDebug } from "./debug";
 /**
  * Code Change の実行機構(spec §11、決定 38 (3))。`new Function` / `eval` は使わず、`<script>` 要素を作って DOM に挿入する。
  * 理由: 企業サイトの CSP は nonce + 'strict-dynamic' が標準で、runtime が nonce を引き継げば追加の許可なしに動く
@@ -76,7 +77,7 @@ export function activateScripts(doc: Document, roots: Element[], nonce: string |
       old.replaceWith(next);
       clones.push(next);
     } catch (e) {
-      console.debug("wtt: script", e);
+      runtimeDebug("script", e);
     }
   }
   return clones;

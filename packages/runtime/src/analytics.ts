@@ -1,6 +1,7 @@
 import { DEFAULT_ANALYTICS, type AnalyticsSettings, type ConversionPayload, type ExposurePayload, type RuntimeSettings } from "@wtt/core";
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+// boot と analytics の形チェックで、null と配列を同じように除外する。
+export const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const allStrings = (v: unknown, keys: readonly string[]): boolean => isRecord(v) && keys.every((k) => typeof v[k] === "string");
 
 /**
