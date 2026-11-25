@@ -38,7 +38,7 @@ export default async function InvitePage({ params, searchParams }: { params: Pro
   const view = inviteView({
     invitedEmail: inv.email,
     signedInEmail,
-    passwordLogin: loginView(await controlFetch<unknown>("/login-options")).passwordLogin,
+    passwordLogin: loginView(await controlFetch<unknown>("/login-options"))?.passwordLogin ?? false,
   });
   return (
     <>

@@ -21,7 +21,7 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers({ host: "localhost:3000" }),
 }));
 vi.mock("@/lib/control-binding", () => ({
-  controlBinding: async () => ({ fetch: async () => (meStatus === 200 ? Response.json({ id: "u1", email: "a@example.com" }) : new Response(null, { status: meStatus })) }),
+  controlBinding: async () => ({ fetch: async () => (meStatus === 200 ? Response.json({ id: "u1", email: "a@example.com", name: "User" }) : new Response(null, { status: meStatus })) }),
 }));
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
@@ -45,7 +45,7 @@ describe("requireUser(admin speed B)", () => {
     expect(cached.has(requireUser)).toBe(true);
   });
 
-  it("ログイン中なら利用者を返し、/me が 200 でなければ /login へ redirect する", async () => {
+  it("ログイン中なら利用者を返し、/me が 401 なら /login へ redirect する", async () => {
     await expect(requireUser()).resolves.toMatchObject({ id: "u1" });
     meStatus = 401;
     await expect(requireUser()).rejects.toThrow("redirect:/login");

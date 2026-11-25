@@ -236,13 +236,22 @@ export async function controlFetch<T>(path: string, init: RequestInit = {}): Pro
   return { status: res.status, data };
 }
 
+export class SessionUnavailableError extends Error {
+  constructor() {
+    super("セッションの状態を確認できませんでした");
+  }
+}
+
 /**
- * ログイン中の利用者。取れなければ /login へ redirect する(throw)。
- * React の cache で包み、同じ描画(1 リクエスト)の中の layout とページが 1 つの結果(redirect の throw も含む)を使う(admin speed B)
+ * 認証が拒否されたときは /login へ移す。取得の失敗は呼び出し元で再読み込みを案内する。
+ * React の cache で包み、同じ描画(1 リクエスト)の中の layout とページが 1 つの結果を使う(admin speed B)
  */
 export const requireUser = cache(async (): Promise<SessionUser> => {
-  const r = await controlFetch<SessionUser>("/me");
-  if (r.status !== 200) redirect("/login");
+  const r = await controlFetch<SessionUser | null>("/me").catch(() => null);
+  if (r?.status === 401) redirect("/login");
+  if (r?.status !== 200 || typeof r.data?.id !== "string" || typeof r.data.email !== "string" || typeof r.data.name !== "string") {
+    throw new SessionUnavailableError();
+  }
   return r.data;
 });
 

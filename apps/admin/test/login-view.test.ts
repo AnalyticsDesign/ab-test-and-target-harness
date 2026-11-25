@@ -5,16 +5,16 @@ describe("loginView (the login screen with the emergency door closed is the prod
   it("shows only Google when control says the password door is closed", () => {
     expect(loginView({ status: 200, data: { google: true, passwordLogin: false } })).toEqual({ google: true, passwordLogin: false });
   });
-  it("shows the emergency form only on an explicit true", () => {
+  it("shows the emergency form only on a valid response with an explicit true", () => {
     expect(loginView({ status: 200, data: { google: true, passwordLogin: true } })).toEqual({ google: true, passwordLogin: true });
-    expect(loginView({ status: 200, data: { google: true, passwordLogin: "yes" } }).passwordLogin).toBe(false);
+    expect(loginView({ status: 200, data: { google: true, passwordLogin: "yes" } })).toBeNull();
   });
-  it("reports Google as missing only on an explicit false", () => {
-    expect(loginView({ status: 200, data: { google: false, passwordLogin: false } }).google).toBe(false);
+  it("reports Google as missing on an explicit false", () => {
+    expect(loginView({ status: 200, data: { google: false, passwordLogin: false } })).toEqual({ google: false, passwordLogin: false });
   });
-  it("falls back to Google-only when control is unreachable or answers something else", () => {
+  it("reports the login methods as unavailable when control does not return the expected response", () => {
     for (const res of [{ status: 502, data: null }, { status: 404, data: { error: "not_found" } }, { status: 200, data: null }, { status: 200, data: "x" }]) {
-      expect(loginView(res)).toEqual({ google: true, passwordLogin: false });
+      expect(loginView(res)).toBeNull();
     }
   });
 });

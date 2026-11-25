@@ -1,7 +1,8 @@
 import { RELEASE_VERSION } from "@/generated/release";
 import { HelpProvider } from "@/components/help/HelpProvider";
 import type { ReactNode } from "react";
-import { requireUser } from "@/lib/control";
+import { requireUser, SessionUnavailableError } from "@/lib/control";
+import { ReloadError } from "@/components/ReloadError";
 import { allInOrder, loadCapabilities, loadSummary } from "@/lib/loaders";
 import { shouldShowBreakGlassBanner } from "@/lib/capabilities";
 import { BreakGlassBanner } from "@/components/BreakGlassBanner";
@@ -26,7 +27,14 @@ import { PageLeaveGuard } from "@/components/ui/PageLeaveGuard";
  */
 export default async function AuthedLayout({ children }: { children: ReactNode }) {
   // 3 つは互いに依らないので並べて読む。失敗は並べた順に判定する(未ログインは requireUser の redirect が先)
-  const [user, caps, summary] = await allInOrder([requireUser(), loadCapabilities(), loadSummary()]);
+  const state = await allInOrder([requireUser(), loadCapabilities(), loadSummary()]).catch((error: unknown) => {
+    if (error instanceof SessionUnavailableError) return null;
+    throw error;
+  });
+  if (!state) {
+    return <ReloadError title="画面を表示できませんでした" message="ログインの状態を確認できませんでした。しばらく待ってから再読み込みしてください。" />;
+  }
+  const [user, caps, summary] = state;
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
       {/* 凍結(全員の操作に関わるので一番上)と版の帯。取り直しは CapabilitiesBanners の 1 回を共有する。どちらも無いときも常にマウントする(開いていた画面にも取り直しで帯が出るように) */}

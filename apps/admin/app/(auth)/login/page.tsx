@@ -1,6 +1,7 @@
 import { controlFetch } from "@/lib/control";
 import { loginView } from "@/lib/login-view";
 import { oauthErrorMessage } from "@/lib/oauth-errors";
+import { ReloadError } from "@/components/ReloadError";
 import { ErrorBox } from "@/components/ErrorBox";
 import { PasswordLoginForm } from "./PasswordLoginForm";
 import { PageMark } from "@/components/ui/PageMark";
@@ -10,8 +11,20 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const { error } = search;
   // 同じキーが複数回付いた URL では配列になる(先頭だけを見る)
   const message = oauthErrorMessage(Array.isArray(error) ? error[0] : error);
-  // control が答えない・形が違うときは「Google のみ」に倒す(lib/login-view.ts)
-  const view = loginView(await controlFetch<unknown>("/login-options"));
+  const options = await controlFetch<unknown>("/login-options").catch(() => null);
+  if (options?.status === 401) {
+    return (
+      <div className="card" style={{ maxWidth: 420 }}>
+        <PageMark path="/login" search={search} kind="error" />
+        <h1>ログイン</h1>
+        <ErrorBox message="ログイン方法の取得が拒否されました。管理者に確認してください。" />
+      </div>
+    );
+  }
+  const view = loginView(options);
+  if (!view) {
+    return <ReloadError title="ログイン" message="ログイン方法を確認できませんでした。しばらく待ってから再読み込みしてください。" />;
+  }
   return (
     <div className="card" style={{ maxWidth: 420 }}>
       <PageMark path={`/login`} search={search} />
