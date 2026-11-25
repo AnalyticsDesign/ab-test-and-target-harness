@@ -364,12 +364,13 @@ test.describe.serial("オーディエンス → エクスペリエンス → Pub
       total += r.instructions;
       leaves.push({ hist: "visited", page: { part: "path", op: "regex", value: src } });
     }
-    expect((await page.request.post(`/api/control/sites/${SITE_AUD.id}/audiences`, { headers: controlHeaders(), data: { id: "aud_e2e_budget", name: "E2E budget", definition: { or: leaves } } })).status()).toBe(201);
     await nav(page).getByRole("link", { name: "エクスペリエンス" }).click();
     const e = { id: "exp_e2e_budget_0", name: "E2E budget 0" };
     await createExperiment(page, e);
+    // 公開に失敗した開始は下書きのまま。正常に開始した後に、次の公開を止める条件を保存する。
+    expect((await changeStatus(page, SITE_AUD.id, e.id, /^開始/)).publish.ok).toBe(true);
+    expect((await page.request.post(`/api/control/sites/${SITE_AUD.id}/audiences`, { headers: controlHeaders(), data: { id: "aud_e2e_budget", name: "E2E budget", definition: { or: leaves } } })).status()).toBe(201);
     expect((await page.request.patch(`/api/control/sites/${SITE_AUD.id}/experiments/${e.id}`, { headers: controlHeaders(), data: { targeting: { audience: "aud_e2e_budget" } } })).status()).toBe(200); // 保存は通る
-    await changeStatus(page, SITE_AUD.id, e.id, /^開始/); // 自動 Publish は止まるが、status は running になる
     await openPublish(page);
     const err = page.getByTestId("publish-compile-error");
     await expect(err).toBeVisible();

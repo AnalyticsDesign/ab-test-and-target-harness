@@ -1,15 +1,16 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiClientError, api, describeError } from "@/lib/client";
+import { deliveryDelayed, PUBLISH_OUTCOME_UNKNOWN, publishOutcomeUnknown } from "@/lib/status-message";
 import type { ResultsResponse } from "@/lib/results-view";
 import { loadTransitionPreview, othersListItems, OTHER_PUBLISH_NOTE, PREVIEW_LOAD_FAILED, STALE_PREVIEW_RETRY, SITE_PUBLISH_NOTE } from "@/lib/start-confirm";
-import { ADOPTION_NOTE_MAX, selectionNotes, stopDialogState, stopDuplicateName, stopDuplicateOption, stopView, submitStop, type StopMessage, type StopMode, type StopOutcome } from "@/lib/stop-dialog";
+import { ADOPTION_NOTE_MAX, selectionNotes, stopDialogState, stopDuplicateName, stopDuplicateOption, stopView, submitStop, type StopMessage, type StopMode } from "@/lib/stop-dialog";
 import { AppLink } from "../ui/AppLink";
 import type { Experiment, PublishPreview } from "@/lib/types";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ErrorBox } from "../ErrorBox";
 import { useNow } from "../LocalTime";
-import { navigateDocument } from "@/lib/navigate";
+import { navigateDocument, reloadDocument } from "@/lib/navigate";
 import { BusyScope, useBusyAction } from "../ui/BusyScope";
 
 /** 記録の応答が 30 秒で分からなかったとき */
@@ -18,7 +19,7 @@ const WRITE_UNKNOWN = "保存できたか分かりません。再読み込みし
 const REFRESH_STALE: StopMessage = { tone: "warn", text: "保存しました。画面の表示が古い可能性があります。再読み込みしてください" };
 
 /** 送った結果(採用の記録し直し = PUT だけ / 終了 = 状態の API と複製) */
-type Sent = { mode: "adopt" } | { mode: "stop"; outcome: StopOutcome };
+type Sent = { mode: "adopt" } | { mode: "stop"; view: ReturnType<typeof stopView>; delayedDraft: boolean };
 
 type Props = {
   wid: string;
@@ -112,7 +113,7 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
   const notes = selectionNotes(state, experiment, selected);
   const otherItems = transition?.ok ? othersListItems(transition.others) : [];
 
-  const viewOf = (o: StopOutcome) => stopView(o, `/w/${wid}/sites/${siteId}/experiments`);
+  const [draftNotice, setDraftNotice] = useState<{ messages: StopMessage[]; created: string } | null>(null);
 
   async function send() {
     if (mode === "stop" && !transition?.ok) return;
@@ -136,14 +137,16 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
           },
           describeError,
         );
-        return { mode: "stop", outcome: stopped };
+        const view = stopView(stopped, `/w/${wid}/sites/${siteId}/experiments`);
+        return { mode: "stop", view, delayedDraft: view.created !== null && deliveryDelayed(stopped.result.publish) };
       },
       // 採用の記録し直しは画面を読み直さない(結果のタブが onDone で結果を読み直す。今までと同じ往復)。
       // 終了は、公開も記録も済んで下書きを作れたら、その下書きへ移る(上部バーの「未公開の編集あり」を描き直すため全画面の遷移。複製の画面と同じ)。
       // それ以外の終了は、画面の読み直しの反映まで開いたまま覆う
-      after: (v) => (v.mode === "adopt" ? "none" : viewOf(v.outcome).navigate ? "navigate" : "refresh"),
+      // 配信の遅れを読んでから下書きを開く場合も、移動の前に元の画面を読み直さない。
+      after: (v) => (v.mode === "adopt" || v.delayedDraft ? "none" : v.view.navigate ? "navigate" : "refresh"),
       navigate: (v) => {
-        const created = v.mode === "stop" ? viewOf(v.outcome).created : null;
+        const created = v.mode === "stop" ? v.view.created : null;
         return created ? navigateDocument(created) : { kind: "none" };
       },
     });
@@ -153,7 +156,11 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
           onDone([], null);
           return;
         }
-        const view = viewOf(outcome.value.outcome);
+        const { view } = outcome.value;
+        if (outcome.value.delayedDraft && view.created) {
+          setDraftNotice({ messages: view.messages, created: view.created });
+          return;
+        }
         // 読み直しが 10 秒で終わらなくても、終了は済んでいる。閉じて、表示が古い可能性を知らせの最後に足す(送り直さない)
         onDone(outcome.refresh === "timeout" ? [...view.messages, REFRESH_STALE] : view.messages, view.created);
         return;
@@ -161,12 +168,16 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
       case "navigated":
         // 下書きへの移動が終わらなかった。終了は済んでいるので閉じて、知らせと下書きへのリンクを出す(もう一度の終了を押せる状態にしない)
         if (outcome.value.mode === "stop") {
-          const view = viewOf(outcome.value.outcome);
+          const { view } = outcome.value;
           onDone(view.messages, view.created);
         }
         return;
       case "failed":
-        // 状態の API(または採用の記録)の失敗。終了していないので、モーダルを開いたままエラーを出す
+        if (mode === "stop" && publishOutcomeUnknown(outcome.error)) {
+          onDone([{ tone: "error", text: PUBLISH_OUTCOME_UNKNOWN }], null);
+          return;
+        }
+        // 終了の準備または採用の記録が失敗した。確認し直せるようにエラーをモーダルに出す。
         if (mode === "stop" && outcome.error instanceof ApiClientError && outcome.error.code === "stale_preview") {
           setError(STALE_PREVIEW_RETRY);
           await reloadTransition();
@@ -178,6 +189,17 @@ function StopForm({ wid, siteId, experiment, timeZone, mode, report, initialVari
       default:
         return;
     }
+  }
+
+  if (draftNotice) {
+    return (
+      <ConfirmDialog
+        open key="draft-created" title="下書きを作成しました" confirmLabel="下書きを開く" cancelLabel="この画面を読み込み直す"
+        dismissOnBackdrop={false} onConfirm={() => navigateDocument(draftNotice.created)} onCancel={reloadDocument}
+      >
+        <StopNotices messages={draftNotice.messages} created={null} />
+      </ConfirmDialog>
+    );
   }
 
   return (

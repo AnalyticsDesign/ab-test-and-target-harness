@@ -11,5 +11,5 @@ export default defineConfig({
       "cloudflare:workers": path.join(import.meta.dirname, "test/stubs/cloudflare-workers.ts"),
     },
   },
-  test: { include: ["test/**/*.test.ts"], environment: "node", env: { AB_CONTROL_URL: "http://control.test" } },
+  test: { include: ["test/**/*.test.{ts,tsx}"], environment: "node", env: { AB_CONTROL_URL: "http://control.test" } },
 });

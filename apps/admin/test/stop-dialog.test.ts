@@ -179,6 +179,15 @@ describe("submitStop / stopView(設計書 §8.2: 複製が失敗しても終了�
     });
   });
 
+  it("stop_with_delivery_warning_holds_navigation", () => {
+    const result = { ...ok, publish: { ok: true, version: 7, needsProfile: false, superseded: false, staticDeploy: "pending", warnings: [{ path: "delivery", message: "反映待ち" }] } } satisfies StatusResult;
+    expect(stopView({ result, duplicate: { kind: "created", id: "copy" } }, "/experiments")).toEqual({
+      messages: [{ tone: "warn", text: "公開は確定しました。配信への反映は遅れています(自動で反映します)" }],
+      created: "/experiments/copy",
+      navigate: false,
+    });
+  });
+
   it("a failed duplicate keeps the stop and shows the error (no other call)", async () => {
     const call = vi.fn(async (_m: string, p: string, _b?: unknown) => {
       if (p.endsWith("/status")) return ok;

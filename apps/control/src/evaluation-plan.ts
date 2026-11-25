@@ -1,6 +1,6 @@
 // D9 ③(plan ③ の K7・K8・K9、設計書 §5): 評価計画の受け口(zod)・読み込み・開始の検査・容量の見込み・書き込みの文。
 // 型・既定値・範囲の規則は packages/stats の evaluation-plan.ts が正(ここでは zod で型と整数だけを見て、範囲は planIssues に任せる)
-import { sql, type SqlBool } from "kysely";
+import { sql, type RawBuilder, type SqlBool } from "kysely";
 import { z } from "zod";
 import { DEFAULT_PLAN, defaultBaseline, planIssues, type EvaluationDefinition, type EvaluationPlan } from "@wtt/stats";
 import { changedFieldsDetail, type AuditSql } from "./audit";
@@ -250,24 +250,24 @@ export async function capacityWarning(
 }
 
 /**
- * 開始で計画を固定する upsert(K8)。開始の batch の 2 文目。
- * 1 文目(状態の CAS)が通って新しい run_id が入ったときだけ効く(INSERT と UPDATE の両方の枝を `run_id = 新しい run_id` の EXISTS で絞る)。
+ * 開始の状態の CAS に続いて計画を固定する upsert。SELECT で新しい run_id と activation を確かめる。
+ * 条件に外れると INSERT の候補がないため、衝突時の UPDATE も走らない。
  * 既に固定した行は上書きしない(fixed_at IS NULL)
  */
 export function fixPlanStatement(
   env: Env,
   a: { siteId: string; experimentId: string; plan: EvaluationPlan; runId: string; userId: string; now: number },
+  guard?: RawBuilder<SqlBool>,
 ): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO evaluation_plans (site_id, experiment_id, plan_json, version, update_token, fixed_at, updated_by, updated_at)
-     SELECT ?1, ?2, ?3, 1, ?4, ?5, ?6, ?5
-     WHERE EXISTS (SELECT 1 FROM experiments WHERE site_id = ?1 AND id = ?2 AND run_id = ?7)
-     ON CONFLICT (site_id, experiment_id) DO UPDATE SET
-       plan_json = excluded.plan_json, version = evaluation_plans.version + 1, update_token = excluded.update_token,
-       fixed_at = excluded.fixed_at, updated_by = excluded.updated_by, updated_at = excluded.updated_at
-     WHERE evaluation_plans.fixed_at IS NULL
-       AND EXISTS (SELECT 1 FROM experiments WHERE site_id = ?1 AND id = ?2 AND run_id = ?7)`,
-  ).bind(a.siteId, a.experimentId, JSON.stringify(a.plan), crypto.randomUUID(), a.now, a.userId, a.runId);
+  const started = sql<SqlBool>`exists (select 1 from experiments where site_id = ${a.siteId} and id = ${a.experimentId} and run_id = ${a.runId})`;
+  return sqlStatement(env.DB, sql`
+    insert into evaluation_plans (site_id, experiment_id, plan_json, version, update_token, fixed_at, updated_by, updated_at)
+    select ${a.siteId}, ${a.experimentId}, ${JSON.stringify(a.plan)}, 1, ${crypto.randomUUID()}, ${a.now}, ${a.userId}, ${a.now}
+    where ${started} ${guard ? sql`and ${guard}` : sql``}
+    on conflict (site_id, experiment_id) do update set
+      plan_json = excluded.plan_json, version = evaluation_plans.version + 1, update_token = excluded.update_token,
+      fixed_at = excluded.fixed_at, updated_by = excluded.updated_by, updated_at = excluded.updated_at
+    where evaluation_plans.fixed_at is null`);
 }
 
 /**

@@ -44,7 +44,7 @@
 
 **開始後のテストの結果は、編集の前と後を合算します。** パターンの変更内容・対象 URL・配信条件・目標の定義を大きく変える場合は、複製して新しいテストを開始してください。メモの更新は公開の対象外、評価計画は保存時に反映済みなので、それらだけの更新に公開は不要です。
 
-API で、確かめた内容に操作を固定する手順は次のとおりです。公開する場合は `GET /sites/{sid}/publish-preview` を読み、内容を確かめ、応答の `digest` を `POST /sites/{sid}/publish` の本文 `{ "expectDigest": "<digest>" }` に入れて送ります。状態を変更する場合は `GET /sites/{sid}/publish-preview?transition=<experimentId>:<running|paused|archived>` を読み、`transitionDigest` を状態の変更(`POST /sites/{sid}/experiments/{experimentId}/status`)の `expectDigest` に入れます。公開が `200` + `ok: false, error: "stale_preview"`、状態の変更が `409 stale_preview` なら、確認した後に内容が変わっています。状態の変更の 409 では何も変わっていません。確認画面を読み直し、変わった内容を確かめてから送り直してください。状態の変更が `200` で `publish.error` が `stale_preview` だった場合は、確かめの直後に保存が割り込んで、状態は変わり公開だけが済んでいません。確認画面を読み直して、`POST /sites/{sid}/publish` で公開してください。
+API で、確かめた内容に操作を固定する手順は次のとおりです。公開する場合は `GET /sites/{sid}/publish-preview` を読み、内容を確かめ、応答の `digest` を `POST /sites/{sid}/publish` の本文 `{ "expectDigest": "<digest>" }` に入れて送ります。状態を変更する場合は `GET /sites/{sid}/publish-preview?transition=<experimentId>:<running|paused|archived>` を読み、`transitionDigest` を状態の変更(`POST /sites/{sid}/experiments/{experimentId}/status`)の `expectDigest` に入れます。公開が `200` + `ok: false, error: "stale_preview"`、状態の変更が `409 stale_preview` なら、確認した後に内容が変わっています。状態の変更の 409 では何も変わっていません。確認画面を読み直し、変わった内容を確かめてから送り直してください。
 
 `expectDigest` は API では任意です。付けなければ、操作した時点の保存内容がすべて公開されます。`x-wtt-client-version` を付けないエージェントは版の判定を受けないので、契約の版が上がっても 426 にはならず、`expectDigest` を付けずに呼べます(付けている場合は下の「API の版と 426」)。
 
@@ -117,7 +117,7 @@ curl -sS -X PUT "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/evaluation-p
   -H "Authorization: Bearer $AB_API_KEY" -H 'content-type: application/json' \
   -d '{"plan":{"primaryGoalId":"g_lead","targetPerVariant":5000}}'
 
-# 5. 開始(管理者。成功するとサイトが自動で公開される)
+# 5. 開始(管理者。遷移と公開は一緒に確定する)
 curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/status" \
   -H "Authorization: Bearer $AB_API_KEY" -H 'content-type: application/json' -d '{"status":"running"}'
 ```
@@ -130,7 +130,12 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/status" \
 - 結果を記録しないサイトでの開始は成功し、応答の `warnings` に `path: "results"` が出ます(結果はツールに残らず、後から記録を有効にしても、このテストは記録されません)。`path: "resultsCapacity"` は計測用のデータベースの空きが少なくなる見込みの警告です(開始は止めない)
 - 評価計画の保存は公開の対象になりません(「未公開の編集あり」になりません)
 
-**開始・再開と画像**: 開始・再開(`status: "running"`)は、状態を変える前に、変えた後に配信する内容(ほかの配信中のエクスペリエンスを含む)を公開と同じ画像の確かめにかけます。通らなければ、状態を変えずに 409 `asset_missing` か `asset_other_site` を返します(封筒の `assetProblems` に URL と変更の場所が入ります。その変更を直してからやり直してください)。一時停止・終了は配信を止める操作なので、画像を確かめずに必ず状態を変えて公開します。
+**開始・再開と画像**: 開始・再開(`status: "running"`)は、状態を変える前に、変えた後に配信する内容(ほかの配信中のエクスペリエンスを含む)を公開と同じ画像の確かめにかけます。通らなければ、状態を変えずに 409 `asset_missing` か `asset_other_site` を返します(封筒の `assetProblems` に URL と変更の場所が入ります。その変更を直してからやり直してください)。一時停止・終了は配信を止める操作なので、画像の確かめを省きます。
+
+- 開始・再開が `409`(`asset_missing`・`asset_other_site`・設定の作成時のコード・`kv_put_failed` など)なら状態は変わっていません。封筒の `error`・`message` を読み、内容の不備は `hint` に従って直し、一時的な失敗なら数秒後に同じ操作を送り直してください。
+- `409 transition_conflict` は別の公開と重なったことを示します。状態は変わっていないので、公開の確認を読み直してから送り直してください。
+- `503 publish_outcome_unknown` は、公開が確定したか分からないことを示します。送り直す前に、公開履歴(`GET /sites/{sid}/publishes`)とエクスペリエンスの状態を読み直してください。
+- 一時停止・終了は公開の準備に失敗しても状態を変え、`200` の `publish.ok: false` で返ります。`publish.warnings` に `path: "delivery"` があれば、公開は確定し、配信への反映だけが遅れています。待てば自動で反映されます。
 
 **対象 URL(`urlMatch`)**は、含める行(`include`)と除く行(`exclude`)で書きます。含める行のどれかに一致し、除く行のどれにも一致しないページが対象です。ページの URL・ホスト・パス・パラメータの条件は、対象 URL だけに書きます(配信条件・オーディエンスには書けません。下の「ページの条件を対象 URL に移す」)。
 
@@ -360,7 +365,7 @@ curl -sS -X PUT "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/adoption" -H
   -H 'content-type: application/json' -d '{"variantId":"b"}'
 ```
 
-- 終了は、先に配信を止め(自動で公開)、その後で結果と採用を記録します。応答の `results.recorded` が `false` なら、終了と公開は済んでおり、結果の記録は自動で作り直されます。採用は `PUT …/adoption` で記録し直してください
+- テストの終了では、公開に成功すると配信を止める公開と状態の変更が一緒に確定し、その後で結果と採用の記録を試みます。公開の準備に失敗して終了だけが確定した場合も、結果と採用の記録を試みます。応答の `results.recorded` が `false` なら、終了は済んでおり、結果の記録は自動で作り直されます。公開の結果は `publish.ok` で確認してください。採用は `PUT …/adoption` で記録し直してください
 - 採用は判定と関係なく選べます(記録には判定も一緒に残ります)。変更の無い基準の ID は「採用なし」として記録します。基準を採用する意味があるのは、基準に変更があるときだけです
 - 終了していないテストへの `PUT …/adoption` は 409、パーソナライズへの採用は 422(どちらも `adoption_not_allowed`)、パターンに無い ID は 422 `unknown_variant` です
 - 採用したパターンをサイトに出し続けるには、レシピ 7 の `mode: "variant"` で下書きを作り、人が開始します
@@ -433,7 +438,7 @@ curl -sS -X PATCH "$AB_CONTROL_URL/sites/$SID/experiments/$EID" -H "Authorizatio
   -H 'content-type: application/json' \
   -d '{"targeting":{"and":[{"audience":"aud_pricing"},{"ctx":"device","op":"in","value":["mobile"]}]}}'
 
-# 3. 開始(管理者。成功するとサイトが自動で公開される)
+# 3. 開始(管理者。遷移と公開は一緒に確定する)
 curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/$EID/status" -H "Authorization: Bearer $AB_API_KEY" \
   -H 'content-type: application/json' -d '{"status":"running"}'
 ```

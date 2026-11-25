@@ -109,7 +109,7 @@ describe("asset_delivered_refs (spec §3.1)", () => {
     expect(await refsOf(sid)).toEqual([]);
   });
 
-  it("publish_does_not_fail_when_experiment_deleted_before_activation", async () => {
+  it("publish_returns_state_changed_without_asset_refs_when_running_experiment_deleted_before_activation", async () => {
     const owner = await setupOwner();
     const { id: sid } = await createSite(owner.token, owner.workspaceId);
     const url = await seedAssetRow(sid, { id: "asset_refccccccc" });
@@ -119,7 +119,7 @@ describe("asset_delivered_refs (spec §3.1)", () => {
     // compile の後・activation の batch の直前にエクスペリエンスを消す(外部キーの違反で batch ごと落ちない)
     const { DB } = countingD1(env.DB, { match: /insert or ignore into asset_delivered_refs/i, run: () => env.DB.prepare("delete from experiments where site_id = ?1 and id = ?2").bind(sid, eid).run() });
     const r = await publishSite({ ...testEnv, DB }, getDb({ ...env, DB } as Env), await siteRow(sid), userActor(owner.userId));
-    expect(r).toMatchObject({ ok: true, superseded: false });
+    expect(r).toMatchObject({ ok: false, error: "state_changed" });
     expect(await refsOf(sid)).toEqual([]);
   });
 

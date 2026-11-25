@@ -323,9 +323,8 @@ export async function createExperiment(page: Page, experiment: { id: string; nam
  * Start / Pause / Stop を押し、`POST …/status` の応答(遷移後の Experiment と Publish の結果)を返す。
  *
  * バージョン番号は画面のバナーではなく応答から取る: バナーは `router.refresh()` の到着タイミングに依存する
- * 一過性の表示で、待ち方によっては競合する。応答は決定 17 が定義する契約そのもの(遷移は成功、Publish の可否は
- * `publish.ok`)なので、こちらを正本にする。
- * 「バナーが refresh を跨いで残ること」自体は `a failed publish keeps its alert on screen` が別に固定している
+ * 一過性の表示で、待ち方によっては競合する。この関数は遷移成功の 200 を待つ。開始前の拒否を検査するときは
+ * テスト側で 409 の応答と確認の中のエラーを確かめる。
  */
 export type StatusResponse = { publish: { ok: boolean; version: number | null; error?: string } };
 

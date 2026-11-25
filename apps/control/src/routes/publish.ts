@@ -6,21 +6,21 @@ import { z } from "zod";
 import { requireSession, type AppEnv } from "../app";
 import { guardAssets } from "../asset-guard";
 import { auditActor, auditStatement } from "../audit";
-import { toStatement, type AudienceRow, type ChangeRow, type ExperimentRow } from "../db";
+import { toStatement, type ChangeRow, type ExperimentRow } from "../db";
 import { ApiError, notFound, publishBodyPruned, validationFailed } from "../errors";
 import { overlapWarnings } from "../experiment-order";
 import { SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
 import { canReadRawPublishError, loadSite } from "../roles";
 import { compile, CompileError, usesCondition, type CompiledConfig, parseCompiledConfig } from "@wtt/core";
-import { compileRowStatements, parseCompileRows, buildCompileInputFromRows, compileInputDigest, applyTransitionToRows, buildCompileInput, describeCompileFailure, type StoredCompileInput, loadActiveConfig, publicPublishResult, publishErrorCode, publishSite } from "../publish";
+import { COMPILE_ROW_STATEMENTS, compileRowStatements, parseCompileRows, buildCompileInputFromRows, compileInputDigest, applyTransitionToRows, buildCompileInput, describeCompileFailure, type StoredCompileInput, loadActiveConfig, publicPublishResult, publishErrorCode, publishSite } from "../publish";
 import { requestStaticDeploy } from "../static-delivery";
 import { audienceUsage } from "./audiences";
 
 export const publishRoutes = new Hono<AppEnv>();
 
 /**
- * spec §13.6: Publish の結果。失敗も HTTP 200 + `ok: false` で返す(決定 17。UI がアラートを出して再試行する)。
+ * 公開の準備の失敗は HTTP 200 + `ok: false`、確定したか分からない場合は 503 の封筒で返す。
  * Task 7 の `POST …/status` も応答の `publish` フィールドにこの同じ schema を使う(export してそちらから import する)
  */
 /** B68: 公開する設定の中の、見つからない画像・別のサイトの画像と、それを含む変更(公開の失敗・確認の画面・状態を変える口の 409 が同じ形) */
@@ -46,13 +46,13 @@ export const PublishResultSchema = z.union([
         "設置タグの配信ファイルの更新。deployed = 反映済み(訪問者のブラウザには 60 秒以内に届く)/ pending = まだ反映されていない(自動で再試行する。サイトの staticStale が true になり、続くときは POST /sites/:sid/static/redeploy で作り直せる)/ skipped = 更新しなかった。superseded が true のときは、より新しい公開が更新するため。superseded が false のときは、配信ファイルを更新する仕組みが設定されていないため",
       ),
     warnings: z.array(z.object({ path: z.string(), message: z.string() })).describe(
-        "公開の警告(拒否はしない)。dataLayer の名札(GA4 で値が破棄される可能性)、配信するタグの大きさ(path = bootstrap)、同じ対象 URL で同じ要素を変えるエクスペリエンスの組(path = experiments.<優先の低い方の ID>。どちらが優先されるかを message に書く)",
+        "公開の警告(拒否はしない)。dataLayer の名札(GA4 で値が破棄される可能性)、配信するタグの大きさ(path = bootstrap)、同じ対象 URL で同じ要素を変えるエクスペリエンスの組(path = experiments.<優先の低い方の ID>。どちらが優先されるかを message に書く)。path が delivery のときは公開は確定し、配信への反映だけが遅れている(自動で反映する)",
       ),
   }),
   z.object({
     ok: z.literal(false),
     version: z.number().int().nullable(),
-    error: z.string().describe("機械可読コード(kv_put_failed / kv_verify_failed / kv_rate_limited / publish_record_missing / stale_preview / legacy_targeting / unknown_audience / within_days_exceeds_retention / asset_missing / asset_other_site …)"),
+    error: z.string().describe("機械可読コード(kv_put_failed / kv_verify_failed / publish_record_missing / state_changed(準備の間にエクスペリエンスの状態が変わった。もう一度公開する) / publish_reservation_expired(準備に時間がかかりすぎた。もう一度公開する) / stale_preview / legacy_targeting / unknown_audience / within_days_exceeds_retention / asset_missing / asset_other_site …)。確定したかを確かめられないときは 503 publish_outcome_unknown の封筒を返す。送り直す前に公開履歴と状態を読み直す"),
     message: z.string(),
     hint: z.string().optional(),
     assetProblems: z
@@ -144,12 +144,12 @@ publishRoutes.post(
   "/sites/:sid/publish",
   describeRoute({
     tags: ["publish"],
-    summary: "サイトを公開(管理者以上)。expectDigest を付けると、確認画面で見た内容のときだけ公開する。失敗も 200 + ok:false で返す",
+    summary: "サイトを公開(管理者以上)。expectDigest を付けると、確認画面で見た内容のときだけ公開する。準備の失敗は 200 + ok:false、確定したか不明なら 503 publish_outcome_unknown の封筒を返す",
     requestBody: { required: false, content: { "application/json": { schema: z.toJSONSchema(PublishBodySchema) as Record<string, unknown> } } },
     security: [{ bearer: [] }],
     responses: {
       200: { description: "公開の結果(成功 / 失敗の両方)", content: { "application/json": { schema: resolver(PublishResultSchema) } } },
-      ...errorResponses(400, 401, 403, 404, 422),
+      ...errorResponses(400, 401, 403, 404, 422, 503),
     },
   }),
   requireSession,
@@ -311,20 +311,23 @@ publishRoutes.get(
     },
   ),
   async (c) => {
-    const { site } = await loadSite(c, c.req.param("sid"), "viewer");
+    const { site: authorizedSite } = await loadSite(c, c.req.param("sid"), "viewer");
     const db = c.get("db");
-    const since = site.last_activated_at ?? 0;
+    const siteId = authorizedSite.id;
     const batch = await c.env.DB.batch([
-      ...compileRowStatements(c.env, db, site.id),
-      toStatement(c.env, db.selectFrom("experiments").leftJoin("user", "user.id", "experiments.updated_by").selectAll("experiments").select("user.name as updated_by_name").where("experiments.site_id", "=", site.id).orderBy("experiments.updated_at", "desc")),
-      toStatement(c.env, db.selectFrom("changes").leftJoin("user", "user.id", "changes.updated_by").selectAll("changes").select("user.name as updated_by_name").where("changes.site_id", "=", site.id)),
-      toStatement(c.env, db.selectFrom("publishes").select("config_json").where("site_id", "=", site.id).where("version", "=", site.active_version ?? 0)),
+      ...compileRowStatements(c.env, db, siteId),
+      toStatement(c.env, db.selectFrom("experiments").leftJoin("user", "user.id", "experiments.updated_by").selectAll("experiments").select("user.name as updated_by_name").where("experiments.site_id", "=", siteId).orderBy("experiments.updated_at", "desc")),
+      toStatement(c.env, db.selectFrom("changes").leftJoin("user", "user.id", "changes.updated_by").selectAll("changes").select("user.name as updated_by_name").where("changes.site_id", "=", siteId)),
+      toStatement(c.env, db.selectFrom("publishes").select("config_json").where("site_id", "=", siteId).where("version", "=", db.selectFrom("sites").select("active_version").where("id", "=", siteId))),
     ]);
-    const rows = parseCompileRows(batch);
-    const allExps = batch[5]!.results as Array<ExperimentRow & { updated_by_name: string | null }>;
+    const rows = parseCompileRows(batch.slice(0, COMPILE_ROW_STATEMENTS));
+    const { site } = rows;
+    const since = site.last_activated_at ?? 0;
+    const [experimentEdits, changeEdits, activePublish] = batch.slice(COMPILE_ROW_STATEMENTS);
+    const allExps = experimentEdits!.results as Array<ExperimentRow & { updated_by_name: string | null }>;
     const exps = allExps.filter((e) => e.updated_at > since);
-    const changes = (batch[6]!.results as Array<ChangeRow & { updated_by_name: string | null }>).filter((ch) => ch.updated_at > since);
-    const changedAudiences = (batch[4]!.results as AudienceRow[]).filter((a) => a.updated_at > since).sort((a, b) => b.updated_at - a.updated_at);
+    const changes = (changeEdits!.results as Array<ChangeRow & { updated_by_name: string | null }>).filter((ch) => ch.updated_at > since);
+    const changedAudiences = rows.audiences.filter((a) => a.updated_at > since).sort((a, b) => b.updated_at - a.updated_at);
     const usage = await audienceUsage(db, site.id);
     const query = c.req.valid("query");
     const transition = query.transition ?? (query.starting ? `${query.starting}:running` : null);
@@ -338,7 +341,7 @@ publishRoutes.get(
     let overlaps: ReturnType<typeof overlapWarnings> = [];
     let input: StoredCompileInput | null = null;
     try {
-      input = buildCompileInputFromRows(site, (site.active_version ?? 0) + 1, rows);
+      input = buildCompileInputFromRows((site.active_version ?? 0) + 1, rows);
       digest = await compileInputDigest(input);
       // compile の前の入力から出す(compile に失敗しても重なりは見せる)
       if (transition === null) overlaps = overlapWarnings(input.experiments);
@@ -351,9 +354,13 @@ publishRoutes.get(
     }
     if (transitionId && transitionTo) {
       try {
-        const hypothetical = applyTransitionToRows(rows, transitionId, transitionTo as "running" | "paused" | "archived", Date.now());
+        const now = Date.now();
+        const hypothetical = applyTransitionToRows(rows, {
+          experimentId: transitionId, to: transitionTo as "running" | "paused" | "archived",
+          stamps: transitionTo === "running" ? { last_started_at: now, started_at: now } : transitionTo === "archived" ? { stopped_at: now } : {},
+        });
         if (hypothetical) {
-          transitionInput = buildCompileInputFromRows(site, (site.active_version ?? 0) + 1, hypothetical);
+          transitionInput = buildCompileInputFromRows((site.active_version ?? 0) + 1, hypothetical);
           transitionDigest = await compileInputDigest(transitionInput);
           overlaps = transitionTo === "running" ? overlapWarnings(transitionInput.experiments).filter((o) => o.experimentIds.includes(transitionId)) : [];
           transitionNext = compile(transitionInput);
@@ -365,7 +372,7 @@ publishRoutes.get(
     const assetGuard = next && input ? await guardAssets(c.env, db, site, input, JSON.stringify(next), { readD1: true }) : null;
     const assetProblems = assetGuard && !assetGuard.ok ? assetGuard.assetProblems : [];
     let active: CompiledConfig | null = null;
-    const activeJson = (batch[7]!.results[0] as { config_json: string | null } | undefined)?.config_json;
+    const activeJson = (activePublish!.results[0] as { config_json: string | null } | undefined)?.config_json;
     if (activeJson) { try { active = parseCompiledConfig(JSON.parse(activeJson)); } catch { /* 読めない過去の版は比較しない */ } }
     const nextPatterns = next?.patterns;
     const droppedPageConditions =

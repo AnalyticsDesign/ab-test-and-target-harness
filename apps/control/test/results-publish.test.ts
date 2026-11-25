@@ -179,10 +179,10 @@ describe("Publish の results(D9 ②)", () => {
     expect(await logRows(sid)).toEqual([{ enabled: 1, publish_version: v2 }, { enabled: 0, publish_version: v4 }]);
     await publish(owner.token, sid);
     expect(await logRows(sid)).toHaveLength(2);
-    // 時刻は公開の時刻(activation と同じ nowMs)
+    // 切替を記録するのは公開の冒頭から activation の準備が済んだ後
     const at = await getDb(env).selectFrom("results_collection_log").select("at").where("site_id", "=", sid).where("publish_version", "=", v4).executeTakeFirstOrThrow();
     const pub = await getDb(env).selectFrom("publishes").select("activated_at").where("site_id", "=", sid).where("version", "=", v4).executeTakeFirstOrThrow();
-    expect(at.at).toBe(pub.activated_at);
+    expect(at.at).toBeGreaterThanOrEqual(pub.activated_at!);
   });
 
   it("B110: records the published results_enabled, not whether results.runs is non-empty, and the stop periods are unaffected", async () => {
@@ -214,11 +214,11 @@ describe("Publish の results(D9 ②)", () => {
     const r = await publishSite(testEnv, db, await siteRow(sid), userActor(owner.userId));
     expect(r).toMatchObject({ ok: true, superseded: true });
     expect(await logRows(sid)).toEqual([]);
-    // activation の後、active の put の最中に追い越された(published_status と同じ fence で書かない)
+    // activation 後の KV put 中に追い越されても、切替の行は先の activation で確定済み。
     await db.updateTable("sites").set({ active_version: null }).where("id", "=", sid).execute();
     const bumped = await json(await publishRes(owner.token, sid, { CONFIG_KV: kvBumpingActiveOnPut(sid, 99) }));
     expect(bumped).toMatchObject({ ok: true, superseded: false });
-    expect(await logRows(sid)).toEqual([]);
+    expect(await logRows(sid)).toEqual([{ enabled: 1, publish_version: bumped.version }]);
   });
 
   it("draft bootstrap has no results", async () => {

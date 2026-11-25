@@ -244,6 +244,8 @@ describe("収集の締め切り(resultsCollectUntil)", () => {
     const owner = await setupOwner();
     const sid = await recordingSite(owner);
     await startTest(owner, sid, "exp_t", { minDays: 7 });
+    // 開始の印を処理済みにして、凍結中の失敗による追加の書き込みを検出する。
+    await env.DB.prepare("update sites set collect_until_dirty = 0 where id = ?").bind(sid).run();
     const failing = failingKv(new RegExp(`^site:${sid}:settings$`), "put");
     const frozen = async () => {
       throw new WriteFrozen();

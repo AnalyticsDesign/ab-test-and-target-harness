@@ -52,7 +52,10 @@ export type CronContext = {
   assertNotFrozen(): Promise<void>;
   /** この実行のクエリの数の残り(K17) */
   queries: QueryBudget;
+  run?: { state: CronRunState | null; reserved: boolean; outside: QueryBudget & { env: Env } };
 };
+
+export type CronRunFacts = { now: number; due: ReadonlySet<string>; state: CronRunState | null };
 
 export type CronJob = {
   name: string;
@@ -64,6 +67,7 @@ export type CronJob = {
   queryShare?: number;
   /** 登録の順に関係なく配分を残す(後ろにあっても、前のジョブが使い切らない。results-capacity)。allotQueries */
   queryReserved?: boolean;
+  reserveWhen?: (facts: CronRunFacts) => boolean;
   /** 1 件を処理するのに要る配分の最低(位置・対象の読み取りと位置の書き込みを含む)。配分がこれに届かない実行では動かさない。allotQueries */
   queryFloor?: number;
   /**
@@ -85,6 +89,16 @@ export type CronRunReport = Array<{ job: string; outcome: "ran" | "continued" | 
  * Free では上げない(2026-10-20 ユーザー決定。backlog B93)。runner と配分を持たないジョブの分は、この外(上限 1,000 との差)に入る
  */
 export const QUERY_LIMIT = 40;
+const REPAIR_OUTSIDE_QUERIES = 2;
+
+/** 今回確保しないジョブは、配分を持たないジョブとして直近の照合だけを動かす。 */
+export function effectiveJobs(jobs: readonly CronJob[], facts: CronRunFacts): CronJob[] {
+  return jobs.map(job => {
+    if (!job.reserveWhen || job.reserveWhen(facts)) return job;
+    const { queryShare, queryFloor, queryReserved, ...unshared } = job;
+    return unshared;
+  });
+}
 
 /** 包んだ文 → 元の文(batch には元の文を渡す。workerd / miniflare の batch は文の中身を直接読むため) */
 const ORIGINAL = new WeakMap<object, D1PreparedStatement>();
@@ -183,6 +197,17 @@ async function recordSuccess(db: Db, job: CronJob, now: number): Promise<void> {
  * | results-purge が due・daily 優先の枠   | 10       | 10            | –     | 3        | 16    |
  * | 両方が due・tick 優先の枠              | 10       | 7             | 20    | 3        | 0(動かない) |
  * | 両方が due・daily 優先の枠             | 0        | 0             | 26    | 3        | 11    |
+ *
+ * 修復の候補がある回の配分:
+ * | due         | 優先  | delivery | collect-until | daily | capacity | purge | publish-repair |
+ * | ----------- | ----- | -------- | ------------- | ----- | -------- | ----- | -------------- |
+ * | なし        | 両枠  | 10       | 10            | –     | 3        | –     | 7              |
+ * | daily       | tick  | 10       | 7             | 13    | 3        | –     | 7              |
+ * | daily       | daily | 4        | 0             | 26    | 3        | –     | 7              |
+ * | purge       | tick  | 10       | 7             | –     | 3        | 13    | 7              |
+ * | purge       | daily | 10       | 4             | –     | 3        | 16    | 7              |
+ * | daily/purge | tick  | 10       | 7             | 13    | 3        | 0     | 7              |
+ * | daily/purge | daily | 0        | 0             | 26    | 3        | 11    | –              |
  * 1 件の最低: delivery 10・collect-until 7・daily 10(到達の確認 1 件)・purge 10(繰り返し 1 回)・capacity 2。
  * (B94 で collect-until を 8 / 6 → 10 / 7 にした。tick 優先の枠の daily は 21 → 20)
  * 記録 1 件(位置と対象の読み取り 3 + 記録 21 + 位置の書き込み 1 = 25)は daily 優先の枠の 26 に収まる。tick 優先の枠の 20 では到達の確認だけが進む。
@@ -297,7 +322,7 @@ export async function runCron(env: Env, scheduledTime: number, jobs: readonly Cr
   const now = scheduledTime;
   // B182: 凍結・daily の記録・プランを最初に batch 1 回で読む(書く直前の確かめは assertNotFrozen が読み直す)。
   // batch が失敗した回だけ、前と同じ 1 つずつの読み取りに戻る
-  const state = await readCronRunState(env.DB, jobs.filter((j) => "daily" in j.cadence).map((j) => j.name));
+  const state = await readCronRunState(env.DB, jobs.filter((j) => "daily" in j.cadence).map((j) => j.name), now);
   const { frozen: frozenAtStart, due, plan, runSharing } = state ? startFromState(state, jobs, now) : await startFromSeparateReads(db, jobs, now);
   // B139: 共有の自動の移行(一度きり)を実行の最初に進める。wtt-control に書くので凍結中は見送る。
   // B182: 動かすかは shouldRunSharingMigration が決める(batch が読めた回)。移行待ちのサイトがある回と、導入の印が D1 に無い回はどの枠でも、
@@ -313,16 +338,30 @@ export async function runCron(env: Env, scheduledTime: number, jobs: readonly Cr
     }
   }
   // 今回動くジョブ(凍結で見送るものを除く)。daily の due は上で決めた(配分を決めるため)
-  const runnable = jobs.filter((j) => !(j.writesControl && frozenAtStart));
   const dueNames = new Set([...due].filter(([, d]) => d === true).map(([n]) => n));
+  const effective = effectiveJobs(jobs, { now, due: dueNames, state });
+  const runnable = effective.filter((j) => !(j.writesControl && frozenAtStart));
   const allot = allotQueries(runnable, dueNames, now, plan);
   const limit = queryLimitFor(runnable, dueNames, plan);
   /** 動くジョブ = due で、配分が 1 件の最低に届くもの */
   const willRun = (j: CronJob) => due.get(j.name) === true && (j.queryShare === undefined || allot.get(j.name)! >= (j.queryFloor ?? 1));
   // K17: 配分を持つジョブが出したクエリの実数(全体)
   let spent = 0;
+  let outsideQueries = 0;
+  const outside = (limit: number) => {
+    const left = () => Math.max(0, limit - outsideQueries);
+    const count = (n: number) => {
+      if (n > left()) throw new Error("cron outside query allowance exhausted");
+      outsideQueries += n;
+    };
+    return {
+      left, use: (n: number) => n <= left(),
+      env: { ...env, DB: countingD1(env.DB, count), ...(env.RESULTS_DB ? { RESULTS_DB: countingD1(env.RESULTS_DB, count) } : {}) },
+    };
+  };
+  const noOutside = outside(0);
   const report: CronRunReport = [];
-  for (const [i, job] of jobs.entries()) {
+  for (const [i, job] of effective.entries()) {
     if (job.writesControl && frozenAtStart) {
       report.push({ job: job.name, outcome: "skipped_frozen" });
       continue;
@@ -330,11 +369,12 @@ export async function runCron(env: Env, scheduledTime: number, jobs: readonly Cr
     // 後ろで動く予定のジョブの配分。このジョブの全体の残りから引いて残す(このジョブが後ろの配分に食い込む件を始めないため)。
     // 前のジョブが 1 件の見込みを超えた分は全体の残りを減らすので、後ろのジョブが実際に使える数は配分より少なくなりうる
     // (下で実行の時点の残りを最低と比べる)
-    const held = jobs
+    const held = effective
       .slice(i + 1)
       .filter((j) => runnable.includes(j) && willRun(j) && j.queryShare !== undefined)
       .reduce((s, j) => s + allot.get(j.name)!, 0);
     const ctx = jobContext(env, db, now, limit, allot.get(job.name), () => spent + held, (n) => (spent += n));
+    ctx.run = { state, reserved: !!job.queryReserved, outside: job.name === "publish-repair" ? outside(REPAIR_OUTSIDE_QUERIES) : noOutside };
     try {
       const d = due.get(job.name);
       if (d instanceof Error) throw d;
@@ -368,7 +408,7 @@ export async function runCron(env: Env, scheduledTime: number, jobs: readonly Cr
       }
     }
   }
-  console.log("cron run", JSON.stringify({ scheduledTime: new Date(now).toISOString(), frozen: frozenAtStart, queries: spent, queryLimit: limit, jobs: report }));
+  console.log("cron run", JSON.stringify({ scheduledTime: new Date(now).toISOString(), frozen: frozenAtStart, queries: spent, outsideQueries, queryLimit: limit, jobs: report }));
   return report;
 }
 

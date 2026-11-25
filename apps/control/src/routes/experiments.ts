@@ -22,8 +22,6 @@ import {
   newRunId,
   targetingReferences,
   MAX_CHANGES_PER_VARIANT,
-  compile,
-  CompileError,
 } from "@wtt/core";
 import { requireSession, type AppEnv } from "../app";
 import {
@@ -39,16 +37,15 @@ import {
   type AuditFieldChange,
   type AuditStatementOpts,
 } from "../audit";
-import { assetGuardEnabled, guardAssets } from "../asset-guard";
 import { changesPutBodyLimit } from "../body-limit";
 import { resultsStore } from "../capabilities";
 import { sqlStatement, toStatement, type Db, type ExperimentRow, type SiteRow, type Tables, type VariantRow } from "../db";
 import { copyChangesQuery, copyPlanQuery, copyVariantsQuery, duplicateExperimentRow, insertExperimentQuery, retiredIds, sourceUnchanged } from "../duplicate";
-import { ApiError, assetGuardRejected, notFound, validationFailed } from "../errors";
+import { ApiError, assetGuardRejected, publishOutcomeUnknown, notFound, validationFailed } from "../errors";
 import { assertStartable, capacityWarning, fixPlanStatement, loadPlan, type LoadedPlan } from "../evaluation-plan";
 import { isReservedId, reservedIdMessage, SLUG_RE } from "../ids";
 import { errorResponses } from "../openapi";
-import { loadCompileRows, applyTransitionToRows, buildCompileInputFromRows, compileInputDigest, buildCompileInput, publicPublishResult, publishSite, type PublishResult } from "../publish";
+import { DELIVERY_DELAY_WARNING, publicPublishResult, publishWithTransition, type PublishResult, type PublishTransition } from "../publish";
 import { rewriteCollectUntil } from "../results/collect-until";
 import { adoptionNotAllowed, AdoptionInputSchema, AdoptionJsonSchema, adoptionSummary, resolveAdoptedVariant } from "../results/adoption";
 import { deliveredAt } from "../results/delivered";
@@ -366,28 +363,6 @@ const variantOriginal = () =>
   });
 
 /**
- * B68(spec §22.2 の「状態を変える口」。Q264): 開始・再開の CAS の前の画像の確かめ。対象の行だけ遷移の後の状態にした仮の行で compile し
- * (`publish-preview` の `?starting=` と同じ形。並べる順に効くので last_started_at も今にする)、公開と同じ取り出しと `assets` の読み 1 回
- * (管理する画像の URL があるときだけ)を当てる。D1 は エクスペリエンス 1 + compile の入力 4 + (あれば)1。
- * compile が CompileError で落ちたときは断らない(今のとおり CAS の後の公開が同じ理由で落ちる)
- */
-async function assertStartAssets(env: AppEnv["Bindings"], db: Db, site: SiteRow, eid: string, now: number): Promise<void> {
-  const rows = (await db.selectFrom("experiments").selectAll().where("site_id", "=", site.id).orderBy("created_at").execute()).map(
-    (r): ExperimentRow => (r.id === eid ? { ...r, status: "running", last_started_at: now } : r),
-  );
-  const input = await buildCompileInput(db, site, (site.active_version ?? 0) + 1, rows);
-  let body: string;
-  try {
-    body = JSON.stringify(compile(input));
-  } catch (e) {
-    if (e instanceof CompileError) return;
-    throw e;
-  }
-  const g = await guardAssets(env, db, site, input, body, { readD1: true });
-  if (!g.ok) throw assetGuardRejected(g.error, g.assetProblems);
-}
-
-/**
  * B69(spec §6.2.1): 開始・再開の CAS の前の、外したページの条件の検査。エクスペリエンスの行は状態の変更の処理が読んだものを使い、
  * 配信条件に無ければ、参照するオーディエンスがあるときだけ、その定義を同じサイトから 1 回(`IN`)読む。D1 の読みは 0〜1 回
  */
@@ -433,7 +408,7 @@ const StatusResponseSchema = z.object({
     .object({ recorded: z.boolean() })
     .optional()
     .describe(
-      "テストを終了したときだけ: 結果の記録と採用の記録ができたか。false のときは状態の変更と公開は済んでおり、結果の記録は自動で作り直す。採用は PUT …/adoption で記録し直す",
+      "テストを終了したときだけ: 結果の記録と採用の記録ができたか。false のときは状態の変更は済んでおり、結果の記録は自動で作り直す。公開の結果は publish.ok で確認する。採用は PUT …/adoption で記録し直す",
     ),
 });
 /** D9 ③(K16、設計書 §8.2): 終了したテストのパターンに未公開の変更があった(配信していたのは変更の前の中身) */
@@ -1154,28 +1129,21 @@ experimentRoutes.patch(
   },
 );
 
-/**
- * spec §13.8 / 決定 17: status 変更(ADMIN 以上)。遷移が成功したら Site を自動 Publish する。
- * Publish が失敗しても D1 の status は戻さない — `published_status` は前回 activation の値のままなので
- * 応答の `experiment.status` と `experiment.publishedStatus` の差が「未反映」の目印になる(UI はここでアラートを出す)。
- * status の CAS 更新が成功した後は、publishSite 自体や応答の組み立てで何がこけても 200(`publish.ok: false`)を返す —
- * 500 にすると、既に成功している status 変更を operator がもう一度やり直そうとして
- * 409 invalid_transition(自分自身の変更と競合)という行き止まりに落ちる
- */
+/** 状態の遷移とサイトの公開を確定する。停止・終了で準備に失敗した場合は状態だけ記録する。 */
 experimentRoutes.post(
   "/sites/:sid/experiments/:eid/status",
   describeRoute({
     tags: ["experiments"],
     summary:
-      "エクスペリエンスの status を遷移する(管理者以上)。成功した遷移は必ずサイトを自動公開する。結果を記録するサイトでテストの下書きを開始するときは、判定に使う目標が無い・基準の重みが 0 なら 422 evaluation_plan_incomplete で、通れば評価計画を固定する。結果を記録しないテストを開始したときは warnings で知らせる。テストの終了(archived)には採用(adoption)を付けられ、配信を止める公開の後に結果と採用を記録する(応答の results.recorded)。開始・再開は、画像の確かめに通らなければ(遷移の後に配信する内容に、見つからない画像・別のサイトの画像がある)状態を変えずに 409 asset_missing / asset_other_site を返す(封筒の assetProblems に画像の URL とそれを含む変更)。一時停止・終了は画像を確かめずに状態を変えて公開する。開始・再開は、配信条件か参照するオーディエンスに、今は使えないページの条件(URL・ホスト・パス・パラメータ)が残っていれば、状態を変えずに 422 invalid_experiment_targeting を返す(対象 URL に移してから開始する)",
-    description: "expectDigest(確認画面の transitionDigest)を付けると、確認画面で見た内容のときだけ状態を変えて公開する。違えば 409 stale_preview で何も変えない。確認画面を読み直して送り直す。確かめと状態の変更の間に保存が割り込んだときだけ、状態は変わり publish.error が stale_preview になる",
+      "エクスペリエンスの status を遷移する(管理者以上)。遷移と公開は 1 回の書き込みで一緒に確定する。開始・再開は、公開の準備(設定の作成・画像の確かめ・配信の設定の書き込み)に失敗すると状態を変えずに 409 を返す(封筒に公開の失敗のコード・message・hint・assetProblems を入れる)。一時停止・終了は、公開の準備に失敗しても状態を変え、200 の publish.ok: false で返す。結果を記録するサイトでテストの下書きを開始するときは、判定に使う目標が無い・基準の重みが 0 なら 422 evaluation_plan_incomplete で、通れば評価計画を固定する。結果を記録しないテストを開始したときは warnings で知らせる。テストの終了(archived)には採用(adoption)を付けられ、公開に成功すれば終了と公開が一緒に確定し、その後で結果と採用の記録を試みる。公開の準備に失敗して終了だけが確定した場合も、結果と採用の記録を試みる(記録の成否は results.recorded、公開の成否は publish.ok)。開始・再開は、画像の確かめに通らなければ(遷移の後に配信する内容に、見つからない画像・別のサイトの画像がある)状態を変えずに 409 asset_missing / asset_other_site を返す(封筒の assetProblems に画像の URL とそれを含む変更)。公開の準備に成功すると、一時停止・終了は画像を確かめずに状態を変えて公開する。開始・再開は、配信条件か参照するオーディエンスに、今は使えないページの条件(URL・ホスト・パス・パラメータ)が残っていれば、状態を変えずに 422 invalid_experiment_targeting を返す(対象 URL に移してから開始する)",
+    description: "expectDigest(確認画面の transitionDigest)を付けると、確認画面で見た内容のときだけ状態を変えて公開する。違えば 409 stale_preview で何も変えない。確認画面を読み直して送り直す。別の公開と重なったときは状態を変えずに 409 transition_conflict を返す(一時停止・終了は 1 回だけ自動でやり直す)。公開の結果を確かめられなかったときは 503 publish_outcome_unknown を返す(公開履歴と状態を読み込み直して確かめる)",
     security: [{ bearer: [] }],
     responses: {
       200: {
-        description: "遷移後のエクスペリエンスと公開の結果(公開失敗も 200 の ok:false で返る)",
+        description: "遷移後のエクスペリエンスと公開の結果。一時停止・終了で公開の準備に失敗したときは publish.ok: false",
         content: { "application/json": { schema: resolver(StatusResponseSchema) } },
       },
-      ...errorResponses(400, 401, 403, 404, 409, 422),
+      ...errorResponses(400, 401, 403, 404, 409, 422, 503),
     },
   }),
   requireSession,
@@ -1194,7 +1162,7 @@ experimentRoutes.post(
     const stoppingTest = exp.kind === "test" && body.status === "archived";
     if (body.adoption !== undefined && exp.kind !== "test") throw adoptionNotAllowed(422, "パーソナライズには採用を記録しません");
     if (body.adoption !== undefined && !stoppingTest) throw adoptionNotAllowed(422, "採用はテストを終了するとき(status = archived)だけ記録できます");
-    const now = Date.now();
+    let now = Date.now();
     let adoption: { variantId: string | null; note: string } | null = null;
     let stopEstimate = 0;
     if (stoppingTest) {
@@ -1240,18 +1208,15 @@ experimentRoutes.post(
         console.error("capacity warning failed (start continues without it)", e);
       }
     }
-    // B68(spec §22.2。Q264・Q266): 開始・再開だけ、CAS の前に公開と同じ画像の確かめを流す。落ちたら状態を変えず(CAS も公開も
-    // 走らせず、何も書かずに)409。止める操作(一時停止・終了)は確かめず、その公開も画像の確かめをしない(必ず通す)
-    if (body.status === "running" && assetGuardEnabled(c.env)) await assertStartAssets(c.env, db, site, exp.id, now);
     const runId = issue ? newRunId() : null;
-    const stamps = {
-      ...(body.status === "running" && exp.started_at === null ? { started_at: now } : {}),
+    const stampsAt = (at: number) => ({
+      ...(body.status === "running" && exp.started_at === null ? { started_at: at } : {}),
       // 決定 51(K5、2026-10-06 ユーザー決定): 配信に入った時刻。開始・再開のたびに更新し、テストどうしの優先の順に使う
-      ...(body.status === "running" ? { last_started_at: now } : {}),
-      ...(body.status === "archived" ? { stopped_at: now } : {}),
+      ...(body.status === "running" ? { last_started_at: at } : {}),
+      ...(body.status === "archived" ? { stopped_at: at } : {}),
       ...(runId ? { run_id: runId } : {}),
-    };
-    // 読んだ status のままであることを条件に更新する(並行 status 変更の stale read を弾く。負けた側は 409 で上書きしない)。
+    });
+    // 読んだ世代・状態のままであることを条件に更新する。同じ ID で作り直した下書きにも、古い要求を適用しない。
     // D9 ③(K8): 結果を記録する開始は、検査した評価計画の version のままであることも条件にする(検査の後に下書きの保存が
     // 割り込むと、検査していない計画を固定することになるため)。2 文目で同じ batch の中で計画を固定する(新しい run_id が入ったときだけ効く)
     const fixedVersion = plan?.version ?? null;
@@ -1259,6 +1224,7 @@ experimentRoutes.post(
     const casWritable = (eb: ExpressionBuilder<Tables, "experiments">) =>
       eb.and([
         thisExperiment(site.id, exp.id)(eb),
+        eb("experiments.generation", "=", exp.generation),
         eb("experiments.status", "=", exp.status),
         ...(siteUnchanged ? [eb(eb.selectFrom("sites").select("sites.results_enabled").where("sites.id", "=", site.id), "=", site.results_enabled)] : []),
         ...(fixedVersion !== null
@@ -1286,38 +1252,44 @@ experimentRoutes.post(
             ]
           : []),
       ]);
-    const cas = db
-      .updateTable("experiments")
-      .set({ status: body.status, ...stamps, updated_at: now, updated_by: c.get("user").id })
-      .where(casWritable);
-    // B129: CAS の前に experiment.status を記録する(前の状態は同じ文で読む)。続く自動の公開は publish.publish の別の行
-    const stmts = [
-      experimentAudit(
-        c,
-        site,
-        exp.id,
-        { action: "experiment.status", target: { type: "experiment" }, targetFrom: experimentTarget(casWritable, sql`, status`), detail: { from: sql`t.status`, to: body.status } },
-        { now },
-      ),
-      toStatement(c.env, cas),
-    ];
-    if (plan && runId) stmts.push(fixPlanStatement(c.env, { siteId: site.id, experimentId: exp.id, plan: plan.plan, runId, userId: c.get("user").id, now }));
-    if (body.expectDigest !== undefined) {
-      const rows = await loadCompileRows(c.env, db, site.id);
-      const after = applyTransitionToRows(rows, exp.id, body.status, now);
-      if (!after || await compileInputDigest(buildCompileInputFromRows(site, (site.active_version ?? 0) + 1, after)) !== body.expectDigest)
-        throw new ApiError(409, "stale_preview", { hint: "公開の確認をもう一度開き、変わった内容を確かめてから公開してください" });
+    const updatedBy = c.get("user").id;
+    const statements = (guard: RawBuilder<SqlBool>, at: number, updatedAt: number | RawBuilder<number> = at) => {
+      const cas = db.updateTable("experiments")
+        .set({ status: body.status, ...stampsAt(at), updated_at: updatedAt, updated_by: updatedBy })
+        .where(casWritable).where(guard);
+      const batch = [
+        experimentAudit(c, site, exp.id, {
+          action: "experiment.status", target: { type: "experiment" },
+          targetFrom: experimentTarget(casWritable, sql`, status`), detail: { from: sql`t.status`, to: body.status },
+        }, { guard, now: at }),
+        toStatement(c.env, cas),
+      ];
+      if (plan && runId) batch.push(fixPlanStatement(c.env, { siteId: site.id, experimentId: exp.id, plan: plan.plan, runId, userId: updatedBy, now: at }, guard));
+      return batch;
+    };
+    const collectUntilDirty = isTest && (runId !== null || exp.run_id !== null);
+    const afterActivePut = collectUntilDirty ? () => rewriteCollectUntil(c.env, db, site.id, apiGuard(c.env)) : undefined;
+    const attempt = (at: number) => {
+      const transition: PublishTransition = {
+        experimentId: exp.id, from: exp.status, to: body.status, stamps: stampsAt(at), updatedBy, casWritable, statements, collectUntilDirty, afterActivePut,
+        ...(plan && runId ? { deliveryPlanOverride: { experimentId: exp.id, plan: plan.plan } } : {}),
+      };
+      return publishWithTransition(c.env, db, site, auditActor(c), at, { transition, expectDigest: body.expectDigest });
+    };
+    let outcome = await attempt(now);
+    if (outcome.kind === "conflict" && body.status !== "running") {
+      now = Date.now();
+      outcome = await attempt(now);
     }
-    const [, casResult] = await c.env.DB.batch(stmts);
-    if ((casResult?.meta.changes ?? 0) === 0) {
-      const fresh = await loadExperiment(db, site.id, exp.id);
+    const invalidTransition = async (): Promise<never> => {
+      const fresh = await db.selectFrom("experiments").select("status").where("site_id", "=", site.id).where("id", "=", exp.id).executeTakeFirst();
       const planChanged =
         fixedVersion !== null &&
-        fresh.status === exp.status &&
+        fresh?.status === exp.status &&
         (await db.selectFrom("evaluation_plans").select("version").where("site_id", "=", site.id).where("experiment_id", "=", exp.id).executeTakeFirst())?.version !== fixedVersion;
       const baselineChanged =
         plan !== null &&
-        fresh.status === exp.status &&
+        fresh?.status === exp.status &&
         !(await db
           .selectFrom("variants")
           .select("id")
@@ -1327,7 +1299,7 @@ experimentRoutes.post(
           .where("weight", ">", 0)
           .executeTakeFirst());
       throw new ApiError(409, "invalid_transition", {
-        from: fresh.status,
+        ...(fresh ? { from: fresh.status } : {}),
         to: body.status,
         hint: planChanged
           ? "評価計画が変わりました。画面を読み込み直してください"
@@ -1337,29 +1309,54 @@ experimentRoutes.post(
               ? "状態かサイト設定が変わりました。画面を読み込み直してください"
               : "別の操作と競合しました。再読込してください",
       });
-    }
-    // D9 ③(K11、設計書 §5.3): 結果を記録する run の開始・終了は、収集の締め切りを KV の Site の設定の記録に書く
-    // (開始 = 目標なしは minEnd・ありは maxEnd、評価時点の前の終了 = 終了の時刻)。一時停止・再開は締め切りを変えないが、
-    // 書き直しても同じ値になるだけなので run を持つテストの遷移ではいつも書く。rewriteCollectUntil は投げない(失敗は印を立て Cron が直す)
-    if (runId !== null || exp.run_id !== null) await rewriteCollectUntil(c.env, db, site.id, apiGuard(c.env));
-    // status の CAS は既に成功して D1 に着地している。ここから先(publishSite 自体、および応答を組み立てる 2 回の
-    // 読み直し)のどこで D1 / KV がこけても、それを 500 として返してはいけない — status 変更そのものは成功しているので、
-    // 再試行した operator は「もう一度 running にしようとして 409 invalid_transition(自分の変更と競合)」という
-    // 行き止まりに落ちる(レビュー指摘)。1 つの try で 3 呼び出しをまとめて囲み、フォールバックは D1 を再度叩かない
-    // (直前に自分が書いた値からその場で組み立てる)
+    };
     let publish: PublishResult;
-    let fresh: ExperimentRow;
-    let freshSite: Pick<SiteRow, "last_activated_at">;
+    switch (outcome.kind) {
+      case "applied":
+        publish = outcome.publish;
+        break;
+      case "outcome_unknown":
+        throw publishOutcomeUnknown();
+      case "invalid_transition":
+        return await invalidTransition();
+      case "stale_preview":
+        throw new ApiError(409, "stale_preview", { hint: "公開の確認をもう一度開き、変わった内容を確かめてから公開してください" });
+      case "conflict":
+        throw new ApiError(409, "transition_conflict", { hint: "状態は変わっていません。読み込み直して、内容を確かめてからもう一度送ってください" });
+      case "record_missing":
+      case "reservation_expired":
+        throw new ApiError(409, outcome.publish.error, { message: outcome.publish.message, hint: outcome.publish.hint });
+      case "prepare_failed": {
+        publish = outcome.publish;
+        if (body.status === "running") {
+          if (publish.error === "asset_missing" || publish.error === "asset_other_site") throw assetGuardRejected(publish.error, publish.assetProblems ?? []);
+          const retry = ["kv_put_failed", "kv_verify_failed", "version_reservation_failed", "publish_failed"].includes(publish.error);
+          throw new ApiError(409, publish.error, {
+            message: publish.message, hint: retry ? "数秒後に、同じ状態の変更をもう一度送ってください" : publish.hint ?? "原因を直してからもう一度操作してください",
+          });
+        }
+        // 停止・終了は準備の失敗でも記録する。確定するのは状態の CAS と操作の記録だけ。
+        const batchAt = Date.now();
+        const updatedAt = sql<number>`max(${batchAt}, coalesce((select last_activated_at from sites where id = ${site.id}), 0) + 1)`;
+        const [, cas] = await c.env.DB.batch(statements(sql<SqlBool>`1`, now, updatedAt));
+        if (!cas?.meta.changes) return await invalidTransition();
+        await afterActivePut?.();
+        break;
+      }
+    }
+    // この先の読み取りが失敗しても、確定した状態と公開の結果から応答し、終了の記録へ進む。
+    const stamps = stampsAt(now);
+    let fresh: ExperimentRow = {
+      ...exp, status: body.status, ...stamps, updated_at: now, updated_by: updatedBy,
+      published_status: publish.ok ? body.status : exp.published_status,
+    };
+    let freshSite: Pick<SiteRow, "last_activated_at"> = { last_activated_at: publish.ok ? now : site.last_activated_at };
     try {
-      // B129: 自動の公開の publish.publish の行は状態を変えた人
-      publish = await publishSite(c.env, db, site, auditActor(c), undefined, { skipAssetGuard: body.status !== "running", expectDigest: body.expectDigest });
       fresh = await loadExperiment(db, site.id, exp.id);
       freshSite = await db.selectFrom("sites").select("last_activated_at").where("id", "=", site.id).executeTakeFirstOrThrow();
     } catch (e) {
-      console.error("status change committed but publish (or its follow-up read) failed", e);
-      publish = { ok: false, version: null, error: "publish_failed", message: e instanceof Error ? e.message : String(e) };
-      fresh = { ...exp, status: body.status, ...stamps, updated_at: now, updated_by: c.get("user").id };
-      freshSite = site; // この失敗パスでは activation まで届いていないので last_activated_at は進んでいない
+      console.error("status response read failed after commit", site.id, exp.id, e);
+      if (publish.ok && !publish.warnings.some((w) => w.path === "delivery")) publish.warnings.push(DELIVERY_DELAY_WARNING);
     }
     // D9 ③(K16、設計書 §8.1 の (3)): 終了したテストの結果の記録と採用の記録(状態の変更と Publish の後。失敗しても 200 で recorded: false)。
     // 終了の後は保存した速報を消す(Publish が消すが、Publish が失敗した場合にも残さない)

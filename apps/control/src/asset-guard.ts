@@ -66,9 +66,6 @@ export async function guardAssets(
   return { ok: false, error: "asset_missing", assetProblems: findAssetProblems(input, missing) };
 }
 
-/** 確かめを当てる構成か(R2 もアップローダーの公開ベースも無い導入では、状態を変える口の CAS の前の確かめを飛ばす) */
-export const assetGuardEnabled = (env: Env): boolean => imageStore(env) !== null || uploaderPublicBase(env) !== null;
-
 /**
  * 公開の手順 4(設定の記録)の条件。`?ids` の画像がすべて、このサイトの `assets` に印の無い行としてある(空なら常に真)。
  * 止める操作の公開は `[]` を渡す(SQL を 2 つに分けない)。B69: `experimentIds` = その版の配る設定に入ったエクスペリエンスの ID
@@ -77,7 +74,7 @@ export const assetGuardEnabled = (env: Env): boolean => imageStore(env) !== null
 export function configRecordUpdate(db: Db, rowId: string, siteId: string, hash: string, body: string, needsProfile: boolean, ids: readonly string[], experimentIds: readonly string[]) {
   const q = sql`
     UPDATE publishes SET config_hash = ${hash}, config_json = ${body}, needs_profile = ${needsProfile ? 1 : 0}, experiment_ids_json = ${JSON.stringify(experimentIds)}
-    WHERE id = ${rowId}
+    WHERE id = ${rowId} AND status = 'reserved'
       AND NOT EXISTS (SELECT 1 FROM json_each(${JSON.stringify(ids)}) j
                       WHERE NOT EXISTS (SELECT 1 FROM assets a
                                         WHERE a.site_id = ${siteId} AND a.id = j.value AND a.purge_marked_at IS NULL))`;

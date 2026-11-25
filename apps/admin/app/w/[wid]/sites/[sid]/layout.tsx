@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/control";
 import { allInOrder, loadSite, loadWorkspaces } from "@/lib/loaders";
+import { kvStaleBannerText } from "@/lib/kv-stale-banner";
 import { canManage } from "@/lib/roles";
 import { Content } from "@/components/ui/AppShell";
 import { TopBar } from "@/components/ui/TopBar";
@@ -24,7 +25,7 @@ export default async function SiteLayout({ children, params }: { children: React
           crumbs={[{ label: ws.name, href: `/w/${wid}` }, { label: site.data.name, href: base }]}
           publish={{ href: `${base}/publish`, activeVersion: site.data.activeVersion, hasUnpublished: site.data.hasUnpublishedChanges === true, canPublish, siteId: site.data.id, historyHref: `${base}/history` }}
         />
-        {site.data.activeKvStale ? <p className="banner-warn banner-full">配信ポインタが未収束です(自動で再同期します。続く場合は公開をやり直してください)</p> : null}
+        {site.data.activeKvStale ? <p className="banner-warn banner-full">{kvStaleBannerText(site.data.activeKvStaleReason)}</p> : null}
         {site.data.staticStale ? <StaticStaleBanner siteId={site.data.id} canRetry={canPublish} removing={site.data.staticRemoving} mismatch={site.data.staticMismatch === true} /> : null}
       </SiteChromeGuard>
       <Content>{children}</Content>

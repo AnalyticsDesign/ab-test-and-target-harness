@@ -36,7 +36,7 @@ export const staticRemoveConflict = () =>
  * digest = 送った入力の digest(7o K24。pending でも送ったなら入る)。送っていない(skipped・削除の依頼・依頼の記録を書けなかった・
  * 公開履歴が無い)なら null。publishSite は null なら届く定義の行に世代を書かない
  */
-export type StaticDeployOutcome = { state: StaticDeployState; generation: StaticGeneration | null; version: number | null; deployedAt: string | null; digest: string | null };
+export type StaticDeployOutcome = { failed?: true; state: StaticDeployState; generation: StaticGeneration | null; version: number | null; deployedAt: string | null; digest: string | null };
 
 /** 世代。epoch = max(created_at, static_epoch)(新しい Site は static_epoch = 0 なので created_at。plan K2) */
 export const genOf = (row: SiteRow): StaticGeneration => ({ epoch: Math.max(row.created_at, row.static_epoch), seq: row.static_seq });
@@ -296,7 +296,7 @@ export async function requestStaticDeploy(env: Env, db: Db, siteId: string, opts
       const sent = await staticInputDigest(input);
       // D9 ③(plan ③ の K14)・7o K24: 「世代 → この出し直しで焼いた版」と送る入力の digest を、依頼の前に書く(待ち切れない・失敗した依頼の世代も、
       // 後で配られたら引けるように)。書けなければ送らない(stale は立ったまま。自己修復か Cron の依頼し直しが後で送る)
-      if (!(await recordDeployRequest(db, siteId, generation, version!, sent))) return { state: "pending", generation, version, deployedAt: null, digest: null };
+      if (!(await recordDeployRequest(db, siteId, generation, version!, sent))) return { failed: true, state: "pending", generation, version, deployedAt: null, digest: null };
       digest = sent;
       call = env.DEPLOYER.redeploySite({ protocol: 1, siteId, generation, ...input, ...(opts.force ? { force: true } : {}) });
     }
@@ -316,7 +316,7 @@ export async function requestStaticDeploy(env: Env, db: Db, siteId: string, opts
     return { state, generation, version, deployedAt: state === "deployed" ? result.deployedAt : null, digest };
   } catch (e) {
     console.error("static deploy request failed", e);
-    return { state: "pending", generation, version, deployedAt: null, digest };
+    return { failed: true, state: "pending", generation, version, deployedAt: null, digest };
   }
 }
 

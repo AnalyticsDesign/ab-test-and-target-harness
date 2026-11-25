@@ -1,4 +1,4 @@
-import { sql, type Selectable } from "kysely";
+import { sql, type RawBuilder, type SqlBool, type Selectable } from "kysely";
 import { canonicalUrlMatch, DEPLOY_HISTORY_DAYS, expandAudiences, type StaticDeployHistoryEntry, type StaticGeneration, type Targeting } from "@wtt/core";
 import { DEFAULT_PLAN, type EvaluationPlan } from "@wtt/stats";
 import type { Db, ExperimentDeliveredDefinitionRow, ExperimentRow, StaticDeployRequestRow } from "../db";
@@ -49,7 +49,7 @@ export const definitionHash = (d: DeliveredDefinition): Promise<string> => sha25
 /**
  * Site の評価計画(判定に使う目標だけを使う)。行が無いテストは Map に入らない(= 判定に使う目標なし)
  */
-export async function plansForDelivery(db: Db, siteId: string): Promise<Map<string, EvaluationPlan>> {
+export async function plansForDelivery(db: Db, siteId: string, override?: { experimentId: string; plan: EvaluationPlan }): Promise<Map<string, EvaluationPlan>> {
   const rows = await db.selectFrom("evaluation_plans").select(["experiment_id", "plan_json"]).where("site_id", "=", siteId).execute();
   const out = new Map<string, EvaluationPlan>();
   for (const r of rows) {
@@ -59,6 +59,7 @@ export async function plansForDelivery(db: Db, siteId: string): Promise<Map<stri
       // 読めない計画は判定に使う目標なしとして扱う(届く定義の記録で Publish を止めない)
     }
   }
+  if (override) out.set(override.experimentId, override.plan);
   return out;
 }
 
@@ -118,12 +119,12 @@ export async function prepareDeliveredDefinitions(defs: Map<string, DeliveredDef
 
 /**
  * 届く定義の行を足す 1 文(K14)。run の定義の hash が、その run のこの版より前の最新の行と同じなら足さない。比べるのと足すのを 1 文にする。
- * fenceActive = Site の active_version がこの版のときだけ足す(publishSite は activation の CAS と同じ batch に入れる。
+ * guard があるときはこの要求が版を有効にしたときだけ足す(publishSite は activation の CAS と同じ batch に入れる。
  * CAS が外れた試行・superseded の Publish では何も足さない = 「行がある」⇔「その版を activation した」)
  */
-export function deliveredDefinitionInsert(db: Db, siteId: string, version: number, generation: StaticGeneration | null, d: PreparedDelivery, fenceActive: boolean) {
+export function deliveredDefinitionInsert(db: Db, siteId: string, version: number, generation: StaticGeneration | null, d: PreparedDelivery, guard?: RawBuilder<SqlBool>) {
   const gen = generation ? genJson(generation) : null;
-  const fence = fenceActive ? sql`and exists (select 1 from sites where id = ${siteId} and active_version = ${version})` : sql``;
+  const fence = guard ? sql`and ${guard}` : sql``;
   const q = sql`
     insert into experiment_delivered_definitions (site_id, experiment_id, run_id, publish_version, static_generation, definition_json, definition_hash)
     select ${siteId}, ${d.experimentId}, ${d.runId}, ${version}, ${gen}, ${d.json}, ${d.hash}
@@ -141,13 +142,13 @@ export function deliveredDefinitionInsert(db: Db, siteId: string, version: numbe
  * B68(spec §3.1): 届く定義が使う画像を `asset_delivered_refs` に足す 1 文(`deliveredDefinitionInsert` の隣に同じ batch で並べる)。
  * 画像の ID は定義の JSON にそのまま現れるものだけ(`extractAssetIds`。Cron の `instr` と同じ規則。戻しはしない)。0 個なら文を作らない(null)。
  * 条件は `deliveredDefinitionInsert` にそろえる: エクスペリエンスが残っている(`INSERT OR IGNORE` は外部キーの違反を無視しないので、
- * compile の後・activation の前に消えていたら batch ごと落ちる。それを防ぐ)と、fenceActive のときの active_version。
+ * compile の後・activation の前に消えていたら batch ごと落ちる。それを防ぐ)と、公開要求の guard。
  * 定義の hash が前と同じで定義の行を足さない公開でも書く(重なりは主キーで無視する)。画像の行は外部キーで持たない
  */
-export function assetDeliveredRefsInsert(db: Db, siteId: string, version: number, d: PreparedDelivery, fenceActive: boolean) {
+export function assetDeliveredRefsInsert(db: Db, siteId: string, d: PreparedDelivery, guard?: RawBuilder<SqlBool>) {
   const ids = extractAssetIds(d.json);
   if (ids.length === 0) return null;
-  const fence = fenceActive ? sql`and exists (select 1 from sites where id = ${siteId} and active_version = ${version})` : sql``;
+  const fence = guard ? sql`and ${guard}` : sql``;
   const q = sql`
     insert or ignore into asset_delivered_refs (site_id, asset_id, experiment_id)
     select ${siteId}, value, ${d.experimentId} from json_each(${JSON.stringify(ids)})
@@ -169,10 +170,10 @@ export async function recordDeliveredDefinitions(
   rows: ExperimentRow[],
 ): Promise<void> {
   for (const d of await prepareDeliveredDefinitions(defs, rows)) {
-    const c = deliveredDefinitionInsert(db, siteId, version, generation, d, false).compile();
+    const c = deliveredDefinitionInsert(db, siteId, version, generation, d).compile();
     await db.executeQuery(c);
     // B68: テストで作る定義でも画像の表が埋まるように、publishSite と同じ 1 文を足す
-    const refs = assetDeliveredRefsInsert(db, siteId, version, d, false);
+    const refs = assetDeliveredRefsInsert(db, siteId, d);
     if (refs) await db.executeQuery(refs.compile());
   }
 }

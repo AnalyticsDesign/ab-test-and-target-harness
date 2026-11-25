@@ -433,7 +433,7 @@ export const AUDITED_ROUTES: Readonly<Record<string, readonly AuditRouteCheck[]>
   "DELETE /sites/:sid/assets/:aid": [{ action: "asset.delete", test: "asset_delete" }],
   "POST /sites/:sid/publish": [
     { action: "publish.publish", test: "publish_records_version" },
-    { action: "publish.publish", test: "publish_revert_records_reverted" },
+    { action: "publish.publish", test: "publish_active_put_failure_keeps_activation_record" },
   ],
   "POST /sites/:sid/static/redeploy": [{ action: "publish.static_redeploy", test: "static_redeploy_and_rebuild" }],
   "POST /static/rebuild": [{ action: "static.rebuild", test: "static_redeploy_and_rebuild" }],

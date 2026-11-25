@@ -3,6 +3,7 @@ import { resultsAccountGuard } from "./account-guard";
 import { assetHousekeepingJob } from "./asset-housekeeping";
 import { breakGlassSweep } from "./break-glass-sweep";
 import { auditRetentionJob } from "./audit-retention";
+import { publishRepairJob } from "./publish-repair";
 import { configCleanupJob } from "./config-cleanup";
 import { resultsCapacityJob, resultsCollectUntilJob, resultsDailyJob, resultsDeliveryJob, resultsPurgeJob } from "./results-jobs";
 import { siteSettingsRefreshJob } from "./site-settings-refresh";
@@ -24,5 +25,7 @@ import type { CronJob } from "./runner";
  * 結果のジョブの配分表を変えないため(1 日 1 回で使う D1 のクエリは 4〜5 件。全体の残りに収まるかを自分で確かめる)
  * B68(spec §5.3・§6.1): asset-housekeeping(15 分ごと。画像の削除の段 → 縮小版の段)を最後に足す。配分を持たず、使う D1 のクエリと
  * subrequest を自分で数える(11 本 → 12 本)
+ * publish-repair は候補があり、両方の日次が due の daily 優先枠でないときだけ修復の配分を確保する。
+ * Worker の途中打ち切りで後ろのジョブが走らない回も配信ポインタを直すため、account-guard の直後に置く。
  */
-export const CRON_JOBS: readonly CronJob[] = [resultsAccountGuard, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob, staticReconcileJob, auditRetentionJob, assetHousekeepingJob];
+export const CRON_JOBS: readonly CronJob[] = [resultsAccountGuard, publishRepairJob, resultsDeliveryJob, resultsCollectUntilJob, resultsDailyJob, resultsCapacityJob, resultsPurgeJob, siteSettingsRefreshJob, breakGlassSweep, configCleanupJob, staticReconcileJob, auditRetentionJob, assetHousekeepingJob];

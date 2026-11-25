@@ -7,7 +7,7 @@ import type { Env } from "../src/env";
 import { kvKeys } from "@wtt/core";
 import { AUTH_ALLOW } from "../src/auth-paths";
 import { freezeHint, isWriteGateExempt, isWriteFrozen, parseWriteFreeze, readWriteFreeze, retryAfterSeconds, writeFrozenError, type WriteFreeze } from "../src/write-freeze";
-import { active, BREAK_GLASS, call, createExperiment, createSite, expectEnvelope, failingD1Query, fakeDeployer, json, publishRes, setupOwner, siteRow, siteWithRunning } from "./helpers";
+import { active, agePublish, BREAK_GLASS, call, createExperiment, createSite, expectEnvelope, failingD1Query, fakeDeployer, json, publishRes, setupOwner, siteRow, siteWithRunning } from "./helpers";
 
 /** 凍結の行を直接書く(運用者が deploy.md の SQL で書くのと同じ形) */
 async function freeze(value: string, updatedAt = 1_000): Promise<void> {
@@ -202,9 +202,10 @@ describe("write freeze guard (D13 / decision 56 (4))", () => {
     await freeze('{"reason":"r"}');
     const frozen = await call("GET", `/sites/${sid}`, { token: owner.token });
     expect(frozen.status).toBe(200);
-    expect((await json(frozen)).activeKvStale).toBe(true); // 直していないので印のまま
+    expect(await json(frozen)).toMatchObject({ activeKvStale: true, activeKvStaleReason: "pending" }); // 直していないので印のまま
     expect(await active(sid)).toBeNull(); // KV に書いていない
     expect((await siteRow(sid)).active_kv_stale).toBe(1); // D1 に書いていない
+    await agePublish(sid, 30_001);
     await env.DB.prepare("delete from instance_settings where key = 'writeFreeze'").run();
     expect((await json(await call("GET", `/sites/${sid}`, { token: owner.token }))).activeKvStale).toBe(false);
     expect(await active(sid)).toBe("1");

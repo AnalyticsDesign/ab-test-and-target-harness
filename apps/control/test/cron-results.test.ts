@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { kvKeys } from "@wtt/core";
-import { allotQueries, isTickPrioritySlot, queryLimitFor, runCron, type CronContext, type CronJob } from "../src/cron/runner";
+import { allotQueries, effectiveJobs, isTickPrioritySlot, queryLimitFor, runCron, type CronContext, type CronJob } from "../src/cron/runner";
 import { CRON_JOBS } from "../src/cron/jobs";
 import { resultsCapacityJob, resultsCollectUntilJob, resultsDailyJob, resultsDeliveryJob, resultsPurgeJob } from "../src/cron/results-jobs";
 import type { Env, ResultsHealthRpc } from "../src/env";
@@ -434,6 +434,8 @@ describe("results-purge: 保持期限・queue・孤児(K12・K18)", () => {
     await seedResults({ participants: participants(runId, sid, "a", 5, Date.now() - HOUR) });
     expect((await setStatus(owner, sid, "exp_t", { status: "archived" }, resultsOverride())).status).toBe(200);
     expect((await kvSettings(sid)).resultsCollectUntil).toHaveProperty(runId);
+    // 終了の印を処理済みにして、次の削除そのものが立てる印を見る。
+    await env.DB.prepare("update sites set collect_until_dirty = 0 where id = ?").bind(sid).run();
     expect((await siteRow(sid)).collect_until_dirty).toBe(0);
     expect((await call("DELETE", `/sites/${sid}/experiments/exp_t`, { token: owner.token, envOverride: resultsOverride() })).status).toBe(204);
     expect((await siteRow(sid)).collect_until_dirty).toBe(1);
@@ -695,6 +697,8 @@ describe("results-collect-until(K11)", () => {
     const owner = await setupOwner();
     const sid = await recordingSite(owner);
     const runId = await startTest(owner, sid, "exp_t");
+    // 開始の印はすでに処理済み。印がないサイトの照合を確かめる。
+    await env.DB.prepare("update sites set collect_until_dirty = 0 where id = ?").bind(sid).run();
     const before = await siteRow(sid);
     expect((await call("PATCH", `/sites/${sid}`, { token: owner.token, body: { consentMode: "required" }, envOverride: RESULTS_STORE })).status).toBe(200);
     const table = await collectUntilMap(getDb(env), sid);
@@ -920,13 +924,61 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
     expect(await runCron(testEnv, T + 45 * MIN, [probe])).toEqual([{ job: "probe", outcome: "ran" }]);
   });
 
+  const repairTick = tickSlot(at("2026-11-20T01:00:00Z"));
+  function repairAllot(names: string[], now: number, repairCandidate: boolean, plan: "free" | "paid" = "free") {
+    const due = new Set(names);
+    const state = { frozen: false, lastRunDay: new Map(), plan, sharingPending: false, installMarkerInD1: true, recentActive: [], repairCandidate };
+    return allotQueries(effectiveJobs(CRON_JOBS, { now, due, state }), due, now, plan);
+  }
+
+  test("allot_table_with_repair_candidate", () => {
+    const tick = repairTick;
+    const odd = tick + 15 * MIN;
+    const rows: Array<[string[], number, Array<number | undefined>]> = [
+      [[], tick, [10, 10, undefined, 3, undefined, 7]],
+      [["results-daily"], tick, [10, 7, 13, 3, undefined, 7]],
+      [["results-daily"], odd, [4, 0, 26, 3, undefined, 7]],
+      [["results-purge"], tick, [10, 7, undefined, 3, 13, 7]],
+      [["results-purge"], odd, [10, 4, undefined, 3, 16, 7]],
+      [["results-daily", "results-purge"], tick, [10, 7, 13, 3, 0, 7]],
+      [["results-daily", "results-purge"], odd, [0, 0, 26, 3, 11, undefined]],
+    ];
+    for (const [due, now, expected] of rows) {
+      const a = repairAllot(due, now, true);
+      expect([a.get("results-delivery"), a.get("results-collect-until"), due.includes("results-daily") ? a.get("results-daily") : undefined,
+        a.get("results-capacity"), due.includes("results-purge") ? a.get("results-purge") : undefined, a.get("publish-repair")]).toEqual(expected);
+    }
+  });
+
+  test("allot_table_with_repair_candidate_paid", () => {
+    for (const due of [["results-purge"], ["results-daily", "results-purge"]]) {
+      for (const now of [repairTick, repairTick + 15 * MIN]) {
+        const expected = repairAllot(due, now, true);
+        expected.set("results-purge", expected.get("results-purge")! + 100);
+        expect(repairAllot(due, now, true, "paid")).toEqual(expected);
+      }
+    }
+  });
+
+  test("every_job_gets_its_floor_within_two_slots", () => {
+    for (const due of [[], ["results-daily"], ["results-purge"], ["results-daily", "results-purge"]]) {
+      for (const start of [repairTick, repairTick + 15 * MIN]) {
+        const slots = [start, start + 15 * MIN].map(now => repairAllot(due, now, true));
+        for (const job of CRON_JOBS) {
+          if (!job.queryFloor || ("daily" in job.cadence && !due.includes(job.name))) continue;
+          expect(Math.max(...slots.map(a => a.get(job.name) ?? 0))).toBeGreaterThanOrEqual(job.queryFloor);
+        }
+      }
+    }
+  });
+
   test("実行ごとの配分の表(容量は残す・daily が due の実行は枠の偶奇で tick と daily の優先を替える)", () => {
     const tick = tickSlot(at("2026-11-20T01:00:00Z"));
     const daily = tick + 15 * MIN;
     expect(isTickPrioritySlot(tick)).toBe(true);
     expect(isTickPrioritySlot(daily)).toBe(false);
     const allot = (due: string[], t: number, plan: "free" | "paid" = "free") => {
-      const m = Object.fromEntries(allotQueries(CRON_JOBS, new Set(due), t, plan));
+      const m = Object.fromEntries(repairAllot(due, t, false, plan));
       return { d: m["results-delivery"], c: m["results-collect-until"], daily: m["results-daily"], cap: m["results-capacity"], purge: m["results-purge"] };
     };
     expect(allot([], tick)).toMatchObject({ d: 10, c: 10, cap: 3 });
@@ -1263,6 +1315,7 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
     const report = await runCron(cronEnv(), at("2026-11-20T23:00:00Z"), CRON_JOBS);
     expect(report).toEqual([
       { job: "results-account-guard", outcome: "ran" },
+      { job: "publish-repair", outcome: "skipped_frozen" },
       { job: "results-delivery", outcome: "skipped_frozen" },
       { job: "results-collect-until", outcome: "skipped_frozen" },
       { job: "results-daily", outcome: "skipped_frozen" },
@@ -1327,8 +1380,10 @@ describe("runner の配分・続き・凍結(K17・K24)", () => {
     // 残り 17 < 22 なので continued。00:15 は、00:00 に到達の段の終わりの印(#end)を書いてあるので到達の list を読まず、
     // 読み取り 2 で残り 24 ≥ 22 なので ran。このテストが SNAPSHOT_COST の変化に気づくのは、16 以下(00:00 で記録を作る)か
     // 24 以上(00:15 でも作れない)のときだけで、17〜23 の変化には気づかない
-    expect(allotQueries(CRON_JOBS, new Set(["results-daily"]), T0).get("results-daily")).toBe(20);
-    expect(allotQueries(CRON_JOBS, new Set(["results-daily"]), T0 + 15 * MIN).get("results-daily")).toBe(26);
+    const due = new Set(["results-daily"]);
+    const noRepair = (now: number) => allotQueries(effectiveJobs(CRON_JOBS, { state: null, now, due }), due, now);
+    expect(noRepair(T0).get("results-daily")).toBe(20);
+    expect(noRepair(T0 + 15 * MIN).get("results-daily")).toBe(26);
     // 配分は tick のジョブがあって決まるので、登録の全ジョブで走らせる(results-daily だけなら tick 優先の枠でも 26 になる)
     const e = cronEnv(fakeResultsBudget(), fakeResultsHealth(), { RESULTS_DB: sizedResultsDb(() => 1_000) });
     const daily = (r: Awaited<ReturnType<typeof runCron>>) => r.find((x) => x.job === "results-daily")?.outcome;

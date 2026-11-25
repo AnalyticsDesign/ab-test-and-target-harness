@@ -24,6 +24,7 @@ export const DEFAULT_MESSAGES: Record<string, string> = {
   forbidden: "この操作を行うロールがありません",
   bad_request: "リクエスト body を解釈できません",
   validation_failed: "入力の検証に失敗しました",
+  publish_outcome_unknown: "公開の結果を確かめられませんでした",
   internal: "サーバー内部エラー",
   unauthorized: "認証が必要です",
   rate_limited: "リクエストが多すぎます",
@@ -35,6 +36,7 @@ export const DEFAULT_MESSAGES: Record<string, string> = {
   payload_too_large: "リクエストが大きすぎます",
   request_failed: "リクエストを処理できません",
   stale_preview: "確認した後に、公開する内容が変わりました",
+  transition_conflict: "別の公開と重なりました",
   invalid_transition: "その status には遷移できません",
   image_upload_disabled: "この導入では画像アップロードと IMAGE の変更は使えません",
   asset_quota_exceeded: "サイトの画像の上限に達しています",
@@ -89,6 +91,9 @@ export class ApiError extends Error {
   }
 }
 
+export const publishOutcomeUnknown = () => new ApiError(503, "publish_outcome_unknown", {
+  hint: "公開履歴と状態を読み込み直して確かめてください。確かめる前に送り直さないでください",
+});
 export const notFound = () => new ApiError(404, "not_found");
 export const publishBodyPruned = (prunedAt: number) => new ApiError(404, "not_found", {
   message: "この版の公開の本体は残っていません",
@@ -104,7 +109,7 @@ export const ASSET_GUARD_HINTS = {
   asset_missing: "次の画像が見つからないため公開できません。パターンの変更から外すか、別の画像を選び直してください",
   asset_other_site: "別のサイトの画像は使えません。このサイトに画像をアップロードして、その画像に差し替えてください",
 } as const;
-/** 状態を変える口の開始・再開の 409(CAS も公開も走らせず、何も書かない) */
+/** 状態を変える口の開始・再開の 409(状態は変えない) */
 export const assetGuardRejected = (error: keyof typeof ASSET_GUARD_HINTS, assetProblems: unknown[]) =>
   new ApiError(409, error, { hint: `${ASSET_GUARD_HINTS[error]}。状態は変わっていません。直してからもう一度操作してください`, assetProblems });
 /** 利用者向けの文言に出すロールの名前(画面の用語。英語の識別子は required / role / highest などのフィールドに残る) */

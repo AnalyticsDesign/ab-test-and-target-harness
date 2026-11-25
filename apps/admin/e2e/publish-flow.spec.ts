@@ -809,10 +809,7 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     await expect(page.getByRole("button", { name: "HTML タイプに切り替える" })).toBeVisible();
   });
 
-  test("a failed publish keeps its alert on screen (決定 17)", async ({ page }) => {
-    // 決定 17: Publish が失敗しても status 変更は成功しているので HTTP 200 で返し、**UI がアラートで知らせる**。
-    // その保証は「メッセージが読める状態で残る」ところまで含む(Task 13 で、`router.refresh()` による
-    // 編集画面の再マウントがアラートを即座に消していたのを実測して修正した)
+  test("a failed start keeps the draft and explains the preparation failure in the confirmation", async ({ page }) => {
     await login(page);
     await createSite(page, SITE_FAILED);
     await createExperiment(page, EXPERIMENT_FAILED);
@@ -826,14 +823,19 @@ test.describe.serial("setup → site → experiment → start → edge bootstrap
     const seeded = await page.request.put(`/api/control/sites/${SITE_FAILED.id}/experiments/${EXPERIMENT_FAILED.id}/variants/b/changes`, { headers: controlHeaders(), data: bigChanges });
     expect(seeded.status()).toBe(200);
 
-    const started = await changeStatus(page, SITE_FAILED.id, EXPERIMENT_FAILED.id, /^開始/);
-    expect(started.publish).toMatchObject({ ok: false, error: "config_too_large" });
-    // status は running に進み、本番は「未反映」のまま = router.refresh() が着地したことの目印
-    await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "running");
+    await page.getByRole("button", { name: /^開始/ }).click();
+    const dialog = page.getByRole("alertdialog", { name: /^開始/ });
+    const rejected = page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith(`/experiments/${EXPERIMENT_FAILED.id}/status`));
+    await dialog.getByRole("button", { name: "開始する" }).press("Enter");
+    const res = await rejected;
+    expect(res.status()).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "config_too_large" });
+    await expect(dialog.getByRole("alert")).toContainText("開始できませんでした(状態は変わっていません)。compiled config が大きすぎます");
+    await dialog.getByRole("button", { name: "キャンセル" }).press("Enter");
+    // 読み直しても下書きのままで、配信済みの版は無い。
+    await page.reload();
+    await expect(page.getByTestId("status-banner")).toHaveAttribute("data-status", "draft");
     await expect(page.getByTestId("status-banner")).toHaveAttribute("data-published-status", "none");
-    // その refresh を挟んでもアラートが残っている
-    await expect(appAlert(page)).toContainText("公開に失敗しました");
-    await expect(appAlert(page)).toContainText("config_too_large");
     // B31 ③: 一覧の「未反映」の下に、本番の状態を見える文で出す(title だけにしない)。一度も公開していないので「まだ公開していません」
     await page.getByRole("banner").getByRole("link", { name: SITE_FAILED.name }).click();
     await expect(page.getByTestId(`experiment-pending-${EXPERIMENT_FAILED.id}`)).toHaveText("まだ公開していません");

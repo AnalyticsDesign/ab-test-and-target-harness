@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { AppLink } from "@/components/ui/AppLink";
+import { DELIVERY_DELAYED, deliveryDelayed } from "@/lib/status-message";
 import { api } from "@/lib/client";
 import { REFRESH_TIMEOUT, noticeOf } from "@/lib/busy-notice";
 import { STATUS_JA, STATUS_TONE } from "@/lib/experiment-filter";
@@ -31,6 +32,7 @@ export function PublishPanel({ wid, site, preview, canPublish }: { wid: string; 
   const names = new Map(preview.experiments.map((e) => [e.id, e.name]));
   const rowsOf = (problems: Parameters<typeof assetProblemRows>[0]) => assetProblemRows(problems, { wid, siteId: site.id, experimentName: (id) => names.get(id) });
   const previewProblems = rowsOf(parseAssetProblems(preview.assetProblems));
+  const warnings = result?.ok ? (result.warnings ?? []).filter((w) => w.path !== "delivery") : [];
   const failedProblems = rowsOf(publishFailureProblems(result));
   return (
     <div>
@@ -130,7 +132,7 @@ export function PublishPanel({ wid, site, preview, canPublish }: { wid: string; 
       {result ? (
         <p data-testid="publish-result" className={result.ok ? "banner-warn" : "error-box"} role={result.ok ? "status" : "alert"}>
           {result.ok
-            ? `v${result.version} を配信に載せました${result.superseded ? "(直後に新しい版が配信中になったため、この版は履歴のみ)" : ""}。${
+            ? deliveryDelayed(result) ? DELIVERY_DELAYED : `v${result.version} を配信に載せました${result.superseded ? "(直後に新しい版が配信中になったため、この版は履歴のみ)" : ""}。${
                 // superseded を先に判定する(配信ファイルは新しい版の公開が更新する。skipped を「設定されていない」と読ませない)
                 result.superseded
                   ? ""
@@ -149,7 +151,7 @@ export function PublishPanel({ wid, site, preview, canPublish }: { wid: string; 
           <AssetProblemList rows={failedProblems} />
         </div>
       ) : null}
-      {result?.ok && result.warnings.length > 0 ? <p className="banner-warn">警告: {result.warnings.map((w) => `${w.path}: ${w.message}`).join(" / ")}</p> : null}
+      {warnings.length > 0 ? <p className="banner-warn">警告: {warnings.map((w) => `${w.path}: ${w.message}`).join(" / ")}</p> : null}
       {result?.ok ? (
         <p>
           <AppLink href={`${base}/history`}>公開履歴を見る</AppLink>

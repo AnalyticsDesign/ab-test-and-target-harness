@@ -26,6 +26,7 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 - 書き込みの凍結: 実行の最初に 1 回凍結を読み、`writesControl: true` のジョブは凍結中なら丸ごと見送る。さらにジョブは `wtt-control` に書く区切りの直前に毎回 `ctx.assertNotFrozen()` を呼び、凍結中ならそこで止まる(残りは次の回)。`writesControl: false` のジョブは凍結中も動く
 - 今のジョブ(登録の順):
   - `results-account-guard`(毎回・`writesControl: false`)。使用状況(`getUsage`)で、Free のアカウント全体の Workers のリクエストか D1 の書き込みの行数が日次上限の 8 割以上なら、edge の `ResultsBudget`(binding `RESULTS_BUDGET`。`script_name: "wtt-edge"`)に `stop("account_usage", 次の UTC 0 時)` を立てる。使用量が取れない・Paid・binding が無いときは何もしない(ログだけ)
+  - `publish-repair`(毎回)。候補がある回に 1 サイトの配信ポインタを確認し、公開済みの版を反映する
   - `results-delivery`(毎回): 配信の確認を待つ届く定義の行がある Site について、デプロイ専用の Worker に配った世代を問い合わせ、配信を確かめた行に `delivered_from` を入れる(テスト中の変更もここで記録する)
   - `results-collect-until`(毎回): 印(`sites.collect_until_dirty`)の付いた Site と、KV の締め切りの表が D1 から計算した値と違う Site の、KV の Site の設定の `resultsCollectUntil` を書き直す
   - `results-daily`(UTC 0 時以降に 1 日 1 回): 目標参加者数の到達の確認 → 評価時点の記録 → 評価時点の前に終了したテストの終了の記録の補完
@@ -112,7 +113,7 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 | `PUT /sites/:sid/experiments/:eid/variants` | EDITOR | Variant を全置換(test は 2 つ以上・single は 1 つ・weight 合計 100。draft のみ。終了したテストは 409 `experiment_archived_readonly`) |
 | `PUT /sites/:sid/experiments/:eid/variants/:vid/changes` | EDITOR | Change を全置換(1 件でも保存時検証に落ちれば何も書かない。終了したテストは 409 `experiment_archived_readonly`) |
 | `POST /sites/:sid/experiments/:eid/duplicate` | EDITOR | 複製(下書きを作る。mode = same / variant。`runId` は写さない)。`same` のテストは評価計画も写す。`variant` は配信を確かめた届く定義の変更を写す(無ければ保存済みの変更)。退役した ID は 409 `id_taken` |
-| `POST /sites/:sid/experiments/:eid/status` | ADMIN | status 遷移(成功した遷移は必ず Site を自動 Publish)。テストの開始(`draft → running`)で、Site が結果を記録し計測用 D1 の binding があれば、評価計画を検査して(判定に使う目標が無い・基準の重みが 0 は 422 `evaluation_plan_incomplete`)固定し、`runId`(結果の記録の ID)を振る。再開では振らない。結果を記録しないテストの開始は応答の `warnings` に `path: "results"` を足す。テストの終了に `adoption` を付けられ、公開の後に終了の記録と採用を同じ batch で書く(失敗は 200 で `results.recorded: false`。Cron が記録を補う) |
+| `POST /sites/:sid/experiments/:eid/status` | ADMIN | 状態の変更と公開を一緒に確定する。公開の準備の失敗は、開始・再開なら状態を変えず 409、一時停止・終了なら状態を変えて 200 の `publish.ok: false`。テストの開始(`draft → running`)で、Site が結果を記録し計測用 D1 の binding があれば、評価計画を検査して(判定に使う目標が無い・基準の重みが 0 は 422 `evaluation_plan_incomplete`)固定し、`runId`(結果の記録の ID)を振る。再開では振らない。結果を記録しないテストの開始は応答の `warnings` に `path: "results"` を足す。テストの終了に `adoption` を付けられ、終了と公開が一緒に確定した後、または公開の準備に失敗して終了だけが確定した後に、結果と採用の記録を同じ batch で試みる(失敗は 200 で `results.recorded: false`。Cron が記録を補う) |
 | `GET /sites/:sid/experiments/:eid/evaluation-plan` | VIEWER | 評価計画(既定値で埋めた形)・固定の有無・評価時点の見込み・注意・変更の履歴。パーソナライズは 404 `results_not_applicable` |
 | `PUT /sites/:sid/experiments/:eid/evaluation-plan` | EDITOR | 下書きは全体、開始後は評価時点の前に延ばす向きだけ(409 `evaluation_plan_locked` / `evaluation_already_fixed`、終了は 409 `experiment_archived_readonly`)。到達を確かめる読み取りが断られたら 503 `results_read_unavailable`。未公開の編集に数えない |
 | `GET /sites/:sid/experiments/:eid/results` | VIEWER | 結果(速報・評価時点の記録・評価時点前の終了の記録)。速報は読み取りを予算の DO に予約してから集計し、5 分は保存した値を返す。評価時点を過ぎたら記録を作って返す。下書きは 409 `results_not_started`、パーソナライズは 404 `results_not_applicable` |
@@ -122,7 +123,7 @@ edge(`apps/edge`)は KV を読むだけで、control とは直接つながらな
 
 | ルート | Role | 内容 |
 |---|---|---|
-| `POST /sites/:sid/publish` | ADMIN | Publish(失敗も 200 + `ok:false`)。成功の結果の `staticDeploy`(`deployed` / `pending` / `skipped`)が設置タグの配信ファイルの更新の状態。compiled config の `results`(結果を記録する Site の running / paused のテストの `runId`。個票が残っている間は forget のために出し続ける)は Publish の経路でだけ足し、公開した収集の状態が変わったら `results_collection_log` に記録する |
+| `POST /sites/:sid/publish` | ADMIN | 公開の準備に失敗すると 200 + `ok:false`。確定したか分からない場合は 503 `publish_outcome_unknown`。成功の結果の `staticDeploy`(`deployed` / `pending` / `skipped`)が設置タグの配信ファイルの更新の状態。compiled config の `results`(結果を記録する Site の running / paused のテストの `runId`。個票が残っている間は forget のために出し続ける)は Publish の経路でだけ足し、公開した収集の状態が変わったら `results_collection_log` に記録する |
 | `POST /sites/:sid/static/redeploy` | ADMIN | 設置タグの配信ファイルを今の公開内容で作り直す(更新が済んでいないとき、削除が途中で止まったとき。結果 `{ staticDeploy }`) |
 | `GET /sites/:sid/publish-preview` | VIEWER | 前回 activation 以降に変わった Experiment / Change |
 | `GET /sites/:sid/publishes` | VIEWER | 公開履歴(新しい順・最大 100 件) |

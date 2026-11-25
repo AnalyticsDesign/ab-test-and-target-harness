@@ -515,7 +515,7 @@ describe("round trips", () => {
       const res = await call(method, path, { token: owner.token, body, envOverride: { DB: counting.db } });
       expect(res.status).toBe(status);
       const c = counting.counts();
-      expect(c.sql.some((s) => /audit_events/.test(s)), `${method} ${path}: 記録の文が 1 文の往復になっている`).toBe(false);
+      expect(c.sql.some((s) => /^insert into audit_events/i.test(s)), `${method} ${path}: 記録の文が 1 文の往復になっている`).toBe(false);
       expect(c.batchSql.flat().filter((s) => /^insert into audit_events/.test(s)), `${method} ${path}: 記録の文は batch に ${audits} つ`).toHaveLength(audits);
       return { queries: c.queries, batches: c.batches };
     };
@@ -547,10 +547,10 @@ describe("round trips", () => {
       create: { queries: 7, batches: 1 },
       duplicate: { queries: 9, batches: 1 },
       deleteDraft: { queries: 6, batches: 1 },
-      // B68(2026-11-06): 開始は CAS の前に画像の確かめ(エクスペリエンス 1 + compile の入力 4。画像の URL があれば + 1。spec §22.2 の Q264)が入り +5 / 0、
-      // 続く公開の設定の記録が画像の条件付きの 1 文の batch になって -1 / +1(合計 +5)。終了は画像を確かめず、設定の記録の分だけ -1 / +1(合計は同じ)
-      status: { queries: 32, batches: 3 },
-      archive: { queries: 32, batches: 3 },
+      // 遷移・公開の操作の記録は同じ activation batch に入る。開始の画像も公開時の compile で確かめる。
+      // 予約の 1 往復を batch にし、開始の 20 往復・終了の 25 往復を保つ。
+      status: { queries: 16, batches: 4 },
+      archive: { queries: 21, batches: 4 },
       adoption: { queries: 8, batches: 1 },
     });
   });

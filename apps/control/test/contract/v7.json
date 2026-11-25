@@ -2937,6 +2937,20 @@
                 "activeKvStale": {
                   "type": "boolean"
                 },
+                "activeKvStaleReason": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "config_missing",
+                        "pending"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "activeVersion": {
                   "anyOf": [
                     {
@@ -3237,6 +3251,7 @@
               },
               "required": [
                 "activeKvStale",
+                "activeKvStaleReason",
                 "activeVersion",
                 "allowedOrigins",
                 "analytics",
@@ -27014,6 +27029,36 @@
               ],
               "type": "object"
             }
+          },
+          "503": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
           }
         },
         "requestBody": {
@@ -27806,6 +27851,36 @@
             }
           },
           "422": {
+            "application/json": {
+              "additionalProperties": {},
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "items": {
+                    "type": [
+                      "number",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "error",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "503": {
             "application/json": {
               "additionalProperties": {},
               "properties": {

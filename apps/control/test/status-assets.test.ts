@@ -4,7 +4,7 @@ import { sql } from "kysely";
 import { getDb } from "../src/db";
 import type { Env } from "../src/env";
 import { call, createExperiment, createSite, experimentRow, json, publishRes, runDirect, seedAssetRow, setupOwner, siteRow, TEXT_CHANGE } from "./helpers";
-import { ASSET_READ, COMPILE_INPUT_READ, CONFIG_RECORD, countingD1, tripsMatching } from "./d1-trips";
+import { ASSET_READ, COMPILE_INPUT_READ_LEGACY, COMPILE_ROWS_BATCH, CONFIG_RECORD, countingD1, tripsMatching } from "./d1-trips";
 import { runHousekeeping } from "./housekeeping-helpers";
 
 // B68 Task 4(spec §22.2 の「状態を変える口」・§22.5・§22.9。Q264・Q266): 開始・再開は CAS の前に画像を確かめ、止める操作は確かめない
@@ -55,7 +55,7 @@ describe("start / resume guard before the status CAS (Q264)", () => {
       const after = await experimentRow(sid, a);
       expect(after.status).toBe(from);
       expect(after.updated_at).toBe(before.updated_at);
-      expect(await publishCount(sid)).toBe(pubs); // 予約行も足さない(公開が走らない)
+      expect(await publishCount(sid)).toBe(pubs + 1); // 準備に失敗した版は履歴に残す
     });
   }
 
@@ -84,7 +84,7 @@ describe("start / resume guard before the status CAS (Q264)", () => {
     expect((await experimentRow(sid, a)).status).toBe("draft");
   });
 
-  it("status_change_extra_d1_read_only_when_managed_urls_exist", async () => {
+  it("start_checks_managed_urls_in_the_config_write_without_an_extra_read", async () => {
     const owner = await setupOwner();
     // 管理する画像の URL が無い compile では assets を読まない
     const { id: s1 } = await createSite(owner.token, owner.workspaceId);
@@ -92,8 +92,9 @@ describe("start / resume guard before the status CAS (Q264)", () => {
     const c1 = countingD1(env.DB);
     expect((await setStatus(owner.token, s1, a1, "running", { DB: c1.DB })).status).toBe(200);
     expect(tripsMatching(c1.trips, ASSET_READ)).toBe(0);
-    expect(tripsMatching(c1.trips, COMPILE_INPUT_READ)).toBe(2); // CAS の前の確かめ + 公開
-    // ある compile では 1 回だけ(公開は手順 4 の UPDATE の条件で見るので、読みは足さない)
+    expect(tripsMatching(c1.trips, COMPILE_INPUT_READ_LEGACY)).toBe(0); // 準備の compile だけ
+    expect(tripsMatching(c1.trips, COMPILE_ROWS_BATCH)).toBe(1); // 公開
+    // 画像を含む場合も設定を記録する UPDATE で確かめる
     const { id: s2 } = await createSite(owner.token, owner.workspaceId);
     const url = await seedAssetRow(s2, { id: "asset_existaaaaa" });
     const a2 = await exp(owner, s2, "exp_a", [htmlChange(`<img src="${url}">`)]);
@@ -101,7 +102,7 @@ describe("start / resume guard before the status CAS (Q264)", () => {
     const res = await setStatus(owner.token, s2, a2, "running", { DB: c2.DB });
     expect(res.status).toBe(200);
     expect((await json<StatusBody>(res)).publish.ok).toBe(true);
-    expect(tripsMatching(c2.trips, ASSET_READ)).toBe(1);
+    expect(tripsMatching(c2.trips, ASSET_READ)).toBe(0);
   });
 
   it("status_change_skips_guard_without_r2_and_uploader", async () => {
@@ -111,11 +112,12 @@ describe("start / resume guard before the status CAS (Q264)", () => {
     const { DB, trips } = countingD1(env.DB);
     const res = await setStatus(owner.token, sid, a, "running", { ASSETS: undefined, DB });
     expect(res.status).toBe(200);
-    expect(tripsMatching(trips, COMPILE_INPUT_READ)).toBe(1); // 公開の 1 回だけ(CAS の前に compile の入力を読まない)
+    expect(tripsMatching(trips, COMPILE_INPUT_READ_LEGACY)).toBe(0);
+    expect(tripsMatching(trips, COMPILE_ROWS_BATCH)).toBe(1); // 公開の 1 回だけ(CAS の前に compile の入力を読まない)
     expect(tripsMatching(trips, ASSET_READ)).toBe(0);
   });
 
-  it("status_change_compile_error_is_not_rejected_by_guard", async () => {
+  it("start_compile_error_returns_409_without_changing_status", async () => {
     const owner = await setupOwner();
     const { id: sid } = await createSite(owner.token, owner.workspaceId);
     await exp(owner, sid, "exp_b", [], "running");
@@ -123,26 +125,26 @@ describe("start / resume guard before the status CAS (Q264)", () => {
     await sql`update experiments set targeting_json = ${JSON.stringify({ audience: "aud_missing" })} where site_id = ${sid} and id = 'exp_b'`.execute(db());
     const a = await exp(owner, sid, "exp_a", []);
     const res = await setStatus(owner.token, sid, a, "running");
-    expect(res.status).toBe(200);
-    const body = await json<StatusBody>(res);
-    expect(body.experiment.status).toBe("running");
-    expect(body.publish).toMatchObject({ ok: false, error: "unknown_audience" });
+    expect(res.status).toBe(409);
+    expect(await json(res)).toMatchObject({ error: "unknown_audience" });
+    expect((await experimentRow(sid, a)).status).toBe("draft");
   });
 
-  it("start_publish_asset_missing_after_guard_keeps_previous_config", async () => {
+  it("start_asset_removed_before_config_write_keeps_previous_status_and_config", async () => {
     const owner = await setupOwner();
     const { id: sid } = await createSite(owner.token, owner.workspaceId);
     const url = await seedAssetRow(sid, { id: "asset_raceaaaaaa" });
     await exp(owner, sid, "exp_b", [htmlChange(`<img src="${url}">`)], "running");
     expect((await json<{ ok: boolean }>(await publishRes(owner.token, sid))).ok).toBe(true); // v1
     const a = await exp(owner, sid, "exp_a", []);
-    // 確かめ(CAS の前)の後・公開の手順 4 の前に Cron が印を付ける
-    const { DB } = countingD1(env.DB, { match: CONFIG_RECORD, run: () => env.DB.prepare("update assets set deleted_at = 1, purge_marked_at = 2 where id = 'asset_raceaaaaaa'").run() });
+    // compile の後、公開の設定を記録する直前に Cron が印を付ける
+    let hits = 0;
+    const { DB } = countingD1(env.DB, { match: CONFIG_RECORD, run: () => { hits++; return env.DB.prepare("update assets set deleted_at = 1, purge_marked_at = 2 where id = 'asset_raceaaaaaa'").run(); } });
     const res = await setStatus(owner.token, sid, a, "running", { DB });
-    expect(res.status).toBe(200);
-    const body = await json<StatusBody>(res);
-    expect(body.experiment.status).toBe("running");
-    expect(body.publish).toMatchObject({ ok: false, version: 2, error: "asset_missing", assetProblems: [{ url, reason: "missing", experimentId: "exp_b" }] });
+    expect(hits).toBe(1);
+    expect(res.status).toBe(409);
+    expect((await experimentRow(sid, a)).status).toBe("draft");
+    expect(await json(res)).toMatchObject({ error: "asset_missing", assetProblems: [{ url, reason: "missing", experimentId: "exp_b" }] });
     expect((await siteRow(sid)).active_version).toBe(1);
   });
 
@@ -220,7 +222,8 @@ describe("stop operations skip the image guard (Q266)", () => {
     };
     const guarded = await pause(WITH_UP); // R2 とアップローダーがある導入
     const plain = await pause({ ASSETS: undefined }); // 確かめそのものが無い導入
-    expect(tripsMatching(guarded, COMPILE_INPUT_READ)).toBe(1); // compile は公開の 1 回だけ
+    expect(tripsMatching(guarded, COMPILE_INPUT_READ_LEGACY)).toBe(0);
+    expect(tripsMatching(guarded, COMPILE_ROWS_BATCH)).toBe(1); // compile は公開の 1 回だけ
     expect(tripsMatching(guarded, ASSET_READ)).toBe(0);
     expect(guarded.length).toBe(plain.length); // D1 の呼び出しの数が確かめの無い状態の変更と同じ
   });

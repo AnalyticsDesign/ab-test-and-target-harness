@@ -62,7 +62,7 @@ export type Site = {
   /** B139: 訪問者 ID の Cookie の共有と、control がタグを置くドメインの一覧から導いたまとまり(読むだけ。共有がオフなら空) */
   shareSubdomains: boolean; cookieGroups: Array<{ domain: string; hosts: string[] }>;
   analytics: AnalyticsSettings; ga4PropertyId: string | null; bigqueryDataset: string | null;
-  activeVersion: number | null; activeKvStale: boolean; staticStale: boolean; staticRemoving: boolean; lastActivatedAt: number | null; contentUpdatedAt: number; createdAt: number; updatedAt: number;
+  activeVersion: number | null; activeKvStale: boolean; activeKvStaleReason?: "pending" | "config_missing" | null; staticStale: boolean; staticRemoving: boolean; lastActivatedAt: number | null; contentUpdatedAt: number; createdAt: number; updatedAt: number;
   /** `GET /sites/:sid` だけが返す(spec §13.9 の badge / banner 用) */
   hasUnpublishedChanges?: boolean;
   /** `GET /sites/:sid` だけが返す: 設置タグの配信ファイルの記録が食い違っている(7o K6。立つのは staticStale のときだけ) */
@@ -113,7 +113,8 @@ export type ListAdoption = {
 /** 計測用のデータベースの使用量(D9 ③。`GET /sites/:sid` が返す。まだ測っていない導入では無い) */
 export type ResultsCapacity = { sizeBytes: number; measuredAt: number; level: "ok" | "warning" | "stopped" };
 export type AnalyticsWarning = { path: string; message: string };
-export type PublishResult = { ok: true; version: number; needsProfile: boolean; superseded: boolean; staticDeploy: "deployed" | "pending" | "skipped"; warnings: AnalyticsWarning[] } | { ok: false; version: number | null; error: string; message: string; hint?: string; /** B68: asset_missing / asset_other_site のときの画像と、それを含む変更 */ assetProblems?: AssetProblem[] };
+/** 成功の warnings は計測の警告と、配信への反映待ち(path = delivery)を含む。 */
+export type PublishResult = { ok: true; version: number; needsProfile: boolean; superseded: boolean; staticDeploy: "deployed" | "pending" | "skipped"; warnings?: AnalyticsWarning[] } | { ok: false; version: number | null; error: string; message: string; hint?: string; /** B68: asset_missing / asset_other_site のときの画像と、それを含む変更 */ assetProblems?: AssetProblem[] };
 /** `POST …/experiments/:eid/status` の応答。warnings = 遷移は成功したが知らせたいこと(結果を記録しない開始・容量の見込み。D9 ②③) */
 export type StatusResult = {
   experiment: Experiment;

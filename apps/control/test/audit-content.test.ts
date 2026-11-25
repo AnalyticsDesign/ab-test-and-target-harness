@@ -22,7 +22,7 @@ import {
 /**
  * B129 Task 7(spec §3.1 の区分 content のうちサイト・目標・オーディエンス・画像・公開・§3.2・§5.1・§5.2): 操作と同じ batch に記録の文を入れる
  * (1 文の execute だった所は 2 文の batch。往復は変えない)。削除・条件付きの文は記録を前に置き、操作の文と同じ条件(Review Focus 1)。
- * 戻しの batch(公開の KV の失敗・サイトの設定の KV の失敗・作成の取り消し)には戻しの記録を足す。CAS より前の失敗は記録しない。
+ * 戻しの batch(サイトの設定の KV の失敗・作成の取り消し)には戻しの記録を足す。CAS より前の失敗は記録しない。
  * `static.rebuild` だけは「前」(writeAuditBefore。書けなければ 500 で作り直しを始めない)
  */
 
@@ -544,16 +544,15 @@ describe("publish", () => {
     expect((await events("publish.publish")).map((e) => e.detail)).toEqual([{ version: 1, superseded: false }]);
   });
 
-  it("publish_revert_records_reverted", async () => {
+  it("publish_active_put_failure_keeps_activation_record", async () => {
     const { owner, sid } = await siteWithRunning();
     expect((await json(await publishRes(owner.token, sid))).ok).toBe(true); // v1
     const res = await publishRes(owner.token, sid, { CONFIG_KV: failingKv(/:active$/, "put", 2) });
-    expect(await json(res)).toMatchObject({ ok: false, version: 2, error: "kv_rate_limited" });
-    expect((await siteRow(sid)).active_version).toBe(1);
+    expect(await json(res)).toMatchObject({ ok: true, version: 2, warnings: expect.arrayContaining([expect.objectContaining({ path: "delivery" })]) });
+    expect((await siteRow(sid)).active_version).toBe(2);
     expect((await events("publish.publish")).map((e) => e.detail)).toEqual([
       { version: 1, superseded: false },
       { version: 2, superseded: false },
-      { version: 2, reason: "reverted" },
     ]);
   });
 
@@ -615,7 +614,7 @@ describe("round trips", () => {
       const res = await call(method, path, { token: owner.token, ...opts, envOverride: { DB: counting.db } });
       expect(res.status).toBe(status);
       const c = counting.counts();
-      expect(c.sql.some((s) => /audit_events/.test(s)), `${method} ${path}: 記録の文が 1 文の往復になっている`).toBe(false);
+      expect(c.sql.some((s) => /^insert into audit_events/i.test(s)), `${method} ${path}: 記録の文が 1 文の往復になっている`).toBe(false);
       expect(c.batchSql.flat().filter((s) => /^insert into audit_events/.test(s)), `${method} ${path}: 記録の文は batch に 1 つ`).toHaveLength(1);
       return { queries: c.queries, batches: c.batches };
     };
@@ -652,7 +651,9 @@ describe("round trips", () => {
       asset: { queries: 5, batches: 2 },
       siteCreate: { queries: 8, batches: 1 },
       sitePatch: { queries: 9, batches: 1 },
-      publish: { queries: 23, batches: 2 },
+      // compile の 5 SELECT を 1 batch にまとめ、1 experiment 分の後処理 4 往復を activation に含める。
+      // 版予約は直近の予約の失効と同じ batch。合計 17 往復を保つ。
+      publish: { queries: 13, batches: 4 },
       redeploy: { queries: 6, batches: 1 },
       siteDelete: { queries: 8, batches: 1 },
       assetRename: { queries: 5, batches: 1 },

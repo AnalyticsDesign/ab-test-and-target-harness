@@ -2,6 +2,7 @@ import { duplicateName } from "@wtt/core";
 import { defaultBaseline } from "@wtt/stats";
 import { monthDay, probPct, sgn, STATE_LABEL } from "./result-format";
 import type { ResultsResponse } from "./results-view";
+import { DELIVERY_DELAYED, deliveryDelayed } from "./status-message";
 import type { Experiment, StatusResult } from "./types";
 
 /**
@@ -239,8 +240,9 @@ export type StopMessage = { publishHref?: string; tone: "info" | "warn" | "error
  */
 export function stopView(o: StopOutcome, experimentsPath: string): { messages: StopMessage[]; created: string | null; navigate: boolean } {
   const r = o.result;
+  const delayed = deliveryDelayed(r.publish);
   const messages: StopMessage[] = [
-    r.publish.ok
+    delayed ? { tone: "warn", text: DELIVERY_DELAYED } : r.publish.ok
       ? { tone: "info", text: `終了しました。公開 v${r.publish.version} を反映しました(訪問者のブラウザには 1 分ほどで届きます)` }
       : r.publish.error === "stale_preview"
         ? { tone: "error", text: "状態は変わりましたが、確認の後に内容が変わったため公開していません", publishHref: `${experimentsPath.replace(/\/experiments$/, "")}/publish` }
@@ -253,7 +255,7 @@ export function stopView(o: StopOutcome, experimentsPath: string): { messages: S
     messages.push({ tone: "error", text: `終了しました。下書きの作成に失敗しました(${o.duplicate.message})。終了は取り消していません。見出しの「複製」から作り直せます` });
   }
   const created = o.duplicate.kind === "created" ? `${experimentsPath}/${o.duplicate.id}` : null;
-  return { messages, created, navigate: created !== null && r.publish.ok && !notRecorded && (r.warnings ?? []).length === 0 };
+  return { messages, created, navigate: created !== null && r.publish.ok && !delayed && !notRecorded && (r.warnings ?? []).length === 0 };
 }
 
 // ---------------------------------------------------------------------------

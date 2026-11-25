@@ -14,6 +14,8 @@ import { app } from "../src/index";
 type Schema = { $ref?: string; properties?: Record<string, unknown>; items?: unknown; oneOf?: unknown[]; anyOf?: unknown[]; allOf?: unknown[]; type?: string };
 type Media = { schema?: Schema };
 type Operation = {
+  summary?: string;
+  description?: string;
   requestBody?: { content?: Record<string, Media> };
   responses?: Record<string, { content?: Record<string, Media> }>;
 };
@@ -70,6 +72,24 @@ describe("openapi (decision 34)", () => {
     // 封筒 schema 本体が components に居ること($ref の参照先が無ければ文書として壊れている)
     const components = (doc as unknown as { components?: { schemas?: Record<string, unknown> } }).components;
     expect(components?.schemas?.ErrorEnvelope).toBeDefined();
+  });
+
+  it("openapi_and_llms_mention_new_status_codes", async () => {
+    const doc = (await (await app.request("/openapi.json", {}, env)).json()) as Doc;
+    const op = doc.paths["/sites/{sid}/experiments/{eid}/status"]!.post!;
+    const guide = await (await app.request("/llms.txt", {}, env)).text();
+    for (const status of ["409", "503"]) {
+      expect(op.responses?.[status]?.content?.["application/json"]?.schema?.$ref).toBe("#/components/schemas/ErrorEnvelope");
+    }
+    expect(op.summary).toMatch(/開始・再開.*状態を変えずに 409.*封筒.*message.*hint.*assetProblems/);
+    expect(guide).toMatch(/開始・再開が `409`.*状態は変わっていません。封筒/);
+    for (const text of [op.summary, guide]) {
+      expect(text).toMatch(/公開の準備に失敗して終了だけが確定した場合も、結果と採用の記録を試み/);
+    }
+    for (const description of [op.description, guide]) {
+      expect(description).toContain("409 transition_conflict");
+      expect(description).toContain("503 publish_outcome_unknown");
+    }
   });
 
   it("publish_body_validation_errors_use_envelopes", async () => {

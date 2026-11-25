@@ -12,6 +12,7 @@ import {
   publishRes,
   siteWithRunning,
   active,
+  agePublish,
   siteRow,
   failingD1Query,
   countingD1,
@@ -85,19 +86,19 @@ describe("unpublished changes (spec §13.9)", () => {
       },
     }) as KVNamespace;
     const res = await json(await publishRes(owner.token, sid, { CONFIG_KV: kv }));
-    expect(res).toMatchObject({ ok: false, error: "kv_rate_limited" });
+    expect(res).toMatchObject({ ok: true, version: 2, warnings: expect.arrayContaining([expect.objectContaining({ path: "delivery" })]) });
     expect((await siteRow(sid)).active_kv_stale).toBe(1);
-    expect((await siteRow(sid)).active_version).toBe(1);
-    // GET /sites/:sid の reconcile で KV が D1(1)に揃う
+    expect((await siteRow(sid)).active_version).toBe(2);
+    await agePublish(sid, 30_001);
+    // KV はすでに最新版なので GET は印だけを降ろす
     const getRes = await call("GET", `/sites/${sid}`, { token: owner.token });
     // review r1 finding 2: 直った瞬間のレスポンス自体が正しい値を返す(loadSite 時点の古い activeKvStale のままではない)
     expect((await json(getRes)).activeKvStale).toBe(false);
-    expect(await active(sid)).toBe("1");
+    expect(await active(sid)).toBe("2");
     expect((await siteRow(sid)).active_kv_stale).toBe(0);
   });
   it("a reconcile failure inside GET /sites/:sid cannot fail the read (review r1 finding 1 red-check)", async () => {
-    // reconcileActive の「状態を読む最初の select」を狙い撃ちで 1 回だけ落とす。
-    // 直す前はこの select が reconcileActive 自身の try の外にあり、GET が丸ごと 500 になり得た
+    // GET は loadSite の行を使う。修復の最初の D1 書込みで失敗させる。
     const { owner, sid } = await siteWithRunning();
     expect((await json(await publishRes(owner.token, sid))).ok).toBe(true); // v1
     const kv = new Proxy(env.CONFIG_KV, {
@@ -110,9 +111,10 @@ describe("unpublished changes (spec §13.9)", () => {
         };
       },
     }) as KVNamespace;
-    expect(await json(await publishRes(owner.token, sid, { CONFIG_KV: kv }))).toMatchObject({ ok: false, error: "kv_rate_limited" });
+    expect(await json(await publishRes(owner.token, sid, { CONFIG_KV: kv }))).toMatchObject({ ok: true, version: 2, warnings: expect.arrayContaining([expect.objectContaining({ path: "delivery" })]) });
     expect((await siteRow(sid)).active_kv_stale).toBe(1); // reconcile が働く条件(stale)を満たした
-    const boomOnce = failingD1Query(env.DB, /select\s+"active_kv_stale",\s*"active_version"\s+from\s+"sites"/i, 1);
+    await agePublish(sid, 30_001);
+    const boomOnce = failingD1Query(env.DB, /update "sites" set "active_kv_stale"/i, 1);
     const getRes = await call("GET", `/sites/${sid}`, { token: owner.token, envOverride: { DB: boomOnce } });
     expect(getRes.status).toBe(200); // reconcile の内部失敗が GET を巻き込んでいない
     const body = await json(getRes);
@@ -236,7 +238,7 @@ describe("preview digest and transition", () => {
     const res = await call("GET", `/sites/${sid}/publish-preview`, { token: owner.token, envOverride: { DB: counter.db } });
     expect(res.status).toBe(200);
     expect(counter.counts().batches).toBe(1);
-    expect(counter.counts().batchSql[0]!.filter((s) => /^select/i.test(s))).toHaveLength(8);
+    expect(counter.counts().batchSql[0]!.filter((s) => /^select/i.test(s))).toHaveLength(9); // サイト設定を含む 6 SELECT と確認用の 3 SELECT
   });
   it("preview_d1_round_trips", async () => {
     const { owner, sid, eid } = await siteWithRunning();

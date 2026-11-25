@@ -1,3 +1,4 @@
+import { newRunId } from "@wtt/core";
 import { env } from "cloudflare:workers";
 import { describe, expect, test } from "vitest";
 import { getDb } from "../src/db";
@@ -279,11 +280,12 @@ describe("results purge queue and forget (D9 ③ K6・K12)", () => {
     const sid = await recordingSite(owner);
     await createExperiment(owner.token, sid, { id: "exp_pre" });
     await call("PUT", `/sites/${sid}/experiments/exp_pre/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
-    await env.DB.prepare("update experiments set run_id = 'run_preset' where site_id = ? and id = 'exp_pre'").bind(sid).run();
+    const preset = newRunId();
+    await env.DB.prepare("update experiments set run_id = ? where site_id = ? and id = 'exp_pre'").bind(preset, sid).run();
     const res = await setStatus(owner.token, sid, "exp_pre", "running");
     expect(res.status).toBe(200);
     expect((await json<{ warnings: unknown[] }>(res)).warnings).toEqual([]);
-    expect((await experimentRow(sid, "exp_pre")).run_id).toBe("run_preset");
+    expect((await experimentRow(sid, "exp_pre")).run_id).toBe(preset);
   });
 
   test("purgeRun は 1 回の DELETE を 2,000 行までにし、lease の行数を書き込みの前に受け取る", async () => {

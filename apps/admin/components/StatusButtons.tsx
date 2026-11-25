@@ -5,7 +5,7 @@ import { useStatusChangeGuard } from "@/lib/status-guard";
 import { ApiClientError, api, describeError } from "@/lib/client";
 import { REFRESH_TIMEOUT, WRITE_UNKNOWN } from "@/lib/busy-notice";
 import type { BusyOutcome } from "@/lib/run-busy";
-import { STATUS_JA } from "@/lib/experiment-filter";
+import { PUBLISH_OUTCOME_UNKNOWN, publishOutcomeUnknown, statusOutcomeMessage, type StatusTarget } from "@/lib/status-message";
 import { comparisonsOf, type PlanView } from "@/lib/evaluation-plan";
 import { loadTransitionPreview, othersListItems, OTHER_PUBLISH_NOTE, STALE_PREVIEW_RETRY, PREVIEW_LOAD_FAILED, pauseConfirm, SITE_PUBLISH_NOTE, startBlocker, startConfirmFor, startWarnings, type StartConfirm, type StartPlan } from "@/lib/start-confirm";
 import type { StopMessage } from "@/lib/stop-dialog";
@@ -18,7 +18,7 @@ import { assetGuardRejection, assetProblemRows, inPlaceTarget, publishFailurePro
 import { replaceParam } from "@/lib/url-state";
 import type { AssetProblem } from "@/lib/types";
 
-const NEXT: Record<Status, Array<{ to: Status; label: string; danger?: boolean }>> = {
+const NEXT: Record<Status, Array<{ to: StatusTarget; label: string; danger?: boolean }>> = {
   draft: [{ to: "running", label: "開始(公開して配信を始める)" }],
   running: [
     { to: "paused", label: "一時停止" },
@@ -54,7 +54,7 @@ async function loadStartPlan(siteId: string, experiment: Experiment, recording: 
 }
 
 /** テストの終了は終了のモーダル(採用の記録)を開く。見出しの文言は「終了して結果を記録」(設計書 §10) */
-const labelOf = (experiment: Experiment, n: { to: Status; label: string }) => (experiment.kind === "test" && n.to === "archived" ? "終了して結果を記録" : n.label);
+const labelOf = (experiment: Experiment, n: { to: StatusTarget; label: string }) => (experiment.kind === "test" && n.to === "archived" ? "終了して結果を記録" : n.label);
 
 /** 開始・再開の最後の確認の本文(startConfirmFor の結果) */
 function startConfirmBody(confirm: StartConfirm): ReactNode {
@@ -169,7 +169,7 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
    * 最後に出す確認と、それに対応する digest。options が null なら確認を出さない。false は前の段で止めた・取り消した・範囲が消えた。
    * 前の段の確認(今は無い)・事前の GET はここ。各段の待ちの後に範囲が生きているかを見る
    */
-  async function finalConfirm(n: { to: Status }, retry: boolean): Promise<{ options: ConfirmOptions | null; digest: string } | false> {
+  async function finalConfirm(n: { to: StatusTarget }, retry: boolean): Promise<{ options: ConfirmOptions | null; digest: string } | false> {
     const starting = n.to === "running" && experiment.status === "draft";
     const [preview, start] = await Promise.all([
       loadTransitionPreview(siteId, experiment.id, n.to, (path) => api<PublishPreview>("GET", path)),
@@ -197,7 +197,7 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
     return done({ title: confirm.title, body: body(confirm), confirmLabel: confirm.confirmLabel, tone: "primary" });
   }
 
-  async function change(n: { to: Status }) {
+  async function change(n: { to: StatusTarget }) {
     const label = busyLabelOf(experiment.status, n.to);
     /** 最後の確認の口。確認の無い経路・最後の確認の前に止めたときは null(close・fail を呼ばず、結果はボタンの並びに出す) */
     let hold: ConfirmHold | null = null;
@@ -241,8 +241,11 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
         outcome = await attempt();
         continue;
       }
-      if (!hold || rejected()) break;
-      const again = await (hold as ConfirmHold).fail(outcome.kind === "failed" ? describeError(outcome.error) : WRITE_UNKNOWN);
+      if (!hold) break;
+      const failure = outcome.kind === "failed" ? statusOutcomeMessage(n.to, experiment.status, outcome, describeError) : { text: WRITE_UNKNOWN };
+      // 画像はボタンの近くで案内する。確定結果が分からない 503 は送り直さず、確認を閉じる。
+      if (!failure || (outcome.kind === "failed" && publishOutcomeUnknown(outcome.error))) break;
+      const again = await (hold as ConfirmHold).fail(failure.text);
       if (!again) return;
       outcome = await attempt();
     }
@@ -250,17 +253,10 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
     (hold as ConfirmHold | null)?.close();
     if (outcome.kind === "saved") {
       const r = outcome.value;
-      setMsg(
-        r.publish.ok
-          ? { text: `公開 v${r.publish.version} を反映しました(訪問者のブラウザには 1 分ほどで届きます)`, error: false }
-          : r.publish.error === "stale_preview"
-            ? { text: "状態は変わりましたが、確認の後に内容が変わったため公開していません", error: true, publishHref: `/w/${wid}/sites/${siteId}/publish` }
-            : {
-              text: `状態は ${STATUS_JA[n.to]} に変わりましたが、公開に失敗しました(${r.publish.error}: ${r.publish.message})。上部の「公開」から再試行してください`,
-              error: true,
-              problems: rowsOf(publishFailureProblems(r.publish)),
-            },
-      );
+      const message = statusOutcomeMessage(n.to, experiment.status, outcome, describeError);
+      setMsg(message
+        ? { ...message, problems: rowsOf(publishFailureProblems(r.publish)) }
+        : { text: "状態は変わりましたが、確認の後に内容が変わったため公開していません", error: true, publishHref: `/w/${wid}/sites/${siteId}/publish` });
       setWarnings(startWarnings(r.warnings));
       setStale(outcome.refresh === "timeout");
     } else if (outcome.kind === "failed" && rejected()) {
@@ -268,7 +264,9 @@ function StatusButtonsRow({ wid, siteId, experiment, recording = false, goals = 
       setMsg({ text: r.text, error: true, problems: rowsOf(r.problems) });
     } else if (outcome.kind === "failed") {
       // 確認の無い経路の失敗。409 invalid_transition(評価計画・パターンの設定が変わった競合など)は control の hint をそのまま出す
-      setMsg({ text: describeError(outcome.error), error: true });
+      setMsg(publishOutcomeUnknown(outcome.error)
+        ? { text: PUBLISH_OUTCOME_UNKNOWN, error: true }
+        : statusOutcomeMessage(n.to, experiment.status, outcome, describeError));
     } else if (outcome.kind === "unknown") {
       setMsg({ text: WRITE_UNKNOWN, error: true });
     }

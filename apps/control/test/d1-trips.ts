@@ -54,4 +54,6 @@ export const ASSET_READ = /^\s*SELECT id FROM assets WHERE/i;
 /** 公開の手順 4(設定の記録) */
 export const CONFIG_RECORD = /UPDATE publishes SET config_hash/i;
 /** compile の入力の読み(buildCompileInput の 4 つのうち、ほかで読まない `audiences` の definition_json) */
-export const COMPILE_INPUT_READ = /select "id", "definition_json" from "audiences"/i;
+export const COMPILE_INPUT_READ_LEGACY = /select "id", "definition_json" from "audiences"/i;
+/** 公開時に同じ batch で読む compile 入力。 */
+export const COMPILE_ROWS_BATCH = /select \* from "audiences"/i;

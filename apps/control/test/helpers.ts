@@ -425,7 +425,6 @@ export function failingD1Insert(db: D1Database, table: string, message = `inject
  * `failingD1Insert` は insert 固定だが、こちらは SQL を正規表現で選ぶ。`batch` は statement の中身を直接読んで
  * run/first/all の proxy を素通りするため、`failingD1Insert` と同じく印(FAILING_STMT)で見分け、印のある statement が混ざる batch 全体を失敗させる
  * (D10 Task 5: setup の完了の書き込みが batch になった)
- * (Task 8: `reconcileActive` の初回 select だけを狙い撃ちして GET /sites/:sid の red-check に使う)
  */
 export function failingD1Query(db: D1Database, sqlPattern: RegExp, times = 1): D1Database {
   let failed = 0;
@@ -1329,4 +1328,32 @@ export function recordingD1(db: D1Database): { DB: D1Database; sqls: string[] } 
     },
   }) as D1Database;
   return { DB, sqls };
+}
+
+/** 公開との前後関係を保ったまま、サイトの自己修復の見送り期間を進める。 */
+export async function agePublish(sid: string, ms: number): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare("update sites set last_activated_at = last_activated_at - ?1, content_updated_at = content_updated_at - ?1 where id = ?2").bind(ms, sid),
+    env.DB.prepare("update experiments set updated_at = updated_at - ? where site_id = ?").bind(ms, sid),
+    env.DB.prepare("update publishes set created_at = created_at - ?1, activated_at = activated_at - ?1 where site_id = ?2").bind(ms, sid),
+  ]);
+}
+
+/** 新版を反映し終えた後に古い put が反映されて失敗応答を返す。再試行は反映前に失敗する。 */
+export function lateFailingActivePut(sid: string, newer: () => Promise<void>): KVNamespace {
+  let puts = 0;
+  return new Proxy(env.CONFIG_KV, {
+    get(target, prop) {
+      const method = Reflect.get(target, prop);
+      if (prop === "put") return async (key: string, value: string) => {
+        if (key !== kvKeys.active(sid)) return target.put(key, value);
+        if (++puts === 1) {
+          await newer();
+          await target.put(key, value);
+        }
+        throw new Error("ambiguous active put");
+      };
+      return typeof method === "function" ? method.bind(target) : method;
+    },
+  });
 }

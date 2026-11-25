@@ -71,6 +71,7 @@ export const siteRoutes = new Hono<AppEnv>();
 
 /** spec §13.9: `GET /sites/:sid` は siteJson に badge/banner 用の 1 フラグを足して返す */
 const SiteGetSchema = SiteJsonSchema.extend({
+  activeKvStaleReason: z.enum(["pending", "config_missing"]).nullable().describe("配信ポインタが未収束の理由。pending は自動で反映する途中、config_missing は配信の設定が見つからない(公開し直す)。未収束でなければ null"),
   hasUnpublishedChanges: z.boolean().describe("エクスペリエンスのいずれかが unpublished、または目標 / パターン / タイムゾーン / 結果の記録の切り替えが前回 activation より後"),
   staticMismatch: z
     .boolean()
@@ -424,19 +425,13 @@ siteRoutes.get(
   async (c) => {
     const { site } = await loadSite(c, c.req.param("sid"), "viewer");
     const db = c.get("db");
-    // Task 6 の publish の続き: KV active が D1 と食い違ったまま(active_kv_stale)なら読み取りのたびに自己修復を試みる。
-    // `reconcileActive` は構造的に throw しない(内部を丸ごと 1 つの try で囲んである。review r1 finding 1)ので、
-    // ここで await が投げて GET を失敗させることはない。戻り値は「呼び出し後に整合しているか」— これで直った瞬間の
-    // 応答が読み込み時点の古い `activeKvStale` を返して自己矛盾するのを防ぐ(review r1 finding 2)
-    // backlog D13 / 決定 56 (7): 凍結中は自己修復を見送り、読んだ時点の印のまま応答する(解除後の GET で直る)。
-    // 凍結の読み取りが失敗したときも isWriteFrozen は true(見送る側に倒す)。
-    // スイッチを読むのは直すものがある(読んだ行に印が立っている)ときだけ — 印が無ければどちらも書かないので、GET ごとの D1 読み取りを省く。
-    // reconcileStatic は自分で static_stale を見て、0 なら何も問い合わせず { stale: false, mismatch: false } を返す。reconcileActive は行を読み直すので、
-    // loadSite の後に別の要求が印を立てた瞬間だけは書き得る — 凍結中に書かないよう、読んだ行に印が無ければ呼ばない
-    // (読んだ行に印が無ければ、応答は呼んだときと同じ activeKvStale = false。直すのは次の GET に回る)
+    // 印が無ければ凍結も再読しない。凍結中は読んだ印だけを表示する。
     const needsRepair = site.active_kv_stale === 1 || site.static_stale === 1;
     const frozen = needsRepair && (await isWriteFrozen(db));
-    const reconciled = site.active_kv_stale !== 1 ? true : frozen ? false : await reconcileActive(c.env, db, site.id);
+    const outcome = frozen
+      ? { stale: site.active_kv_stale === 1, deferred: false, reason: "pending" as const }
+      : await reconcileActive(c.env, db, site.id, { nowMs: Date.now(), row: site });
+    const activeKvStale = !outcome.deferred && outcome.stale;
     // 決定 52 / plan K5 ④: 配信ファイルの出し直しが済んでいない Site は、デプロイ専用の Worker の状態を見て印を下ろす(届いていなければ依頼し直す)。
     // 7o K6: 記録の食い違い(先行・同じ世代の別の中身・墓標)も返す。凍結中は問い合わせないので false
     const { stale: staticStale, mismatch: staticMismatch } = frozen
@@ -450,7 +445,8 @@ siteRoutes.get(
     const store = await db.selectFrom("results_store_status").select(["size_bytes", "measured_at"]).where("id", "=", 1).executeTakeFirst();
     return c.json({
       ...siteJson(site),
-      activeKvStale: reconciled ? false : site.active_kv_stale === 1,
+      activeKvStale,
+      activeKvStaleReason: activeKvStale ? (outcome.reason ?? "pending") : null,
       staticStale,
       staticMismatch,
       hasUnpublishedChanges: dirty !== undefined || site.content_updated_at > since,

@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { kvKeys, parseSiteSettings } from "@wtt/core";
 import { call, json, setupOwner, inviteAndJoin, createSite, failingKv, failingD1Insert, SITE_HOSTS_PK_VIOLATION, fakeEdgePing, seedEdgeDomains, setEdgeDomains, siteRow, expectEnvelope } from "./helpers";
+import { abortingBindings, settleOrAbort } from "./abort-harness";
+import { beforeD1Query, publishRes, siteWithRunning, testEnv } from "./helpers";
 import { getDb } from "../src/db";
 import { releaseHosts, siteToSettings } from "../src/site-settings";
 
@@ -293,11 +295,7 @@ describe("sites", () => {
       },
     }) as D1Database;
     expect((await call("PATCH", `/sites/${id}`, { token, body: { name: "新しい名前" }, envOverride: { DB: interleaving } })).status).toBe(200);
-    // PATCH 直後、GET を挟む前に D1 を直接読む。Task 8 の GET /sites/:sid は reconcileActive を呼び、
-    // このシナリオの KV は壊していないので reconcile は必ず成功して active_kv_stale を 0 に正規化してしまう —
-    // GET 越しに読むと「PATCH が clobber したから 0」なのか「reconcile が直したから 0」なのか区別が付かず、
-    // この assertion が本来検出すべき退行(SITE_PATCH_COLUMNS に active_kv_stale が紛れ込む)を検出できなくなる
-    // (review r2 finding 3)。なので PATCH が触れたかどうかは reconcile の手前、生の D1 row で確かめる
+    // GET には自己修復がある。PATCH が並行する公開の印を変えなかったかを直接 D1 で確かめる。
     expect((await siteRow(id)).active_kv_stale).toBe(1); // PATCH は触っていない(=1 のまま生きている)
     const site = await json(await call("GET", `/sites/${id}`, { token }));
     expect(site.name).toBe("新しい名前"); // PATCH の変更は入っている
@@ -589,5 +587,58 @@ describe("cookie sharing scopes (B139)", () => {
     const c = await call("PATCH", `/sites/${id2}`, { token, body: { idSource: "cookie:_v_js_js" } });
     expect(c.status).toBe(422);
     expect((await expectEnvelope(c)).error).toBe("cookie_name_in_use");
+  });
+});
+
+describe("サイト詳細の配信ポインタの修復", () => {
+  it("get_site_trips_by_flag_state and activeKvStaleReason", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    const baseTrips = 6; // 認証・サイト・未公開変更・計測用 DB 使用量の取得
+    for (const [state, extraD1, gets, puts, reason] of [
+      ["clear", 0, 0, 0, null], ["deferred", 1, 0, 0, null], ["repaired", 3, 2, 1, null],
+      ["missing", 1, 1, 0, "config_missing"], ["put_failure", 4, 2, 2, "pending"],
+    ] as const) {
+      await getDb(env).updateTable("sites").set({
+        static_stale: 0, active_version: 1, active_kv_stale: state === "clear" ? 0 : 1,
+        last_activated_at: state === "deferred" ? Date.now() : 1,
+      }).where("id", "=", sid).execute();
+      await env.CONFIG_KV.delete(kvKeys.active(sid));
+      if (state === "missing") await env.CONFIG_KV.delete(kvKeys.config(sid, 1));
+      else await env.CONFIG_KV.put(kvKeys.config(sid, 1), "{}");
+      const log = abortingBindings({ ...testEnv, CONFIG_KV: state === "put_failure" ? failingKv(/:active$/) : testEnv.CONFIG_KV }, null);
+      const res = await call("GET", `/sites/${sid}`, { token, envOverride: log.env });
+      expect(await json(res), state).toMatchObject({ activeKvStale: reason !== null, activeKvStaleReason: reason });
+      const d1 = log.calls.filter(c => !c.startsWith("kv.")).length;
+      expect(d1, state).toBe(baseTrips + extraD1);
+      expect(log.calls.filter(c => c.startsWith("kv.get")), state).toHaveLength(gets);
+      expect(log.calls.filter(c => c.startsWith("kv.put")), state).toHaveLength(puts);
+    }
+  });
+
+  it("publish_cas_sets_active_kv_stale and get_site_hides_flag_during_30s_after_publish", async () => {
+    const { owner, sid } = await siteWithRunning();
+    const baseline = abortingBindings(testEnv, null);
+    expect(await json(await publishRes(owner.token, sid, baseline.env))).toMatchObject({ ok: true });
+    const cas = baseline.calls.findIndex(sql => /update "sites" set "active_version"/i.test(sql) && sql.includes(" ;; "));
+    expect(cas).toBeGreaterThan(0);
+    const interrupted = abortingBindings(testEnv, { at: cas + 1, mode: "after" });
+    const result = await settleOrAbort(publishRes(owner.token, sid, interrupted.env), interrupted.reached);
+    expect(result.aborted).toBe(true);
+    expect(await siteRow(sid)).toMatchObject({ active_version: 2, active_kv_stale: 1, static_stale: 1 });
+    const read = abortingBindings(testEnv, null);
+    expect(await json(await call("GET", `/sites/${sid}`, { token: owner.token, envOverride: read.env }))).toMatchObject({ activeKvStale: false, activeKvStaleReason: null });
+    expect(read.calls.filter(c => c.startsWith("kv.put") && c.endsWith(":active"))).toHaveLength(0);
+  });
+
+  it("get_site_returns_updated_flag_value", async () => {
+    const { token, workspaceId } = await setupOwner();
+    const { id: sid } = await createSite(token, workspaceId);
+    await getDb(env).updateTable("sites").set({ active_version: 1, active_kv_stale: 1 }).where("id", "=", sid).execute();
+    await env.CONFIG_KV.put(kvKeys.config(sid, 1), "{}");
+    const hook = beforeD1Query(env.DB, /update "sites" set "active_kv_stale"/i, () =>
+      getDb(env).updateTable("sites").set({ active_version: 2, active_kv_stale: 0 }).where("id", "=", sid).execute());
+    expect(await json(await call("GET", `/sites/${sid}`, { token, envOverride: { DB: hook.db } }))).toMatchObject({ activeKvStale: true, activeKvStaleReason: "pending" });
+    expect((await siteRow(sid)).active_kv_stale).toBe(1);
   });
 });

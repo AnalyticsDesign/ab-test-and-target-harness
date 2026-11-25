@@ -81,42 +81,6 @@ function failingD1Select(columnPattern: RegExp, onHit: () => void = () => {}): D
   }) as D1Database;
 }
 
-/**
- * `sqlPattern` にマッチする最初の 1 文の直前に `sideEffect` を差し込む D1 ラッパ(review finding 3 用)。
- * 「compile 済みの config が確定した後、published_status を書き込む直前に、別の actor が status を書き換える」
- * という競合を実際に発生させて、published_status がどちらの値で書かれるかを確かめる
- */
-function withSideEffectBeforeFirstMatch(sqlPattern: RegExp, sideEffect: () => Promise<void>): D1Database {
-  let done = false;
-  const wrap = (stmt: D1PreparedStatement): D1PreparedStatement =>
-    new Proxy(stmt, {
-      get(s, p) {
-        if ((p === "run" || p === "first" || p === "all") && !done) {
-          done = true;
-          return async (...args: unknown[]) => {
-            await sideEffect();
-            return (s[p as "run"] as (...a: unknown[]) => unknown).apply(s, args);
-          };
-        }
-        if (p === "bind") return (...args: unknown[]) => wrap(s.bind(...args));
-        const x = Reflect.get(s, p);
-        return typeof x === "function" ? x.bind(s) : x;
-      },
-    });
-  return new Proxy(env.DB, {
-    get(target, prop) {
-      const v = Reflect.get(target, prop);
-      if (prop === "prepare") {
-        return (sqlText: string) => {
-          const stmt = target.prepare(sqlText);
-          return sqlPattern.test(sqlText) ? wrap(stmt) : stmt;
-        };
-      }
-      return typeof v === "function" ? v.bind(target) : v;
-    },
-  }) as D1Database;
-}
-
 describe("status transitions (spec §13.8)", () => {
   it("start publishes automatically and published_status follows", async () => {
     const { owner, sid, eid } = await base();
@@ -204,16 +168,18 @@ describe("status transitions (spec §13.8)", () => {
     const exp = await json(await call("GET", `/sites/${sid}/experiments/${eid}`, { token }));
     expect(exp.status).toBe(winner); // 先に CAS を通した側だけが反映され、負けた側は 409(stale read で上書きしない)
   });
-  it("concurrent status changes to the SAME target status still let only one win (review finding 4: 異なる target 同士だと、直列実行でも TRANSITIONS 表だけで 409 が出て CAS を試さずに通ってしまう可能性があるため、同じ target で狙って CAS を踏ませる)", async () => {
+  it("concurrent_same_pause_one_wins_without_retry", async () => {
     const { owner, sid, eid } = await base();
-    const token = owner.token;
-    await setStatus(token, sid, eid, "running");
-    const [a, b] = await Promise.all([
-      call("POST", `/sites/${sid}/experiments/${eid}/status`, { token, body: { status: "paused" } }),
-      call("POST", `/sites/${sid}/experiments/${eid}/status`, { token, body: { status: "paused" } }),
-    ]);
-    expect([a.status, b.status].sort()).toEqual([200, 409]);
-    // CAS が無いと両方 200 になりうる(実測: red-check 参照)。D1 の状態も 1 回だけ更新されている
+    await setStatus(owner.token, sid, eid, "running");
+    const hook = beforeD1BatchMatching(env.DB, /update "sites" set "active_version"/i, async () => {
+      expect((await setStatus(owner.token, sid, eid, "paused")).status).toBe(200);
+    });
+    const loser = await setStatus(owner.token, sid, eid, "paused", { DB: hook.db });
+    expect(hook.ran()).toBe(true);
+    expect(loser.status).toBe(409);
+    expect(await json(loser)).toMatchObject({ error: "invalid_transition" });
+    const rows = await getDb(env).selectFrom("publishes").select("status").where("site_id", "=", sid).where("version", ">", 1).orderBy("version").execute();
+    expect(rows.map((row) => row.status)).toEqual(["failed", "active"]);
     expect((await experimentRow(sid, eid)).status).toBe("paused");
   });
 
@@ -231,44 +197,33 @@ describe("status transitions (spec §13.8)", () => {
     expect(del2.status).toBe(204);
   });
 
-  it("review finding 1: a publishSite throw right at the start (before activation) still reports the committed status change as 200, not 500", async () => {
+  it("start_before_reservation_failure_returns_409", async () => {
     const { owner, sid, eid } = await base();
-    // version 予約の insert(手順 2。compile より前で、UNIQUE 以外の catch を素通りして re-throw する)を壊す。
-    // Task 8 で reconcileActive 自体が「絶対に throw しない」形に直った(review r1 finding 1)ので、
-    // publishSite の一番最初の呼び出しは reconcileActive ではなくこの insert になった —
-    // それでも activation どころか compile にも到達しない、より早い段階での throw であることに変わりはない
     const res = await setStatus(owner.token, sid, eid, "running", { DB: failingD1Query(env.DB, /^\s*insert into publishes/i) });
-    expect(res.status).toBe(200);
-    const body = await json(res);
-    expect(body.publish).toMatchObject({ ok: false, version: null, error: "publish_failed" });
-    // status の CAS 自体は publishSite を呼ぶ前に確定しているので、D1 には running が乗っている
-    expect(body.experiment).toMatchObject({ status: "running" });
-    expect((await experimentRow(sid, eid)).status).toBe("running");
-    // publish 自体は 1 度も進んでいないので、KV の active はまだ無い(前の版も無い、そもそも初回)
+    expect(res.status).toBe(409);
+    expect(await json(res)).toMatchObject({ error: "publish_failed", hint: "数秒後に、同じ状態の変更をもう一度送ってください" });
+    expect((await experimentRow(sid, eid)).status).toBe("draft");
     expect(await active(sid)).toBeNull();
   });
 
-  it("review finding 3: published_status is written from the compile-time snapshot, not a live re-read — a status change that lands after compile does not leak in", async () => {
+  it("keeps the previous active config and published_status when status changes after compile", async () => {
     const { owner, sid, eid } = await base();
     await setStatus(owner.token, sid, eid, "running"); // v1: config に exp_hero を含めて活性化。status も published_status も running
 
-    // 別の actor が、この plain /publish の「published_status を書く」直前(= compile も activation も終わった後)に
-    // この Experiment を paused に書き換える(runDirect は D1 を直接叩く。route の CAS も自動 Publish も経由しない)。
-    // 決定 17 が守るべきなのは「published_status は published_status = status の update が読む瞬間の値」ではなく
-    // 「この publish が実際に compile した瞬間の値」— 後者でなければ site-delete guard(routes/sites.ts)が
-    // published_status を見て「もう running を含んでいない」と誤判定しうる(review finding 3)
-    const sideEffect = () => runDirect(sid, eid, "paused");
-    const res = await publishRes(owner.token, sid, { DB: withSideEffectBeforeFirstMatch(/published_status/i, sideEffect) });
+    // compile が終わり、activation の batch を送る直前に別の actor が status を変える。
+    const hook = beforeD1BatchMatching(env.DB, /update "sites" set "active_version"/i, () => runDirect(sid, eid, "paused"));
+    const res = await publishRes(owner.token, sid, { DB: hook.db });
+    expect(hook.ran()).toBe(true);
     expect(res.status).toBe(200);
-    expect(await json(res)).toMatchObject({ ok: true, version: 2 });
+    expect(await json(res)).toMatchObject({ ok: false, error: "state_changed", version: 2 });
 
     const row = await experimentRow(sid, eid);
     // 競合した書込みは実際に効いている(D1 の生の status は paused)
     expect(row.status).toBe("paused");
-    // しかし published_status は、この publish が compile した瞬間の値(running)のまま —
-    // 競合した書込みを published_status に取り込んでいない(取り込んでいたら "paused" になっていたはず)
+    // CAS が 0 行になり、以前の公開状態と配信中の版が残る。
     expect(row.published_status).toBe("running");
-    // 実際に配信されている config(この publish が activate した v2)は running のまま exp_hero を含む
+    expect((await siteRow(sid)).active_version).toBe(1);
+    expect(await active(sid)).toBe("1");
     expect((await activeConfig(sid))?.experiments.map((e) => e.id)).toEqual(["exp_hero"]);
   });
 
@@ -434,7 +389,7 @@ describe("開始・再開の前の、外したページの条件の検査(B69)",
 
   it("start_and_resume_reject_moved_page_condition", async () => {
     const owner = await setupOwner();
-    // assetGuardEnabled が真(既定の R2 あり)と偽(R2 もアップローダーも無い)の両方で
+    // 画像を確かめる構成と、R2 もアップローダーも無い構成の両方で
     for (const [label, guardOff] of [["guard", {}], ["no guard", { ASSETS: undefined }]] as const) {
       for (const via of ["direct", "audience"] as const) {
         for (const from of ["draft", "paused"] as const) {
@@ -559,7 +514,8 @@ describe("status bound to preview", () => {
       expect(res.status).toBe(409);
       expect(await json(res)).toMatchObject({ error: "stale_preview", message: "確認した後に、公開する内容が変わりました", hint: "公開の確認をもう一度開き、変わった内容を確かめてから公開してください" });
       expect((await experimentRow(sid, other)).status).toBe("running");
-      expect(await count("publishes", sid)).toBe(before.pubs);
+      expect(await count("publishes", sid)).toBe(before.pubs + 1);
+      expect(await getDb(env).selectFrom("publishes").select("status").where("site_id", "=", sid).orderBy("version", "desc").executeTakeFirst()).toEqual({ status: "failed" });
       expect(await count("audit_events", sid)).toBe(before.audits);
       expect((await siteRow(sid)).active_version).toBe(before.version);
       expect(await active(sid)).toBe(before.kv);
@@ -590,19 +546,20 @@ describe("status bound to preview", () => {
     expect(await getDb(env).selectFrom("evaluation_plans").selectAll().where("site_id", "=", sid).execute()).toEqual(planBefore);
   });
   for (const broken of [false, true]) {
-    it(broken ? "status_race_stop_with_broken_images_needs_image_fix" : "status_race_after_precheck_reports_publish_stale", async () => {
+    it(broken ? "status_save_during_activation_with_broken_images" : "status_save_after_compile_remains_unpublished", async () => {
       const { owner, sid, eid, other } = await pair();
       if (broken) {
         const url = await seedAssetRow(sid, { id: "asset_digestaaaa", purgeMarkedAt: 2 });
         await getDb(env).updateTable("changes").set({ type: "HTML", payload_json: JSON.stringify({ html: `<img src="${url}">`, position: "append", runScripts: false }) }).where("site_id", "=", sid).where("experiment_id", "=", eid).execute();
       }
       const p = await preview(owner.token, sid, other);
-      const hook = beforeD1BatchMatching(env.DB, /update "experiments" set "status"/i, () => getDb(env).updateTable("experiments").set({ name: "Saved during CAS" }).where("site_id", "=", sid).where("id", "=", eid).execute());
+      const hook = beforeD1BatchMatching(env.DB, /update "experiments" set "status"/i, () => getDb(env).updateTable("experiments").set({ name: "Saved during CAS", updated_at: Date.now() + 1 }).where("site_id", "=", sid).where("id", "=", eid).execute());
       const res = await call("POST", `/sites/${sid}/experiments/${other}/status`, { token: owner.token, body: { status: "paused", expectDigest: p.transitionDigest }, envOverride: { DB: hook.db } });
       expect(hook.ran()).toBe(true);
       expect(res.status).toBe(200);
-      expect(await json(res)).toMatchObject({ experiment: { status: "paused" }, publish: { ok: false, error: "stale_preview" } });
-      expect(await active(sid)).toBe("1");
+      expect(await json(res)).toMatchObject({ experiment: { status: "paused" }, publish: { ok: true } });
+      expect(await active(sid)).toBe("2");
+      expect(await json(await call("GET", `/sites/${sid}`, { token: owner.token }))).toMatchObject({ hasUnpublishedChanges: true });
       if (broken) {
         expect(await json(await publishRes(owner.token, sid))).toMatchObject({ ok: false, error: "asset_missing" });
         await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [TEXT_CHANGE()] });
@@ -616,7 +573,7 @@ describe("status bound to preview", () => {
     const counter = countingD1(env.DB);
     const res = await call("POST", `/sites/${sid}/experiments/${other}/status`, { token: owner.token, body: { status: "paused", expectDigest: p.transitionDigest }, envOverride: { DB: counter.db } });
     expect(res.status).toBe(200);
-    expect(counter.counts().batchSql.filter((ss) => ss.length === 5 && ss.every((s) => /^select/i.test(s)))).toHaveLength(1);
+    expect(counter.counts().batchSql.filter((ss) => ss.length === 6 && ss.every((s) => /^select/i.test(s)))).toHaveLength(1);
   });
   it("status_without_digest_keeps_working", async () => {
     const { owner, sid, other } = await pair();
