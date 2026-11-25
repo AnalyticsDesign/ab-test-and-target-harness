@@ -6,6 +6,10 @@
 /** ホスト名の形の検査(小文字の英数字・ドット・ハイフンだけ)。site-settings.ts の zod もこれを使う */
 export const HOST_RE = /^[a-z0-9.-]+$/;
 
+const MAX_HOST_LENGTH = 253;
+// scheme(8)・完全修飾名の末尾のドット(1)・ポート(6)・末尾のスラッシュ(1)を含む、整形前の上限。
+const MAX_DOMAIN_INPUT_LENGTH = MAX_HOST_LENGTH + 8 + 1 + 6 + 1;
+
 /** 1 サイトが持てるドメインの数。移行で超えたサイトも、保存のときはこの数以下を求める */
 export const MAX_DOMAINS = 50;
 
@@ -37,7 +41,9 @@ function isCanonicalOrigin(v: string): boolean {
  * - path・query・fragment は `path`、`*` は `wildcard`、HOST_RE に合わない(非 ASCII 含む)ものは `not_domain`
  */
 export function normalizeDomainInput(raw: string): NormalizeResult {
-  const s = raw.trim().toLowerCase();
+  const line = raw.trim();
+  if (line.length > MAX_DOMAIN_INPUT_LENGTH) return { ok: false, reason: "not_domain" };
+  const s = line.toLowerCase();
   const m = /^([a-z][a-z0-9+.-]*):\/\//.exec(s);
   const scheme = m ? m[1] : null;
   if (scheme !== null && scheme !== "http" && scheme !== "https") return { ok: false, reason: "not_domain" };
@@ -57,7 +63,7 @@ export function normalizeDomainInput(raw: string): NormalizeResult {
   }
   host = host.replace(/\.+$/, "");
   // 空のラベル(`.example.com` / `a..b`)も落とす
-  if (host === "" || !HOST_RE.test(host) || host.split(".").some((label) => label === "")) return { ok: false, reason: "not_domain" };
+  if (host === "" || host.length > MAX_HOST_LENGTH || !HOST_RE.test(host) || host.split(".").some((label) => label === "")) return { ok: false, reason: "not_domain" };
 
   // 既定のポート(https の 443・http の 80)は落とす。Origin の正規形(new URL(v).origin)に合わせ、`https://h:443` は通常の行になる
   if (port === (scheme === "http" ? 80 : 443)) port = null;

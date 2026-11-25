@@ -11,6 +11,10 @@ export const MAX_DOMAINS = 50;
 
 const HOST_RE = /^[a-z0-9.-]+$/;
 
+const MAX_HOST_LENGTH = 253;
+// scheme(8)・完全修飾名の末尾のドット(1)・ポート(6)・末尾のスラッシュ(1)を含む、整形前の上限。
+const MAX_DOMAIN_INPUT_LENGTH = MAX_HOST_LENGTH + 8 + 1 + 6 + 1;
+
 /** new URL(v).origin が v と一致するか(@wtt/core の設定の検査と同じ条件) */
 function isCanonicalOrigin(v: string): boolean {
   try {
@@ -22,7 +26,9 @@ function isCanonicalOrigin(v: string): boolean {
 
 /** control の normalizeDomainInput と同じ規則で 1 行をそろえる。通常の行はホスト名、開発用(http・port 付き)は Origin の形 */
 export function normalizeDomain(raw: string): { ok: true; value: string; dev: boolean } | { ok: false } {
-  const s = raw.trim().toLowerCase();
+  const line = raw.trim();
+  if (line.length > MAX_DOMAIN_INPUT_LENGTH) return { ok: false };
+  const s = line.toLowerCase();
   const m = /^([a-z][a-z0-9+.-]*):\/\//.exec(s);
   const scheme = m ? m[1] : null;
   if (scheme !== null && scheme !== "http" && scheme !== "https") return { ok: false };
@@ -38,7 +44,7 @@ export function normalizeDomain(raw: string): { ok: true; value: string; dev: bo
     port = Number(p);
   }
   host = host.replace(/\.+$/, "");
-  if (host === "" || !HOST_RE.test(host) || host.split(".").some((label) => label === "")) return { ok: false };
+  if (host === "" || host.length > MAX_HOST_LENGTH || !HOST_RE.test(host) || host.split(".").some((label) => label === "")) return { ok: false };
   // 既定のポート(https の 443・http の 80)は落とす。Origin の正規形(new URL(v).origin)に合わせ、`https://h:443` は通常の行になる
   if (port === (scheme === "http" ? 80 : 443)) port = null;
   const origin = `${scheme ?? "https"}://${host}${port === null ? "" : `:${port}`}`;

@@ -9,7 +9,10 @@ export type PageMatchInput = { part?: PagePart; op: PageOp; value: string };
 
 /** ホスト: 小文字化・前後の空白と末尾のドットを除く・IDN は punycode(URL の解析と同じ形) */
 export function normalizeHostValue(v: string): string {
-  let out = v.trim().toLowerCase().replace(/\.+$/, "");
+  const lower = v.trim().toLowerCase();
+  let end = lower.length;
+  while (end > 0 && lower[end - 1] === ".") end--;
+  let out = lower.slice(0, end);
   if (/[^\x00-\x7f]/.test(out)) {
     try {
       out = new URL(`http://${out}`).hostname;

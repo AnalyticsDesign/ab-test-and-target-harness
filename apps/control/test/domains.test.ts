@@ -19,6 +19,16 @@ describe("domains", () => {
     expect(checkDomainList(["www.example.com", "https://www.example.com:8443"])).toHaveProperty("rows");
   });
 
+  test("accepts the maximum host and line lengths and rejects longer input", () => {
+    const labels = ["a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(61)];
+    const host = labels.join(".");
+    expect(normalizeDomainInput(`https://${host}.:65535/`)).toEqual({
+      ok: true, value: `https://${host}:65535`, dev: true,
+    });
+    expect(normalizeDomainInput(host + "d")).toEqual({ ok: false, reason: "not_domain" });
+    expect(normalizeDomainInput(`https://${host}.:65535//`)).toEqual({ ok: false, reason: "not_domain" });
+  });
+
   test("derives_the_three_columns_from_domains", () => {
     const rows: DomainRow[] = [
       { value: "www.example.com", verdict: "edge", checkedAt: 1, triedAt: 1 },
