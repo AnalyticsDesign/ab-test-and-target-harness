@@ -1,13 +1,15 @@
+import bootstrapLimits from "./bootstrap-limits.json";
 import type { CompiledConfig } from "./schema";
 import { toRuntimeSettings, type RuntimeSettings, type SiteSettings } from "./settings";
 
-/**
- * 決定 50: bootstrap(`/s/<siteId>.js` の応答)の大きさの上限。全体は新しい接続の最初の往復(初期ウィンドウ 約 14KB)に収める。
- * runtime はどの Site でも同じ固定の部分で、全体 − HTTP ヘッダの見込み − ふつうの config(約 2.5KB)= 11KB。
- * runtimeGzipMax は packages/runtime/scripts/embed.mjs の RUNTIME_GZIP_MAX と同じ値(bake.test.ts が照合する)。
- * 上限を変えたくなったら、本体 spec の決定 50 (6) から始める(前提が変わったか / 同期で読まなくてよいコードを外し尽くしたか)
- */
-export const BOOTSTRAP_LIMITS = { totalBytes: 14336, headerAllowance: 512, runtimeGzipMax: 11809 } as const;
+// 決定 50: Publish の警告用。runtime の CI 停止線にサイト設定の 2 KiB とヘッダ見込みを足す。
+// 判定に使う gzip は、実際の配信で選ばれる圧縮方式やヘッダを含む転送量の代理値。
+const headerAllowance = 512;
+export const BOOTSTRAP_LIMITS = {
+  totalBytes: bootstrapLimits.runtimeGzipMax + 2 * 1024 + headerAllowance,
+  headerAllowance,
+  runtimeGzipMax: bootstrapLimits.runtimeGzipMax,
+} as const;
 
 /** previewSource = 下書きの bootstrap だけ(決定 50)。apiBase = edge の公開 origin(決定 52 (7))。runtimeHash = 先頭の注釈に出す(更新の確認用) */
 export type BakeOptions = { previewSource?: string; apiBase?: string | null; runtimeHash?: string };

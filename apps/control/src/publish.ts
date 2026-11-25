@@ -630,13 +630,13 @@ async function prepareReservedPublish(
   const warnings = analyticsWarnings(config);
   // 決定 51(設計書 §3.3): 同じ対象 URL・同じセレクタを変える組。拒否はしない(どちらが優先されるかを文に入れる)
   for (const { path, message } of overlapWarnings(input.experiments)) warnings.push({ path, message });
-  // 決定 50: 焼いた bootstrap(runtime + config + Identity 設定)が新しい接続の最初の往復に収まらない大きさなら警告(拒否はしない)
+  // 決定 50: サイト設定を焼いたタグの gzip が、同期配信の目安を超えた場合に警告する。
   const bootstrapBytes = await gzipSize(bakeBootstrap(config, siteToSettings(site), RUNTIME_SOURCE, { apiBase: edgeOrigin(env), runtimeHash: RUNTIME_HASH }));
   const budget = BOOTSTRAP_LIMITS.totalBytes - BOOTSTRAP_LIMITS.headerAllowance;
   if (bootstrapBytes > budget)
     warnings.push({
       path: "bootstrap",
-      message: `配信するタグが大きく(gzip ${bootstrapBytes} バイト、目安 ${budget} バイト)、初めて訪れたときの読み込みで通信の往復が 1 回増えることがあります。配信中のエクスペリエンスや変更を減らすと小さくなります`,
+      message: `配信するタグが大きく(gzip ${bootstrapBytes} バイト、目安 ${budget} バイト)、ページを開いてから最初の表示まで時間がかかることがあります。配信中のエクスペリエンスや変更を減らすと小さくなります`,
     });
 
   const key = kvKeys.config(site.id, version);

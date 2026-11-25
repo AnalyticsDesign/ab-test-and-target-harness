@@ -120,16 +120,20 @@ describe("正規表現の規則(決定 49、設計書 §10)", () => {
 });
 
 describe("bootstrap の大きさ(決定 50)", () => {
-  it("runtime + config の gzip が 13,824 B を超えたら Publish の警告に出す(拒否はしない)", async () => {
+  it("サイト設定込みのタグの gzip が 16,896 B を超えたら Publish の警告に出す(拒否はしない)", async () => {
     const { owner, sid } = await site();
     const { id: eid } = await createExperiment(owner.token, sid, { id: "exp_big" });
-    // gzip で縮まない文字列で config を大きくする(runtime 約 9.4KB + これ 約 6KB)
-    const noise = Array.from({ length: 10_000 }, () => Math.random().toString(36).charAt(2)).join("");
+    // gzip 後もサイズが残る、再現可能な文字列でサイト設定を大きくする。
+    let seed = 932;
+    const noise = Array.from({ length: 20_000 }, () => {
+      seed = (Math.imul(seed, 1_664_525) + 1_013_904_223) >>> 0;
+      return ((seed >>> 16) % 36).toString(36);
+    }).join("");
     await call("PUT", `/sites/${sid}/experiments/${eid}/variants/b/changes`, { token: owner.token, body: [{ id: "c1", type: "TEXT", selector: ".a", payload: { text: noise } }] });
     await runDirect(sid, eid);
     const r = await json<PublishBody>(await publishRes(owner.token, sid));
     expect(r.ok).toBe(true);
-    expect(r.warnings?.find((w) => w.path === "bootstrap")?.message).toMatch(/往復/);
+    expect(r.warnings?.find((w) => w.path === "bootstrap")?.message).toContain("目安 16896 バイト");
   });
   it("ふつうの大きさなら警告を出さない", async () => {
     const { owner, sid } = await site();

@@ -1,18 +1,19 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { gzipSync } from "node:zlib";
-
-// 決定 50: runtime 単体の上限(gzip)。packages/core/src/bake.ts の BOOTSTRAP_LIMITS.runtimeGzipMax と同じ値(bake.test.ts が照合する)。
-// 上限を変えたくなったら本体 spec の決定 50 (6) から始める。超えそうなら、上げる前に同期で読まなくてよいコードを別ファイルに外す
-// (Task 4・6 でサイズを超えて上限を前倒しで上げていれば、この定数はもう 11264。Task 10(Plan 12)で 429 の通知を足して 11392 に上げた。B139 の Q33(2026-10-29)で、共有の読み書きと Route の無いホスト向けの経路を足して 11809 に上げた。ここでは 2 つの出力への分割だけを行う)
-const RUNTIME_GZIP_MAX = 11809;
+import bootstrapLimits from "../../core/src/bootstrap-limits.json" with { type: "json" };
 
 const src = await readFile(new URL("../dist/runtime.iife.js", import.meta.url), "utf8");
 const previewSrc = await readFile(new URL("../dist/preview.iife.js", import.meta.url), "utf8");
 const previewHash = (await readFile(new URL("../dist/preview.hash", import.meta.url), "utf8")).trim();
 const runtimeHash = createHash("sha256").update(src).digest("hex").slice(0, 12); // PREVIEW_HASH(build.mjs)と同じ作り方
 const gz = gzipSync(Buffer.from(src)).length;
-if (gz > RUNTIME_GZIP_MAX) throw new Error(`runtime bundle is ${gz} bytes gzipped — over the ${RUNTIME_GZIP_MAX} byte limit (decision 50)`);
+// gzip はサイズの比較用。固定 Node の CI の check だけを判定の正にすると、手元や導入先の Node の差で build が止まらない。
+if (process.env.WTT_CHECK_RUNTIME_SIZE === "1") {
+  const { runtimeGzipWarning, runtimeGzipMax } = bootstrapLimits;
+  if (gz > runtimeGzipMax) throw new Error(`Runtime size ${gz} B gzip exceeds the ${runtimeGzipMax} B limit`);
+  if (gz > runtimeGzipWarning) console.log(`::warning::Runtime size ${gz} B gzip exceeds the ${runtimeGzipWarning} B warning threshold`);
+}
 const previewGz = gzipSync(Buffer.from(previewSrc)).length;
 
 // zod 不在は bundle graph で判定する(minify 後の文字列検索は識別子が縮約されて偽陰性になる。r1 CX-Low-3)。

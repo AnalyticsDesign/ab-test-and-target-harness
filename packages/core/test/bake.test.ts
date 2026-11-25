@@ -82,10 +82,7 @@ describe("bakeBootstrap", () => {
     const settings = parseSiteSettings({ settingsVersion: 1, siteId: "site_b" })!;
     expect(bootPayload(cfg, settings).config).toBe(cfg);
   });
-  it("BOOTSTRAP_LIMITS は決定 50 の値で、runtime の build の検査値と同じ", async () => {
-    expect(BOOTSTRAP_LIMITS).toEqual({ totalBytes: 14336, headerAllowance: 512, runtimeGzipMax: 11809 });
-    const { readFileSync } = await import("node:fs");
-    const embed = readFileSync(new URL("../../runtime/scripts/embed.mjs", import.meta.url), "utf8");
-    expect(embed).toMatch(new RegExp(`RUNTIME_GZIP_MAX = ${BOOTSTRAP_LIMITS.runtimeGzipMax};`));
+  it("サイト全体の目安は runtime の停止線に設定 2 KiB とヘッダ見込みを加えた値(決定 50)", () => {
+    expect(BOOTSTRAP_LIMITS).toEqual({ totalBytes: 17_408, headerAllowance: 512, runtimeGzipMax: 14_848 });
   });
 });

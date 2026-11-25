@@ -32,6 +32,9 @@ jobs:
           cache: pnpm
       - run: node --version
       - run: pnpm install --frozen-lockfile
+      - run: pnpm runtime:build
+        env:
+          WTT_CHECK_RUNTIME_SIZE: "1"
       - run: pnpm typecheck
       - run: pnpm docs:check
 
