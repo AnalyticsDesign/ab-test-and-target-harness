@@ -46,6 +46,8 @@
 
 API で、確かめた内容に操作を固定する手順は次のとおりです。公開する場合は `GET /sites/{sid}/publish-preview` を読み、内容を確かめ、応答の `digest` を `POST /sites/{sid}/publish` の本文 `{ "expectDigest": "<digest>" }` に入れて送ります。状態を変更する場合は `GET /sites/{sid}/publish-preview?transition=<experimentId>:<running|paused|archived>` を読み、`transitionDigest` を状態の変更(`POST /sites/{sid}/experiments/{experimentId}/status`)の `expectDigest` に入れます。公開が `200` + `ok: false, error: "stale_preview"`、状態の変更が `409 stale_preview` なら、確認した後に内容が変わっています。状態の変更の 409 では何も変わっていません。確認画面を読み直し、変わった内容を確かめてから送り直してください。
 
+公開(`POST /sites/{sid}/publish`)が `200` + `ok: false` で、`error` が `state_changed`(準備の間にエクスペリエンスの状態が変わった)・`publish_reservation_expired`(準備に時間がかかりすぎた)・`publish_record_missing`(公開の記録が見つからない)なら、この公開は有効になっていません。`publish-preview` を読み直し、内容を確かめてから公開し直してください。`503 publish_outcome_unknown` は、公開が確定したか分からないことを示します(状態の変更でも同じ)。送り直す前に、公開履歴(`GET /sites/{sid}/publishes`)とエクスペリエンスの状態を読み直してください。
+
 `expectDigest` は API では任意です。付けなければ、操作した時点の保存内容がすべて公開されます。`x-wtt-client-version` を付けないエージェントは版の判定を受けないので、契約の版が上がっても 426 にはならず、`expectDigest` を付けずに呼べます(付けている場合は下の「API の版と 426」)。
 
 手順(管理画面): 左メニューの下の「設定」→「API キー」(`/w/me/api-keys`)の「新しい API キーを発行」で、名前と**範囲**と**権限**と**有効期限**(期限なし / 1・7・30・90 日。API の `expiresInDays` は 1〜365 の整数で、省略すると期限なし。管理画面で選べるのは上の 5 つだけ)を選んで発行します。キーは発行の直後に 1 度だけ表示されます。**個人で運用するなら、自分の鍵の権限を「編集者」にするだけで「人間が公開する運用」になります**(専用ユーザーは要りません)。更新や確認のためだけに使う鍵は有効期限を 1 日にします。期限を過ぎた鍵は 401 になり、`hint` に「この API キーは有効期限を過ぎています。管理画面で発行し直してください」と出ます。エージェントを別のユーザーとして分けたい(誰の操作かをメンバーの一覧で見分けたい)ときは、招待リンクを発行 → エージェント用の Google アカウントのメールアドレスで受諾(受諾もログインも Google アカウントで行うので、招待するのは Google アカウントのあるメールアドレスにします)→ その利用者でログインして鍵を発行します。鍵の発行は人が行う操作で、エージェントが自分で作ることはできません。管理者以上は、左メニューの下の「設定」→「メンバーの API キー」(`/w/<ワークスペース ID>/api-keys`。ワークスペースかサイトの画面から開いたときに出る)で、そのワークスペースで使える鍵(そのワークスペースの鍵と、システム管理者の「すべてのワークスペース」の鍵)を持ち主付きで一覧し、失効させられます(鍵が漏れたときの止め方)。
@@ -132,10 +134,12 @@ curl -sS -X POST "$AB_CONTROL_URL/sites/$SID/experiments/exp_hero_q1/status" \
 
 **開始・再開と画像**: 開始・再開(`status: "running"`)は、状態を変える前に、変えた後に配信する内容(ほかの配信中のエクスペリエンスを含む)を公開と同じ画像の確かめにかけます。通らなければ、状態を変えずに 409 `asset_missing` か `asset_other_site` を返します(封筒の `assetProblems` に URL と変更の場所が入ります。その変更を直してからやり直してください)。一時停止・終了は配信を止める操作なので、画像の確かめを省きます。
 
-- 開始・再開が `409`(`asset_missing`・`asset_other_site`・設定の作成時のコード・`kv_put_failed` など)なら状態は変わっていません。封筒の `error`・`message` を読み、内容の不備は `hint` に従って直し、一時的な失敗なら数秒後に同じ操作を送り直してください。
-- `409 transition_conflict` は別の公開と重なったことを示します。状態は変わっていないので、公開の確認を読み直してから送り直してください。
+- 開始・再開が `409` を返したとき(公開の準備の失敗)は、状態は変わっていません。封筒の `error`・`message` を読んでください。画像の確かめ(`asset_missing`・`asset_other_site`)と、設定の作成時のコード(`legacy_targeting`・`unknown_audience`・`unknown_goal`・`invalid_regex`・`config_too_large` など)は内容の不備なので、`hint` に従って直してからやり直してください。`kv_put_failed`・`kv_verify_failed`・`version_reservation_failed`・`publish_failed` は一時的な失敗なので、数秒後に同じ状態の変更を送り直してください。
+- 状態の変更は、一時停止・終了も含めて、`409 stale_preview`(確認した後に内容が変わった)・`409 transition_conflict`(別の公開と重なり続けた。一時停止・終了は 1 回自動でやり直した後)・`409 publish_reservation_expired`(公開の予約が切れた)・`409 publish_record_missing`(公開の記録が無い)では状態を変えていません。エクスペリエンスと公開の確認を読み込み直して確かめてから、同じ状態の変更を送り直してください(`expectDigest` を付けるなら、`transitionDigest` を取り直します)。
+- `409 invalid_transition` は、今の状態からその状態へは変えられないか、確かめた後に状態・サイト設定・評価計画・パターンの設定が別の操作で変わったことを示します。送り直さず、エクスペリエンスを読み込み直して今の状態と `hint` を確かめ、操作を決め直してください。
 - `503 publish_outcome_unknown` は、公開が確定したか分からないことを示します。送り直す前に、公開履歴(`GET /sites/{sid}/publishes`)とエクスペリエンスの状態を読み直してください。
-- 一時停止・終了は公開の準備に失敗しても状態を変え、`200` の `publish.ok: false` で返ります。`publish.warnings` に `path: "delivery"` があれば、公開は確定し、配信への反映だけが遅れています。待てば自動で反映されます。
+- 一時停止・終了は、公開の準備(設定の作成・配信の設定の書き込み)に失敗しても状態を変え、`200` の `publish.ok: false` で返ります。訪問者には前の公開内容が配られ続けるので、`publish.error`・`publish.hint` を見て原因を直し、`POST /sites/{sid}/publish` で公開してください。
+- 公開(状態の変更に伴う公開を含む)が `ok: true` で、`warnings`(状態の変更の応答では `publish.warnings`)に `path: "delivery"` があれば、公開は確定しており、配信への反映だけが遅れています。通常 15 分以内に自動で反映されます。続くときは `GET /sites/{sid}` を読み、`activeKvStaleReason` が `config_missing`(配信の設定が見つからない)なら公開し直し、`staticStale` が `true` のままなら `POST /sites/{sid}/static/redeploy` で設置タグの配信ファイルを作り直してください。
 
 **対象 URL(`urlMatch`)**は、含める行(`include`)と除く行(`exclude`)で書きます。含める行のどれかに一致し、除く行のどれにも一致しないページが対象です。ページの URL・ホスト・パス・パラメータの条件は、対象 URL だけに書きます(配信条件・オーディエンスには書けません。下の「ページの条件を対象 URL に移す」)。
 

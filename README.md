@@ -107,7 +107,7 @@ flowchart LR
 
 Workers Free の CPU 時間の上限は 1 回 10 ms である。Free での導入は、評価のために使うことを勧める。2026-11 の実測では、v0.9 の管理画面が Free で Cloudflare に時々止められた(Error 1102)。v1.0 で CPU 時間は減ったが、重い要求が止められる可能性は残る。v1.0 より前の版は CPU 時間を減らす前の作りなので、Free で使っているなら v1.0 以降への更新を勧める。安定して使うなら、または一時停止・終了の時刻を厳密に決めて運用するなら Workers Paid にする(ドメインなしの構成では、先にドメインを Cloudflare に追加する。[デプロイガイド 2.8](docs/deploy.md#28-ドメインありへの移行workers-dev--route))。実測の数字は[デプロイガイドの冒頭](docs/deploy.md#デプロイガイド)、止められたときの見え方と確かめ方は[運用ガイド](docs/operations.md#cpu-の上限で要求が止められたときfree)にある。
 
-Workers Paid では、Cloudflare で Workers と Durable Objects の支出上限やメール通知を設定できる。対象となる料金、設定手順、停止時の影響は[運用ガイドの「支出上限と通知」](docs/operations.md#支出上限と通知workers-paid)を参照。
+Workers Paid では、Cloudflare で Workers と Durable Objects の支出上限やメール通知を設定できる。対象となる料金、設定手順、停止時の影響は[運用ガイドの「支出上限と通知」](docs/operations.md#支出上限と通知workers-paid)を参照。本製品自体には、費用の合計を見て自動で止める機能は無い。管理画面の「[使用状況](docs/operations.md#11-使用状況cloudflare-の上限)」も合わせて確かめる。
 
 ## 導入
 
@@ -221,7 +221,7 @@ pnpm typecheck     # 型チェック(全パッケージ)
 pnpm docs:check    # 文書のリンク・パス検査
 ```
 
-管理画面の E2E は固定ポートを使うので、別の worktree と同時に実行しない。実行中は、実行元の worktree のファイルを編集しない。ログイン・セッション確認の内部要求の診断は `apps/admin` の `.wrangler` 内の `e2e-diagnostics` に実行ごとに保存する。
+管理画面の E2E は固定のポートを使うので、同じマシンでほかの作業ツリー(別の clone や git worktree)の E2E と同時に流さない。また、E2E は Worker のファイル監視を止めて動くので、流している間にそのフォルダのファイルを編集しても、動いている Worker には反映されない。流し終えてから編集する。ログイン・セッション確認の内部要求の診断は `apps/admin` の `.wrangler` 内の `e2e-diagnostics` に実行ごとに保存する。
 
 Windows on ARM(ARM64)では、ローカル実行に使う workerd が動かない(`pnpm install` で警告が出る)。Cloudflare への導入(deploy)はできるが、workerd を使う `wrangler dev`・E2E・control / edge の単体テストは動かない。開発は macOS / Linux / x64 の Windows で行う。
 
