@@ -1,4 +1,4 @@
-import bootstrapLimits from "./bootstrap-limits.json";
+import bootstrapLimits from "./bootstrap-limits.json" with { type: "json" };
 import type { CompiledConfig } from "./schema";
 import { toRuntimeSettings, type RuntimeSettings, type SiteSettings } from "./settings";
 

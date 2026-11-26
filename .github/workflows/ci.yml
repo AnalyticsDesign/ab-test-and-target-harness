@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
 
-# 公開側の repo と手動の実行だけで動かす(E2E は含めない)。
+# 公開側の repo と手動の実行だけで動かす(E2E はテスト一覧を読み込むところまで)。
 # test はパッケージごとの job に分ける: 1 つの job で `pnpm test` を回すと、4 コアの runner の上で workerd のテスト(control・edge)が
 # CPU を取り合い、test だけで 24〜38 分かかっていた(2026-11-02・03 の 3 回)。分ければ各 job が自分の runner の CPU を使え、
 # 一番長い job(control)の時間で終わる。パッケージは workspace の source を直接参照するので(build 無し)、job ごとに install だけでよい。
@@ -35,6 +35,8 @@ jobs:
       - run: pnpm runtime:build
         env:
           WTT_CHECK_RUNTIME_SIZE: "1"
+      - run: node tools/run-playwright.mjs apps/admin --list
+      - run: node tools/run-playwright.mjs packages/sample-site --list
       - run: pnpm typecheck
       - run: pnpm docs:check
 
